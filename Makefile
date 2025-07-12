@@ -1,102 +1,174 @@
-# HTML5 Parser Enhanced Makefile
+# Modern Browser Parser - HTML5 & CSS3 Engine
+# Organized structure for browser development
+
 CXX = g++
-CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -Iinclude
-DEBUG_FLAGS = -std=c++17 -Wall -Wextra -g -DDEBUG -Iinclude
-TARGET = html5parser
-SRCDIR = src
-OBJDIR = obj
-INCDIR = include
+CXXFLAGS = -std=c++17 -Wall -Wextra -O2
+DEBUG_FLAGS = -g -DDEBUG
+INCLUDES = -Ihtml/include -Icss/include -Icore/include
+
+# Directories
+HTML_SRC = html/src
+CSS_SRC = css/src
+CORE_SRC = core/src
+BUILD_DIR = build
+OBJ_DIR = $(BUILD_DIR)/obj
+BIN_DIR = $(BUILD_DIR)/bin
+EXAMPLES_DIR = examples
+TESTS_DIR = tests
+
+# Create directories
+$(shell mkdir -p $(OBJ_DIR)/html $(OBJ_DIR)/css $(OBJ_DIR)/core $(BIN_DIR))
 
 # Source files
-SOURCES = $(wildcard $(SRCDIR)/*.cpp $(SRCDIR)/*/*.cpp)
-OBJECTS = $(SOURCES:$(SRCDIR)/%.cpp=$(OBJDIR)/%.o)
+HTML_SOURCES = $(wildcard $(HTML_SRC)/*.cpp)
+CSS_SOURCES = $(wildcard $(CSS_SRC)/*.cpp)
+CORE_SOURCES = $(wildcard $(CORE_SRC)/*.cpp)
+
+# Object files
+HTML_OBJECTS = $(HTML_SOURCES:$(HTML_SRC)/%.cpp=$(OBJ_DIR)/html/%.o)
+CSS_OBJECTS = $(CSS_SOURCES:$(CSS_SRC)/%.cpp=$(OBJ_DIR)/css/%.o)
+CORE_OBJECTS = $(CORE_SOURCES:$(CORE_SRC)/%.cpp=$(OBJ_DIR)/core/%.o)
+
+ALL_OBJECTS = $(HTML_OBJECTS) $(CSS_OBJECTS) $(CORE_OBJECTS)
+
+# Targets
+.PHONY: all clean browser html-parser css-parser core examples tests debug help
 
 # Default target
-all: $(TARGET)
+all: browser
 
-# Debug build
-debug: CXXFLAGS = $(DEBUG_FLAGS)
-debug: $(TARGET)
+# Main browser parser (integrated HTML5 + CSS3)
+browser: $(BIN_DIR)/browser-parser
+	@echo "✅ Browser parser built successfully!"
 
-# Main target
-$(TARGET): $(OBJECTS)
-	@echo "Linking $(TARGET)..."
-	$(CXX) $(OBJECTS) -o $(TARGET)
-	@echo "Build complete: $(TARGET)"
+$(BIN_DIR)/browser-parser: $(ALL_OBJECTS) $(OBJ_DIR)/main_browser.o
+	@echo "🔗 Linking browser parser..."
+	$(CXX) $(CXXFLAGS) $^ -o $@
 
-# Object file compilation
-$(OBJDIR)/%.o: $(SRCDIR)/%.cpp
-	@mkdir -p $(dir $@)
-	@echo "Compiling $<..."
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+# Individual parsers
+html-parser: $(BIN_DIR)/html-parser
+	@echo "✅ HTML5 parser built successfully!"
 
-# Test with default file
-test: $(TARGET)
-	@echo "Running parser test..."
-	./$(TARGET) test.html
+$(BIN_DIR)/html-parser: $(HTML_OBJECTS) $(OBJ_DIR)/main_html.o
+	@echo "🔗 Linking HTML parser..."
+	$(CXX) $(CXXFLAGS) $^ -o $@
 
-# Test with custom file
-test-file: $(TARGET)
-	@read -p "Enter HTML file path: " file; \
-	./$(TARGET) "$$file"
+css-parser: $(BIN_DIR)/css-parser
+	@echo "✅ CSS3 parser built successfully!"
 
-# Performance test
-perf: $(TARGET)
-	@echo "Running performance test..."
-	time ./$(TARGET) test.html > /dev/null
+$(BIN_DIR)/css-parser: $(CSS_OBJECTS) $(OBJ_DIR)/main_css.o
+	@echo "🔗 Linking CSS parser..."
+	$(CXX) $(CXXFLAGS) $^ -o $@
 
-# Memory check (requires valgrind)
-memcheck: $(TARGET)
-	@echo "Running memory check..."
-	valgrind --leak-check=full --show-leak-kinds=all ./$(TARGET) test.html
+# Core library (for linking with other projects)
+core: $(BIN_DIR)/libbrowser.a
+	@echo "✅ Browser core library built successfully!"
 
-# Install target
-install: $(TARGET)
-	@echo "Installing $(TARGET) to /usr/local/bin/"
-	sudo cp $(TARGET) /usr/local/bin/
-	sudo chmod +x /usr/local/bin/$(TARGET)
+$(BIN_DIR)/libbrowser.a: $(ALL_OBJECTS)
+	@echo "📦 Creating static library..."
+	ar rcs $@ $^
 
-# Create example files
-examples:
-	@echo "Creating example HTML files..."
-	@mkdir -p examples
-	@echo '<!DOCTYPE html><html><head><title>Simple</title></head><body><h1>Hello</h1></body></html>' > examples/simple.html
-	@echo '<!DOCTYPE html><html><body><div><p>Nested <span>content</span></p></div></body></html>' > examples/nested.html
-	@echo '<!DOCTYPE html><html><body><!-- Comment --><p>Text</p></body></html>' > examples/comment.html
+# Object file compilation rules
+$(OBJ_DIR)/html/%.o: $(HTML_SRC)/%.cpp
+	@echo "🔨 Compiling HTML: $<"
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
-# Documentation
-docs:
-	@echo "HTML5 Parser Usage:"
-	@echo "  make           - Build the parser"
-	@echo "  make debug     - Build with debug symbols"
-	@echo "  make test      - Test with test.html"
-	@echo "  make test-file - Test with custom file"
-	@echo "  make perf      - Performance benchmark"
-	@echo "  make memcheck  - Memory leak check"
-	@echo "  make examples  - Create example files"
-	@echo "  make clean     - Remove build files"
-	@echo "  make install   - Install system-wide"
+$(OBJ_DIR)/css/%.o: $(CSS_SRC)/%.cpp
+	@echo "🔨 Compiling CSS: $<"
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
-# Clean build files
+$(OBJ_DIR)/core/%.o: $(CORE_SRC)/%.cpp
+	@echo "🔨 Compiling Core: $<"
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+# Main files
+$(OBJ_DIR)/main_browser.o: main_browser.cpp
+	@echo "🔨 Compiling main browser..."
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+$(OBJ_DIR)/main_html.o: main_html.cpp
+	@echo "🔨 Compiling main HTML..."
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+$(OBJ_DIR)/main_css.o: main_css.cpp
+	@echo "🔨 Compiling main CSS..."
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+# Debug builds
+debug: CXXFLAGS += $(DEBUG_FLAGS)
+debug: browser
+	@echo "🐛 Debug build completed!"
+
+# Examples
+examples: browser
+	@echo "📚 Building examples..."
+	@$(MAKE) -C $(EXAMPLES_DIR) --no-print-directory
+
+# Tests
+tests: browser
+	@echo "🧪 Building tests..."
+	@$(MAKE) -C $(TESTS_DIR) --no-print-directory
+
+# Utilities
 clean:
-	@echo "Cleaning build files..."
-	rm -rf $(OBJDIR) $(TARGET)
-	@echo "Clean complete"
+	@echo "🧹 Cleaning build files..."
+	rm -rf $(BUILD_DIR)
+	@echo "✅ Clean completed!"
 
-# Clean everything including examples
-clean-all: clean
-	rm -rf examples
+install: browser
+	@echo "📦 Installing browser parser..."
+	cp $(BIN_DIR)/browser-parser /usr/local/bin/ 2>/dev/null || echo "❌ Install failed (try sudo)"
 
-# Help target
-help: docs
+# Development helpers
+format:
+	@echo "🎨 Formatting code..."
+	find . -name "*.cpp" -o -name "*.h" | xargs clang-format -i
 
-# Phony targets
-.PHONY: all debug test test-file perf memcheck install examples docs clean clean-all help
+lint:
+	@echo "🔍 Running linter..."
+	find . -name "*.cpp" -o -name "*.h" | xargs cppcheck --enable=all --std=c++17
 
-# Show variables (debug)
-show-vars:
-	@echo "CXX: $(CXX)"
-	@echo "CXXFLAGS: $(CXXFLAGS)"
-	@echo "SOURCES: $(SOURCES)"
-	@echo "OBJECTS: $(OBJECTS)"
-	@echo "TARGET: $(TARGET)"
+docs:
+	@echo "📖 Generating documentation..."
+	doxygen docs/Doxyfile 2>/dev/null || echo "❌ Doxygen not found"
+
+# Information
+info:
+	@echo "Browser Parser Build System"
+	@echo "============================"
+	@echo "HTML Sources: $(words $(HTML_SOURCES)) files"
+	@echo "CSS Sources:  $(words $(CSS_SOURCES)) files"
+	@echo "Core Sources: $(words $(CORE_SOURCES)) files"
+	@echo "Build Dir:    $(BUILD_DIR)"
+	@echo "Compiler:     $(CXX) $(CXXFLAGS)"
+
+help:
+	@echo "Modern Browser Parser Build System"
+	@echo "=================================="
+	@echo ""
+	@echo "Main targets:"
+	@echo "  all         Build the complete browser parser (default)"
+	@echo "  browser     Build integrated HTML5 + CSS3 parser"
+	@echo "  html-parser Build standalone HTML5 parser"
+	@echo "  css-parser  Build standalone CSS3 parser"
+	@echo "  core        Build static library for linking"
+	@echo ""
+	@echo "Development:"
+	@echo "  debug       Build with debug symbols"
+	@echo "  examples    Build example programs"
+	@echo "  tests       Build and run tests"
+	@echo "  format      Format code with clang-format"
+	@echo "  lint        Run static analysis"
+	@echo "  docs        Generate documentation"
+	@echo ""
+	@echo "Utilities:"
+	@echo "  clean       Remove build files"
+	@echo "  install     Install to system (needs sudo)"
+	@echo "  info        Show build information"
+	@echo "  help        Show this help message"
+
+# Dependency tracking (optional)
+-include $(ALL_OBJECTS:.o=.d)
+
+$(OBJ_DIR)/%.d: %.cpp
+	@$(CXX) $(CXXFLAGS) $(INCLUDES) -MM -MT $(@:.d=.o) $< > $@

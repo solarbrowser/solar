@@ -1,5 +1,5 @@
-#ifndef PARSER_H
-#define PARSER_H
+#ifndef HTML_PARSER_H
+#define HTML_PARSER_H
 
 #include <string>
 #include <vector>
@@ -114,4 +114,4 @@ private:
 
 } // namespace HTML5Parser
 
-#endif // PARSER_H
+#endif // HTML_PARSER_H
