@@ -91,9 +91,3 @@ Solar is released under the [MPL-2.0 License](./LICENSE).
 ## 🌐 Website
 
 [browser.solar](https://browser.solar)
-
----
-
-## 🖋 Author  
-Lead Developer of Solar
-[GitHub](https://github.com/ataturkcu)
