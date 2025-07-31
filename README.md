@@ -1,7 +1,7 @@
 # Solar 🌞  
 **The Privacy-First, Fully Customizable Web Browser – Built from Scratch**
 
-[![License](https://img.shields.io/badge/license-MPL-2.0-blue.svg)](./LICENSE)
+[![License](https://img.shields.io/badge/license-MPL2.0-blue.svg)](./LICENSE)
 [![Platform](https://img.shields.io/badge/platform-linux%20|%20windows%20|%20android%20|%20ios%20|%20macos-lightgrey)]()
 [![Build](https://img.shields.io/badge/build-rolling-blue.svg)]()
 
