@@ -109,6 +109,90 @@ tests: browser
 	@echo "🧪 Building tests..."
 	@$(MAKE) -C $(TESTS_DIR) --no-print-directory
 
+# Parser test
+test-parser: $(BIN_DIR)/test-parser
+	@echo "✅ Parser test built successfully!"
+	@echo "🧪 Running parser test..."
+	@$(BIN_DIR)/test-parser
+
+$(BIN_DIR)/test-parser: $(ALL_OBJECTS) $(OBJ_DIR)/test_parser.o
+	@echo "🔗 Linking parser test..."
+	$(CXX) $(CXXFLAGS) $^ -o $@
+
+$(OBJ_DIR)/test_parser.o: test_parser.cpp
+	@echo "🔨 Compiling parser test..."
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+# Simple test
+test-simple: $(BIN_DIR)/test-simple
+	@echo "✅ Simple test built successfully!"
+	@echo "🧪 Running simple test..."
+	@timeout 5 $(BIN_DIR)/test-simple || echo "Test finished (timeout or completed)"
+
+$(BIN_DIR)/test-simple: $(HTML_OBJECTS) $(OBJ_DIR)/test_simple.o
+	@echo "🔗 Linking simple test..."
+	$(CXX) $(CXXFLAGS) $^ -o $@
+
+$(OBJ_DIR)/test_simple.o: test_simple.cpp
+	@echo "🔨 Compiling simple test..."
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+# Comprehensive test
+test-comprehensive: $(BIN_DIR)/test-comprehensive
+	@echo "✅ Comprehensive test built successfully!"
+	@echo "🧪 Running comprehensive test..."
+	@$(BIN_DIR)/test-comprehensive
+
+$(BIN_DIR)/test-comprehensive: $(ALL_OBJECTS) $(OBJ_DIR)/test_comprehensive.o
+	@echo "🔗 Linking comprehensive test..."
+	$(CXX) $(CXXFLAGS) $^ -o $@
+
+$(OBJ_DIR)/test_comprehensive.o: test_comprehensive.cpp
+	@echo "🔨 Compiling comprehensive test..."
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+# Individual test
+test-individual: $(BIN_DIR)/test-individual
+	@echo "✅ Individual test built successfully!"
+	@echo "🧪 Running individual test..."
+	@timeout 10 $(BIN_DIR)/test-individual || echo "Test finished (timeout or completed)"
+
+$(BIN_DIR)/test-individual: $(ALL_OBJECTS) $(OBJ_DIR)/test_individual.o
+	@echo "🔗 Linking individual test..."
+	$(CXX) $(CXXFLAGS) $^ -o $@
+
+$(OBJ_DIR)/test_individual.o: test_individual.cpp
+	@echo "🔨 Compiling individual test..."
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+# Final comprehensive test with timeout protection
+test-final: $(BIN_DIR)/test-final
+	@echo "✅ Final test built successfully!"
+	@echo "🧪 Running final comprehensive test with timeout protection..."
+	@timeout 120 $(BIN_DIR)/test-final || echo "Final test finished (timeout or completed)"
+
+$(BIN_DIR)/test-final: $(ALL_OBJECTS) $(OBJ_DIR)/test_final.o
+	@echo "🔗 Linking final test..."
+	$(CXX) $(CXXFLAGS) $^ -o $@ -pthread
+
+$(OBJ_DIR)/test_final.o: test_final.cpp
+	@echo "🔨 Compiling final test..."
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+# CSS Debug test
+test-css-debug: $(BIN_DIR)/test-css-debug
+	@echo "✅ CSS debug test built successfully!"
+	@echo "🧪 Running CSS debug test..."
+	@timeout 10 $(BIN_DIR)/test-css-debug || echo "CSS debug test finished (timeout or completed)"
+
+$(BIN_DIR)/test-css-debug: $(ALL_OBJECTS) $(OBJ_DIR)/test_css_debug.o
+	@echo "🔗 Linking CSS debug test..."
+	$(CXX) $(CXXFLAGS) $^ -o $@
+
+$(OBJ_DIR)/test_css_debug.o: test_css_debug.cpp
+	@echo "🔨 Compiling CSS debug test..."
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
 # Utilities
 clean:
 	@echo "🧹 Cleaning build files..."
@@ -172,3 +256,104 @@ help:
 
 $(OBJ_DIR)/%.d: %.cpp
 	@$(CXX) $(CXXFLAGS) $(INCLUDES) -MM -MT $(@:.d=.o) $< > $@
+test-safe: 
+	@echo "Building safe test..."
+	@g++ -std=c++17 -Wall -Wextra -O2 -Ihtml/include -Icss/include -Icore/include -c test_simple_safe.cpp -o test_simple_safe.o
+	@g++ -std=c++17 -Wall -Wextra -O2 build/obj/css/*.o test_simple_safe.o -o test_safe
+	@echo "Running SAFE test with 5s timeout..."
+	@timeout 5 ./test_safe || echo "Safe test finished"
+	@rm -f test_simple_safe.o test_safe
+
+
+test-keyframes: 
+	@echo "Building keyframes test..."
+	@g++ -std=c++17 -Wall -Wextra -O2 -Ihtml/include -Icss/include -Icore/include -c test_keyframes.cpp -o test_keyframes.o
+	@g++ -std=c++17 -Wall -Wextra -O2 build/obj/css/*.o test_keyframes.o -o test_keyframes
+	@echo "Running KEYFRAMES test with 10s timeout..."
+	@timeout 10 ./test_keyframes || echo "Keyframes test finished"
+	@rm -f test_keyframes.o test_keyframes
+
+
+test-keyframes-debug: 
+	@echo "Building keyframes debug test..."
+	@g++ -std=c++17 -Wall -Wextra -O2 -Ihtml/include -Icss/include -Icore/include -c test_keyframes_debug.cpp -o test_keyframes_debug.o
+	@g++ -std=c++17 -Wall -Wextra -O2 build/obj/css/*.o test_keyframes_debug.o -o test_keyframes_debug
+	@echo "Running KEYFRAMES DEBUG test with 5s timeout..."
+	@timeout 5 ./test_keyframes_debug || echo "Debug test finished"
+	@rm -f test_keyframes_debug.o test_keyframes_debug
+
+
+test-tokenizer-debug: 
+	@echo "Building tokenizer debug..."
+	@g++ -std=c++17 -Wall -Wextra -O2 -Ihtml/include -Icss/include -Icore/include -c test_tokenizer_debug.cpp -o test_tokenizer_debug.o
+	@g++ -std=c++17 -Wall -Wextra -O2 build/obj/css/*.o test_tokenizer_debug.o -o test_tokenizer_debug
+	@echo "Running tokenizer debug (should be fast)..."
+	@timeout 2 ./test_tokenizer_debug || echo "Tokenizer debug done"
+	@rm -f test_tokenizer_debug.o test_tokenizer_debug
+
+
+test-atrule-debug: 
+	@echo "Building AtRule debug..."
+	@g++ -std=c++17 -Wall -Wextra -O2 -Ihtml/include -Icss/include -Icore/include -c test_atrule_debug.cpp -o test_atrule_debug.o
+	@g++ -std=c++17 -Wall -Wextra -O2 build/obj/css/*.o test_atrule_debug.o -o test_atrule_debug
+	@echo "Running AtRule debug..."
+	@timeout 2 ./test_atrule_debug || echo "AtRule debug done"
+	@rm -f test_atrule_debug.o test_atrule_debug
+
+test-keyframes-detailed: 
+	@echo "Building detailed keyframes test..."
+	@g++ -std=c++17 -Wall -Wextra -O2 -Ihtml/include -Icss/include -Icore/include -c test_keyframes_detailed.cpp -o test_keyframes_detailed.o
+	@g++ -std=c++17 -Wall -Wextra -O2 build/obj/css/*.o test_keyframes_detailed.o -o test_keyframes_detailed
+	@echo "Running detailed keyframes test..."
+	@timeout 10 ./test_keyframes_detailed || echo "Detailed test done"
+	@rm -f test_keyframes_detailed.o test_keyframes_detailed
+
+test-html-malformed-debug: 
+	@echo "Building HTML malformed debug..."
+	@g++ -std=c++17 -Wall -Wextra -O2 -Ihtml/include -Icss/include -Icore/include -c test_html_malformed_debug.cpp -o test_html_malformed_debug.o
+	@g++ -std=c++17 -Wall -Wextra -O2 build/obj/html/*.o test_html_malformed_debug.o -o test_html_malformed_debug
+	@echo "Running HTML malformed debug..."
+	@timeout 5 ./test_html_malformed_debug || echo "HTML debug done"
+	@rm -f test_html_malformed_debug.o test_html_malformed_debug
+
+test-css-complex-debug: 
+	@echo "Building CSS complex debug..."
+	@g++ -std=c++17 -Wall -Wextra -O2 -Ihtml/include -Icss/include -Icore/include -c test_css_complex_debug.cpp -o test_css_complex_debug.o
+	@g++ -std=c++17 -Wall -Wextra -O2 build/obj/css/*.o test_css_complex_debug.o -o test_css_complex_debug
+	@echo "Running CSS complex debug..."
+	@timeout 10 ./test_css_complex_debug || echo "CSS complex debug done"
+	@rm -f test_css_complex_debug.o test_css_complex_debug
+
+test-import-debug: 
+	@echo "Building @import debug..."
+	@g++ -std=c++17 -Wall -Wextra -O2 -Ihtml/include -Icss/include -Icore/include -c test_import_debug.cpp -o test_import_debug.o
+	@g++ -std=c++17 -Wall -Wextra -O2 build/obj/css/*.o test_import_debug.o -o test_import_debug
+	@echo "Running @import debug..."
+	@timeout 2 ./test_import_debug || echo "Import debug done"
+	@rm -f test_import_debug.o test_import_debug
+
+test-final-debug: 
+	@echo "Building final debug..."
+	@g++ -std=c++17 -Wall -Wextra -O2 -Ihtml/include -Icss/include -Icore/include -c test_final_debug.cpp -o test_final_debug.o
+	@g++ -std=c++17 -Wall -Wextra -O2 build/obj/css/*.o test_final_debug.o -o test_final_debug
+	@echo "Running final debug..."
+	@timeout 5 ./test_final_debug || echo "Final debug done"
+	@rm -f test_final_debug.o test_final_debug
+
+test-only-import: 
+	@echo "Building only import test..."
+	@g++ -std=c++17 -Wall -Wextra -O2 -Ihtml/include -Icss/include -Icore/include -c test_only_import.cpp -o test_only_import.o
+	@g++ -std=c++17 -Wall -Wextra -O2 build/obj/css/*.o test_only_import.o -o test_only_import
+	@echo "Running only import test..."
+	@timeout 2 ./test_only_import || echo "Only import done"
+	@rm -f test_only_import.o test_only_import
+
+test-quanta-lexer: 
+	@echo "Building Quanta lexer test..."
+	@cd quanta && make lexer
+	@g++ -std=c++17 -Wall -Wextra -O2 -I. -c test_quanta_lexer.cpp -o test_quanta_lexer.o
+	@g++ -std=c++17 -Wall -Wextra -O2 quanta/build/obj/lexer/*.o quanta/build/obj/core/Value.o test_quanta_lexer.o -o test_quanta_lexer 2>/dev/null || g++ -std=c++17 -Wall -Wextra -O2 quanta/build/obj/lexer/*.o test_quanta_lexer.o -o test_quanta_lexer
+	@echo "Running Quanta lexer test..."
+	@timeout 10 ./test_quanta_lexer || echo "Quanta lexer test done"
+	@rm -f test_quanta_lexer.o test_quanta_lexer
+

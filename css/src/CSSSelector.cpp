@@ -214,6 +214,11 @@ bool AtRule::is_descriptor() const {
            name == "counter-style" || name == "property";
 }
 
+bool AtRule::is_keyframes() const {
+    return name == "keyframes" || name == "-webkit-keyframes" || 
+           name == "-moz-keyframes" || name == "-ms-keyframes";
+}
+
 std::string AtRule::to_string() const {
     std::ostringstream ss;
     ss << "@" << name;

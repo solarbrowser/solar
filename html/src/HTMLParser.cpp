@@ -4,6 +4,7 @@
 #include <functional>
 #include <sstream>
 #include <iomanip>
+#include <regex>
 
 namespace HTML5Parser {
 
@@ -103,6 +104,11 @@ std::unique_ptr<Node> Parser::parse_element() {
     
     tag_name = normalize_tag_name(tag_name);
     
+    if (!is_valid_tag_name(tag_name)) {
+        add_error("Invalid tag name: " + tag_name);
+        return nullptr;
+    }
+    
     if (is_closing) {
         consume_whitespace();
         if (!consume_string(">")) {
@@ -137,12 +143,14 @@ std::unique_ptr<Node> Parser::parse_element() {
             node->children.push_back(std::move(text_node));
         }
     } else {
+        bool found_closing_tag = false;
         while (!at_end()) {
             size_t before_parse = pos_;
             
             if (consume_string("</" + tag_name)) {
                 consume_whitespace();
                 if (consume_string(">")) {
+                    found_closing_tag = true;
                     break;
                 }
                 pos_ = before_parse; // Backtrack
@@ -159,7 +167,13 @@ std::unique_ptr<Node> Parser::parse_element() {
             
             if (pos_ == before_parse) {
                 pos_++; // Avoid infinite loop
+                if (pos_ >= html_.length()) break; // Exit if we reach end
             }
+        }
+        
+        // Check if closing tag was found
+        if (!found_closing_tag) {
+            add_error("Unclosed tag: " + tag_name);
         }
     }
     
@@ -182,7 +196,7 @@ std::unique_ptr<Node> Parser::parse_text() {
     }
     
     auto node = std::make_unique<Node>(NodeType::Text);
-    node->text_content = text;
+    node->text_content = decode_html_entities(text);
     node->start_pos = start_pos;
     node->end_pos = pos_;
     
@@ -290,7 +304,7 @@ void Parser::parse_attributes(std::map<std::string, std::string>& attributes) {
         
         if (consume_string("=")) {
             std::string value = parse_attribute_value();
-            attributes[name] = value;
+            attributes[name] = decode_html_entities(value);
         } else {
             attributes[name] = "";
         }
@@ -372,6 +386,25 @@ ElementCategory Parser::get_element_category(const std::string& tag_name) const 
         return ElementCategory::EscapableRawText;
     }
     return ElementCategory::Container;
+}
+
+bool Parser::is_valid_tag_name(const std::string& name) const {
+    if (name.empty()) return false;
+    
+    // Tag name must start with letter or underscore
+    if (!std::isalpha(name[0]) && name[0] != '_') {
+        return false;
+    }
+    
+    // Tag name can contain letters, digits, hyphens, underscores, periods, and colons
+    for (size_t i = 1; i < name.length(); ++i) {
+        char c = name[i];
+        if (!std::isalnum(c) && c != '-' && c != '_' && c != '.' && c != ':') {
+            return false;
+        }
+    }
+    
+    return true;
 }
 
 bool Parser::is_valid_child(const std::string& parent, const std::string& child) const {
@@ -512,6 +545,66 @@ std::string PrettyPrinter::escape_json_string(const std::string& str) {
             default: result += c; break;
         }
     }
+    return result;
+}
+
+std::string Parser::decode_html_entities(const std::string& text) const {
+    static const std::map<std::string, std::string> html_entities = {
+        {"&amp;", "&"}, {"&lt;", "<"}, {"&gt;", ">"}, {"&quot;", "\""}, {"&apos;", "'"},
+        {"&nbsp;", " "}, {"&copy;", "©"}, {"&reg;", "®"}, {"&trade;", "™"},
+        {"&euro;", "€"}, {"&pound;", "£"}, {"&yen;", "¥"}, {"&cent;", "¢"},
+        {"&sect;", "§"}, {"&para;", "¶"}, {"&middot;", "·"}, {"&laquo;", "«"},
+        {"&raquo;", "»"}, {"&iquest;", "¿"}, {"&iexcl;", "¡"}, {"&deg;", "°"},
+        {"&plusmn;", "±"}, {"&sup1;", "¹"}, {"&sup2;", "²"}, {"&sup3;", "³"},
+        {"&frac14;", "¼"}, {"&frac12;", "½"}, {"&frac34;", "¾"}
+    };
+    
+    std::string result = text;
+    
+    // Replace named entities
+    for (const auto& entity : html_entities) {
+        size_t pos = 0;
+        while ((pos = result.find(entity.first, pos)) != std::string::npos) {
+            result.replace(pos, entity.first.length(), entity.second);
+            pos += entity.second.length();
+        }
+    }
+    
+    // Replace numeric entities (&#123; and &#x1F;) - manual implementation
+    size_t pos = 0;
+    int safety_counter = 0;
+    while ((pos = result.find("&#", pos)) != std::string::npos && safety_counter++ < 1000) {
+        size_t end_pos = result.find(';', pos);
+        if (end_pos == std::string::npos) break;
+        
+        std::string entity = result.substr(pos, end_pos - pos + 1);
+        std::string number_part = entity.substr(2, entity.length() - 3);
+        
+        if (!number_part.empty()) {
+            try {
+                int code;
+                if (number_part[0] == 'x' || number_part[0] == 'X') {
+                    // Hex entity
+                    code = std::stoi(number_part.substr(1), nullptr, 16);
+                } else {
+                    // Decimal entity
+                    code = std::stoi(number_part);
+                }
+                
+                if (code >= 32 && code <= 126) {
+                    result.replace(pos, entity.length(), std::string(1, static_cast<char>(code)));
+                    pos += 1;
+                } else {
+                    pos = end_pos + 1;
+                }
+            } catch (const std::exception&) {
+                pos = end_pos + 1;
+            }
+        } else {
+            pos = end_pos + 1;
+        }
+    }
+    
     return result;
 }
 

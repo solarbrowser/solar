@@ -121,16 +121,35 @@ std::unique_ptr<CSSStyleSheet> CSSParser::parse_stylesheet() {
                 skip_whitespace();
                 
                 Token url_token = consume_token();
+                std::string import_url;
+                
                 if (url_token.type == TokenType::Url || url_token.type == TokenType::String) {
-                    stylesheet->imports.push_back(url_token.value);
-                    
-                    // Consume until semicolon
-                    while (!tokenizer_.at_end() && peek_token().type != TokenType::Semicolon) {
-                        consume_token();
+                    import_url = url_token.value;
+                } else if ((url_token.type == TokenType::Ident || url_token.type == TokenType::Function) && url_token.value == "url") {
+                    // Parse url() function: url("...")
+                    if (peek_token().type == TokenType::LeftParen) {
+                        consume_token(); // consume (
+                        Token string_token = consume_token();
+                        if (string_token.type == TokenType::String) {
+                            import_url = string_token.value;
+                        }
+                        if (peek_token().type == TokenType::RightParen) {
+                            consume_token(); // consume )
+                        }
                     }
-                    if (peek_token().type == TokenType::Semicolon) {
-                        consume_token();
-                    }
+                }
+                
+                if (!import_url.empty()) {
+                    stylesheet->imports.push_back(import_url);
+                }
+                
+                // Consume until semicolon (with safety)
+                int import_safety = 0;
+                while (!tokenizer_.at_end() && peek_token().type != TokenType::Semicolon && import_safety++ < 100) {
+                    consume_token();
+                }
+                if (peek_token().type == TokenType::Semicolon) {
+                    consume_token();
                 }
             } else {
                 auto rule = parse_at_rule();
@@ -235,15 +254,25 @@ std::unique_ptr<AtRule> CSSParser::parse_at_rule() {
         } else if (rule->is_descriptor()) {
             // Parse declarations
             parse_declaration_list(rule->declarations);
+        } else if (rule->is_keyframes()) {
+            // Parse keyframes rules (0% { ... }, 50% { ... }, etc.)
+            parse_keyframes_rules(rule->rules);
         } else {
-            // Generic block parsing - could be rules or declarations
-            // Try to determine based on content
-            while (!tokenizer_.at_end() && peek_token().type != TokenType::RightBrace) {
+            // Generic block parsing - could be rules or declarations (WITH SAFETY)
+            int generic_safety_counter = 0;
+            size_t generic_last_position = 0;
+            
+            while (!tokenizer_.at_end() && peek_token().type != TokenType::RightBrace && generic_safety_counter++ < 100) {
+                size_t generic_current_position = tokenizer_.position();
+                if (generic_current_position == generic_last_position) {
+                    // No progress made, skip token to avoid infinite loop
+                    consume_token();
+                    continue;
+                }
+                generic_last_position = generic_current_position;
+                
                 Token token = peek_token();
-                if (token.type == TokenType::AtKeyword || 
-                    (token.type == TokenType::Ident && 
-                     std::find_if(peek_token(5).value.begin(), peek_token(5).value.end(), 
-                                  [](char c) { return c == '{'; }) != peek_token(5).value.end())) {
+                if (token.type == TokenType::AtKeyword) {
                     // Looks like a rule
                     auto nested_rule = parse_rule();
                     if (nested_rule) {
@@ -276,10 +305,21 @@ std::unique_ptr<AtRule> CSSParser::parse_at_rule() {
 }
 
 void CSSParser::parse_declaration_list(std::vector<CSSDeclaration>& declarations) {
-    while (!tokenizer_.at_end() && peek_token().type != TokenType::RightBrace) {
+    int safety_counter = 0;
+    size_t last_position = 0;
+    
+    while (!tokenizer_.at_end() && peek_token().type != TokenType::RightBrace && safety_counter++ < 10000) {
         skip_whitespace();
         
         if (peek_token().type == TokenType::RightBrace) break;
+        
+        size_t current_position = tokenizer_.position();
+        if (current_position == last_position) {
+            // No progress made, skip token to avoid infinite loop
+            consume_token();
+            continue;
+        }
+        last_position = current_position;
         
         auto decl = parse_declaration();
         if (!decl.property.empty()) {
@@ -300,14 +340,79 @@ void CSSParser::parse_declaration_list(std::vector<CSSDeclaration>& declarations
 }
 
 void CSSParser::parse_rule_list(std::vector<std::unique_ptr<CSSRule>>& rules) {
-    while (!tokenizer_.at_end() && peek_token().type != TokenType::RightBrace) {
+    int safety_counter = 0;
+    size_t last_position = 0;
+    
+    while (!tokenizer_.at_end() && peek_token().type != TokenType::RightBrace && safety_counter++ < 10000) {
         skip_whitespace();
         
         if (peek_token().type == TokenType::RightBrace) break;
         
+        size_t current_position = tokenizer_.position();
+        if (current_position == last_position) {
+            // No progress made, skip token to avoid infinite loop
+            consume_token();
+            continue;
+        }
+        last_position = current_position;
+        
         auto rule = parse_rule();
         if (rule) {
             rules.push_back(std::move(rule));
+        }
+    }
+}
+
+void CSSParser::parse_keyframes_rules(std::vector<std::unique_ptr<CSSRule>>& rules) {
+    int safety_counter = 0;
+    size_t last_position = 0;
+    
+    while (!tokenizer_.at_end() && peek_token().type != TokenType::RightBrace && safety_counter++ < 100) {
+        skip_whitespace();
+        
+        if (peek_token().type == TokenType::RightBrace) break;
+        
+        size_t current_position = tokenizer_.position();
+        if (current_position == last_position) {
+            // No progress made, skip token to avoid infinite loop
+            consume_token();
+            continue;
+        }
+        last_position = current_position;
+        
+        // Parse keyframe rule: "0%" or "from" or "to" { declarations }
+        Token selector_token = peek_token();
+        
+        if (selector_token.type == TokenType::Percentage || 
+            (selector_token.type == TokenType::Ident && 
+             (selector_token.value == "from" || selector_token.value == "to"))) {
+            
+            // Create a style rule for this keyframe
+            auto keyframe_rule = std::make_unique<StyleRule>();
+            
+            // Parse the keyframe selector (0%, 50%, from, to)
+            ComplexSelector complex_selector;
+            CompoundSelector compound_selector;
+            SimpleSelector simple_selector(SelectorType::Type, selector_token.value);
+            compound_selector.add_selector(simple_selector);
+            complex_selector.add_component(compound_selector);
+            keyframe_rule->selectors.add_selector(complex_selector);
+            
+            consume_token(); // consume the selector
+            skip_whitespace();
+            
+            if (consume_if_match(TokenType::LeftBrace)) {
+                parse_declaration_list(keyframe_rule->declarations);
+                
+                if (!consume_if_match(TokenType::RightBrace)) {
+                    add_error("Expected '}' after keyframe declarations");
+                }
+            }
+            
+            rules.push_back(std::move(keyframe_rule));
+        } else {
+            // Skip unknown token
+            consume_token();
         }
     }
 }

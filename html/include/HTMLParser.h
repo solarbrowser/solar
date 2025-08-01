@@ -99,6 +99,7 @@ private:
     bool is_valid_child(const std::string& parent, const std::string& child) const;
     void add_error(const std::string& message);
     std::string normalize_tag_name(const std::string& name) const;
+    std::string decode_html_entities(const std::string& text) const;
 };
 
 class PrettyPrinter {

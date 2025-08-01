@@ -285,6 +285,7 @@ public:
     std::unique_ptr<CSSRule> clone() const override;
     bool is_conditional() const; // @media, @supports, @document
     bool is_descriptor() const;  // @font-face, @page, @viewport
+    bool is_keyframes() const;   // @keyframes
 };
 
 class CommentRule : public CSSRule {
@@ -447,6 +448,7 @@ private:
     std::unique_ptr<AtRule> parse_at_rule();
     void parse_declaration_list(std::vector<CSSDeclaration>& declarations);
     void parse_rule_list(std::vector<std::unique_ptr<CSSRule>>& rules);
+    void parse_keyframes_rules(std::vector<std::unique_ptr<CSSRule>>& rules);
     
     // Selector parsing helpers
     AttributeSelector parse_attribute_selector();
