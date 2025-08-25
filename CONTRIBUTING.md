@@ -17,7 +17,7 @@ Thank you for your interest in contributing to Solar! We welcome contributions o
 ### 3. Submitting Code
 
 - Fork the repository and create your branch from `main`.  
-- Follow the coding style used in the project (modern C++20 conventions).  
+- Follow the coding style used in the project (C++ 17 conventions).  
 - Write clear, concise commit messages.  
 - Test your changes thoroughly.  
 - Submit a pull request (PR) describing what your changes do and why.
