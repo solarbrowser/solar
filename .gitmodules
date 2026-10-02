@@ -1,0 +1,3 @@
+[submodule "third_party/quanta"]
+	path = third_party/quanta
+	url = https://github.com/solarbrowser/quanta

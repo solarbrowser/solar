@@ -1,11 +1,20 @@
 CXX = clang++
-CXXFLAGS = -std=c++20 -Wall -Wextra -O2 -pthread -Iinclude -MMD -MP
+CXXFLAGS = -std=c++20 -Wall -Wextra -O2 -pthread -Iinclude -isystem third_party/quanta/include -MMD -MP
 
 BUILD_DIR = build
 OBJ_DIR = $(BUILD_DIR)/obj
 
-LIB_SOURCES = $(wildcard src/url/*.cpp)
-LIB_OBJECTS = $(LIB_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
+URL_SOURCES = $(wildcard src/url/*.cpp)
+URL_OBJECTS = $(URL_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
+WEB_SOURCES = $(wildcard src/web/*.cpp)
+WEB_OBJECTS = $(WEB_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
+
+QUANTA_DIR = third_party/quanta
+LIBQUANTA = $(QUANTA_DIR)/build/lib/libquanta.a
+# Named on the link line, not archived: an archive member nothing references is dropped, so
+# only a plain object makes the whole process allocate through mimalloc.
+QUANTA_OVERRIDE = $(QUANTA_DIR)/build/lib/quanta_mimalloc_override.o
+QUANTA_LIBS = $(LIBQUANTA) $(QUANTA_OVERRIDE)
 
 # IdnaTables.cpp must be regenerated from the same Unicode version's data files.
 UNICODE_VERSION = 18.0.0
@@ -13,23 +22,32 @@ UCD_URL = https://www.unicode.org/Public/$(UNICODE_VERSION)
 UCD_DIR = $(BUILD_DIR)/ucd
 
 .DEFAULT_GOAL := all
-.PHONY: all test idna-tables clean
+.PHONY: all test idna-tables clean quanta
 
 all: solar
 
-solar: $(OBJ_DIR)/src/main.o $(LIB_OBJECTS)
+quanta:
+	@$(MAKE) --no-print-directory -C $(QUANTA_DIR) lib
+
+$(QUANTA_LIBS): | quanta
+
+solar: $(OBJ_DIR)/src/main.o $(URL_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^
 
-$(BUILD_DIR)/UrlTest: $(OBJ_DIR)/tests/UrlTest.o $(LIB_OBJECTS)
+$(BUILD_DIR)/UrlTest: $(OBJ_DIR)/tests/UrlTest.o $(URL_OBJECTS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^
 
-$(BUILD_DIR)/SearchParamsTest: $(OBJ_DIR)/tests/SearchParamsTest.o $(LIB_OBJECTS)
+$(BUILD_DIR)/SearchParamsTest: $(OBJ_DIR)/tests/SearchParamsTest.o $(URL_OBJECTS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^
 
-$(BUILD_DIR)/ValidationErrorTest: $(OBJ_DIR)/tests/ValidationErrorTest.o $(LIB_OBJECTS)
+$(BUILD_DIR)/ValidationErrorTest: $(OBJ_DIR)/tests/ValidationErrorTest.o $(URL_OBJECTS)
+	@echo "[LINK] $@"
+	@$(CXX) $(CXXFLAGS) -o $@ $^
+
+$(BUILD_DIR)/UrlBindingsTest: $(OBJ_DIR)/tests/UrlBindingsTest.o $(URL_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^
 
@@ -38,10 +56,11 @@ $(BUILD_DIR)/GenIdnaTables: tools/GenIdnaTables.cpp
 	@echo "[BUILD] $<"
 	@$(CXX) -std=c++20 -Wall -Wextra -O2 -o $@ $<
 
-test: $(BUILD_DIR)/UrlTest $(BUILD_DIR)/SearchParamsTest $(BUILD_DIR)/ValidationErrorTest
+test: $(BUILD_DIR)/UrlTest $(BUILD_DIR)/SearchParamsTest $(BUILD_DIR)/ValidationErrorTest $(BUILD_DIR)/UrlBindingsTest
 	@$(BUILD_DIR)/UrlTest
 	@$(BUILD_DIR)/SearchParamsTest
 	@$(BUILD_DIR)/ValidationErrorTest
+	@$(BUILD_DIR)/UrlBindingsTest
 
 idna-tables: $(BUILD_DIR)/GenIdnaTables
 	@mkdir -p $(UCD_DIR)
@@ -60,4 +79,4 @@ $(OBJ_DIR)/%.o: %.cpp
 clean:
 	@rm -rf $(BUILD_DIR) solar
 
--include $(LIB_OBJECTS:.o=.d) $(OBJ_DIR)/src/main.d $(OBJ_DIR)/tests/UrlTest.d $(OBJ_DIR)/tests/SearchParamsTest.d $(OBJ_DIR)/tests/ValidationErrorTest.d
+-include $(wildcard $(OBJ_DIR)/*/*.d $(OBJ_DIR)/*/*/*.d)
