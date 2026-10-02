@@ -337,19 +337,44 @@ bool SatisfiesBidiRule(std::u32string_view label) {
   return last == BidiClass::L || last == BidiClass::EN;
 }
 
-bool IsValidLabel(std::u32string_view label, bool checkBidi) {
+// `strict` stands for UTS46's CheckHyphens, UseSTD3ASCIIRules and VerifyDnsLength, which the
+// URL Standard sets together.
+bool IsValidLabel(std::u32string_view label, bool checkBidi, bool strict) {
   if (label.empty()) return true;
   if (NormalizeNfc(label) != label) return false;
-  if (StartsWithXn(label)) return false;
+  if (strict) {
+    if (label.size() >= 4 && label[2] == U'-' && label[3] == U'-') return false;
+    if (label.front() == U'-' || label.back() == U'-') return false;
+  } else if (StartsWithXn(label)) {
+    return false;
+  }
   if (IsMark(label.front())) return false;
   for (char32_t c : label) {
     if (c == U'.' || LookupMapping(c).status != Status::Valid) return false;
+    bool std3Ascii = (c >= U'a' && c <= U'z') || (c >= U'0' && c <= U'9') || c == U'-';
+    if (strict && c < 0x80 && !std3Ascii) return false;
   }
   if (!SatisfiesContextJ(label)) return false;
   return !checkBidi || SatisfiesBidiRule(label);
 }
 
-std::optional<std::string> ToAscii(std::u32string_view domain) {
+bool IsValidDnsLength(std::string_view domain) {
+  std::string_view name = domain;
+  if (name.ends_with('.')) name.remove_suffix(1);
+  if (name.empty() || name.size() > 253) return false;
+
+  size_t start = 0;
+  for (size_t i = 0; i <= name.size(); ++i) {
+    if (i == name.size() || name[i] == '.') {
+      size_t length = i - start;
+      if (length < 1 || length > 63) return false;
+      start = i + 1;
+    }
+  }
+  return true;
+}
+
+std::optional<std::string> ToAscii(std::u32string_view domain, bool strict) {
   std::u32string mapped;
   for (char32_t c : domain) {
     const MappingRange& range = LookupMapping(c);
@@ -389,7 +414,7 @@ std::optional<std::string> ToAscii(std::u32string_view domain) {
 
   std::string result;
   for (size_t i = 0; i < labels.size(); ++i) {
-    if (!IsValidLabel(labels[i], bidiDomain)) return std::nullopt;
+    if (!IsValidLabel(labels[i], bidiDomain, strict)) return std::nullopt;
 
     if (i > 0) result.push_back('.');
     if (IsAscii(labels[i])) {
@@ -400,6 +425,7 @@ std::optional<std::string> ToAscii(std::u32string_view domain) {
       result += "xn--" + *encoded;
     }
   }
+  if (strict && !IsValidDnsLength(result)) return std::nullopt;
   return result;
 }
 
@@ -416,7 +442,9 @@ bool IsForbiddenDomainCodePoint(char c) {
 
 }  // namespace
 
-std::optional<std::string> DomainToAscii(std::u32string_view domain) {
+std::optional<std::string> DomainToAscii(std::u32string_view domain, ValidationErrors* errors) {
+  if (errors && !ToAscii(domain, true)) Report(errors, ValidationError::DomainToAscii);
+
   std::optional<std::string> result;
   if (IsAscii(domain)) {
     // Web compatibility: an ASCII domain is only lowercased and never run through UTS46,
@@ -428,7 +456,7 @@ std::optional<std::string> DomainToAscii(std::u32string_view domain) {
     }
     result = std::move(lowered);
   } else {
-    result = ToAscii(domain);
+    result = ToAscii(domain, false);
   }
 
   if (!result || result->empty()) return std::nullopt;

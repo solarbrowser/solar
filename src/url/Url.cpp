@@ -22,6 +22,16 @@ std::optional<uint16_t> DefaultPort(std::string_view scheme) {
   return std::nullopt;
 }
 
+bool IsUrlCodePoint(char32_t c) {
+  if (c < 0x80) {
+    return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+           std::string_view("!$&'()*+,-./:;=?@_~").find(static_cast<char>(c)) != std::string_view::npos;
+  }
+  bool surrogate = c >= 0xD800 && c <= 0xDFFF;
+  bool noncharacter = (c >= 0xFDD0 && c <= 0xFDEF) || (c & 0xFFFE) == 0xFFFE;
+  return c >= 0xA0 && c <= 0x10FFFD && !surrogate && !noncharacter;
+}
+
 bool IsWindowsDriveLetter(std::string_view s) {
   return s.size() == 2 && IsAsciiAlpha(s[0]) && (s[1] == ':' || s[1] == '|');
 }

@@ -29,14 +29,19 @@ $(BUILD_DIR)/SearchParamsTest: $(OBJ_DIR)/tests/SearchParamsTest.o $(LIB_OBJECTS
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^
 
+$(BUILD_DIR)/ValidationErrorTest: $(OBJ_DIR)/tests/ValidationErrorTest.o $(LIB_OBJECTS)
+	@echo "[LINK] $@"
+	@$(CXX) $(CXXFLAGS) -o $@ $^
+
 $(BUILD_DIR)/GenIdnaTables: tools/GenIdnaTables.cpp
 	@mkdir -p $(BUILD_DIR)
 	@echo "[BUILD] $<"
 	@$(CXX) -std=c++20 -Wall -Wextra -O2 -o $@ $<
 
-test: $(BUILD_DIR)/UrlTest $(BUILD_DIR)/SearchParamsTest
+test: $(BUILD_DIR)/UrlTest $(BUILD_DIR)/SearchParamsTest $(BUILD_DIR)/ValidationErrorTest
 	@$(BUILD_DIR)/UrlTest
 	@$(BUILD_DIR)/SearchParamsTest
+	@$(BUILD_DIR)/ValidationErrorTest
 
 idna-tables: $(BUILD_DIR)/GenIdnaTables
 	@mkdir -p $(UCD_DIR)
@@ -55,4 +60,4 @@ $(OBJ_DIR)/%.o: %.cpp
 clean:
 	@rm -rf $(BUILD_DIR) solar
 
--include $(LIB_OBJECTS:.o=.d) $(OBJ_DIR)/src/main.d $(OBJ_DIR)/tests/UrlTest.d $(OBJ_DIR)/tests/SearchParamsTest.d
+-include $(LIB_OBJECTS:.o=.d) $(OBJ_DIR)/src/main.d $(OBJ_DIR)/tests/UrlTest.d $(OBJ_DIR)/tests/SearchParamsTest.d $(OBJ_DIR)/tests/ValidationErrorTest.d

@@ -30,6 +30,8 @@ struct Url {
 bool IsSpecialScheme(std::string_view scheme);
 std::optional<uint16_t> DefaultPort(std::string_view scheme);
 
+bool IsUrlCodePoint(char32_t codePoint);
+
 bool IsWindowsDriveLetter(std::string_view s);
 bool IsNormalizedWindowsDriveLetter(std::string_view s);
 bool StartsWithWindowsDriveLetter(std::string_view s);

@@ -6,6 +6,7 @@
 
 #include "solar/url/Idna.h"
 #include "solar/url/PercentEncode.h"
+#include "solar/url/Url.h"
 #include "solar/url/Utf8.h"
 
 namespace solar::url {
@@ -37,18 +38,26 @@ std::vector<std::string_view> Split(std::string_view s, char separator) {
   return parts;
 }
 
-std::optional<uint64_t> ParseIpv4Number(std::string_view input) {
+struct Ipv4Number {
+  uint64_t value;
+  bool nonDecimal;
+};
+
+std::optional<Ipv4Number> ParseIpv4Number(std::string_view input) {
   if (input.empty()) return std::nullopt;
 
   unsigned radix = 10;
+  bool nonDecimal = false;
   if (input.size() >= 2 && input[0] == '0' && (input[1] == 'x' || input[1] == 'X')) {
     input.remove_prefix(2);
     radix = 16;
+    nonDecimal = true;
   } else if (input.size() >= 2 && input[0] == '0') {
     input.remove_prefix(1);
     radix = 8;
+    nonDecimal = true;
   }
-  if (input.empty()) return 0;
+  if (input.empty()) return Ipv4Number{0, true};
 
   uint64_t value = 0;
   for (char c : input) {
@@ -57,7 +66,7 @@ std::optional<uint64_t> ParseIpv4Number(std::string_view input) {
     value = value * radix + digit;
     if (value > kIpv4NumberCap) value = kIpv4NumberCap;
   }
-  return value;
+  return Ipv4Number{value, nonDecimal};
 }
 
 bool EndsInANumber(std::string_view input) {
@@ -72,18 +81,35 @@ bool EndsInANumber(std::string_view input) {
   return ParseIpv4Number(last).has_value();
 }
 
-std::optional<std::string> ParseIpv4(std::string_view input) {
+std::optional<std::string> ParseIpv4(std::string_view input, ValidationErrors* errors) {
   std::vector<std::string_view> parts = Split(input, '.');
-  if (parts.back().empty() && parts.size() > 1) parts.pop_back();
-  if (parts.size() > 4) return std::nullopt;
+  if (parts.back().empty()) {
+    Report(errors, ValidationError::Ipv4EmptyPart);
+    if (parts.size() > 1) parts.pop_back();
+  }
+  if (parts.size() < 4) Report(errors, ValidationError::Ipv4TooFewParts);
+  if (parts.size() > 4) {
+    Report(errors, ValidationError::Ipv4TooManyParts);
+    return std::nullopt;
+  }
 
   std::vector<uint64_t> numbers;
   for (std::string_view part : parts) {
-    std::optional<uint64_t> number = ParseIpv4Number(part);
-    if (!number) return std::nullopt;
-    numbers.push_back(*number);
+    std::optional<Ipv4Number> number = ParseIpv4Number(part);
+    if (!number) {
+      Report(errors, ValidationError::Ipv4NonNumericPart);
+      return std::nullopt;
+    }
+    if (number->nonDecimal) Report(errors, ValidationError::Ipv4NonDecimalPart);
+    numbers.push_back(number->value);
   }
 
+  for (uint64_t number : numbers) {
+    if (number > 255) {
+      Report(errors, ValidationError::Ipv4OutOfRangePart);
+      break;
+    }
+  }
   for (size_t i = 0; i + 1 < numbers.size(); ++i) {
     if (numbers[i] > 255) return std::nullopt;
   }
@@ -154,7 +180,7 @@ std::string SerializeIpv6(const std::array<uint16_t, 8>& address) {
   return out;
 }
 
-std::optional<std::string> ParseIpv6(std::string_view input) {
+std::optional<std::string> ParseIpv6(std::string_view input, ValidationErrors* errors) {
   std::array<uint16_t, 8> address{};
   size_t pieceIndex = 0;
   std::optional<size_t> compress;
@@ -163,16 +189,25 @@ std::optional<std::string> ParseIpv6(std::string_view input) {
   auto at = [&](size_t i) -> int { return i < input.size() ? static_cast<unsigned char>(input[i]) : -1; };
 
   if (at(pointer) == ':') {
-    if (at(pointer + 1) != ':') return std::nullopt;
+    if (at(pointer + 1) != ':') {
+      Report(errors, ValidationError::Ipv6InvalidCompression);
+      return std::nullopt;
+    }
     pointer += 2;
     compress = ++pieceIndex;
   }
 
   while (at(pointer) != -1) {
-    if (pieceIndex == 8) return std::nullopt;
+    if (pieceIndex == 8) {
+      Report(errors, ValidationError::Ipv6TooManyPieces);
+      return std::nullopt;
+    }
 
     if (at(pointer) == ':') {
-      if (compress) return std::nullopt;
+      if (compress) {
+        Report(errors, ValidationError::Ipv6MultipleCompression);
+        return std::nullopt;
+      }
       ++pointer;
       compress = ++pieceIndex;
       continue;
@@ -187,9 +222,15 @@ std::optional<std::string> ParseIpv6(std::string_view input) {
     }
 
     if (at(pointer) == '.') {
-      if (length == 0) return std::nullopt;
+      if (length == 0) {
+        Report(errors, ValidationError::Ipv4InIpv6InvalidCodePoint);
+        return std::nullopt;
+      }
       pointer -= length;
-      if (pieceIndex > 6) return std::nullopt;
+      if (pieceIndex > 6) {
+        Report(errors, ValidationError::Ipv4InIpv6TooManyPieces);
+        return std::nullopt;
+      }
 
       size_t numbersSeen = 0;
       while (at(pointer) != -1) {
@@ -198,21 +239,29 @@ std::optional<std::string> ParseIpv6(std::string_view input) {
           if (at(pointer) == '.' && numbersSeen < 4) {
             ++pointer;
           } else {
+            Report(errors, ValidationError::Ipv4InIpv6InvalidCodePoint);
             return std::nullopt;
           }
         }
-        if (at(pointer) == -1 || !IsAsciiDigit(static_cast<char>(at(pointer)))) return std::nullopt;
+        if (at(pointer) == -1 || !IsAsciiDigit(static_cast<char>(at(pointer)))) {
+          Report(errors, ValidationError::Ipv4InIpv6InvalidCodePoint);
+          return std::nullopt;
+        }
 
         while (at(pointer) != -1 && IsAsciiDigit(static_cast<char>(at(pointer)))) {
           uint32_t number = at(pointer) - '0';
           if (!ipv4Piece) {
             ipv4Piece = number;
           } else if (*ipv4Piece == 0) {
+            Report(errors, ValidationError::Ipv4InIpv6InvalidCodePoint);
             return std::nullopt;
           } else {
             ipv4Piece = *ipv4Piece * 10 + number;
           }
-          if (*ipv4Piece > 255) return std::nullopt;
+          if (*ipv4Piece > 255) {
+            Report(errors, ValidationError::Ipv4InIpv6OutOfRangePart);
+            return std::nullopt;
+          }
           ++pointer;
         }
 
@@ -220,17 +269,27 @@ std::optional<std::string> ParseIpv6(std::string_view input) {
         ++numbersSeen;
         if (numbersSeen == 2 || numbersSeen == 4) ++pieceIndex;
       }
-      if (numbersSeen != 4) return std::nullopt;
+      if (numbersSeen != 4) {
+        Report(errors, ValidationError::Ipv4InIpv6TooFewParts);
+        return std::nullopt;
+      }
       break;
     }
 
     if (at(pointer) == ':') {
       ++pointer;
-      if (at(pointer) == -1) return std::nullopt;
+      if (at(pointer) == -1) {
+        Report(errors, ValidationError::Ipv6InvalidCodePoint);
+        return std::nullopt;
+      }
     } else if (at(pointer) != -1) {
+      Report(errors, ValidationError::Ipv6InvalidCodePoint);
       return std::nullopt;
     }
 
+    if (length > 1 && value < (uint32_t{1} << (4 * (length - 1)))) {
+      Report(errors, ValidationError::Ipv6PieceLeadingZero);
+    }
     address[pieceIndex] = static_cast<uint16_t>(value);
     ++pieceIndex;
   }
@@ -244,6 +303,7 @@ std::optional<std::string> ParseIpv6(std::string_view input) {
       --swaps;
     }
   } else if (pieceIndex != 8) {
+    Report(errors, ValidationError::Ipv6TooFewPieces);
     return std::nullopt;
   }
 
@@ -261,32 +321,67 @@ bool IsForbiddenHostCodePoint(char c) {
   }
 }
 
-std::optional<std::string> ParseOpaqueHost(std::string_view input) {
+std::optional<std::string> ParseOpaqueHost(std::string_view input, ValidationErrors* errors) {
   for (char c : input) {
-    if (IsForbiddenHostCodePoint(c)) return std::nullopt;
+    if (IsForbiddenHostCodePoint(c)) {
+      Report(errors, ValidationError::HostInvalidCodePoint);
+      return std::nullopt;
+    }
   }
+
+  if (errors) {
+    for (char32_t c : DecodeUtf8(input)) {
+      if (c != '%' && !IsUrlCodePoint(c)) {
+        Report(errors, ValidationError::InvalidUrlUnit);
+        break;
+      }
+    }
+    for (size_t i = input.find('%'); i != std::string_view::npos; i = input.find('%', i + 1)) {
+      if (i + 2 >= input.size() || HexValue(input[i + 1]) < 0 || HexValue(input[i + 2]) < 0) {
+        Report(errors, ValidationError::InvalidUrlUnit);
+        break;
+      }
+    }
+  }
+
   std::string out;
   AppendPercentEncoded(out, input, EncodeSet::C0Control);
   return out;
 }
 
+bool ContainsPercentEncodedByte(std::string_view input) {
+  for (size_t i = 0; i + 2 < input.size(); ++i) {
+    if (input[i] == '%' && HexValue(input[i + 1]) >= 0 && HexValue(input[i + 2]) >= 0) return true;
+  }
+  return false;
+}
+
 }  // namespace
 
-std::optional<std::string> ParseHost(std::string_view input, bool isOpaque) {
+std::optional<std::string> ParseHost(std::string_view input, bool isOpaque, ValidationErrors* errors) {
   if (!input.empty() && input.front() == '[') {
-    if (input.back() != ']') return std::nullopt;
-    std::optional<std::string> ipv6 = ParseIpv6(input.substr(1, input.size() - 2));
+    if (input.back() != ']') {
+      Report(errors, ValidationError::Ipv6Unclosed);
+      return std::nullopt;
+    }
+    std::optional<std::string> ipv6 = ParseIpv6(input.substr(1, input.size() - 2), errors);
     if (!ipv6) return std::nullopt;
     return "[" + *ipv6 + "]";
   }
 
-  if (isOpaque) return ParseOpaqueHost(input);
+  if (isOpaque) return ParseOpaqueHost(input, errors);
 
+  if (ContainsPercentEncodedByte(input)) Report(errors, ValidationError::DomainPercentEncoded);
   std::u32string domain = DecodeUtf8(PercentDecode(input));
-  std::optional<std::string> asciiDomain = DomainToAscii(domain);
+  std::optional<std::string> asciiDomain = DomainToAscii(domain, errors);
   if (!asciiDomain) return std::nullopt;
 
-  if (EndsInANumber(*asciiDomain)) return ParseIpv4(*asciiDomain);
+  if (EndsInANumber(*asciiDomain)) {
+    bool ascii = true;
+    for (char32_t c : domain) ascii = ascii && c < 0x80;
+    if (!ascii) Report(errors, ValidationError::Ipv4NonAsciiInput);
+    return ParseIpv4(*asciiDomain, errors);
+  }
   return asciiDomain;
 }
 

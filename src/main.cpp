@@ -13,7 +13,11 @@ int main(int argc, char** argv) {
   }
 
   std::string normalized = solar::url::Normalize(argv[1]);
-  std::optional<solar::url::Url> url = solar::url::Parse(normalized);
+  solar::url::ValidationErrors errors;
+  std::optional<solar::url::Url> url = solar::url::Parse(normalized, nullptr, &errors);
+  for (solar::url::ValidationError error : errors) {
+    std::fprintf(stderr, "warning: %s\n", solar::url::ValidationErrorName(error));
+  }
   if (!url) {
     std::fprintf(stderr, "invalid url: %s\n", normalized.c_str());
     return 1;

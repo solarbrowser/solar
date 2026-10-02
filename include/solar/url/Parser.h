@@ -4,12 +4,15 @@
 #include <string_view>
 
 #include "solar/url/Url.h"
+#include "solar/url/ValidationError.h"
 
 namespace solar::url {
 
 // The WHATWG URL Standard's URL parser. Input that is not valid UTF-8 is
 // decoded with replacement characters first, as the standard expects of callers.
-std::optional<Url> Parse(std::string_view input, const Url* base = nullptr);
+// When `errors` is given, every validation error met along the way is appended to it,
+// whether or not the parse then succeeds.
+std::optional<Url> Parse(std::string_view input, const Url* base = nullptr, ValidationErrors* errors = nullptr);
 
 // The states the URL setters start the parser in ("state override").
 enum class StateOverride { SchemeStart, Host, Hostname, Port, PathStart, Query, Fragment };
