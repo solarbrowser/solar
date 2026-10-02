@@ -8,4 +8,6 @@ namespace solar::url {
 
 std::string Serialize(const Url& url, bool excludeFragment = false);
 
+std::string SerializePath(const Url& url);
+
 }  // namespace solar::url

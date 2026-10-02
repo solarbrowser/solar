@@ -19,14 +19,17 @@ std::string Serialize(const Url& url, bool excludeFragment) {
   // Without this, a path starting with an empty segment would read back as a host.
   if (!url.host && !url.opaquePath && url.path.size() > 1 && url.path[0].empty()) out += "/.";
 
-  if (url.opaquePath) {
-    out += *url.opaquePath;
-  } else {
-    for (const std::string& segment : url.path) out += "/" + segment;
-  }
+  out += SerializePath(url);
 
   if (url.query) out += "?" + *url.query;
   if (!excludeFragment && url.fragment) out += "#" + *url.fragment;
+  return out;
+}
+
+std::string SerializePath(const Url& url) {
+  if (url.opaquePath) return *url.opaquePath;
+  std::string out;
+  for (const std::string& segment : url.path) out += "/" + segment;
   return out;
 }
 

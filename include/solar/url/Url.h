@@ -24,6 +24,7 @@ struct Url {
 
   bool IsSpecial() const;
   bool IncludesCredentials() const { return !username.empty() || !password.empty(); }
+  bool CannotHaveUsernamePasswordPort() const { return !host || host->empty() || scheme == "file"; }
 };
 
 bool IsSpecialScheme(std::string_view scheme);

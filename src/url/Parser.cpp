@@ -24,6 +24,7 @@ enum class State {
   SpecialAuthorityIgnoreSlashes,
   Authority,
   Host,
+  Hostname,  // only ever a state override: identical to Host except that it refuses a port
   Port,
   File,
   FileSlash,
@@ -60,16 +61,21 @@ bool IsDoubleDotSegment(std::string_view s) {
 
 class BasicUrlParser {
  public:
-  BasicUrlParser(std::string_view input, const Url* base) : input_(input), base_(base) {}
+  BasicUrlParser(std::string_view input, const Url* base, Url& url, std::optional<State> stateOverride)
+      : input_(input),
+        base_(base),
+        url_(url),
+        override_(stateOverride),
+        state_(stateOverride.value_or(State::SchemeStart)) {}
 
-  std::optional<Url> Run() {
+  bool Run() {
     const std::ptrdiff_t size = static_cast<std::ptrdiff_t>(input_.size());
     while (true) {
-      if (!Step()) return std::nullopt;
-      if (pointer_ >= size) break;
+      if (!Step()) return false;
+      if (done_ || pointer_ >= size) break;
       ++pointer_;
     }
-    return std::move(url_);
+    return true;
   }
 
  private:
@@ -99,7 +105,8 @@ class BasicUrlParser {
       case State::SpecialAuthoritySlashes: return OnSpecialAuthoritySlashes();
       case State::SpecialAuthorityIgnoreSlashes: return OnSpecialAuthorityIgnoreSlashes();
       case State::Authority: return OnAuthority();
-      case State::Host: return OnHost();
+      case State::Host:
+      case State::Hostname: return OnHost();
       case State::Port: return OnPort();
       case State::File: return OnFile();
       case State::FileSlash: return OnFileSlash();
@@ -118,9 +125,11 @@ class BasicUrlParser {
     if (IsAsciiAlpha(c)) {
       buffer_.push_back(AsciiLower(c));
       state_ = State::Scheme;
-    } else {
+    } else if (!override_) {
       state_ = State::NoScheme;
       --pointer_;
+    } else {
+      return false;
     }
     return true;
   }
@@ -130,8 +139,20 @@ class BasicUrlParser {
     if (IsAsciiAlphanumeric(c) || c == '+' || c == '-' || c == '.') {
       buffer_.push_back(AsciiLower(c));
     } else if (c == ':') {
+      if (override_) {
+        // A scheme change must not cross between special and non-special, and file
+        // keeps its restrictions on credentials, ports and an empty host.
+        if (url_.IsSpecial() != IsSpecialScheme(buffer_)) return Finish();
+        if ((url_.IncludesCredentials() || url_.port) && buffer_ == "file") return Finish();
+        if (url_.scheme == "file" && url_.host && url_.host->empty()) return Finish();
+      }
       url_.scheme = std::move(buffer_);
       buffer_.clear();
+
+      if (override_) {
+        if (url_.port == DefaultPort(url_.scheme)) url_.port.reset();
+        return Finish();
+      }
 
       if (url_.scheme == "file") {
         state_ = State::File;
@@ -146,10 +167,12 @@ class BasicUrlParser {
         url_.opaquePath = "";
         state_ = State::OpaquePath;
       }
-    } else {
+    } else if (!override_) {
       buffer_.clear();
       state_ = State::NoScheme;
       pointer_ = -1;
+    } else {
+      return false;
     }
     return true;
   }
@@ -292,8 +315,12 @@ class BasicUrlParser {
 
   bool OnHost() {
     int c = C();
-    if (c == ':' && !insideBrackets_) {
+    if (override_ && url_.scheme == "file") {
+      --pointer_;
+      state_ = State::FileHost;
+    } else if (c == ':' && !insideBrackets_) {
       if (buffer_.empty()) return false;
+      if (override_ == State::Hostname) return false;
       std::optional<std::string> host = ParseHost(buffer_, !url_.IsSpecial());
       if (!host) return false;
       url_.host = std::move(host);
@@ -302,11 +329,13 @@ class BasicUrlParser {
     } else if (IsSpecialTerminator(c)) {
       --pointer_;
       if (url_.IsSpecial() && buffer_.empty()) return false;
+      if (override_ && buffer_.empty() && (url_.IncludesCredentials() || url_.port)) return false;
       std::optional<std::string> host = ParseHost(buffer_, !url_.IsSpecial());
       if (!host) return false;
       url_.host = std::move(host);
       buffer_.clear();
       state_ = State::PathStart;
+      if (override_) return Finish();
     } else {
       if (c == '[') insideBrackets_ = true;
       if (c == ']') insideBrackets_ = false;
@@ -319,7 +348,7 @@ class BasicUrlParser {
     int c = C();
     if (IsAsciiDigit(c)) {
       buffer_.push_back(static_cast<char>(c));
-    } else if (IsSpecialTerminator(c)) {
+    } else if (IsSpecialTerminator(c) || override_) {
       if (!buffer_.empty()) {
         uint32_t port = 0;
         for (char digit : buffer_) {
@@ -333,7 +362,9 @@ class BasicUrlParser {
           url_.port = static_cast<uint16_t>(port);
         }
         buffer_.clear();
+        if (override_) return Finish();
       }
+      if (override_) return false;
       state_ = State::PathStart;
       --pointer_;
     } else {
@@ -400,11 +431,12 @@ class BasicUrlParser {
     int c = C();
     if (c == kEof || c == '/' || c == '\\' || c == '?' || c == '#') {
       --pointer_;
-      if (IsWindowsDriveLetter(buffer_)) {
+      if (!override_ && IsWindowsDriveLetter(buffer_)) {
         // buffer_ is deliberately kept: the path state consumes it as the first segment.
         state_ = State::Path;
       } else if (buffer_.empty()) {
         url_.host = "";
+        if (override_) return Finish();
         state_ = State::PathStart;
       } else {
         std::optional<std::string> host = ParseHost(buffer_, !url_.IsSpecial());
@@ -413,6 +445,7 @@ class BasicUrlParser {
         url_.host = std::move(host);
         buffer_.clear();
         state_ = State::PathStart;
+        if (override_) return Finish();
       }
     } else {
       buffer_.push_back(static_cast<char>(c));
@@ -425,15 +458,17 @@ class BasicUrlParser {
     if (url_.IsSpecial()) {
       state_ = State::Path;
       if (c != '/' && c != '\\') --pointer_;
-    } else if (c == '?') {
+    } else if (!override_ && c == '?') {
       url_.query = "";
       state_ = State::Query;
-    } else if (c == '#') {
+    } else if (!override_ && c == '#') {
       url_.fragment = "";
       state_ = State::Fragment;
     } else if (c != kEof) {
       state_ = State::Path;
       if (c != '/') --pointer_;
+    } else if (override_ && !url_.host) {
+      url_.path.emplace_back();
     }
     return true;
   }
@@ -442,7 +477,7 @@ class BasicUrlParser {
     int c = C();
     bool slash = c == '/' || (url_.IsSpecial() && c == '\\');
 
-    if (c == kEof || slash || c == '?' || c == '#') {
+    if (c == kEof || slash || (!override_ && (c == '?' || c == '#'))) {
       if (IsDoubleDotSegment(buffer_)) {
         ShortenPath(url_);
         if (!slash) url_.path.emplace_back();
@@ -492,7 +527,7 @@ class BasicUrlParser {
 
   bool OnQuery() {
     int c = C();
-    if (c == '#' || c == kEof) {
+    if ((!override_ && c == '#') || c == kEof) {
       EncodeSet set = url_.IsSpecial() ? EncodeSet::SpecialQuery : EncodeSet::Query;
       AppendPercentEncoded(*url_.query, buffer_, set);
       buffer_.clear();
@@ -514,10 +549,18 @@ class BasicUrlParser {
     return true;
   }
 
+  // Ends a state-override run successfully, which the standard words as a bare "return".
+  bool Finish() {
+    done_ = true;
+    return true;
+  }
+
   std::string_view input_;
   const Url* base_;
-  Url url_;
-  State state_ = State::SchemeStart;
+  Url& url_;
+  std::optional<State> override_;
+  State state_;
+  bool done_ = false;
   std::string buffer_;
   bool atSignSeen_ = false;
   bool insideBrackets_ = false;
@@ -525,15 +568,17 @@ class BasicUrlParser {
   std::ptrdiff_t pointer_ = 0;
 };
 
-std::string Sanitize(std::string_view input) {
+std::string Sanitize(std::string_view input, bool trimControlsAndSpace) {
   std::string scalarValues;
   scalarValues.reserve(input.size());
   for (char32_t codePoint : DecodeUtf8(input)) AppendUtf8(scalarValues, codePoint);
 
   size_t begin = 0;
   size_t end = scalarValues.size();
-  while (begin < end && static_cast<unsigned char>(scalarValues[begin]) <= 0x20) ++begin;
-  while (end > begin && static_cast<unsigned char>(scalarValues[end - 1]) <= 0x20) --end;
+  if (trimControlsAndSpace) {
+    while (begin < end && static_cast<unsigned char>(scalarValues[begin]) <= 0x20) ++begin;
+    while (end > begin && static_cast<unsigned char>(scalarValues[end - 1]) <= 0x20) --end;
+  }
 
   std::string out;
   out.reserve(end - begin);
@@ -547,8 +592,18 @@ std::string Sanitize(std::string_view input) {
 }  // namespace
 
 std::optional<Url> Parse(std::string_view input, const Url* base) {
-  std::string sanitized = Sanitize(input);
-  return BasicUrlParser(sanitized, base).Run();
+  std::string sanitized = Sanitize(input, true);
+  Url url;
+  if (!BasicUrlParser(sanitized, base, url, std::nullopt).Run()) return std::nullopt;
+  return url;
+}
+
+bool ParseInto(Url& url, std::string_view input, StateOverride state) {
+  static constexpr State kStates[] = {State::SchemeStart, State::Host,      State::Hostname,
+                                      State::Port,        State::PathStart, State::Query,
+                                      State::Fragment};
+  std::string sanitized = Sanitize(input, false);
+  return BasicUrlParser(sanitized, nullptr, url, kStates[static_cast<int>(state)]).Run();
 }
 
 }  // namespace solar::url
