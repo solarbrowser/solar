@@ -51,16 +51,21 @@ $(BUILD_DIR)/UrlBindingsTest: $(OBJ_DIR)/tests/UrlBindingsTest.o $(URL_OBJECTS) 
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^
 
+$(BUILD_DIR)/WptTest: $(OBJ_DIR)/tests/WptTest.o $(URL_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
+	@echo "[LINK] $@"
+	@$(CXX) $(CXXFLAGS) -o $@ $^
+
 $(BUILD_DIR)/GenIdnaTables: tools/GenIdnaTables.cpp
 	@mkdir -p $(BUILD_DIR)
 	@echo "[BUILD] $<"
 	@$(CXX) -std=c++20 -Wall -Wextra -O2 -o $@ $<
 
-test: $(BUILD_DIR)/UrlTest $(BUILD_DIR)/SearchParamsTest $(BUILD_DIR)/ValidationErrorTest $(BUILD_DIR)/UrlBindingsTest
+test: $(BUILD_DIR)/UrlTest $(BUILD_DIR)/SearchParamsTest $(BUILD_DIR)/ValidationErrorTest $(BUILD_DIR)/UrlBindingsTest $(BUILD_DIR)/WptTest
 	@$(BUILD_DIR)/UrlTest
 	@$(BUILD_DIR)/SearchParamsTest
 	@$(BUILD_DIR)/ValidationErrorTest
 	@$(BUILD_DIR)/UrlBindingsTest
+	@$(BUILD_DIR)/WptTest $(wildcard tests/wpt/url/*.any.js)
 
 idna-tables: $(BUILD_DIR)/GenIdnaTables
 	@mkdir -p $(UCD_DIR)

@@ -1,0 +1,5 @@
+urlencoded-parser.any.js	request.formData()	needs the Fetch API
+urlencoded-parser.any.js	response.formData()	needs the Fetch API
+urlsearchparams-constructor.any.js	URLSearchParams constructor, FormData.	needs FormData
+urlsearchparams-constructor.any.js	URLSearchParams constructor, DOMException as argument	needs DOMException
+IdnaTestV2.any.js	ToASCII("𾢬	assigned in Unicode 18.0, which WPT's expectations predate
