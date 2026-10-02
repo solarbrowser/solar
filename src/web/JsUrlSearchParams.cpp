@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <string>
 
 #include "UrlBindingsInternal.h"
@@ -33,6 +34,106 @@ JsUrlSearchParams* This(Context& ctx, const Value& thisValue) {
   return self;
 }
 
+using Pair = url::UrlSearchParams::Pair;
+
+// The engine keeps a lone surrogate as a 3-byte sequence, which USVString turns into one
+// U+FFFD; the keys OwnKeys returns have not been through that yet.
+std::string ScrubSurrogates(const std::string& s) {
+  std::string out;
+  out.reserve(s.size());
+  for (size_t i = 0; i < s.size(); ++i) {
+    bool surrogate = static_cast<unsigned char>(s[i]) == 0xED && i + 2 < s.size() &&
+                     static_cast<unsigned char>(s[i + 1]) >= 0xA0;
+    if (surrogate) {
+      out += "\xEF\xBF\xBD";
+      i += 2;
+    } else {
+      out.push_back(s[i]);
+    }
+  }
+  return out;
+}
+
+// Calls `visit` with each value `iterable`'s iterator produces. False, with an exception
+// pending, when anything fails or `visit` returns false.
+template <typename Visit>
+bool Iterate(Context& ctx, const Value& iterable, const Value& method, Visit visit) {
+  Value iterator = qe::Call(ctx, method, iterable);
+  if (qe::HasException(ctx)) return false;
+  if (!qe::IsObject(iterator)) {
+    qe::ThrowTypeError(ctx, "The iterator method did not return an object");
+    return false;
+  }
+  Value next = qe::Get(ctx, iterator, "next");
+  if (qe::HasException(ctx)) return false;
+
+  while (true) {
+    Value result = qe::Call(ctx, next, iterator);
+    if (qe::HasException(ctx)) return false;
+    if (!qe::IsObject(result)) {
+      qe::ThrowTypeError(ctx, "The iterator result is not an object");
+      return false;
+    }
+    Value done = qe::Get(ctx, result, "done");
+    if (qe::HasException(ctx)) return false;
+    if (done.to_boolean()) return true;
+    Value item = qe::Get(ctx, result, "value");
+    if (qe::HasException(ctx)) return false;
+    if (!visit(item)) return false;
+  }
+}
+
+// sequence<sequence<USVString>>, each inner sequence being a name and a value.
+bool ReadSequence(Context& ctx, const Value& init, const Value& method, std::vector<Pair>& out) {
+  return Iterate(ctx, init, method, [&](const Value& pair) {
+    if (!qe::IsObject(pair)) {
+      qe::ThrowTypeError(ctx, "Failed to construct 'URLSearchParams': The provided value cannot be converted to a sequence.");
+      return false;
+    }
+    Value innerMethod = qe::GetIteratorMethod(ctx, pair);
+    if (qe::HasException(ctx)) return false;
+    if (qe::IsUndefined(innerMethod)) {
+      qe::ThrowTypeError(ctx, "Failed to construct 'URLSearchParams': The provided value cannot be converted to a sequence.");
+      return false;
+    }
+
+    std::vector<std::string> items;
+    bool ok = Iterate(ctx, pair, innerMethod, [&](const Value& item) {
+      items.push_back(qe::ToUsvUtf8(ctx, item));
+      return !qe::HasException(ctx);
+    });
+    if (!ok) return false;
+    if (items.size() != 2) {
+      qe::ThrowTypeError(ctx, "Failed to construct 'URLSearchParams': Each query pair must be an iterable [name, value] tuple");
+      return false;
+    }
+    out.emplace_back(std::move(items[0]), std::move(items[1]));
+    return true;
+  });
+}
+
+// record<USVString, USVString>. A repeated key keeps its first position and takes the last value.
+bool ReadRecord(Context& ctx, const Value& init, std::vector<Pair>& out) {
+  std::vector<std::string> keys = qe::OwnKeys(ctx, init);
+  if (qe::HasException(ctx)) return false;
+
+  for (const std::string& rawKey : keys) {
+    Value value = qe::Get(ctx, init, rawKey);
+    if (qe::HasException(ctx)) return false;
+    std::string text = qe::ToUsvUtf8(ctx, value);
+    if (qe::HasException(ctx)) return false;
+
+    std::string key = ScrubSurrogates(rawKey);
+    auto existing = std::find_if(out.begin(), out.end(), [&](const Pair& pair) { return pair.first == key; });
+    if (existing != out.end()) {
+      existing->second = std::move(text);
+    } else {
+      out.emplace_back(std::move(key), std::move(text));
+    }
+  }
+  return true;
+}
+
 Value Construct(Context& ctx, Value, qe::Args args, Value newTarget) {
   if (qe::IsUndefined(newTarget)) {
     qe::ThrowTypeError(ctx, "Failed to construct 'URLSearchParams': Please use the 'new' operator, this DOM "
@@ -41,22 +142,31 @@ Value Construct(Context& ctx, Value, qe::Args args, Value newTarget) {
   }
 
   std::string init;
+  std::vector<Pair> pairs;
+  bool fromObject = false;
   if (!args.empty() && !qe::IsUndefined(args[0])) {
     if (qe::IsObject(args[0])) {
-      // The sequence and record forms need to tell an iterable from a plain object, which
-      // takes a Symbol.iterator lookup the embedding surface does not offer yet.
-      qe::ThrowTypeError(ctx, "Failed to construct 'URLSearchParams': object initializers are not supported");
-      return qe::Undefined();
+      fromObject = true;
+      Value method = qe::GetIteratorMethod(ctx, args[0]);
+      if (qe::HasException(ctx)) return qe::Undefined();
+      bool ok = qe::IsUndefined(method) ? ReadRecord(ctx, args[0], pairs) : ReadSequence(ctx, args[0], method, pairs);
+      if (!ok) return qe::Undefined();
+    } else {
+      init = qe::ToUsvUtf8(ctx, args[0]);
+      if (qe::HasException(ctx)) return qe::Undefined();
     }
-    init = qe::ToUsvUtf8(ctx, args[0]);
-    if (qe::HasException(ctx)) return qe::Undefined();
   }
 
   Object* prototype = qe::PrototypeFromNewTarget(ctx, newTarget);
   if (qe::HasException(ctx)) return qe::Undefined();
 
   JsUrlSearchParams* params = Heap::Allocate<JsUrlSearchParams>();
-  params->own.emplace(init);
+  if (fromObject) {
+    params->own.emplace();
+    for (const Pair& pair : pairs) params->own->Append(pair.first, pair.second);
+  } else {
+    params->own.emplace(init);
+  }
   params->initialize_prototype(prototype ? prototype : g_prototype);
   return qe::FromObject(params);
 }

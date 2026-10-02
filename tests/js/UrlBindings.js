@@ -108,6 +108,24 @@ check('empty', new URLSearchParams().toString(), '');
 check('undefined init', new URLSearchParams(undefined).size, 0);
 check('string init', new URLSearchParams('x=1&x=2').size, 2);
 
+check('record init', new URLSearchParams({ a: '1', b: '2' }).toString(), 'a=1&b=2');
+check('record skips symbols', new URLSearchParams({ a: '1', [Symbol('s')]: '2' }).toString(), 'a=1');
+check('record converts values', new URLSearchParams({ n: 5, t: true, z: null }).toString(), 'n=5&t=true&z=null');
+check('sequence init', new URLSearchParams([['a', '1'], ['b', '2']]).toString(), 'a=1&b=2');
+check('sequence keeps duplicates', new URLSearchParams([['a', '1'], ['a', '2']]).toString(), 'a=1&a=2');
+check('map init', new URLSearchParams(new Map([['m', 'n']])).toString(), 'm=n');
+check('params init', new URLSearchParams(new URLSearchParams('p=q')).toString(), 'p=q');
+check('generator init', new URLSearchParams((function* () { yield ['g', 'h']; })()).toString(), 'g=h');
+check('null init is a string', new URLSearchParams(null).toString(), 'null=');
+check('number init is a string', new URLSearchParams(5).toString(), '5=');
+check('init object is not linked', (() => { const o = { a: '1' }; const p = new URLSearchParams(o); o.a = '2'; return p.get('a'); })(), '1');
+throwsTypeError('pair of three', () => new URLSearchParams([['a', 'b', 'c']]));
+throwsTypeError('pair of one', () => new URLSearchParams([['a']]));
+throwsTypeError('pair is not an object', () => new URLSearchParams(['ab']));
+throwsTypeError('pair is not iterable', () => new URLSearchParams([{}]));
+throwsTypeError('iterator method not callable', () => new URLSearchParams({ [Symbol.iterator]: 1 }));
+throwsTypeError('iterator throws', () => new URLSearchParams({ *[Symbol.iterator]() { throw new TypeError('x'); } }));
+
 const sorted = new URLSearchParams('z=1&a=2&\u{1F308}=3&ﬃ=4');
 sorted.sort();
 check('sort by code unit', [...sorted.keys()].join('|'), ['a', 'z', '\u{1F308}', '\uFB03'].join('|'));
