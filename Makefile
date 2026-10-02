@@ -60,12 +60,14 @@ $(BUILD_DIR)/GenIdnaTables: tools/GenIdnaTables.cpp
 	@echo "[BUILD] $<"
 	@$(CXX) -std=c++20 -Wall -Wextra -O2 -o $@ $<
 
+# One process per WPT file: Quanta segfaults after several Runtimes have been created and used
+# in one process (tests/wpt/url/url-setters-stripping.any.js six times in a row reproduces it).
 test: $(BUILD_DIR)/UrlTest $(BUILD_DIR)/SearchParamsTest $(BUILD_DIR)/ValidationErrorTest $(BUILD_DIR)/UrlBindingsTest $(BUILD_DIR)/WptTest
 	@$(BUILD_DIR)/UrlTest
 	@$(BUILD_DIR)/SearchParamsTest
 	@$(BUILD_DIR)/ValidationErrorTest
 	@$(BUILD_DIR)/UrlBindingsTest
-	@$(BUILD_DIR)/WptTest $(wildcard tests/wpt/url/*.any.js)
+	@for f in $(wildcard tests/wpt/url/*.any.js); do $(BUILD_DIR)/WptTest $$f || exit 1; done
 
 idna-tables: $(BUILD_DIR)/GenIdnaTables
 	@mkdir -p $(UCD_DIR)

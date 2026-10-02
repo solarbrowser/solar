@@ -90,6 +90,8 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
 }  // namespace
 
 int main(int argc, char** argv) {
+  // Unbuffered, so that the last line before a crash is the file that crashed.
+  std::setbuf(stdout, nullptr);
   if (argc < 2) {
     std::fprintf(stderr, "usage: %s <test.any.js>...\n", argv[0]);
     return 2;
