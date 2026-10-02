@@ -8,6 +8,11 @@ bool InSet(uint8_t byte, EncodeSet set) {
   if (byte <= 0x1F || byte > 0x7E) return true;
   if (set == EncodeSet::C0Control) return false;
 
+  if (set == EncodeSet::FormUrlencoded) {
+    bool alphanumeric = (byte >= '0' && byte <= '9') || (byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z');
+    return !alphanumeric && byte != '*' && byte != '-' && byte != '.' && byte != '_';
+  }
+
   if (set == EncodeSet::Fragment) {
     return byte == ' ' || byte == '"' || byte == '<' || byte == '>' || byte == '`';
   }
@@ -45,6 +50,16 @@ void AppendPercentEncoded(std::string& out, uint8_t byte, EncodeSet set) {
 
 void AppendPercentEncoded(std::string& out, std::string_view bytes, EncodeSet set) {
   for (char byte : bytes) AppendPercentEncoded(out, static_cast<uint8_t>(byte), set);
+}
+
+void AppendFormEncoded(std::string& out, std::string_view bytes) {
+  for (char byte : bytes) {
+    if (byte == ' ') {
+      out.push_back('+');
+    } else {
+      AppendPercentEncoded(out, static_cast<uint8_t>(byte), EncodeSet::FormUrlencoded);
+    }
+  }
 }
 
 std::string PercentDecode(std::string_view input) {

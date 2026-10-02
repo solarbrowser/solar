@@ -80,4 +80,11 @@ void AppendUtf8(std::string& out, char32_t codePoint) {
   }
 }
 
+std::string ScrubUtf8(std::string_view bytes) {
+  std::string out;
+  out.reserve(bytes.size());
+  for (char32_t codePoint : DecodeUtf8(bytes)) AppendUtf8(out, codePoint);
+  return out;
+}
+
 }  // namespace solar::url

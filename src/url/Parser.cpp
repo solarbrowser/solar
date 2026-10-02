@@ -569,9 +569,7 @@ class BasicUrlParser {
 };
 
 std::string Sanitize(std::string_view input, bool trimControlsAndSpace) {
-  std::string scalarValues;
-  scalarValues.reserve(input.size());
-  for (char32_t codePoint : DecodeUtf8(input)) AppendUtf8(scalarValues, codePoint);
+  std::string scalarValues = ScrubUtf8(input);
 
   size_t begin = 0;
   size_t end = scalarValues.size();
