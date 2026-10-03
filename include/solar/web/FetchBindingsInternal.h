@@ -34,13 +34,37 @@ struct BodyBuffer {
   // What a read of it rejects with when it was cut short on purpose (an abort), instead of a TypeError.
   std::shared_ptr<Quanta::Embed::Persistent> failureValue;
   std::vector<std::function<void()>> waiting;  // consumers that asked before it was complete
+  // Streams reading it as it arrives: woken by each piece of it, and by its end.
+  std::vector<std::function<void()>> watchers;
+  // The body was made from a ReadableStream: the bytes are the stream's, which its owner holds.
+  bool fromStream = false;
+
+  // Wakes whoever waits for more of it; `ended` also wakes those who waited for all of it.
+  void Wake(bool ended) {
+    std::vector<std::function<void()>> woken = std::move(watchers);
+    watchers.clear();
+    if (ended) {
+      for (auto& wake : waiting) woken.push_back(std::move(wake));
+      waiting.clear();
+    }
+    for (auto& wake : woken) wake();
+  }
 };
 
 // The part of Request and Response that is the Body mixin of the Fetch Standard.
 struct JsBodyOwner : Quanta::DOMObject {
   std::shared_ptr<BodyBuffer> body;  // none: the object has no body
   bool used = false;                 // the body has been read (or handed over)
-  void Visit(Quanta::Visitor&) {}
+  // The ReadableStream that is the body (the `body` attribute): the one it was made from, or one made
+  // over its bytes the first time it is asked for. A body with a stream is read through it.
+  Quanta::Object* stream = nullptr;
+  // What a read of the whole stream is waiting to hand its bytes (or its failure) to.
+  struct PendingRead {
+    std::function<void(std::string)> ok;
+    std::function<void(const Quanta::Value&)> fail;
+  };
+  std::optional<PendingRead> pendingRead;
+  void Visit(Quanta::Visitor& visitor) { visitor.Mark(stream); }
 };
 
 // A Blob: immutable bytes with a type. A slice shares its parent's bytes.
@@ -102,7 +126,10 @@ struct JsResponse : JsBodyOwner {
   std::string url;  // serialized without the fragment; empty if it has none
   bool redirected = false;
   JsHeaders* headers = nullptr;
-  void Visit(Quanta::Visitor& visitor) { visitor.Mark(headers); }
+  void Visit(Quanta::Visitor& visitor) {
+    JsBodyOwner::Visit(visitor);
+    visitor.Mark(headers);
+  }
 };
 
 enum class RequestMode { SameOrigin, NoCors, Cors, Navigate };
@@ -123,6 +150,7 @@ struct JsRequest : JsBodyOwner {
   bool keepalive = false;
   JsAbortSignal* signal = nullptr;
   void Visit(Quanta::Visitor& visitor) {
+    JsBodyOwner::Visit(visitor);
     visitor.Mark(headers);
     visitor.Mark(signal);
   }
@@ -136,6 +164,7 @@ JsRequest* MakeRequest(Quanta::Context& ctx, const Quanta::Value& input, const Q
 struct ExtractedBody {
   std::shared_ptr<BodyBuffer> buffer;
   std::string contentType;
+  Quanta::Object* stream = nullptr;  // the ReadableStream it was made from, if it was
 };
 // BodyInit -> bytes. False, with an exception pending, if it is a kind this build does not have.
 bool ExtractBody(Quanta::Context& ctx, const Quanta::Value& init, ExtractedBody& out);
@@ -150,6 +179,30 @@ Quanta::Value ResolvedPromise(Quanta::Context& ctx, const Quanta::Value& value);
 Quanta::Value DecodeUtf8(Quanta::Context& ctx, std::string_view bytes);
 // A Blob's type from a Content-Type value: the MIME type in lower case, or empty if it is none.
 std::string BlobTypeFromContentType(std::string_view contentType);
+
+// ---- Bodies as streams (JsBodyStream.cpp) ----
+
+// The hidden functions the streams script reads a body with, and registers its own with.
+void DefineBodyStreamFunctions(Quanta::Context& ctx);
+// The ReadableStream of a body, made over its bytes the first time. Null, with no exception, if there is
+// no body; null with one pending if the script could not make it.
+Quanta::Object* BodyStream(Quanta::Context& ctx, JsBodyOwner* owner);
+// Whether `value` is a ReadableStream of this realm, and whether one is locked or has been read from.
+bool IsReadableStream(Quanta::Context& ctx, const Quanta::Value& value);
+bool StreamIsUnusable(Quanta::Context& ctx, Quanta::Object* stream);
+// A new ReadableStream that gives what `stream` gives, which is read to the end into it. Null, with an
+// exception pending, if the script could not make it.
+Quanta::Object* ProxyBodyStream(Quanta::Context& ctx, Quanta::Object* stream);
+// bodyUsed: the body has been read, or its stream has been disturbed.
+bool BodyIsUsed(Quanta::Context& ctx, JsBodyOwner* owner);
+// Reads all of the stream the body is, one way or another: `ok` gets its bytes, or `fail` the reason it
+// failed, from a later job. False, with an exception pending, if the stream is locked or disturbed.
+bool ReadBodyStream(Quanta::Context& ctx, JsBodyOwner* owner, std::function<void(std::string)> ok, std::function<void(const Quanta::Value&)> fail);
+// Gives `to` the body of `from` as a clone does: the same bytes, or the other half of a tee of its stream.
+// False, with an exception pending, if the tee failed.
+bool CloneBody(Quanta::Context& ctx, JsBodyOwner* from, JsBodyOwner* to);
+// A ReadableStream over a Blob's bytes.
+Quanta::Value BlobStream(Quanta::Context& ctx, JsBlob* blob);
 
 // A TypeError as a value, to reject a promise with.
 Quanta::Value MakeTypeError(Quanta::Context& ctx, const std::string& message);

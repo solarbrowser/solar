@@ -410,3 +410,147 @@ promise_test(async () => {
   const wrong = await new Response('x=1', { headers: { 'Content-Type': 'text/plain' } }).formData().then(() => 'resolved', (e) => e);
   assert_true(wrong instanceof TypeError, 'another type is not form data');
 }, 'formData() understands urlencoded bodies and refuses others');
+
+promise_test(async () => {
+  const response = await fetch(SERVER + '/trickle');
+  assert_true(response.body instanceof ReadableStream);
+  assert_equals(response.body, response.body, 'the same stream each time');
+  const reader = response.body.getReader();
+  const started = Date.now();
+  const first = await reader.read();
+  assert_false(first.done);
+  assert_true(first.value instanceof Uint8Array);
+  assert_equals(new TextDecoder().decode(first.value), '01234');
+  assert_true(Date.now() - started < 600, 'the first part is not held back for the rest');
+  const second = await reader.read();
+  assert_equals(new TextDecoder().decode(second.value), '56789');
+  assert_true((await reader.read()).done);
+  assert_true(response.bodyUsed);
+}, 'response.body gives the body as it arrives');
+
+promise_test(async () => {
+  const response = await fetch(SERVER + '/bytes');
+  const reader = response.body.getReader({ mode: 'byob' });
+  const chunks = [];
+  let buffer = new ArrayBuffer(100);
+  for (;;) {
+    const { value, done } = await reader.read(new Uint8Array(buffer));
+    if (value) chunks.push(...value);
+    if (done) break;
+    buffer = value.buffer;
+  }
+  assert_array_equals(chunks, Array.from({ length: 256 }, (_, i) => i));
+}, 'a BYOB reader reads the body into its own buffers');
+
+promise_test(async () => {
+  const response = await fetch(SERVER + '/text');
+  const reader = response.body.getReader();
+  const read = reader.read();
+  await read;
+  await promise_rejects_js(null, TypeError, response.text());
+  assert_true(response.bodyUsed);
+  assert_throws_js(TypeError, () => response.clone());
+}, 'a body being read through its stream cannot be read again');
+
+promise_test(async () => {
+  const response = await fetch(SERVER + '/text');
+  await response.text();
+  assert_true(response.body.locked || response.bodyUsed);
+  assert_true(response.bodyUsed);
+}, 'the stream of a body that was read is used up');
+
+promise_test(async () => {
+  const response = await fetch(SERVER + '/text');
+  const copy = response.clone();
+  assert_not_equals(response.body, copy.body);
+  const [a, b] = await Promise.all([response.text(), copy.text()]);
+  assert_equals(a, 'hello');
+  assert_equals(b, 'hello');
+}, 'clone() of a response with a stream tees it');
+
+promise_test(async () => {
+  const response = await fetch(SERVER + '/trickle');
+  const copy = response.clone();
+  const [a, b] = await Promise.all([response.text(), copy.arrayBuffer()]);
+  assert_equals(a, '0123456789');
+  assert_equals(new TextDecoder().decode(b), '0123456789');
+}, 'clone() of a response whose body is still arriving');
+
+promise_test(async () => {
+  const response = new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('hel'));
+      controller.enqueue(new TextEncoder().encode('lo'));
+      controller.close();
+    },
+  }));
+  assert_equals(await response.text(), 'hello');
+}, 'a Response made from a stream reads as the stream gave it');
+
+promise_test(async (t) => {
+  const stream = new ReadableStream({ start(c) { c.enqueue('not bytes'); c.close(); } });
+  await promise_rejects_js(t, TypeError, new Response(stream).text());
+  const failing = new ReadableStream({ start(c) { c.error(new RangeError('boom')); } });
+  await promise_rejects_js(t, RangeError, new Response(failing).arrayBuffer());
+}, 'a stream body that gives anything but bytes, or fails, rejects the read');
+
+promise_test(async () => {
+  const stream = new ReadableStream({ start(c) { c.enqueue(new Uint8Array([1])); c.close(); } });
+  stream.getReader();
+  assert_throws_js(TypeError, () => new Response(stream), 'a locked stream cannot be a body');
+}, 'a locked stream is not a body');
+
+promise_test(async () => {
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('streamed '));
+      controller.enqueue(new TextEncoder().encode('upload'));
+      controller.close();
+    },
+  });
+  assert_throws_js(TypeError, () => new Request(SERVER + '/echo', { method: 'POST', body }), 'duplex is required');
+  const request = new Request(SERVER + '/echo', { method: 'POST', body: new ReadableStream({
+    start(c) { c.enqueue(new TextEncoder().encode('streamed ')); c.enqueue(new TextEncoder().encode('upload')); c.close(); },
+  }), duplex: 'half' });
+  const echo = await (await fetch(request)).json();
+  assert_equals(echo.method, 'POST');
+  assert_equals(echo.body, 'streamed upload');
+}, 'fetch sends the bytes of a stream body');
+
+promise_test(async () => {
+  const request = new Request(SERVER + '/echo', { method: 'POST', body: 'x' });
+  const body = request.body;
+  const next = new Request(request);
+  assert_true(request.bodyUsed);
+  assert_not_equals(next.body, body);
+  assert_equals(await next.text(), 'x');
+}, 'a Request made from a Request takes its body through a new stream');
+
+promise_test(async () => {
+  const blob = new Blob(['ab', 'cd']);
+  const reader = blob.stream().getReader();
+  let text = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    text += new TextDecoder().decode(value);
+  }
+  assert_equals(text, 'abcd');
+  assert_equals(await new Response(blob.stream()).text(), 'abcd');
+}, 'Blob.stream() gives the bytes of the Blob');
+
+promise_test(async () => {
+  const response = await fetch(SERVER + '/text');
+  const text = await response.body.pipeThrough(new TextDecoderStream()).getReader().read();
+  assert_equals(text.value, 'hello');
+}, 'a body pipes through a TextDecoderStream');
+
+promise_test(async () => {
+  const controller = new AbortController();
+  const response = await fetch(SERVER + '/trickle', { signal: controller.signal });
+  const reader = response.body.getReader();
+  await reader.read();
+  controller.abort();
+  const error = await reader.read().then(() => null, (e) => e);
+  assert_true(error !== null, 'the stream fails when the fetch is aborted');
+}, 'aborting a fetch fails the stream of its body');

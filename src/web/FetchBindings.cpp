@@ -24,6 +24,7 @@ void Install(Host& host) {
   // symbol-keyed definitions, so it is installed from script.
   host.Evaluate("Headers.prototype[Symbol.iterator] = Headers.prototype.entries; FormData.prototype[Symbol.iterator] = FormData.prototype.entries; Object.setPrototypeOf(File, Blob);");
 
+  DefineBodyStreamFunctions(host.GetContext());
   // The streams are a script, run here, after the classes it uses (AbortController among them) exist.
   std::string streams;
   for (const char* const* piece = kScriptStreams; *piece; ++piece) streams += *piece;

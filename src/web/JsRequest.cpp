@@ -52,6 +52,7 @@ struct RequestInit {
   bool hasHeaders = false;
   Value signal;
   bool hasSignal = false;
+  bool duplex = false;  // duplex: "half" was given
   bool any = false;  // whether any member was given
 };
 
@@ -95,6 +96,7 @@ bool ReadInit(Context& ctx, const Value& init, RequestInit& out) {
       return false;
     }
     out.any = true;
+    out.duplex = true;
   }
   out.headers = qe::Get(ctx, init, "headers");
   if (qe::HasException(ctx)) return false;
@@ -300,27 +302,49 @@ JsRequest* MakeRequest(Context& ctx, const Value& input, const Value& init) {
 
   // The body: the init's, or the input's, which then belongs to the new request alone.
   std::shared_ptr<BodyBuffer> body;
+  Quanta::Object* stream = nullptr;
   std::string contentType;
   const bool initBody = members.hasBody && !qe::IsNull(members.body);
   if (initBody) {
     ExtractedBody extracted;
     if (!ExtractBody(ctx, members.body, extracted)) return nullptr;
     body = extracted.buffer;
+    stream = extracted.stream;
     contentType = extracted.contentType;
+    if (stream && !members.duplex) {
+      qe::ThrowTypeError(ctx, "Failed to construct 'Request': The `duplex` member must be specified for a request with a ReadableStream body.");
+      return nullptr;
+    }
   } else if (source && source->body) {
     if (source->used) {
       qe::ThrowTypeError(ctx, "Failed to construct 'Request': Cannot construct a Request with a Request object that has already been used.");
       return nullptr;
     }
     body = source->body;
+    stream = source->stream;
+    if (stream && StreamIsUnusable(ctx, stream)) {
+      qe::ThrowTypeError(ctx, "Failed to construct 'Request': Cannot construct a Request with a Request object that has already been used.");
+      return nullptr;
+    }
   }
   if (body && (request->method == "GET" || request->method == "HEAD")) {
     qe::ThrowTypeError(ctx, "Failed to construct 'Request': Request with GET/HEAD method cannot have body.");
     return nullptr;
   }
-  // The input's body is spent only now that nothing can fail any more.
-  if (!initBody && source && source->body) source->used = true;
+  // The input's body is spent only now that nothing can fail any more, whether or not the init gave a new one.
+  if (source && source->body) {
+    if (!initBody && stream) {
+      // The new request reads the input's stream through a stream of its own.
+      stream = ProxyBodyStream(ctx, stream);
+      if (!stream) return nullptr;
+    }
+    source->used = true;
+  }
   request->body = std::move(body);
+  if (stream) {
+    request->stream = stream;
+    request->NoteWrite(qe::FromObject(stream));
+  }
   if (initBody && !contentType.empty() && !request->headers->headers.Has("content-type")) request->headers->headers.Append("Content-Type", contentType);
   return request;
 }
@@ -423,23 +447,20 @@ Value GetDuplex(Context& ctx, Value t, qe::Args, Value) {
 
 Value GetBodyUsed(Context& ctx, Value t, qe::Args, Value) {
   JsRequest* self = This(ctx, t);
-  return self ? qe::FromBool(self->used) : qe::Undefined();
+  return self ? qe::FromBool(BodyIsUsed(ctx, self)) : qe::Undefined();
 }
 
-// A body is a ReadableStream in the standard, and this build has none: a request without a body says so,
-// and one with a body says what it cannot give.
 Value GetBody(Context& ctx, Value t, qe::Args, Value) {
   JsRequest* self = This(ctx, t);
   if (!self) return qe::Undefined();
-  if (!self->body) return qe::Null();
-  qe::ThrowTypeError(ctx, "Request.body is not supported yet; read the body with text(), json(), arrayBuffer() or bytes()");
-  return qe::Undefined();
+  Quanta::Object* stream = BodyStream(ctx, self);
+  return stream ? qe::FromObject(stream) : qe::Null();
 }
 
 Value Clone(Context& ctx, Value t, qe::Args, Value) {
   JsRequest* self = This(ctx, t);
   if (!self) return qe::Undefined();
-  if (self->used) {
+  if (BodyIsUsed(ctx, self) || (self->stream && StreamIsUnusable(ctx, self->stream))) {
     qe::ThrowTypeError(ctx, "Failed to execute 'clone' on 'Request': Request body is already used");
     return qe::Undefined();
   }
@@ -454,7 +475,7 @@ Value Clone(Context& ctx, Value t, qe::Args, Value) {
   copy->referrerPolicy = self->referrerPolicy;
   copy->integrity = self->integrity;
   copy->keepalive = self->keepalive;
-  copy->body = self->body;
+  if (!CloneBody(ctx, self, copy)) return qe::Undefined();
   copy->headers = AllocateHeaders(ctx, self->headers->headers.guard());
   copy->headers->headers = self->headers->headers;
   copy->NoteWrite(qe::FromObject(copy->headers));

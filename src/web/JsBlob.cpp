@@ -252,6 +252,11 @@ Value Text(Context& ctx, Value t, qe::Args, Value) {
   return ResolvedPromise(ctx, DecodeUtf8(ctx, self->Bytes()));
 }
 
+Value Stream(Context& ctx, Value t, qe::Args, Value) {
+  JsBlob* self = This(ctx, t);
+  return self ? BlobStream(ctx, self) : qe::Undefined();
+}
+
 Value ReadBytes(Context& ctx, JsBlob* self, bool asBuffer) {
   const std::string_view bytes = self->Bytes();
   Value array = qe::NewUint8Array(ctx, {reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size()});
@@ -321,6 +326,7 @@ void DefineBlobClasses(Context& ctx) {
   qe::DefineAccessor(blob.prototype, "type", GetType, nullptr);
   qe::DefineMethod(blob.prototype, "slice", Slice, 0);
   qe::DefineMethod(blob.prototype, "text", Text, 0);
+  qe::DefineMethod(blob.prototype, "stream", Stream, 0);
   qe::DefineMethod(blob.prototype, "arrayBuffer", Read<true>, 0);
   qe::DefineMethod(blob.prototype, "bytes", Read<false>, 0);
   qe::DefineGlobal(ctx, "Blob", blob.constructor);

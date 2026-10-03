@@ -70,9 +70,13 @@ bool ExtractBody(Context& ctx, const Value& init, ExtractedBody& out) {
     out.contentType = "application/x-www-form-urlencoded;charset=UTF-8";
   } else if (std::optional<std::span<const uint8_t>> bytes = qe::BytesOf(init)) {
     buffer->bytes.assign(reinterpret_cast<const char*>(bytes->data()), bytes->size());
-  } else if (qe::IsObject(init) && qe::IsCallable(qe::Get(ctx, init, "getReader"))) {
-    qe::ThrowTypeError(ctx, "A ReadableStream body is not supported yet");
-    return false;
+  } else if (qe::IsObject(init) && IsReadableStream(ctx, init)) {
+    if (StreamIsUnusable(ctx, init.as_object())) {
+      if (!qe::HasException(ctx)) qe::ThrowTypeError(ctx, "Failed to construct body: the ReadableStream is locked or disturbed");
+      return false;
+    }
+    buffer->fromStream = true;
+    out.stream = init.as_object();
   } else if (qe::IsObject(init) && DOMObject::Cast<DOMObject>(init)) {
     // Some other host object: no class of this build is a body.
     qe::ThrowTypeError(ctx, "This kind of body is not supported yet");
@@ -145,7 +149,7 @@ Value ConsumeBody(Context& ctx, JsBodyOwner* owner, BodyKind kind, const std::st
     qe::Call(ctx, capability.reject, qe::Undefined(), qe::Args(&error, 1));
     return capability.promise;
   }
-  if (owner->used) {
+  if (owner->used || (owner->stream && BodyIsUsed(ctx, owner))) {
     Value error = MakeTypeError(ctx, "Body is unusable: Body has already been read");
     qe::Call(ctx, capability.reject, qe::Undefined(), qe::Args(&error, 1));
     return capability.promise;
@@ -153,6 +157,28 @@ Value ConsumeBody(Context& ctx, JsBodyOwner* owner, BodyKind kind, const std::st
 
   qe::Persistent resolve(ctx, capability.resolve);
   qe::Persistent reject(ctx, capability.reject);
+  if (owner->stream) {
+    // A body with a stream is read through it, whoever made the stream.
+    auto resolveShared = std::make_shared<qe::Persistent>(std::move(resolve));
+    auto rejectShared = std::make_shared<qe::Persistent>(std::move(reject));
+    const bool started = ReadBodyStream(
+        ctx, owner,
+        [host, resolveShared, rejectShared, kind, mimeType](std::string bytes) {
+          BodyBuffer read;
+          read.bytes = std::move(bytes);
+          Settle(host, host->context(), *resolveShared, *rejectShared, read, kind, mimeType);
+        },
+        [host, rejectShared](const Value& reason) {
+          Value error = reason;
+          qe::Call(host->context(), rejectShared->Get(), qe::Undefined(), qe::Args(&error, 1));
+        });
+    if (!started) {
+      Value error = ctx.get_exception();
+      ctx.clear_exception();
+      qe::Call(ctx, capability.reject, qe::Undefined(), qe::Args(&error, 1));
+    }
+    return capability.promise;
+  }
   if (!owner->body) {
     BodyBuffer empty;
     Settle(host, ctx, resolve, reject, empty, kind, mimeType);

@@ -68,9 +68,7 @@ void FetchOperation::FailWith(const Value& reason, const std::string& message) {
   } else if (body && !body->complete && !body->failure) {
     body->failure = message;
     body->failureValue = std::make_shared<qe::Persistent>(ctx, reason);
-    std::vector<std::function<void()>> waiting = std::move(body->waiting);
-    body->waiting.clear();
-    for (auto& wake : waiting) wake();
+    body->Wake(true);
   }
   if (host.config().afterScript) host.config().afterScript();
 }
@@ -178,7 +176,13 @@ void FetchOperation::OnResponseHead(const net::HttpResponseHead& head, const url
 
 void FetchOperation::OnBody(std::span<const uint8_t> data) {
   if (preflighting) return;
-  if (body && !body->failure) body->bytes.append(reinterpret_cast<const char*>(data.data()), data.size());
+  if (body && !body->failure) {
+    body->bytes.append(reinterpret_cast<const char*>(data.data()), data.size());
+    if (!body->watchers.empty()) {
+      body->Wake(false);
+      if (host.config().afterScript) host.config().afterScript();
+    }
+  }
 }
 
 void FetchOperation::StartMain() {
@@ -194,9 +198,7 @@ void FetchOperation::OnEnd() {
   if (body && !body->failure) {
     body->complete = true;
     qe::ReportExternalAllocation(body->bytes.size());
-    std::vector<std::function<void()>> waiting = std::move(body->waiting);
-    body->waiting.clear();
-    for (auto& wake : waiting) wake();
+    body->Wake(true);
   }
   if (host.config().afterScript) host.config().afterScript();
   Done();
@@ -217,6 +219,7 @@ void CancelOperation(FetchOperation& operation) {
   if (operation.body && !operation.body->complete) {
     operation.body->failure = "the page went away";
     operation.body->waiting.clear();
+    operation.body->watchers.clear();
   }
   operation.Done();
 }
@@ -266,11 +269,6 @@ Value Fetch(Context& ctx, Value, qe::Args args, Value newTarget) {
   net::FetchOptions options;
   options.method = request->method;
   options.headers = request->headers->headers.list();
-  if (request->body) {
-    // The request's bytes go as they are, shared with it, and it is read now.
-    options.body = std::shared_ptr<const std::string>(request->body, &request->body->bytes);
-    request->used = true;
-  }
   options.cache = request->cache;
   options.redirect = request->redirect;
   options.timeout = std::chrono::hours(24);
@@ -304,39 +302,73 @@ Value Fetch(Context& ctx, Value, qe::Args args, Value newTarget) {
   op->method = request->method;
   host->Adopt(std::move(operation));
 
-  // A cors request that is not simple asks the server first, unless it has been told lately that it may.
-  if (op->corsTainted && net::NeedsPreflight(request->method, request->headers->headers)) {
-    op->preflightNeeded = true;
-    op->unsafeHeaders = net::CorsUnsafeRequestHeaderNames(request->headers->headers);
-    url::Url withoutFragment = request->url;
-    withoutFragment.fragment.reset();
-    op->preflightUrl = url::Serialize(withoutFragment);
-    const bool includeCredentials = request->credentials == RequestCredentials::Include;
-    if (!host->preflights().Allows(op->pageOrigin, op->preflightUrl, includeCredentials, op->method, op->unsafeHeaders)) {
-      net::FetchOptions preflight;
-      preflight.method = "OPTIONS";
-      preflight.headers.emplace_back("Origin", op->pageOrigin);
-      preflight.headers.emplace_back("Access-Control-Request-Method", op->method);
-      if (!op->unsafeHeaders.empty()) {
-        std::string names;
-        for (const std::string& name : op->unsafeHeaders) names += (names.empty() ? "" : ",") + name;
-        preflight.headers.emplace_back("Access-Control-Request-Headers", names);
+  // From here on the request needs its bytes, which a stream gives only once it has ended.
+  auto launch = [host, op, request, page = page, options = std::move(options)](std::shared_ptr<const std::string> bodyBytes) mutable {
+    options.body = std::move(bodyBytes);
+
+    // A cors request that is not simple asks the server first, unless it has been told lately that it may.
+    if (op->corsTainted && net::NeedsPreflight(request->method, request->headers->headers)) {
+      op->preflightNeeded = true;
+      op->unsafeHeaders = net::CorsUnsafeRequestHeaderNames(request->headers->headers);
+      url::Url withoutFragment = request->url;
+      withoutFragment.fragment.reset();
+      op->preflightUrl = url::Serialize(withoutFragment);
+      const bool includeCredentials = request->credentials == RequestCredentials::Include;
+      if (!host->preflights().Allows(op->pageOrigin, op->preflightUrl, includeCredentials, op->method, op->unsafeHeaders)) {
+        net::FetchOptions preflight;
+        preflight.method = "OPTIONS";
+        preflight.headers.emplace_back("Origin", op->pageOrigin);
+        preflight.headers.emplace_back("Access-Control-Request-Method", op->method);
+        if (!op->unsafeHeaders.empty()) {
+          std::string names;
+          for (const std::string& name : op->unsafeHeaders) names += (names.empty() ? "" : ",") + name;
+          preflight.headers.emplace_back("Access-Control-Request-Headers", names);
+        }
+        for (const auto& [name, value] : options.headers) {
+          if (EqualsIgnoreCase(name, "referer")) preflight.headers.emplace_back(name, value);
+        }
+        preflight.redirect = net::RedirectMode::Error;  // a preflight that is redirected has failed
+        preflight.cache = net::CacheMode::NoStore;
+        preflight.useCookies = false;                   // it never carries credentials
+        preflight.timeout = options.timeout;
+        preflight.initiator = page;
+        op->mainOptions = std::move(options);
+        op->preflighting = true;
+        op->handle = host->config().client->Fetch(request->url, *op, std::move(preflight));
+        return;
       }
-      for (const auto& [name, value] : options.headers) {
-        if (EqualsIgnoreCase(name, "referer")) preflight.headers.emplace_back(name, value);
-      }
-      preflight.redirect = net::RedirectMode::Error;  // a preflight that is redirected has failed
-      preflight.cache = net::CacheMode::NoStore;
-      preflight.useCookies = false;                   // it never carries credentials
-      preflight.timeout = options.timeout;
-      preflight.initiator = page;
-      op->mainOptions = std::move(options);
-      op->preflighting = true;
-      op->handle = host->config().client->Fetch(request->url, *op, std::move(preflight));
-      return capability.promise;
     }
+    op->handle = host->config().client->Fetch(request->url, *op, std::move(options));
+  };
+
+  if (request->body && request->body->fromStream) {
+    auto hold = std::make_shared<qe::Persistent>(ctx, qe::FromObject(request));
+    auto run = std::make_shared<decltype(launch)>(std::move(launch));
+    const bool started = ReadBodyStream(
+        ctx, request,
+        [host, op, hold, run](std::string bytes) {
+          if (!host->Owns(op) || op->finished) return;
+          (*run)(std::make_shared<const std::string>(std::move(bytes)));
+        },
+        [host, op, hold](const Value& reason) {
+          if (!host->Owns(op) || op->finished) return;
+          op->FailWith(reason, "the request body failed");
+          op->Done();
+        });
+    if (!started) {
+      op->abortedByScript = true;
+      op->Done();
+      return rejectWithPending();
+    }
+    return capability.promise;
   }
-  op->handle = host->config().client->Fetch(request->url, *op, std::move(options));
+  std::shared_ptr<const std::string> bodyBytes;
+  if (request->body) {
+    // The request's bytes go as they are, shared with it, and it is read now.
+    bodyBytes = std::shared_ptr<const std::string>(request->body, &request->body->bytes);
+    request->used = true;
+  }
+  launch(std::move(bodyBytes));
   return capability.promise;
 }
 

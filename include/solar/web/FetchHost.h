@@ -52,6 +52,8 @@ class FetchHost {
   void Adopt(std::unique_ptr<FetchOperation> operation);
   // Called when an operation has ended; it is destroyed once the stack it ended on has unwound.
   void Finish(FetchOperation* operation);
+  // Whether `operation` is still one of the host's, which one that waits for script must ask.
+  bool Owns(const FetchOperation* operation) const;
 
  private:
   Config config_;

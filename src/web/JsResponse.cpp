@@ -94,6 +94,10 @@ bool Initialize(Context& ctx, JsResponse* response, const ExtractedBody* body, c
       return false;
     }
     response->body = body->buffer;
+    if (body->stream) {
+      response->stream = body->stream;
+      response->NoteWrite(qe::FromObject(body->stream));
+    }
     if (!body->contentType.empty() && !response->headers->headers.Has("content-type")) {
       response->headers->headers.Append("Content-Type", body->contentType);
     }
@@ -221,23 +225,20 @@ Value GetHeaders(Context& ctx, Value t, qe::Args, Value) {
 
 Value GetBodyUsed(Context& ctx, Value t, qe::Args, Value) {
   JsResponse* self = This(ctx, t);
-  return self ? qe::FromBool(self->used) : qe::Undefined();
+  return self ? qe::FromBool(BodyIsUsed(ctx, self)) : qe::Undefined();
 }
 
-// A body is a ReadableStream in the standard, and this build has none: a response without a body says so,
-// and one with a body says what it cannot give.
 Value GetBody(Context& ctx, Value t, qe::Args, Value) {
   JsResponse* self = This(ctx, t);
   if (!self) return qe::Undefined();
-  if (!self->body) return qe::Null();
-  qe::ThrowTypeError(ctx, "Response.body is not supported yet; read the body with text(), json(), arrayBuffer() or bytes()");
-  return qe::Undefined();
+  Quanta::Object* stream = BodyStream(ctx, self);
+  return stream ? qe::FromObject(stream) : qe::Null();
 }
 
 Value Clone(Context& ctx, Value t, qe::Args, Value) {
   JsResponse* self = This(ctx, t);
   if (!self) return qe::Undefined();
-  if (self->used) {
+  if (BodyIsUsed(ctx, self) || (self->stream && StreamIsUnusable(ctx, self->stream))) {
     qe::ThrowTypeError(ctx, "Failed to execute 'clone' on 'Response': Response body is already used");
     return qe::Undefined();
   }
@@ -247,7 +248,7 @@ Value Clone(Context& ctx, Value t, qe::Args, Value) {
   copy->statusText = self->statusText;
   copy->url = self->url;
   copy->redirected = self->redirected;
-  copy->body = self->body;  // the bytes are the same; each reads them for itself
+  if (!CloneBody(ctx, self, copy)) return qe::Undefined();
   copy->headers = AllocateHeaders(ctx, self->headers->headers.guard());
   copy->headers->headers = self->headers->headers;
   copy->NoteWrite(qe::FromObject(copy->headers));

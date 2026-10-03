@@ -1,6 +1,5 @@
 urlsearchparams-constructor.any.js	URLSearchParams constructor, DOMException as argument	needs DOMException
 IdnaTestV2.any.js	ToASCII("𾢬	assigned in Unicode 18.0, which WPT's expectations predate
-request-keepalive.any.js	keepalive flag with stream body	needs ReadableStream
 encodeInto.any.js	*SharedArrayBuffer	Quanta has no SharedArrayBuffer
 textdecoder-copy.any.js	*SharedArrayBuffer	Quanta has no SharedArrayBuffer
 textdecoder-streaming.any.js	*SharedArrayBuffer	Quanta has no SharedArrayBuffer
@@ -10,14 +9,6 @@ encodeInto.any.js	Invalid encodeInto() destination: Float16Array	Quanta has no F
 encodeInto.any.js	encodeInto() and a detached output buffer	there is no MessageChannel to detach a buffer with
 response-consume-empty.any.js	Consume empty FormData response body as text	the multipart encoding of no entries is the closing delimiter, not nothing
 request-consume-empty.any.js	Consume empty FormData request body as text	the multipart encoding of no entries is the closing delimiter, not nothing
-response-init-002.any.js	Read Response's body as readableStream	needs ReadableStream
-response-init-contenttype.any.js	Default Content-Type for Response with ReadableStream body	needs ReadableStream
-response-init-contenttype.any.js	Can override Content-Type for Response with ReadableStream body	needs ReadableStream
-request-init-contenttype.any.js	Default Content-Type for Request with ReadableStream body	needs ReadableStream
-request-init-contenttype.any.js	Can override Content-Type for Request with ReadableStream body	needs ReadableStream
-request-disturbed.any.js	Request's body: initial state	needs ReadableStream
-request-disturbed.any.js	Check creating a new request with a new body from a disturbed request	needs ReadableStream
-request-disturbed.any.js	Input request used for creating new request became disturbed	needs ReadableStream
 async-iterator.any.js	Async iterator instances should have the correct list of properties	Quanta: %AsyncIteratorPrototype% has next, return and throw
 errors.any.js	abort should set the close reason for the writable when it happens before cancel during start, and cancel should reject	the standard and this test disagree on how a cancel races an error
 errors.any.js	controller.error() should close writable immediately after readable.cancel()	the standard and this test disagree on how a cancel races an error
@@ -26,3 +17,4 @@ non-transferable-buffers.any.js	*non-transferable buffer	needs WebAssembly
 general.any.js	*with a transferred	needs structuredClone
 read-min.any.js	*with a transferred	needs structuredClone
 templated.any.js	*(empty) BYOB reader: canceling via the reader	the test expects an undefined value, the standard gives an empty view
+decode-attributes.any.js	*iso-8859-2	legacy encodings are not supported

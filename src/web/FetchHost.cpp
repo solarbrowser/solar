@@ -32,6 +32,10 @@ FetchHost* HostOf(Quanta::Context& ctx) { return static_cast<FetchHost*>(qe::Get
 
 void FetchHost::Adopt(std::unique_ptr<FetchOperation> operation) { operations_.push_back(std::move(operation)); }
 
+bool FetchHost::Owns(const FetchOperation* operation) const {
+  return std::any_of(operations_.begin(), operations_.end(), [operation](const std::unique_ptr<FetchOperation>& o) { return o.get() == operation; });
+}
+
 void FetchHost::Finish(FetchOperation* operation) {
   // The operation is on the stack, in a call from the network; it goes when the loop next runs.
   config_.loop->PostDelayed(std::chrono::milliseconds(0), [this, operation, alive = alive_] {
