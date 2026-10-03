@@ -9,6 +9,7 @@
 #include "solar/net/HttpClient.h"
 #include "solar/url/Parser.h"
 #include "solar/url/Serializer.h"
+#include "support/Compress.h"
 #include "support/TestLoop.h"
 #include "support/TestServer.h"
 
@@ -50,6 +51,25 @@ class Collector : public solar::net::FetchHandler {
     result.error = std::string(message);
   }
   Result result;
+};
+
+// Counts the body and keeps none of it, and checks it is the byte it should be.
+class Counting : public solar::net::FetchHandler {
+ public:
+  void OnResponseHead(const HttpResponseHead&, const solar::url::Url&) override {}
+  void OnBody(std::span<const uint8_t> data) override {
+    ++calls;
+    bytes += data.size();
+    for (uint8_t byte : data) allZero = allZero && byte == 0;
+  }
+  void OnEnd() override { ++terminalCalls; ended = true; }
+  void OnError(std::string_view message) override { ++terminalCalls; error = std::string(message); }
+  size_t bytes = 0;
+  size_t calls = 0;
+  bool allZero = true;
+  bool ended = false;
+  int terminalCalls = 0;
+  std::optional<std::string> error;
 };
 
 // A loop and a client that outlive several fetches, so a connection can be reused between them.
@@ -129,6 +149,12 @@ TestServer::Script Serves(Log& log, std::function<std::string(const std::string&
 }
 
 bool Has(const std::string& head, const std::string& text) { return head.find(text) != std::string::npos; }
+
+std::string Sample() {
+  std::string s;
+  for (int i = 0; i < 4000; ++i) s += "sample line " + std::to_string(i * 7919 % 1000) + "\n";
+  return s;
+}
 
 }  // namespace
 
@@ -396,6 +422,177 @@ int main() {
     Result second = s.Get(Origin(server) + "/", options);
     Check("a smuggled response is not delivered", first.body == "ok", first.body);
     Check("and the connection is not reused", second.ended && second.body == "real" && log.connections == 2, second.error.value_or(second.body));
+  }
+
+  // ---- Content-Encoding ----
+  {
+    std::string original;
+    for (int i = 0; i < 3000; ++i) original += "line " + std::to_string(i) + " of a body that compresses well\n";
+    struct Case {
+      const char* coding;
+      std::string (*encode)(std::string_view);
+    };
+    for (const Case& c : {Case{"gzip", solar::test::Gzip}, Case{"deflate", solar::test::ZlibDeflate}, Case{"br", solar::test::Brotli},
+                          Case{"zstd", solar::test::Zstd}}) {
+      Log log;
+      const std::string packed = c.encode(original);
+      TestServer server(Serves(log, [&](const std::string&) {
+        return Response("200 OK", packed, std::string("Content-Encoding: ") + c.coding + "\r\n");
+      }));
+      Session s;
+      Collector collector;
+      s.client->Fetch(*solar::url::Parse(Origin(server) + "/"), collector);
+      s.loop->Run();
+      Check(std::string("decodes ") + c.coding, collector.result.ended && collector.result.body == original, collector.result.error.value_or("wrong body"));
+      Check(std::string("Accept-Encoding offers ") + c.coding, Has(log.Head(0), "Accept-Encoding: gzip, deflate, br, zstd\r\n"), log.Head(0));
+    }
+  }
+  {
+    // Content-Length is the compressed length, and the head says so; the body is the decoded one.
+    const std::string original(10000, 'x');
+    const std::string packed = solar::test::Gzip(original);
+    Log log;
+    TestServer server(Serves(log, [&](const std::string&) { return Response("200 OK", packed, "Content-Encoding: gzip\r\n"); }));
+    Session s;
+    Collector collector;
+    std::optional<HttpResponseHead> seen;
+    struct Head : Collector {
+      std::optional<HttpResponseHead>* out;
+      void OnResponseHead(const HttpResponseHead& h, const solar::url::Url& u) override {
+        *out = h;
+        Collector::OnResponseHead(h, u);
+      }
+    } withHead;
+    withHead.out = &seen;
+    s.client->Fetch(*solar::url::Parse(Origin(server) + "/"), withHead);
+    s.loop->Run();
+    Check("the head keeps Content-Encoding and Content-Length", seen && seen->Header("content-encoding") == "gzip" &&
+              seen->Header("content-length") == std::to_string(packed.size()));
+    Check("and the body is decoded", withHead.result.body == original && original.size() != packed.size());
+  }
+  {
+    const std::string original = std::string(50000, 'q') + "tail";
+    const std::string packed = solar::test::Brotli(solar::test::Gzip(original));
+    Log log;
+    TestServer server(Serves(log, [&](const std::string&) { return Response("200 OK", packed, "Content-Encoding: gzip, br\r\n"); }));
+    Session s;
+    Result r = s.Get(Origin(server) + "/");
+    Check("two codings are undone in reverse", r.ended && r.body == original, r.error.value_or("wrong body"));
+  }
+  {
+    // Chunked on the outside, gzip inside: the chunk edges are nowhere near the gzip's.
+    const std::string original(200000, 'z');
+    const std::string packed = solar::test::Gzip(original);
+    TestServer server([&](int client) {
+      TestServer::ReadHead(client);
+      std::string out = "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nTransfer-Encoding: chunked\r\n\r\n";
+      for (size_t at = 0; at < packed.size(); at += 13) {
+        const std::string piece = packed.substr(at, 13);
+        char size[16];
+        std::snprintf(size, sizeof(size), "%zx", piece.size());
+        out += std::string(size) + "\r\n" + piece + "\r\n";
+      }
+      out += "0\r\n\r\n";
+      TestServer::SendAll(client, out);
+    });
+    Session s;
+    Result r = s.Get(Origin(server) + "/");
+    Check("gzip inside chunked", r.ended && r.body == original, r.error.value_or("wrong body"));
+  }
+  {
+    const std::string original = "slow and compressed";
+    const std::string packed = solar::test::Gzip(original);
+    TestServer server([&](int client) {
+      TestServer::ReadHead(client);
+      TestServer::SendSlowly(client, Response("200 OK", packed, "Content-Encoding: gzip\r\n"), 1, 1);
+    });
+    Session s;
+    Result r = s.Get(Origin(server) + "/");
+    Check("a compressed response sent a byte at a time", r.ended && r.body == original, r.error.value_or(""));
+  }
+  {
+    // 128 MiB that never exists in one piece: it passes through in the decoder's chunks.
+    const std::string packed = solar::test::Gzip(std::string(128u << 20, '\0'));
+    Log log;
+    TestServer server(Serves(log, [&](const std::string&) { return Response("200 OK", packed, "Content-Encoding: gzip\r\n"); }));
+    Session s;
+    Counting counting;
+    s.client->Fetch(*solar::url::Parse(Origin(server) + "/"), counting);
+    s.loop->Run();
+    Check("a large body streams through", counting.ended && counting.bytes == (128u << 20) && counting.allZero, counting.error.value_or(std::to_string(counting.bytes)));
+    Check("in many pieces", counting.calls > 1000, std::to_string(counting.calls));
+  }
+  {
+    // A decompression bomb: kilobytes in, gigabytes out, stopped at the limit.
+    const std::string packed = solar::test::Gzip(std::string(256u << 20, '\0'));
+    Log log;
+    TestServer server(Serves(log, [&](const std::string&) { return Response("200 OK", packed, "Content-Encoding: gzip\r\n"); }));
+    Session s;
+    Counting counting;
+    FetchOptions options;
+    options.maxDecodedBodyBytes = 1 << 20;
+    s.client->Fetch(*solar::url::Parse(Origin(server) + "/"), counting, options);
+    s.loop->Run();
+    Check("a bomb is stopped at the limit", counting.error && counting.error->find("size limit") != std::string::npos && !counting.ended, counting.error.value_or("not stopped"));
+    Check("having delivered no more than the limit", counting.bytes <= (1u << 20), std::to_string(counting.bytes));
+    Check("with one terminal call", counting.terminalCalls == 1);
+
+    // The connection that carried a bomb is not trusted again.
+    Result next = s.Get(Origin(server) + "/");
+    Check("and its connection is not reused", log.connections == 2, std::to_string(log.connections));
+  }
+  {
+    // The server says what it likes about the length; the compressed stream still has to be whole.
+    const std::string packed = solar::test::Gzip(std::string(100000, 'k'));
+    const std::string cut = packed.substr(0, packed.size() - 6);
+    Log log;
+    TestServer server(Serves(log, [&](const std::string&) { return Response("200 OK", cut, "Content-Encoding: gzip\r\n"); }));
+    Session s;
+    Result r = s.Get(Origin(server) + "/");
+    Check("a truncated compressed body is an error", r.error && r.error->find("truncated") != std::string::npos && !r.ended, r.error.value_or("accepted"));
+  }
+  {
+    std::string corrupt = solar::test::Gzip(Sample());
+    for (size_t i = corrupt.size() / 2; i < corrupt.size() / 2 + 6; ++i) corrupt[i] = static_cast<char>(corrupt[i] ^ 0xFF);
+    Log log;
+    TestServer server(Serves(log, [&](const std::string&) { return Response("200 OK", corrupt, "Content-Encoding: gzip\r\n"); }));
+    Session s;
+    Result r = s.Get(Origin(server) + "/");
+    Check("corrupt compressed data is an error", r.error.has_value() && !r.ended && r.terminalCalls == 1, r.error.value_or("accepted"));
+  }
+  {
+    Log log;
+    TestServer server(Serves(log, [](const std::string&) { return Response("200 OK", "raw bytes", "Content-Encoding: snappy\r\n"); }));
+    Session s;
+    Result r = s.Get(Origin(server) + "/");
+    Check("a coding that is not understood leaves the body alone", r.ended && r.body == "raw bytes", r.error.value_or(""));
+  }
+  {
+    Log log;
+    TestServer server(Serves(log, [](const std::string&) { return Response("200 OK", "", "Content-Encoding: gzip\r\n"); }));
+    Session s;
+    Result r = s.Get(Origin(server) + "/");
+    Check("an empty body with a Content-Encoding is fine", r.ended && r.body.empty(), r.error.value_or(""));
+  }
+  {
+    // A redirect's own body is never decoded, so a bad one does not matter.
+    Log log;
+    TestServer server(Serves(log, [](const std::string& path) {
+      if (path == "/a") return Response("302 Found", "this is not gzip", "Location: /b\r\nContent-Encoding: gzip\r\n");
+      return Response("200 OK", "arrived");
+    }));
+    Session s;
+    Result r = s.Get(Origin(server) + "/a");
+    Check("a redirect with a Content-Encoding body is followed", r.ended && r.body == "arrived", r.error.value_or(""));
+  }
+  {
+    Log log;
+    const std::string packed = solar::test::Zstd(std::string(5000, 'r'));
+    TestServer server(Serves(log, [&](const std::string&) { return Response("200 OK", packed, "Content-Encoding: zstd\r\n"); }));
+    Session s;
+    s.Get(Origin(server) + "/");
+    Result again = s.Get(Origin(server) + "/");
+    Check("a decoded response leaves its connection reusable", again.ended && log.connections == 1, std::to_string(log.connections));
   }
 
   // ---- Cancellation ----

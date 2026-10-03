@@ -182,6 +182,7 @@ struct Exchange : Http1ResponseParser::Sink {
 
   HttpConnection* conn = nullptr;
   std::unique_ptr<Http1ResponseParser> parser;
+  std::unique_ptr<BodyDecoder> decoder;  // null when the body is delivered as it came
   std::string request;
   bool finished = false;
   bool reusedConnection = false;
@@ -209,6 +210,7 @@ struct Exchange : Http1ResponseParser::Sink {
   void OnConnectionClosed(int error, const std::string& tlsFailure);
 
   void OnHead(const HttpResponseHead& h) override {
+    if (finished) return;
     head = h;
     if (IsRedirectStatus(h.status)) {
       if (auto target = h.Header("location")) {
@@ -217,12 +219,37 @@ struct Exchange : Http1ResponseParser::Sink {
         return;
       }
     }
+    decoder = BodyDecoder::Create(h, options.maxDecodedBodyBytes);
     handler.OnResponseHead(h, current);
   }
   void OnBody(std::span<const uint8_t> data) override {
-    if (!redirecting) handler.OnBody(data);
+    if (finished || redirecting) return;
+    if (!decoder) {
+      handler.OnBody(data);
+      return;
+    }
+    // A handler that finished the fetch from inside OnBody ends the decoding too.
+    if (auto error = decoder->Decode(data, [this](std::span<const uint8_t> decoded) {
+          handler.OnBody(decoded);
+          return !finished;
+        })) {
+      Fail(*error);
+    }
   }
-  void OnComplete() override { hopComplete = true; }
+  void OnComplete() override {
+    if (finished) return;
+    if (decoder) {
+      // The body has ended, and a compressed one must have ended with it.
+      if (auto error = decoder->Finish([this](std::span<const uint8_t> decoded) {
+            handler.OnBody(decoded);
+            return !finished;
+          })) {
+        Fail(*error);
+        return;
+      }
+    }
+    hopComplete = true;
+  }
 };
 
 void HttpConnection::ConnectNext() {
@@ -313,7 +340,7 @@ std::string Exchange::BuildRequest() const {
   }
   if (!hasUserAgent) out += "User-Agent: Solar\r\n";
   if (!hasAccept) out += "Accept: */*\r\n";
-  out += "Accept-Encoding: identity\r\n\r\n";
+  out += "Accept-Encoding: gzip, deflate, br, zstd\r\n\r\n";
   return out;
 }
 
@@ -322,6 +349,7 @@ void Exchange::StartHop(bool forceFresh) {
   redirecting = false;
   location.reset();
   head.reset();
+  decoder.reset();
   anyResponseByte = false;
   reusedConnection = false;
   parser = std::make_unique<Http1ResponseParser>(*this);
@@ -373,6 +401,7 @@ void Exchange::OnData(std::span<const uint8_t> data) {
   if (finished) return;
   anyResponseByte = true;
   const std::optional<std::string> error = parser->Feed(data);
+  if (finished) return;  // a decoding failure, or a handler that cancelled, ended it from inside Feed
   if (hopComplete) {
     hopComplete = false;
     // Bytes after a complete response mean the connection is out of step with the server.

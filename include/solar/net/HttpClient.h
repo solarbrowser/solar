@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "solar/net/ContentDecoder.h"
 #include "solar/net/Http1Parser.h"
 #include "solar/net/Loop.h"
 #include "solar/net/Tls.h"
@@ -21,7 +22,8 @@ class FetchHandler {
   virtual ~FetchHandler() = default;
 
   // `finalUrl` is where the response came from after any redirects, with the fragment the
-  // standard carries across them.
+  // standard carries across them. `head` is the response as the server sent it, so a body that
+  // was compressed still lists its Content-Encoding and Content-Length; OnBody delivers it decoded.
   virtual void OnResponseHead(const HttpResponseHead& head, const url::Url& finalUrl) = 0;
   // A view into the buffer the kernel filled, valid only until this returns.
   virtual void OnBody(std::span<const uint8_t> data) = 0;
@@ -40,6 +42,9 @@ struct FetchOptions {
   // two is refused too. Authorization is dropped when a redirect leaves the origin.
   std::vector<std::pair<std::string, std::string>> headers;
   int maxRedirects = 20;
+  // The most a compressed body may decode to. It is what stops a few kilobytes from becoming
+  // gigabytes; a body that is not compressed is not limited by it.
+  uint64_t maxDecodedBodyBytes = uint64_t{1} << 30;
 };
 
 struct HttpClientOptions {

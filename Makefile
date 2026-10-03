@@ -24,14 +24,18 @@ endif
 # libraries are the platform's own: io_uring on Linux, Winsock on Windows, nothing extra elsewhere.
 OPENSSL_CFLAGS = $(shell pkg-config --cflags openssl 2>/dev/null)
 OPENSSL_LIBS = $(shell pkg-config --libs openssl 2>/dev/null)
+# The content codings. The encoders are only for the tests' servers, but are linked everywhere.
+COMPRESSION_PACKAGES = zlib libbrotlidec libbrotlienc libzstd
+COMPRESSION_CFLAGS = $(shell pkg-config --cflags $(COMPRESSION_PACKAGES) 2>/dev/null)
+COMPRESSION_LIBS = $(shell pkg-config --libs $(COMPRESSION_PACKAGES) 2>/dev/null)
 ifeq ($(PLATFORM),linux)
-NET_LIBS = $(shell pkg-config --libs liburing) $(OPENSSL_LIBS)
+NET_LIBS = $(shell pkg-config --libs liburing) $(OPENSSL_LIBS) $(COMPRESSION_LIBS)
 else ifeq ($(PLATFORM),windows)
-NET_LIBS = $(OPENSSL_LIBS) -lws2_32 -lmswsock
+NET_LIBS = $(OPENSSL_LIBS) $(COMPRESSION_LIBS) -lws2_32 -lmswsock
 else
-NET_LIBS = $(OPENSSL_LIBS)
+NET_LIBS = $(OPENSSL_LIBS) $(COMPRESSION_LIBS)
 endif
-CXXFLAGS += $(OPENSSL_CFLAGS)
+CXXFLAGS += $(OPENSSL_CFLAGS) $(COMPRESSION_CFLAGS)
 
 WEB_SOURCES = $(wildcard src/web/*.cpp)
 WEB_OBJECTS = $(WEB_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
@@ -74,17 +78,21 @@ $(BUILD_DIR)/Http1ParserTest: $(OBJ_DIR)/tests/Http1ParserTest.o $(OBJ_DIR)/src/
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^
 
-$(BUILD_DIR)/NetTest: $(OBJ_DIR)/tests/NetTest.o $(OBJ_DIR)/tests/support/TestServer.o $(URL_OBJECTS) $(NET_OBJECTS)
+$(BUILD_DIR)/NetTest: $(OBJ_DIR)/tests/NetTest.o $(OBJ_DIR)/tests/support/TestServer.o $(OBJ_DIR)/tests/support/Compress.o $(URL_OBJECTS) $(NET_OBJECTS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -Itests -o $@ $^ $(NET_LIBS)
 
-$(BUILD_DIR)/HttpClientTest: $(OBJ_DIR)/tests/HttpClientTest.o $(OBJ_DIR)/tests/support/TestServer.o $(URL_OBJECTS) $(NET_OBJECTS)
+$(BUILD_DIR)/HttpClientTest: $(OBJ_DIR)/tests/HttpClientTest.o $(OBJ_DIR)/tests/support/TestServer.o $(OBJ_DIR)/tests/support/Compress.o $(URL_OBJECTS) $(NET_OBJECTS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
 
 $(BUILD_DIR)/TlsTest: $(OBJ_DIR)/tests/TlsTest.o $(OBJ_DIR)/tests/support/TestServer.o $(OBJ_DIR)/tests/support/TlsTestServer.o $(OBJ_DIR)/tests/support/Pki.o $(URL_OBJECTS) $(NET_OBJECTS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
+
+$(BUILD_DIR)/ContentDecoderTest: $(OBJ_DIR)/tests/ContentDecoderTest.o $(OBJ_DIR)/tests/support/Compress.o $(OBJ_DIR)/src/net/ContentDecoder.o $(OBJ_DIR)/src/net/Http1Parser.o
+	@echo "[LINK] $@"
+	@$(CXX) $(CXXFLAGS) -o $@ $^ $(COMPRESSION_LIBS)
 
 $(BUILD_DIR)/NormalizerTest: $(OBJ_DIR)/tests/NormalizerTest.o $(URL_OBJECTS)
 	@echo "[LINK] $@"
@@ -111,7 +119,7 @@ $(BUILD_DIR)/GenIdnaTables: tools/GenIdnaTables.cpp
 	@echo "[BUILD] $<"
 	@$(CXX) -std=c++20 -Wall -Wextra -O2 -o $@ $<
 
-PORTABLE_TESTS = UrlTest SearchParamsTest ValidationErrorTest NormalizerTest Http1ParserTest
+PORTABLE_TESTS = UrlTest SearchParamsTest ValidationErrorTest NormalizerTest Http1ParserTest ContentDecoderTest
 NET_TESTS = NetTest HttpClientTest TlsTest
 QUANTA_TESTS = UrlBindingsTest UrlRealmsTest
 ifeq ($(PLATFORM),linux)
@@ -133,7 +141,7 @@ endif
 # leak detection and run. Each is compiled straight from its sources.
 ASAN_FLAGS = -std=c++20 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined -Iinclude -Itests -pthread
 ASAN_URL = $(URL_SOURCES)
-ASAN_NET = $(NET_SOURCES) tests/support/TestServer.cpp
+ASAN_NET = $(NET_SOURCES) tests/support/TestServer.cpp tests/support/Compress.cpp
 ASAN_TLS = tests/support/TlsTestServer.cpp tests/support/Pki.cpp
 asan-test:
 	@mkdir -p $(BUILD_DIR)/asan
@@ -143,9 +151,11 @@ asan-test:
 	done
 	@echo "[ASAN] Http1ParserTest"
 	@$(CXX) $(ASAN_FLAGS) -o $(BUILD_DIR)/asan/Http1ParserTest tests/Http1ParserTest.cpp src/net/Http1Parser.cpp && $(BUILD_DIR)/asan/Http1ParserTest
+	@echo "[ASAN] ContentDecoderTest"
+	@$(CXX) $(ASAN_FLAGS) $(COMPRESSION_CFLAGS) -o $(BUILD_DIR)/asan/ContentDecoderTest tests/ContentDecoderTest.cpp tests/support/Compress.cpp src/net/ContentDecoder.cpp src/net/Http1Parser.cpp $(COMPRESSION_LIBS) && $(BUILD_DIR)/asan/ContentDecoderTest
 	@for t in $(NET_TESTS); do \
 	    extra=""; [ $$t = TlsTest ] && extra="$(ASAN_TLS)"; \
-	    $(CXX) $(ASAN_FLAGS) -o $(BUILD_DIR)/asan/$$t tests/$$t.cpp $(ASAN_NET) $$extra $(ASAN_URL) $(NET_LIBS) || exit 1; \
+	    $(CXX) $(ASAN_FLAGS) $(OPENSSL_CFLAGS) $(COMPRESSION_CFLAGS) -o $(BUILD_DIR)/asan/$$t tests/$$t.cpp $(ASAN_NET) $$extra $(ASAN_URL) $(NET_LIBS) || exit 1; \
 	    for b in uring readiness; do \
 	        echo "[ASAN] $$t on $$b"; \
 	        SOLAR_LOOP_BACKEND=$$b $(BUILD_DIR)/asan/$$t || exit 1; \
