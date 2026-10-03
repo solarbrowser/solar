@@ -185,8 +185,8 @@ int main() {
     Check("timeout", r.error == std::optional<std::string>("timed out"), r.error.value_or("no error"));
   }
   {
-    Result r = Get("https://127.0.0.1:1/");
-    Check("https is refused until TLS exists", r.error.has_value() && r.error->find("TLS") != std::string::npos);
+    Result r = Get("ftp://127.0.0.1:1/");
+    Check("other schemes are refused", r.error.has_value() && r.error->find("unsupported scheme") != std::string::npos);
   }
   {
     TestServer server(Replies("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nv6"), true);

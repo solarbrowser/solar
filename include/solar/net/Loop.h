@@ -1,7 +1,6 @@
 #pragma once
 
-#include <sys/socket.h>
-
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -11,9 +10,26 @@
 
 namespace solar::net {
 
+// An IP address and port, in no platform's socket structure: each backend converts it.
 struct SocketAddress {
-  sockaddr_storage storage{};
-  socklen_t length = 0;
+  enum class Family : uint8_t { IPv4, IPv6 };
+
+  Family family = Family::IPv4;
+  std::array<uint8_t, 16> bytes{};  // network order; the first 4 for IPv4
+  uint16_t port = 0;                // host order
+};
+
+// One end of a byte stream, as an exchange sees it: bytes go out with Send and the stream ends
+// with Close. A TCP connection is one; TLS over a connection is another.
+class Transport {
+ public:
+  // Queues `data` to be written as it is, without copying it again.
+  virtual void Send(std::string data) = 0;
+  // Idempotent. The end is reported to the handler's OnClosed once everything in flight is done.
+  virtual void Close() = 0;
+
+ protected:
+  ~Transport() = default;
 };
 
 // Receives what happens on one connection. Every call is made from the thread running the loop.
@@ -30,12 +46,10 @@ class ConnectionHandler {
 };
 
 // An opaque handle, valid until the handler's OnClosed returns.
-class Connection {
+class Connection : public Transport {
  public:
-  // Queues `data` to be written as it is, without copying it again.
-  void Send(std::string data);
-  // Idempotent. OnClosed follows once everything in flight has finished.
-  void Close();
+  void Send(std::string data) override;
+  void Close() override;
 
  protected:
   Connection() = default;

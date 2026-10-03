@@ -1,11 +1,13 @@
 #pragma once
 
 #include <chrono>
+#include <memory>
 #include <span>
 #include <string_view>
 
 #include "solar/net/Http1Parser.h"
 #include "solar/net/Loop.h"
+#include "solar/net/Tls.h"
 #include "solar/url/Url.h"
 
 namespace solar::net {
@@ -25,9 +27,11 @@ class FetchHandler {
 struct FetchOptions {
   // For the whole exchange, from connecting to the last byte of the body.
   std::chrono::milliseconds timeout{30000};
+  // For https. Null means the shared context that trusts the system's roots.
+  std::shared_ptr<TlsContext> tls;
 };
 
-// Fetches `url` with a GET over plain HTTP/1.1. Everything is reported from Loop::Run, never
+// Fetches `url` with a GET over HTTP/1.1, through TLS for https. Everything is reported from Loop::Run, never
 // from inside this call. `handler` must outlive the fetch.
 void Fetch(Loop& loop, const url::Url& url, FetchHandler& handler, FetchOptions options = {});
 

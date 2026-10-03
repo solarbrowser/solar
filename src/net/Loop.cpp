@@ -3,10 +3,12 @@
 #include <liburing.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 #include <cerrno>
 #include <cstdlib>
+#include <cstring>
 #include <deque>
 #include <map>
 #include <set>
@@ -82,7 +84,8 @@ struct ConnectionState : Connection {
   Loop::Impl* loop = nullptr;
   ConnectionHandler* handler = nullptr;
   int fd = -1;
-  SocketAddress address;
+  sockaddr_storage address{};
+  socklen_t addressLength = 0;
 
   Tag connectTag{this, Op::Connect};
   Tag recvTag{this, Op::Recv};
@@ -109,7 +112,7 @@ ConnectionState& State(Connection* connection) { return *static_cast<ConnectionS
 
 void Loop::Impl::StartConnect(ConnectionState& c) {
   io_uring_sqe* sqe = NextSqe();
-  io_uring_prep_connect(sqe, c.fd, reinterpret_cast<const sockaddr*>(&c.address.storage), c.address.length);
+  io_uring_prep_connect(sqe, c.fd, reinterpret_cast<const sockaddr*>(&c.address), c.addressLength);
   io_uring_sqe_set_data(sqe, &c.connectTag);
   c.connectActive = true;
   ++c.inflight;
@@ -291,10 +294,23 @@ Connection* Loop::Connect(const SocketAddress& address, ConnectionHandler* handl
   auto* c = new ConnectionState();
   c->loop = impl_.get();
   c->handler = handler;
-  c->address = address;
   impl_->connections.insert(c);
 
-  c->fd = ::socket(address.storage.ss_family, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+  if (address.family == SocketAddress::Family::IPv6) {
+    auto* in6 = reinterpret_cast<sockaddr_in6*>(&c->address);
+    in6->sin6_family = AF_INET6;
+    in6->sin6_port = htons(address.port);
+    std::memcpy(&in6->sin6_addr, address.bytes.data(), 16);
+    c->addressLength = sizeof(sockaddr_in6);
+  } else {
+    auto* in4 = reinterpret_cast<sockaddr_in*>(&c->address);
+    in4->sin_family = AF_INET;
+    in4->sin_port = htons(address.port);
+    std::memcpy(&in4->sin_addr, address.bytes.data(), 4);
+    c->addressLength = sizeof(sockaddr_in);
+  }
+
+  c->fd = ::socket(c->address.ss_family, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
   if (c->fd < 0) {
     c->error = errno;
     impl_->CloseConnection(*c);  // reported from Run, like every other failure
