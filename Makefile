@@ -70,7 +70,7 @@ PSL_URL = https://publicsuffix.org/list/public_suffix_list.dat
 PSL_FILE = $(BUILD_DIR)/psl/public_suffix_list.dat
 
 .DEFAULT_GOAL := all
-.PHONY: all test asan-test idna-tables public-suffix-tables clean quanta
+.PHONY: all test test-gc asan-test idna-tables public-suffix-tables clean quanta
 
 all: solar
 
@@ -200,8 +200,13 @@ test: $(addprefix $(BUILD_DIR)/,$(TESTS)) $(if $(filter linux,$(PLATFORM)),$(BUI
 ifeq ($(PLATFORM),linux)
 	@for t in $(NET_TESTS) FetchBindingsTest; do SOLAR_LOOP_BACKEND=readiness $(BUILD_DIR)/$$t || exit 1; done
 	@$(BUILD_DIR)/WptTest $(wildcard tests/wpt/url/*.any.js) $(WPT_DOM) $(WPT_FETCH) $(WPT_STREAMS)
-	@QUANTA_GC_STRESS=2 $(BUILD_DIR)/WptTest $(WPT_DOM) $(WPT_FETCH) $(WPT_STREAMS) > /dev/null
 endif
+
+# The WPT tests and the fetch binding tests again with the collector run at every allocation. Quanta
+# is tested that way itself, so this is for what Solar's own bindings keep alive (Persistents, Visit).
+test-gc: $(BUILD_DIR)/WptTest $(BUILD_DIR)/FetchBindingsTest
+	@QUANTA_GC_STRESS=2 $(BUILD_DIR)/FetchBindingsTest
+	@QUANTA_GC_STRESS=2 $(BUILD_DIR)/WptTest $(WPT_DOM) $(WPT_FETCH) $(WPT_STREAMS) > /dev/null
 
 # The tests that do not need Quanta, built with AddressSanitizer, UndefinedBehaviorSanitizer and
 # leak detection and run. Each is compiled straight from its sources.
