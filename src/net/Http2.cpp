@@ -1,6 +1,6 @@
 #include "Http2.h"
 
-#include <nghttp2/nghttp2.h>
+#include "Nghttp2Compat.h"
 
 #include <algorithm>
 #include <charconv>
