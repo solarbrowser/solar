@@ -122,7 +122,7 @@ $(BUILD_DIR)/PublicSuffixTest: $(OBJ_DIR)/tests/PublicSuffixTest.o $(URL_OBJECTS
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^
 
-$(BUILD_DIR)/CookiesTest: $(OBJ_DIR)/tests/CookiesTest.o $(OBJ_DIR)/src/net/Cookies.o $(URL_OBJECTS)
+$(BUILD_DIR)/CookiesTest: $(OBJ_DIR)/tests/CookiesTest.o $(OBJ_DIR)/src/net/Cookies.o $(OBJ_DIR)/src/net/HttpDate.o $(URL_OBJECTS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^
 
@@ -185,7 +185,7 @@ asan-test:
 	@echo "[ASAN] HstsTest"
 	@$(CXX) $(ASAN_FLAGS) -o $(BUILD_DIR)/asan/HstsTest tests/HstsTest.cpp src/net/Hsts.cpp $(ASAN_URL) && $(BUILD_DIR)/asan/HstsTest
 	@echo "[ASAN] CookiesTest"
-	@$(CXX) $(ASAN_FLAGS) -o $(BUILD_DIR)/asan/CookiesTest tests/CookiesTest.cpp src/net/Cookies.cpp $(ASAN_URL) && $(BUILD_DIR)/asan/CookiesTest
+	@$(CXX) $(ASAN_FLAGS) -o $(BUILD_DIR)/asan/CookiesTest tests/CookiesTest.cpp src/net/Cookies.cpp src/net/HttpDate.cpp $(ASAN_URL) && $(BUILD_DIR)/asan/CookiesTest
 	@echo "[ASAN] AddressRaceTest"
 	@$(CXX) $(ASAN_FLAGS) -o $(BUILD_DIR)/asan/AddressRaceTest tests/AddressRaceTest.cpp src/net/AddressRace.cpp && $(BUILD_DIR)/asan/AddressRaceTest
 	@echo "[ASAN] Http1ParserTest"

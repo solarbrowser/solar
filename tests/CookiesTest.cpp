@@ -7,6 +7,7 @@
 #include <string>
 
 #include "solar/net/Cookies.h"
+#include "solar/net/HttpDate.h"
 #include "solar/url/Parser.h"
 #include "support/Json.h"
 
@@ -142,7 +143,7 @@ int main(int argc, char** argv) {
     for (const Json& test : tests->array) {
       const std::string input = test.Find("test")->string;
       const Json* expected = test.Find("expected");
-      const auto parsed = solar::net::ParseCookieDate(input);
+      const auto parsed = solar::net::ParseHttpDate(input);
       if (expected->type == Json::Type::Null) {
         Check("date <" + input + "> is refused", !parsed.has_value(), parsed ? FormatDate(*parsed) : "");
       } else {

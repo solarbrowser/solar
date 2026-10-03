@@ -63,8 +63,4 @@ class CookieJar {
   std::vector<Cookie> cookies_;  // oldest first
 };
 
-// RFC 6265's cookie-date, which is read leniently: "Sun, 06 Nov 1994 08:49:37 GMT" and a good many
-// others. None if no date can be made of it.
-std::optional<std::chrono::system_clock::time_point> ParseCookieDate(std::string_view text);
-
 }  // namespace solar::net
