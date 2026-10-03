@@ -28,6 +28,7 @@ struct HttpClient::Impl {
   HttpClientOptions options;
   // Connections hold races that hold lookups with this resolver, so it is destroyed after them.
   std::shared_ptr<Resolver> resolver;
+  std::shared_ptr<HstsStore> hsts;
   uint64_t nextId = 1;
   std::unordered_map<uint64_t, std::unique_ptr<internal::Exchange>> exchanges;
   std::list<std::unique_ptr<internal::HttpConnection>> connections;
@@ -39,7 +40,11 @@ struct HttpClient::Impl {
   std::unordered_map<std::string, internal::HttpConnection*> connecting;
   bool reapQueued = false;
 
-  Impl(Loop& l, HttpClientOptions o) : loop(l), options(std::move(o)), resolver(options.resolver ? options.resolver : MakeSystemResolver(l)) {}
+  Impl(Loop& l, HttpClientOptions o)
+      : loop(l),
+        options(std::move(o)),
+        resolver(options.resolver ? options.resolver : MakeSystemResolver(l)),
+        hsts(options.hsts ? options.hsts : std::make_shared<HstsStore>()) {}
   ~Impl();
 
   internal::HttpConnection* TakeIdle(const std::string& key);
@@ -211,6 +216,10 @@ struct Exchange : Http1ResponseParser::Sink, Http2Stream {
     if (finished) return;
     anyResponseByte = true;
     head = h;
+    // Only a response over TLS, whose certificate has been checked, may set the policy.
+    if (current.scheme == "https" && current.host) {
+      if (auto policy = h.Header("strict-transport-security")) impl.hsts->Note(*current.host, *policy);
+    }
     if (IsRedirectStatus(h.status)) {
       if (auto target = h.Header("location")) {
         location = std::string(*target);
@@ -410,6 +419,9 @@ std::string Exchange::BuildRequest() const {
 }
 
 void Exchange::StartHop(bool forceFresh) {
+  // A host that has asked for https is not spoken to in the clear, whatever the URL says. The port
+  // stays as it is: a URL's default port is not in it, so port 80 was never there to change.
+  if (current.scheme == "http" && current.host && impl.hsts->Covers(*current.host)) current.scheme = "https";
   hopComplete = false;
   redirecting = false;
   location.reset();

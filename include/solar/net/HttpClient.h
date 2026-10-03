@@ -11,6 +11,7 @@
 
 #include "solar/net/ContentDecoder.h"
 #include "solar/net/Http1Parser.h"
+#include "solar/net/Hsts.h"
 #include "solar/net/Loop.h"
 #include "solar/net/Resolver.h"
 #include "solar/net/Tls.h"
@@ -60,6 +61,9 @@ struct HttpClientOptions {
   std::shared_ptr<Resolver> resolver;
   // Offer HTTP/2 to https servers. When false only HTTP/1.1 is offered, one request to a connection.
   bool http2 = true;
+  // The hosts that have asked to be reached over https only, whose http URLs are changed to https
+  // before anything is sent. When there is none the client keeps one for its own lifetime.
+  std::shared_ptr<HstsStore> hsts;
 };
 
 class HttpClient;
