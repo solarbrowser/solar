@@ -1,11 +1,14 @@
 CXX = clang++
-CXXFLAGS = -std=c++20 -Wall -Wextra -O2 -pthread -Iinclude -isystem third_party/quanta/include -MMD -MP
+CXXFLAGS = -std=c++20 -Wall -Wextra -O2 -pthread -Iinclude -Itests -isystem third_party/quanta/include -MMD -MP
 
 BUILD_DIR = build
 OBJ_DIR = $(BUILD_DIR)/obj
 
 URL_SOURCES = $(wildcard src/url/*.cpp)
 URL_OBJECTS = $(URL_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
+NET_SOURCES = $(wildcard src/net/*.cpp)
+NET_OBJECTS = $(NET_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
+LIBURING_LIBS = $(shell pkg-config --libs liburing)
 WEB_SOURCES = $(wildcard src/web/*.cpp)
 WEB_OBJECTS = $(WEB_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
 
@@ -31,9 +34,9 @@ quanta:
 
 $(QUANTA_LIBS): | quanta
 
-solar: $(OBJ_DIR)/src/main.o $(URL_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
+solar: $(OBJ_DIR)/src/main.o $(URL_OBJECTS) $(NET_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
-	@$(CXX) $(CXXFLAGS) -o $@ $^
+	@$(CXX) $(CXXFLAGS) -o $@ $^ $(LIBURING_LIBS)
 
 $(BUILD_DIR)/UrlTest: $(OBJ_DIR)/tests/UrlTest.o $(URL_OBJECTS)
 	@echo "[LINK] $@"
@@ -42,6 +45,14 @@ $(BUILD_DIR)/UrlTest: $(OBJ_DIR)/tests/UrlTest.o $(URL_OBJECTS)
 $(BUILD_DIR)/SearchParamsTest: $(OBJ_DIR)/tests/SearchParamsTest.o $(URL_OBJECTS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^
+
+$(BUILD_DIR)/Http1ParserTest: $(OBJ_DIR)/tests/Http1ParserTest.o $(OBJ_DIR)/src/net/Http1Parser.o
+	@echo "[LINK] $@"
+	@$(CXX) $(CXXFLAGS) -o $@ $^
+
+$(BUILD_DIR)/NetTest: $(OBJ_DIR)/tests/NetTest.o $(OBJ_DIR)/tests/support/TestServer.o $(URL_OBJECTS) $(NET_OBJECTS)
+	@echo "[LINK] $@"
+	@$(CXX) $(CXXFLAGS) -Itests -o $@ $^ $(LIBURING_LIBS)
 
 $(BUILD_DIR)/NormalizerTest: $(OBJ_DIR)/tests/NormalizerTest.o $(URL_OBJECTS)
 	@echo "[LINK] $@"
@@ -68,11 +79,13 @@ $(BUILD_DIR)/GenIdnaTables: tools/GenIdnaTables.cpp
 	@echo "[BUILD] $<"
 	@$(CXX) -std=c++20 -Wall -Wextra -O2 -o $@ $<
 
-test: $(BUILD_DIR)/UrlTest $(BUILD_DIR)/SearchParamsTest $(BUILD_DIR)/ValidationErrorTest $(BUILD_DIR)/NormalizerTest $(BUILD_DIR)/UrlBindingsTest $(BUILD_DIR)/UrlRealmsTest $(BUILD_DIR)/WptTest
+test: $(BUILD_DIR)/UrlTest $(BUILD_DIR)/SearchParamsTest $(BUILD_DIR)/ValidationErrorTest $(BUILD_DIR)/NormalizerTest $(BUILD_DIR)/Http1ParserTest $(BUILD_DIR)/NetTest $(BUILD_DIR)/UrlBindingsTest $(BUILD_DIR)/UrlRealmsTest $(BUILD_DIR)/WptTest
 	@$(BUILD_DIR)/UrlTest
 	@$(BUILD_DIR)/SearchParamsTest
 	@$(BUILD_DIR)/ValidationErrorTest
 	@$(BUILD_DIR)/NormalizerTest
+	@$(BUILD_DIR)/Http1ParserTest
+	@$(BUILD_DIR)/NetTest
 	@$(BUILD_DIR)/UrlBindingsTest
 	@$(BUILD_DIR)/UrlRealmsTest
 	@$(BUILD_DIR)/WptTest $(wildcard tests/wpt/url/*.any.js)

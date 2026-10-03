@@ -2,13 +2,52 @@
 #include <optional>
 #include <string>
 
+#include "solar/net/Fetch.h"
 #include "solar/url/Normalizer.h"
 #include "solar/url/Parser.h"
 #include "solar/url/Serializer.h"
 
+namespace {
+
+class PrintingHandler : public solar::net::FetchHandler {
+ public:
+  void OnResponseHead(const solar::net::HttpResponseHead& head) override {
+    std::printf("HTTP %d %s\n", head.status, head.reason.c_str());
+    for (const auto& [name, value] : head.headers) std::printf("%s: %s\n", name.c_str(), value.c_str());
+    std::printf("\n");
+  }
+  void OnBody(std::span<const uint8_t> data) override { std::fwrite(data.data(), 1, data.size(), stdout); }
+  void OnEnd() override {}
+  void OnError(std::string_view message) override {
+    std::fprintf(stderr, "fetch failed: %.*s\n", static_cast<int>(message.size()), message.data());
+    failed = true;
+  }
+  bool failed = false;
+};
+
+int RunFetch(const char* typed) {
+  std::optional<solar::url::Url> url = solar::url::Parse(solar::url::Normalize(typed));
+  if (!url) {
+    std::fprintf(stderr, "invalid url: %s\n", typed);
+    return 1;
+  }
+  auto loop = solar::net::Loop::Create();
+  if (!loop) {
+    std::fprintf(stderr, "cannot start the event loop (is io_uring available?)\n");
+    return 1;
+  }
+  PrintingHandler handler;
+  solar::net::Fetch(*loop, *url, handler);
+  loop->Run();
+  return handler.failed ? 1 : 0;
+}
+
+}  // namespace
+
 int main(int argc, char** argv) {
+  if (argc == 3 && std::string(argv[1]) == "fetch") return RunFetch(argv[2]);
   if (argc != 2) {
-    std::fprintf(stderr, "usage: %s <url>\n", argv[0]);
+    std::fprintf(stderr, "usage: %s <url>\n       %s fetch <url>\n", argv[0], argv[0]);
     return 2;
   }
 
