@@ -132,12 +132,20 @@ int main() {
     Check("while the loop kept running", ticks >= 10, std::to_string(ticks) + " ticks in " + std::to_string(Seconds(start)) + " s");
   }
   {
-    // Lookups run side by side.
+    // Lookups run side by side. How many are in a lookup at once says so without a clock, which a
+    // loaded machine makes unreliable.
     auto loop = solar::test::MakeLoop();
     SystemResolverOptions options;
     options.threads = 4;
-    options.lookup = [](const std::string&, uint16_t port, Family) {
+    std::atomic<int> inside{0};
+    std::atomic<int> mostInside{0};
+    options.lookup = [&](const std::string&, uint16_t port, Family) {
+      const int now = ++inside;
+      int seen = mostInside.load();
+      while (now > seen && !mostInside.compare_exchange_weak(seen, now)) {
+      }
       std::this_thread::sleep_for(50ms);
+      --inside;
       ResolveResult r;
       SocketAddress a;
       a.bytes = {10, 0, 0, 2};
@@ -150,11 +158,10 @@ int main() {
     for (int i = 0; i < 40; ++i) {
       resolver->Resolve("host" + std::to_string(i) + ".example", 80, Family::IPv4, [&](ResolveResult r) { answers += r.addresses.size() == 1; });
     }
-    const auto start = std::chrono::steady_clock::now();
     loop->Run();
     Check("forty lookups all answer", answers == 40, std::to_string(answers));
-    // One after another they would take 2 s; four at a time, about half a second.
-    Check("on several threads at once", Seconds(start) < 1.3, std::to_string(Seconds(start)) + " s");
+    Check("on several threads at once", mostInside >= 2, std::to_string(mostInside));
+    Check("but no more than the resolver was given", mostInside <= 4, std::to_string(mostInside));
   }
   {
     // A cancelled lookup is not answered, and Run does not wait for it.
