@@ -96,16 +96,20 @@ $(BUILD_DIR)/GenIdnaTables: tools/GenIdnaTables.cpp
 	@$(CXX) -std=c++20 -Wall -Wextra -O2 -o $@ $<
 
 PORTABLE_TESTS = UrlTest SearchParamsTest ValidationErrorTest NormalizerTest Http1ParserTest
-LINUX_TESTS = NetTest HttpClientTest TlsTest UrlBindingsTest UrlRealmsTest
+NET_TESTS = NetTest HttpClientTest TlsTest
+LINUX_TESTS = $(NET_TESTS) UrlBindingsTest UrlRealmsTest
 ifeq ($(UNAME),Linux)
 TESTS = $(PORTABLE_TESTS) $(LINUX_TESTS)
 else
 TESTS = $(PORTABLE_TESTS)
 endif
 
+# SOLAR_LOOP_BACKEND picks the event loop the network tests run on. Linux has two, and both are
+# run: io_uring where the kernel has it, and epoll everywhere.
 test: $(addprefix $(BUILD_DIR)/,$(TESTS)) $(if $(filter Linux,$(UNAME)),$(BUILD_DIR)/WptTest)
 	@for t in $(TESTS); do $(BUILD_DIR)/$$t || exit 1; done
 ifeq ($(UNAME),Linux)
+	@for t in $(NET_TESTS); do SOLAR_LOOP_BACKEND=readiness $(BUILD_DIR)/$$t || exit 1; done
 	@$(BUILD_DIR)/WptTest $(wildcard tests/wpt/url/*.any.js)
 endif
 
@@ -123,10 +127,13 @@ asan-test:
 	done
 	@echo "[ASAN] Http1ParserTest"
 	@$(CXX) $(ASAN_FLAGS) -o $(BUILD_DIR)/asan/Http1ParserTest tests/Http1ParserTest.cpp src/net/Http1Parser.cpp && $(BUILD_DIR)/asan/Http1ParserTest
-	@for t in NetTest HttpClientTest TlsTest; do \
-	    echo "[ASAN] $$t"; \
+	@for t in $(NET_TESTS); do \
 	    extra=""; [ $$t = TlsTest ] && extra="$(ASAN_TLS)"; \
-	    $(CXX) $(ASAN_FLAGS) -o $(BUILD_DIR)/asan/$$t tests/$$t.cpp $(ASAN_NET) $$extra $(ASAN_URL) $(NET_LIBS) && $(BUILD_DIR)/asan/$$t || exit 1; \
+	    $(CXX) $(ASAN_FLAGS) -o $(BUILD_DIR)/asan/$$t tests/$$t.cpp $(ASAN_NET) $$extra $(ASAN_URL) $(NET_LIBS) || exit 1; \
+	    for b in uring readiness; do \
+	        echo "[ASAN] $$t on $$b"; \
+	        SOLAR_LOOP_BACKEND=$$b $(BUILD_DIR)/asan/$$t || exit 1; \
+	    done; \
 	done
 
 idna-tables: $(BUILD_DIR)/GenIdnaTables

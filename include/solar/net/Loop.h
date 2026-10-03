@@ -10,6 +10,9 @@
 
 namespace solar::net {
 
+// The error code for a failure that is TLS's or the protocol's rather than a socket's.
+inline constexpr int kProtocolError = 0x5000;
+
 // An IP address and port, in no platform's socket structure: each backend converts it.
 struct SocketAddress {
   enum class Family : uint8_t { IPv4, IPv6 };
@@ -59,13 +62,19 @@ class Connection : public Transport {
   ~Connection() = default;
 };
 
-// A single-threaded event loop over io_uring. Bytes are received into a ring of buffers the
-// kernel picks from, so a connection needs no buffer of its own and nothing is copied on the
-// way to the handler.
+enum class LoopBackend {
+  Automatic,  // the best this platform and this kernel offer
+  IoUring,    // Linux: completions, receiving into buffers the kernel picks from
+  Readiness,  // epoll or kqueue: wait until a socket is ready, then read it
+};
+
+// A single-threaded event loop. What it runs on is the platform's: io_uring or epoll on Linux,
+// kqueue on macOS, IO completion ports on Windows. The handler sees the same thing on all of
+// them: the bytes that arrived, valid for the length of the call.
 class Loop {
  public:
-  // Null where io_uring cannot be started.
-  static std::unique_ptr<Loop> Create();
+  // Null where the loop cannot be started, or `backend` does not exist here.
+  static std::unique_ptr<Loop> Create(LoopBackend backend = LoopBackend::Automatic);
   ~Loop();
 
   Loop(const Loop&) = delete;
@@ -73,6 +82,9 @@ class Loop {
 
   // Starts connecting. `handler` must outlive the connection; its OnClosed is the last call.
   Connection* Connect(const SocketAddress& address, ConnectionHandler* handler);
+
+  // What the loop runs on: "io_uring", "epoll", "kqueue" or "iocp".
+  const char* backend_name() const;
 
   using Task = std::function<void()>;
   using TimerId = uint64_t;

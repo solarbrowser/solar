@@ -9,6 +9,7 @@
 #include "solar/net/HttpClient.h"
 #include "solar/url/Parser.h"
 #include "solar/url/Serializer.h"
+#include "support/TestLoop.h"
 #include "support/TestServer.h"
 
 namespace {
@@ -56,7 +57,7 @@ struct Session {
   std::unique_ptr<Loop> loop;
   std::unique_ptr<HttpClient> client;  // declared after the loop, so destroyed before it
 
-  explicit Session(HttpClientOptions options = {}) : loop(Loop::Create()), client(std::make_unique<HttpClient>(*loop, options)) {}
+  explicit Session(HttpClientOptions options = {}) : loop(solar::test::MakeLoop()), client(std::make_unique<HttpClient>(*loop, options)) {}
 
   Result Get(const std::string& url, FetchOptions options = {}) {
     Collector collector;

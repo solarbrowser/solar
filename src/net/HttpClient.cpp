@@ -1,9 +1,5 @@
 #include "solar/net/HttpClient.h"
 
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <netinet/in.h>
-
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
@@ -11,6 +7,7 @@
 #include <optional>
 #include <unordered_map>
 
+#include "Socket.h"
 #include "solar/url/Origin.h"
 #include "solar/url/Parser.h"
 #include "solar/url/Serializer.h"
@@ -47,6 +44,7 @@ namespace {
 
 // Blocks while the system resolver runs. This stands in until DNS moves off the loop's thread.
 bool Resolve(const std::string& host, uint16_t port, std::vector<SocketAddress>& out, std::string& error) {
+  InitializeSockets();
   std::string name = host;
   if (name.size() >= 2 && name.front() == '[' && name.back() == ']') name = name.substr(1, name.size() - 2);
 
@@ -56,7 +54,11 @@ bool Resolve(const std::string& host, uint16_t port, std::vector<SocketAddress>&
   addrinfo* results = nullptr;
   const int code = ::getaddrinfo(name.c_str(), std::to_string(port).c_str(), &hints, &results);
   if (code != 0) {
+#ifdef _WIN32
+    error = std::string("cannot resolve ") + host + ": " + ErrorMessage(code);
+#else
     error = std::string("cannot resolve ") + host + ": " + ::gai_strerror(code);
+#endif
     return false;
   }
   for (addrinfo* entry = results; entry; entry = entry->ai_next) {
@@ -394,7 +396,7 @@ void Exchange::OnConnectionClosed(int error, const std::string& tlsFailure) {
     return;
   }
   if (error != 0) {
-    Fail(std::string("connection failed: ") + std::strerror(error));
+    Fail("connection failed: " + ErrorMessage(error));
     return;
   }
   if (const auto parseError = parser->Finish()) {

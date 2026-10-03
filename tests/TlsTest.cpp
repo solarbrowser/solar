@@ -6,6 +6,7 @@
 #include "solar/net/HttpClient.h"
 #include "solar/url/Parser.h"
 #include "support/Pki.h"
+#include "support/TestLoop.h"
 #include "support/TestServer.h"
 #include "support/TlsTestServer.h"
 
@@ -51,7 +52,7 @@ void Check(const std::string& name, bool ok, const std::string& detail = "") {
 }
 
 Result Get(const std::string& url, std::shared_ptr<TlsContext> tls, std::chrono::milliseconds timeout = std::chrono::seconds(10)) {
-  auto loop = solar::net::Loop::Create();
+  auto loop = solar::test::MakeLoop();
   auto parsed = solar::url::Parse(url);
   Collector collector;
   FetchOptions options;
@@ -207,7 +208,7 @@ int main() {
       }
     });
 
-    auto loop = solar::net::Loop::Create();
+    auto loop = solar::test::MakeLoop();
     solar::net::HttpClient client(*loop);
     FetchOptions options;
     options.tls = trusting;

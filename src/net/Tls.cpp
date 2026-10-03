@@ -6,7 +6,6 @@
 #include <openssl/x509v3.h>
 
 #include <algorithm>
-#include <cerrno>
 #include <cstring>
 
 namespace solar::net {
@@ -233,7 +232,7 @@ void TlsLayer::OnClosed(int error) {
       failure_ = "connection closed without a TLS close_notify";
     }
   }
-  if (!failure_.empty() && reported == 0) reported = EPROTO;
+  if (!failure_.empty() && reported == 0) reported = kProtocolError;
   upper_.OnClosed(reported);
 }
 

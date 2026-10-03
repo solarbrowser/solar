@@ -6,6 +6,7 @@
 
 #include "solar/net/HttpClient.h"
 #include "solar/url/Parser.h"
+#include "support/TestLoop.h"
 #include "support/TestServer.h"
 
 namespace {
@@ -52,11 +53,7 @@ void Check(const std::string& name, bool ok, const std::string& detail = "") {
 }
 
 Result Get(const std::string& url, FetchOptions options = {}) {
-  auto loop = solar::net::Loop::Create();
-  if (!loop) {
-    std::printf("cannot create the loop (is io_uring available?)\n");
-    std::exit(2);
-  }
+  auto loop = solar::test::MakeLoop();
   auto parsed = solar::url::Parse(url);
   Collector collector;
   solar::net::HttpClient client(*loop);
