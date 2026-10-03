@@ -765,8 +765,14 @@ int main() {
       const auto start = std::chrono::steady_clock::now();
       client.Fetch(*solar::url::Parse("http://fake.test:" + std::to_string(server.port()) + "/"), c);
       loop->Run();
-      Check("a refused address makes the next start at once", c.result.ended && c.result.body == "fell back", c.result.error.value_or(""));
+      Check("a refused address does not stop the next from connecting", c.result.ended && c.result.body == "fell back", c.result.error.value_or(""));
+#ifdef _WIN32
+      // Windows retries a refused connection for a couple of seconds before reporting it, so the
+      // attempt delay is what starts IPv4 there; what matters is that it is not left waiting longer.
+      Check("without waiting for the refusal", elapsed(start) < 1000, std::to_string(elapsed(start)) + " ms");
+#else
       Check("without waiting for the attempt delay", elapsed(start) < 200, std::to_string(elapsed(start)) + " ms");
+#endif
     }
     {
       Log log;
