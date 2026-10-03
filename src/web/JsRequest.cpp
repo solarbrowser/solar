@@ -313,12 +313,13 @@ JsRequest* MakeRequest(Context& ctx, const Value& input, const Value& init) {
       return nullptr;
     }
     body = source->body;
-    source->used = true;
   }
   if (body && (request->method == "GET" || request->method == "HEAD")) {
     qe::ThrowTypeError(ctx, "Failed to construct 'Request': Request with GET/HEAD method cannot have body.");
     return nullptr;
   }
+  // The input's body is spent only now that nothing can fail any more.
+  if (!initBody && source && source->body) source->used = true;
   request->body = std::move(body);
   if (initBody && !contentType.empty() && !request->headers->headers.Has("content-type")) request->headers->headers.Append("Content-Type", contentType);
   return request;
@@ -503,6 +504,7 @@ void DefineRequestClass(Context& ctx) {
   qe::DefineMethod(request.prototype, "arrayBuffer", Consume<BodyKind::ArrayBuffer>, 0);
   qe::DefineMethod(request.prototype, "bytes", Consume<BodyKind::Bytes>, 0);
   qe::DefineMethod(request.prototype, "blob", Consume<BodyKind::Blob>, 0);
+  qe::DefineMethod(request.prototype, "formData", Consume<BodyKind::FormData>, 0);
   qe::DefineGlobal(ctx, "Request", request.constructor);
 }
 

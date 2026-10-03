@@ -11,13 +11,14 @@ template <typename Host>
 void Install(Host& host) {
   DefineEncodingClasses(host.GetContext());
   DefineBlobClasses(host.GetContext());
+  DefineFormDataClass(host.GetContext());
   DefineHeadersClass(host.GetContext());
   DefineResponseClass(host.GetContext());
   DefineRequestClass(host.GetContext());
   DefineFetchFunction(host.GetContext());
   // Web IDL makes @@iterator the same function object as entries, and the embedding surface has no
   // symbol-keyed definitions, so it is installed from script.
-  host.Evaluate("Headers.prototype[Symbol.iterator] = Headers.prototype.entries; Object.setPrototypeOf(File, Blob);");
+  host.Evaluate("Headers.prototype[Symbol.iterator] = Headers.prototype.entries; FormData.prototype[Symbol.iterator] = FormData.prototype.entries; Object.setPrototypeOf(File, Blob);");
 
   // encodeInto returns a dictionary, a plain object, which a native cannot make; the native does the
   // work and this puts its answer in the shape the standard gives.

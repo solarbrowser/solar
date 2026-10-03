@@ -289,6 +289,7 @@ void DefineResponseClass(Context& ctx) {
   qe::DefineMethod(response.prototype, "arrayBuffer", Consume<BodyKind::ArrayBuffer>, 0);
   qe::DefineMethod(response.prototype, "bytes", Consume<BodyKind::Bytes>, 0);
   qe::DefineMethod(response.prototype, "blob", Consume<BodyKind::Blob>, 0);
+  qe::DefineMethod(response.prototype, "formData", Consume<BodyKind::FormData>, 0);
   qe::DefineGlobal(ctx, "Response", response.constructor);
 }
 

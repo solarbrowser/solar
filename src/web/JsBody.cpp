@@ -63,6 +63,8 @@ bool ExtractBody(Context& ctx, const Value& init, ExtractedBody& out) {
   if (JsBlob* blob = DOMObject::Cast<JsBlob>(init)) {
     buffer->bytes.assign(blob->Bytes());
     out.contentType = blob->type;
+  } else if (JsFormData* form = DOMObject::Cast<JsFormData>(init)) {
+    EncodeMultipart(*form, buffer->bytes, out.contentType);
   } else if (JsUrlSearchParams* params = DOMObject::Cast<JsUrlSearchParams>(init)) {
     buffer->bytes = params->Params().ToString();
     out.contentType = "application/x-www-form-urlencoded;charset=UTF-8";
@@ -106,6 +108,16 @@ void Settle(FetchHost* host, Context& ctx, const qe::Persistent& resolve, const 
     case BodyKind::Blob:
       result = qe::FromObject(NewBlob(ctx, buffer.bytes, BlobTypeFromContentType(mimeType)));
       break;
+    case BodyKind::FormData: {
+      JsFormData* form = NewFormData(ctx);
+      if (!ParseFormData(ctx, buffer.bytes, mimeType, form)) {
+        Value error = MakeTypeError(ctx, "Failed to parse body as FormData");
+        qe::Call(ctx, reject.Get(), qe::Undefined(), qe::Args(&error, 1));
+        return;
+      }
+      result = qe::FromObject(form);
+      break;
+    }
     case BodyKind::ArrayBuffer:
     case BodyKind::Bytes: {
       Value array = qe::NewUint8Array(ctx, {reinterpret_cast<const uint8_t*>(buffer.bytes.data()), buffer.bytes.size()});

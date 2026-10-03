@@ -304,6 +304,16 @@ JsBlob* NewBlob(Context& ctx, std::string bytes, std::string type) {
   return blob;
 }
 
+JsFile* NewFile(Context& ctx, std::string bytes, std::string name, std::string type, int64_t lastModified) {
+  JsFile* file = Allocate<JsFile>(FilePrototype(ctx));
+  file->size = bytes.size();
+  file->data = std::make_shared<const std::string>(std::move(bytes));
+  file->type = NormalizeType(type);
+  file->name = std::move(name);
+  file->lastModified = lastModified >= 0 ? lastModified : std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+  return file;
+}
+
 void DefineBlobClasses(Context& ctx) {
   qe::ClassRef blob = qe::DefineClass(ctx, "Blob", ConstructBlob, 0);
   qe::SetRealmData(ctx, &g_blobPrototypeKey, blob.prototype);

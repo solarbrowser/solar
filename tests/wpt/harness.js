@@ -33,6 +33,19 @@
   };
   // testharness's format_value, for messages: strings quoted, other values as String would write them.
   globalThis.format_value = (value) => (typeof value === 'string' ? JSON.stringify(value) : typeof value === 'symbol' ? String(value) : Array.isArray(value) ? '[' + value.map(globalThis.format_value).join(', ') + ']' : String(value));
+  // The promise-returning counterparts of assert_throws_*: the promise must reject with such an error.
+  globalThis.promise_rejects_js = (t, constructor, promise, description) =>
+    Promise.resolve(promise).then(
+      () => fail('promise resolved, but a ' + constructor.name + ' was expected', description),
+      (e) => { if (!(e instanceof constructor)) fail('rejected with ' + describe(e) + ' instead of a ' + constructor.name, description); });
+  globalThis.promise_rejects_exactly = (t, expected, promise, description) =>
+    Promise.resolve(promise).then(
+      () => fail('promise resolved, but a rejection was expected', description),
+      (e) => { if (e !== expected) fail('rejected with ' + describe(e) + ' instead of the expected value', description); });
+  globalThis.promise_rejects_dom = (t, name, promise, description) =>
+    Promise.resolve(promise).then(
+      () => fail('promise resolved, but a ' + name + ' DOMException was expected', description),
+      (e) => { if (!(e instanceof DOMException) || e.name !== name) fail('rejected with ' + describe(e) + ' instead of a ' + name, description); });
   globalThis.assert_own_property = (object, name, description) => {
     if (!Object.prototype.hasOwnProperty.call(object, name)) fail('expected property ' + String(name) + ' missing', description);
   };

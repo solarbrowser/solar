@@ -370,3 +370,43 @@ promise_test(async () => {
   assert_equals(text, 'a Blob in a Response');
   assert_equals(new Request(SERVER, { method: 'POST', body: new Blob(['x'], { type: 'a/b' }) }).headers.get('content-type'), 'a/b');
 }, 'Request and Response take Blob bodies');
+
+// ---- FormData bodies ----
+
+promise_test(async () => {
+  const form = new FormData();
+  form.append('field', 'value with\nnewline');
+  form.append('file', new Blob(['file contents'], { type: 'text/x-file' }), 'name "quoted".txt');
+  const response = await fetch(SERVER + '/echo', { method: 'POST', body: form });
+  const echo = await response.json();
+  assert_true(/^multipart\/form-data; boundary=-+SolarFormBoundary[0-9a-zA-Z]{16}$/.test(echo.contentType), echo.contentType);
+  assert_true(echo.body.includes('name="field"\r\n\r\nvalue with\r\nnewline\r\n'), 'a string value, with CRLF newlines');
+  assert_true(echo.body.includes('name="file"; filename="name %22quoted%22.txt"\r\nContent-Type: text/x-file\r\n\r\nfile contents\r\n'), 'a file');
+  const boundary = echo.contentType.split('boundary=')[1];
+  assert_true(echo.body.endsWith('--' + boundary + '--\r\n'), 'closed by the final boundary');
+}, 'a FormData is sent as multipart/form-data');
+
+promise_test(async () => {
+  const form = new FormData();
+  form.append('a', '1');
+  form.append('b', new File(['bytes'], 'b.bin', { type: 'application/x-bin' }));
+  form.append('c', 'caf\u00e9 \u20ac');
+  const request = new Request(SERVER + '/echo', { method: 'POST', body: form });
+  const parsed = await request.formData();
+  assert_equals(parsed.get('a'), '1');
+  assert_true(parsed.get('b') instanceof File);
+  assert_equals(parsed.get('b').name, 'b.bin');
+  assert_equals(parsed.get('b').type, 'application/x-bin');
+  assert_equals(await parsed.get('b').text(), 'bytes');
+  assert_equals(parsed.get('c'), 'caf\u00e9 \u20ac');
+  assert_array_equals([...parsed.keys()], ['a', 'b', 'c']);
+}, 'formData() reads back what a FormData was sent as');
+
+promise_test(async () => {
+  const response = new Response('x=1&y=%C3%A9&x=2', { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+  const form = await response.formData();
+  assert_array_equals(form.getAll('x'), ['1', '2']);
+  assert_equals(form.get('y'), '\u00e9');
+  const wrong = await new Response('x=1', { headers: { 'Content-Type': 'text/plain' } }).formData().then(() => 'resolved', (e) => e);
+  assert_true(wrong instanceof TypeError, 'another type is not form data');
+}, 'formData() understands urlencoded bodies and refuses others');

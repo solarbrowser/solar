@@ -63,9 +63,34 @@ struct JsFile : JsBlob {
 
 // A new Blob in the realm of `ctx` holding a copy of `bytes`.
 JsBlob* NewBlob(Quanta::Context& ctx, std::string bytes, std::string type);
+// A new File; a negative `lastModified` means now.
+JsFile* NewFile(Quanta::Context& ctx, std::string bytes, std::string name, std::string type, int64_t lastModified);
 void DefineBlobClasses(Quanta::Context& ctx);
 // TextEncoder and TextDecoder (the Encoding Standard), for UTF-8, UTF-16 and windows-1252.
 void DefineEncodingClasses(Quanta::Context& ctx);
+
+// One entry of a FormData: a name and either a string or a File.
+struct FormDataEntry {
+  std::string name;
+  std::string value;
+  JsFile* file = nullptr;
+};
+
+struct JsFormData : Quanta::DOMObject {
+  std::vector<FormDataEntry> entries;
+  Quanta::Object* iteratorPrototype = nullptr;
+  void Visit(Quanta::Visitor& visitor) {
+    for (const FormDataEntry& entry : entries) visitor.Mark(entry.file);
+    visitor.Mark(iteratorPrototype);
+  }
+};
+
+JsFormData* NewFormData(Quanta::Context& ctx);
+void DefineFormDataClass(Quanta::Context& ctx);
+// A FormData as a body: multipart/form-data, and the Content-Type with its boundary.
+void EncodeMultipart(const JsFormData& form, std::string& body, std::string& contentType);
+// A body as a FormData, by its Content-Type: urlencoded or multipart. False if it is neither or is malformed.
+bool ParseFormData(Quanta::Context& ctx, std::string_view body, std::string_view contentType, JsFormData* into);
 
 enum class ResponseType { Basic, Cors, Default, Error, Opaque, OpaqueRedirect };
 
@@ -115,7 +140,7 @@ struct ExtractedBody {
 // BodyInit -> bytes. False, with an exception pending, if it is a kind this build does not have.
 bool ExtractBody(Quanta::Context& ctx, const Quanta::Value& init, ExtractedBody& out);
 
-enum class BodyKind { Text, Json, ArrayBuffer, Bytes, Blob };
+enum class BodyKind { Text, Json, ArrayBuffer, Bytes, Blob, FormData };
 // text(), json(), arrayBuffer() and bytes(): a promise for the body read as that.
 // `mimeType` is the Content-Type of the body's owner, which becomes the type of a Blob.
 Quanta::Value ConsumeBody(Quanta::Context& ctx, JsBodyOwner* owner, BodyKind kind, const std::string& mimeType = "");
