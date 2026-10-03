@@ -1,11 +1,14 @@
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "quanta/Embed.h"
+#include "solar/web/DomBindings.h"
 #include "solar/web/FetchBindings.h"
 #include "solar/web/UrlBindings.h"
 
@@ -67,8 +70,23 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
   }
   std::string name = std::filesystem::path(path).filename();
 
+  // "// META: script=file" asks for another file to run first, relative to this one.
+  std::string prelude;
+  {
+    std::istringstream lines(source);
+    std::string line;
+    while (std::getline(lines, line) && line.starts_with("//")) {
+      const std::string tag = "// META: script=";
+      if (!line.starts_with(tag)) continue;
+      std::string script;
+      const std::string wanted = (std::filesystem::path(path).parent_path() / line.substr(tag.size())).string();
+      if (ReadFile(wanted, script)) prelude += script + "\n";
+    }
+  }
+
   auto runtime = qe::Runtime::Create();
   solar::web::InstallUrlApis(*runtime);
+  solar::web::InstallDomApis(*runtime);
   solar::web::InstallFetchApis(*runtime);
 
   std::string skips = "globalThis.__skip = [";
@@ -77,12 +95,22 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
 
   std::printf("%s\n", name.c_str());
   qe::Runtime::Result result = runtime->Evaluate(skips + resources + harness, "harness.js");
+  if (result.ok && !prelude.empty()) result = runtime->Evaluate(prelude, "prelude.js");
   if (result.ok) result = runtime->Evaluate(source, name);
   if (!result.ok) {
     std::printf("  FAIL while loading: %s\n", result.error.c_str());
     return false;
   }
   runtime->PerformMicrotaskCheckpoint();
+  // Tests that wait for a timer: let each come due, up to a limit so that a test that never ends
+  // does not hold the run.
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (auto delay = runtime->NextTimerDelayMs()) {
+    if (std::chrono::steady_clock::now() > deadline) break;
+    if (*delay > 0) std::this_thread::sleep_for(std::chrono::milliseconds(*delay));
+    runtime->RunDueTimers();
+    runtime->PerformMicrotaskCheckpoint();
+  }
 
   result = runtime->Evaluate("__wptFinish()", name);
   return result.ok;
