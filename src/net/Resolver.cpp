@@ -7,7 +7,7 @@
 #include <thread>
 #include <unordered_map>
 
-#include "Socket.h"
+#include "solar/net/Socket.h"
 
 namespace solar::net {
 

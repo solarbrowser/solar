@@ -2,7 +2,7 @@
 #include <string>
 #include <vector>
 
-#include "net/AddressRace.h"
+#include "solar/net/AddressRace.h"
 
 namespace {
 

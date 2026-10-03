@@ -1,6 +1,6 @@
-#include "ConnectRace.h"
+#include "solar/net/ConnectRace.h"
 
-#include "Socket.h"
+#include "solar/net/Socket.h"
 
 namespace solar::net::internal {
 

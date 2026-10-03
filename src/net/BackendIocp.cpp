@@ -1,4 +1,4 @@
-#include "LoopCore.h"
+#include "solar/net/LoopCore.h"
 
 #ifdef _WIN32
 

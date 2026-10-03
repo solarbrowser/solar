@@ -1,5 +1,5 @@
-#include "LoopCore.h"
-#include "Poller.h"
+#include "solar/net/LoopCore.h"
+#include "solar/net/Poller.h"
 
 #ifndef _WIN32
 

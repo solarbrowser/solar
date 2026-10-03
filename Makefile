@@ -1,5 +1,5 @@
 CXX = clang++
-CXXFLAGS = -std=c++20 -Wall -Wextra -O2 -pthread -Iinclude -Isrc -Itests -isystem third_party/quanta/include -MMD -MP
+CXXFLAGS = -std=c++20 -Wall -Wextra -O2 -pthread -Iinclude -Itests -isystem third_party/quanta/include -MMD -MP
 
 BUILD_DIR = build
 OBJ_DIR = $(BUILD_DIR)/obj
@@ -161,7 +161,7 @@ endif
 
 # The tests that do not need Quanta, built with AddressSanitizer, UndefinedBehaviorSanitizer and
 # leak detection and run. Each is compiled straight from its sources.
-ASAN_FLAGS = -std=c++20 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined -Iinclude -Isrc -Itests -pthread
+ASAN_FLAGS = -std=c++20 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined -Iinclude -Itests -pthread
 ASAN_URL = $(URL_SOURCES)
 ASAN_NET = $(NET_SOURCES) tests/support/TestServer.cpp tests/support/Compress.cpp
 ASAN_TLS = tests/support/TlsTestServer.cpp tests/support/Pki.cpp

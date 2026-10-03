@@ -6,7 +6,7 @@
 #include <memory>
 #include <string>
 
-#include "AddressRace.h"
+#include "solar/net/AddressRace.h"
 #include "solar/net/Loop.h"
 #include "solar/net/Resolver.h"
 

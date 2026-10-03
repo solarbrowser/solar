@@ -1,6 +1,6 @@
 #include "Http2TestServer.h"
 
-#include "net/Nghttp2Compat.h"
+#include "solar/net/Nghttp2Compat.h"
 #include <openssl/ssl.h>
 
 #include <algorithm>

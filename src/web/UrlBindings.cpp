@@ -1,6 +1,6 @@
 #include "solar/web/UrlBindings.h"
 
-#include "UrlBindingsInternal.h"
+#include "solar/web/UrlBindingsInternal.h"
 
 namespace solar::web {
 

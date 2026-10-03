@@ -7,9 +7,9 @@
 #include <optional>
 #include <unordered_map>
 
-#include "ConnectRace.h"
-#include "Http2.h"
-#include "Socket.h"
+#include "solar/net/ConnectRace.h"
+#include "solar/net/Http2.h"
+#include "solar/net/Socket.h"
 #include "solar/url/Origin.h"
 #include "solar/url/Parser.h"
 #include "solar/url/Serializer.h"

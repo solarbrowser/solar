@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <memory>
 
-#include "Socket.h"
+#include "solar/net/Socket.h"
 
 namespace solar::net::internal {
 

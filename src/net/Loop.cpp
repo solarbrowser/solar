@@ -1,6 +1,6 @@
 #include <algorithm>
 
-#include "LoopCore.h"
+#include "solar/net/LoopCore.h"
 
 namespace solar::net {
 

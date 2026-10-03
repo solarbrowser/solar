@@ -5,7 +5,7 @@
 #include <utility>
 #include <vector>
 
-#include "IdnaTables.h"
+#include "solar/url/IdnaTables.h"
 
 namespace solar::url {
 

@@ -1,6 +1,6 @@
-#include "Http2.h"
+#include "solar/net/Http2.h"
 
-#include "Nghttp2Compat.h"
+#include "solar/net/Nghttp2Compat.h"
 
 #include <algorithm>
 #include <charconv>
