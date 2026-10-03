@@ -7,3 +7,10 @@ request-headers.any.js	Testing empty Request Content-Type header	needs Blob
 request-structure.any.js	Request has blob method	needs Blob
 request-structure.any.js	Request has formData method	needs FormData
 request-keepalive.any.js	keepalive flag with stream body	needs ReadableStream
+encodeInto.any.js	*SharedArrayBuffer	Quanta has no SharedArrayBuffer
+textdecoder-copy.any.js	*SharedArrayBuffer	Quanta has no SharedArrayBuffer
+textdecoder-streaming.any.js	*SharedArrayBuffer	Quanta has no SharedArrayBuffer
+Blob-constructor.any.js	Passing a Float16Array	Quanta has no Float16Array
+Blob-constructor.any.js	Passing a FrozenArray	there is no MessageChannel
+encodeInto.any.js	Invalid encodeInto() destination: Float16Array	Quanta has no Float16Array
+encodeInto.any.js	encodeInto() and a detached output buffer	there is no MessageChannel to detach a buffer with

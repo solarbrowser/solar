@@ -43,6 +43,30 @@ struct JsBodyOwner : Quanta::DOMObject {
   void Visit(Quanta::Visitor&) {}
 };
 
+// A Blob: immutable bytes with a type. A slice shares its parent's bytes.
+struct JsBlob : Quanta::DOMObject {
+  std::shared_ptr<const std::string> data;
+  size_t offset = 0;
+  size_t size = 0;
+  std::string type;  // lower case, printable ASCII, or empty
+
+  std::string_view Bytes() const { return data ? std::string_view(*data).substr(offset, size) : std::string_view(); }
+  void Visit(Quanta::Visitor&) {}
+};
+
+struct JsFile : JsBlob {
+  using Parent = JsBlob;
+  std::string name;
+  int64_t lastModified = 0;  // milliseconds since the epoch
+  void Visit(Quanta::Visitor&) {}
+};
+
+// A new Blob in the realm of `ctx` holding a copy of `bytes`.
+JsBlob* NewBlob(Quanta::Context& ctx, std::string bytes, std::string type);
+void DefineBlobClasses(Quanta::Context& ctx);
+// TextEncoder and TextDecoder (the Encoding Standard), for UTF-8, UTF-16 and windows-1252.
+void DefineEncodingClasses(Quanta::Context& ctx);
+
 enum class ResponseType { Basic, Cors, Default, Error, Opaque, OpaqueRedirect };
 
 struct JsResponse : JsBodyOwner {
@@ -91,9 +115,16 @@ struct ExtractedBody {
 // BodyInit -> bytes. False, with an exception pending, if it is a kind this build does not have.
 bool ExtractBody(Quanta::Context& ctx, const Quanta::Value& init, ExtractedBody& out);
 
-enum class BodyKind { Text, Json, ArrayBuffer, Bytes };
+enum class BodyKind { Text, Json, ArrayBuffer, Bytes, Blob };
 // text(), json(), arrayBuffer() and bytes(): a promise for the body read as that.
-Quanta::Value ConsumeBody(Quanta::Context& ctx, JsBodyOwner* owner, BodyKind kind);
+// `mimeType` is the Content-Type of the body's owner, which becomes the type of a Blob.
+Quanta::Value ConsumeBody(Quanta::Context& ctx, JsBodyOwner* owner, BodyKind kind, const std::string& mimeType = "");
+// A promise already resolved with `value`.
+Quanta::Value ResolvedPromise(Quanta::Context& ctx, const Quanta::Value& value);
+// UTF-8 decode of the Encoding Standard: a leading byte order mark dropped, malformed bytes replaced.
+Quanta::Value DecodeUtf8(Quanta::Context& ctx, std::string_view bytes);
+// A Blob's type from a Content-Type value: the MIME type in lower case, or empty if it is none.
+std::string BlobTypeFromContentType(std::string_view contentType);
 
 // A TypeError as a value, to reject a promise with.
 Quanta::Value MakeTypeError(Quanta::Context& ctx, const std::string& message);

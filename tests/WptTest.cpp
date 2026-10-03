@@ -83,7 +83,9 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
       const std::string tag = "// META: script=";
       if (!line.starts_with(tag)) continue;
       std::string script;
-      const std::string wanted = (std::filesystem::path(path).parent_path() / line.substr(tag.size())).string();
+      // A path from the root is from tests/wpt; any other is from the test's own directory.
+      const std::string given = line.substr(tag.size());
+      const std::string wanted = given.starts_with("/") ? "tests/wpt" + given : (std::filesystem::path(path).parent_path() / given).string();
       if (ReadFile(wanted, script)) prelude += script + "\n";
     }
   }

@@ -263,7 +263,7 @@ Value Consume(Context& ctx, Value t, qe::Args, Value) {
     ctx.clear_exception();
     return RejectedPromise(ctx, error);
   }
-  return ConsumeBody(ctx, self, Kind);
+  return ConsumeBody(ctx, self, Kind, self->headers->headers.Get("content-type").value_or(""));
 }
 
 }  // namespace
@@ -288,6 +288,7 @@ void DefineResponseClass(Context& ctx) {
   qe::DefineMethod(response.prototype, "json", Consume<BodyKind::Json>, 0);
   qe::DefineMethod(response.prototype, "arrayBuffer", Consume<BodyKind::ArrayBuffer>, 0);
   qe::DefineMethod(response.prototype, "bytes", Consume<BodyKind::Bytes>, 0);
+  qe::DefineMethod(response.prototype, "blob", Consume<BodyKind::Blob>, 0);
   qe::DefineGlobal(ctx, "Response", response.constructor);
 }
 

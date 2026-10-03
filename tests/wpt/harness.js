@@ -31,6 +31,8 @@
   globalThis.assert_false = (actual, description) => {
     if (actual !== false) fail('expected false but got ' + describe(actual), description);
   };
+  // testharness's format_value, for messages: strings quoted, other values as String would write them.
+  globalThis.format_value = (value) => (typeof value === 'string' ? JSON.stringify(value) : typeof value === 'symbol' ? String(value) : Array.isArray(value) ? '[' + value.map(globalThis.format_value).join(', ') + ']' : String(value));
   globalThis.assert_own_property = (object, name, description) => {
     if (!Object.prototype.hasOwnProperty.call(object, name)) fail('expected property ' + String(name) + ' missing', description);
   };
@@ -93,8 +95,9 @@
     fail('did not throw ' + constructor.name, description);
   };
 
+  // A skip is the start of a test's name, or, if it begins with "*", a part of it.
   function isSkipped(name) {
-    return skips.some((prefix) => String(name).startsWith(prefix));
+    return skips.some((skip) => (skip.startsWith('*') ? String(name).includes(skip.slice(1)) : String(name).startsWith(skip)));
   }
 
   // Setup code is just run; a test file that names its setup tests asynchronously is not supported.

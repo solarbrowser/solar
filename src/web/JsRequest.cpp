@@ -471,7 +471,7 @@ Value Consume(Context& ctx, Value t, qe::Args, Value) {
     ctx.clear_exception();
     return RejectedPromise(ctx, error);
   }
-  return ConsumeBody(ctx, self, Kind);
+  return ConsumeBody(ctx, self, Kind, self->headers->headers.Get("content-type").value_or(""));
 }
 
 }  // namespace
@@ -502,6 +502,7 @@ void DefineRequestClass(Context& ctx) {
   qe::DefineMethod(request.prototype, "json", Consume<BodyKind::Json>, 0);
   qe::DefineMethod(request.prototype, "arrayBuffer", Consume<BodyKind::ArrayBuffer>, 0);
   qe::DefineMethod(request.prototype, "bytes", Consume<BodyKind::Bytes>, 0);
+  qe::DefineMethod(request.prototype, "blob", Consume<BodyKind::Blob>, 0);
   qe::DefineGlobal(ctx, "Request", request.constructor);
 }
 

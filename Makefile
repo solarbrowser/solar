@@ -168,7 +168,7 @@ $(BUILD_DIR)/GenIdnaTables: tools/GenIdnaTables.cpp
 	@$(CXX) -std=c++20 -Wall -Wextra -O2 -o $@ $<
 
 WPT_FETCH = $(wildcard tests/wpt/fetch/api/headers/*.any.js tests/wpt/fetch/api/request/*.any.js tests/wpt/fetch/api/response/*.any.js)
-WPT_DOM = $(wildcard tests/wpt/dom/abort/*.any.js tests/wpt/dom/events/*.any.js tests/wpt/webidl/*.any.js)
+WPT_DOM = $(wildcard tests/wpt/dom/abort/*.any.js tests/wpt/dom/events/*.any.js tests/wpt/webidl/*.any.js tests/wpt/encoding/*.any.js tests/wpt/FileAPI/blob/*.any.js tests/wpt/FileAPI/file/*.any.js)
 
 PORTABLE_TESTS = UrlTest SearchParamsTest ValidationErrorTest NormalizerTest PublicSuffixTest CookiesTest HttpCacheTest FetchHeadersTest CorsTest Http1ParserTest ContentDecoderTest AddressRaceTest HstsTest
 NET_TESTS = LoopTest ResolverTest NetTest HttpClientTest TlsTest Http2Test

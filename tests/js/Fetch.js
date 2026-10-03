@@ -342,3 +342,31 @@ promise_test(async () => {
   const after = Number(await (await fetch(OTHER + '/preflight-count')).text());
   assert_equals(after, before, 'simple requests are sent without asking');
 }, 'a simple request is not preceded by a preflight');
+
+// ---- Blob bodies ----
+
+promise_test(async () => {
+  const echo = await (await fetch(SERVER + '/echo', { method: 'POST', body: new Blob(['blob ', 'body'], { type: 'text/x-test' }) })).json();
+  assert_equals(echo.body, 'blob body');
+  assert_equals(echo.contentType, 'text/x-test', 'the Blob\'s type is the content type');
+  const none = await (await fetch(SERVER + '/echo', { method: 'POST', body: new Blob(['x']) })).json();
+  assert_equals(none.contentType, '', 'a Blob without a type adds none');
+}, 'a Blob is sent as its bytes, with its type');
+
+promise_test(async () => {
+  const response = await fetch(SERVER + '/json');
+  const blob = await response.blob();
+  assert_true(blob instanceof Blob);
+  assert_equals(blob.type, 'application/json');
+  assert_equals(blob.size, 23);
+  assert_equals(await blob.text(), '{"a":1,"b":[true,null]}');
+  const bytes = await (await fetch(SERVER + '/bytes')).blob();
+  assert_equals(bytes.type, 'application/octet-stream');
+  assert_equals((await bytes.slice(250).bytes()).join(), '250,251,252,253,254,255');
+}, 'blob() gives a Blob typed by Content-Type');
+
+promise_test(async () => {
+  const text = await new Response(new Blob(['a Blob in a Response'], { type: 'text/plain' })).text();
+  assert_equals(text, 'a Blob in a Response');
+  assert_equals(new Request(SERVER, { method: 'POST', body: new Blob(['x'], { type: 'a/b' }) }).headers.get('content-type'), 'a/b');
+}, 'Request and Response take Blob bodies');
