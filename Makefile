@@ -9,14 +9,30 @@ URL_OBJECTS = $(URL_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
 NET_SOURCES = $(wildcard src/net/*.cpp)
 NET_OBJECTS = $(NET_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
 
-# The event loop is io_uring and exists only for Linux so far. What does not touch it (the URL
-# library and the HTTP parser) is built and tested everywhere.
 UNAME := $(shell uname -s)
 ifeq ($(UNAME),Linux)
-LIBURING_LIBS = $(shell pkg-config --libs liburing)
-OPENSSL_LIBS = $(shell pkg-config --libs openssl)
-NET_LIBS = $(LIBURING_LIBS) $(OPENSSL_LIBS)
+PLATFORM = linux
+else ifeq ($(UNAME),Darwin)
+PLATFORM = macos
+else ifneq (,$(findstring MINGW,$(UNAME))$(findstring MSYS,$(UNAME)))
+PLATFORM = windows
+else
+PLATFORM = other
 endif
+
+# Where OpenSSL lives differs by platform, so its flags come from pkg-config. The event loop
+# libraries are the platform's own: io_uring on Linux, Winsock on Windows, nothing extra elsewhere.
+OPENSSL_CFLAGS = $(shell pkg-config --cflags openssl 2>/dev/null)
+OPENSSL_LIBS = $(shell pkg-config --libs openssl 2>/dev/null)
+ifeq ($(PLATFORM),linux)
+NET_LIBS = $(shell pkg-config --libs liburing) $(OPENSSL_LIBS)
+else ifeq ($(PLATFORM),windows)
+NET_LIBS = $(OPENSSL_LIBS) -lws2_32 -lmswsock
+else
+NET_LIBS = $(OPENSSL_LIBS)
+endif
+CXXFLAGS += $(OPENSSL_CFLAGS)
+
 WEB_SOURCES = $(wildcard src/web/*.cpp)
 WEB_OBJECTS = $(WEB_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
 
@@ -97,18 +113,18 @@ $(BUILD_DIR)/GenIdnaTables: tools/GenIdnaTables.cpp
 
 PORTABLE_TESTS = UrlTest SearchParamsTest ValidationErrorTest NormalizerTest Http1ParserTest
 NET_TESTS = NetTest HttpClientTest TlsTest
-LINUX_TESTS = $(NET_TESTS) UrlBindingsTest UrlRealmsTest
-ifeq ($(UNAME),Linux)
-TESTS = $(PORTABLE_TESTS) $(LINUX_TESTS)
+QUANTA_TESTS = UrlBindingsTest UrlRealmsTest
+ifeq ($(PLATFORM),linux)
+TESTS = $(PORTABLE_TESTS) $(NET_TESTS) $(QUANTA_TESTS)
 else
-TESTS = $(PORTABLE_TESTS)
+TESTS = $(PORTABLE_TESTS) $(NET_TESTS)
 endif
 
 # SOLAR_LOOP_BACKEND picks the event loop the network tests run on. Linux has two, and both are
 # run: io_uring where the kernel has it, and epoll everywhere.
-test: $(addprefix $(BUILD_DIR)/,$(TESTS)) $(if $(filter Linux,$(UNAME)),$(BUILD_DIR)/WptTest)
+test: $(addprefix $(BUILD_DIR)/,$(TESTS)) $(if $(filter linux,$(PLATFORM)),$(BUILD_DIR)/WptTest)
 	@for t in $(TESTS); do $(BUILD_DIR)/$$t || exit 1; done
-ifeq ($(UNAME),Linux)
+ifeq ($(PLATFORM),linux)
 	@for t in $(NET_TESTS); do SOLAR_LOOP_BACKEND=readiness $(BUILD_DIR)/$$t || exit 1; done
 	@$(BUILD_DIR)/WptTest $(wildcard tests/wpt/url/*.any.js)
 endif

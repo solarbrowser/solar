@@ -1,14 +1,11 @@
 #include "TlsTestServer.h"
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
+#include "SocketCompat.h"
+
 #include <openssl/bio.h>
 #include <openssl/err.h>
 #include <openssl/pem.h>
 #include <openssl/ssl.h>
-#include <poll.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 namespace solar::test {
 
@@ -51,16 +48,17 @@ TlsTestServer::TlsTestServer(const Identity& identity, Script script, bool sendC
   SSL_CTX_set_tlsext_servername_arg(context_, this);
   SSL_CTX_set_alpn_select_cb(context_, AlpnCallback, this);
 
-  listener_ = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+  sock::Init();
+  listener_ = static_cast<int>(::socket(AF_INET, SOCK_STREAM, 0));
   if (listener_ < 0) return;
   int one = 1;
-  ::setsockopt(listener_, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+  ::setsockopt(listener_, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&one), sizeof(one));
   sockaddr_in address{};
   address.sin_family = AF_INET;
   address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   socklen_t length = sizeof(address);
   if (::bind(listener_, reinterpret_cast<sockaddr*>(&address), length) < 0 || ::listen(listener_, 16) < 0) {
-    ::close(listener_);
+    sock::Close(listener_);
     listener_ = -1;
     return;
   }
@@ -74,19 +72,19 @@ TlsTestServer::~TlsTestServer() {
   if (acceptor_.joinable()) acceptor_.join();
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    for (int client : clients_) ::shutdown(client, SHUT_RDWR);
+    for (int client : clients_) sock::ShutdownBoth(static_cast<sock::Handle>(client));
   }
   for (std::thread& worker : workers_) worker.join();
-  if (listener_ >= 0) ::close(listener_);
+  if (listener_ >= 0) sock::Close(static_cast<sock::Handle>(listener_));
   SSL_CTX_free(context_);
 }
 
 void TlsTestServer::AcceptLoop() {
   while (!stopping_) {
-    pollfd waiting{listener_, POLLIN, 0};
-    if (::poll(&waiting, 1, 20) <= 0) continue;
-    int client = ::accept4(listener_, nullptr, nullptr, SOCK_CLOEXEC);
-    if (client < 0) continue;
+    if (!sock::WaitReadable(static_cast<sock::Handle>(listener_), 20)) continue;
+    const sock::Handle accepted = sock::Accept(static_cast<sock::Handle>(listener_));
+    if (accepted == sock::kInvalid) continue;
+    const int client = static_cast<int>(accepted);
 
     std::lock_guard<std::mutex> lock(mutex_);
     clients_.push_back(client);
@@ -102,7 +100,7 @@ void TlsTestServer::AcceptLoop() {
         if (sendCloseNotify_) SSL_shutdown(connection);
       }
       SSL_free(connection);
-      ::close(client);
+      sock::Close(static_cast<sock::Handle>(client));
     });
   }
 }

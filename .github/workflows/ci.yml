@@ -10,7 +10,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Everything: the URL library, the network layer, and the Quanta bindings with WPT's url tests.
+  # Everything: the URL library, the network layer on io_uring and on epoll, and the Quanta
+  # bindings with WPT's url tests.
   linux:
     runs-on: ubuntu-24.04
     steps:
@@ -47,14 +48,18 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y clang make pkg-config liburing-dev libssl-dev
       - run: make asan-test
 
-  # The event loop is io_uring, so only what does not depend on it is built here: the URL library
-  # and the HTTP parser.
+  # The URL library and the network layer, on kqueue. The Quanta bindings are Linux-only so far.
   macos:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          brew install openssl@3 pkg-config
+          echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig" >> "$GITHUB_ENV"
       - run: make -j"$(sysctl -n hw.ncpu)" test
 
+  # The same, on IO completion ports.
   windows:
     runs-on: windows-latest
     defaults:
@@ -66,5 +71,5 @@ jobs:
         with:
           msystem: CLANG64
           update: true
-          install: make mingw-w64-clang-x86_64-clang
+          install: make mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-openssl mingw-w64-clang-x86_64-pkgconf
       - run: make -j"$(nproc)" test
