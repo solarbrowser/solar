@@ -29,6 +29,7 @@ struct HttpClient::Impl {
   // Connections hold races that hold lookups with this resolver, so it is destroyed after them.
   std::shared_ptr<Resolver> resolver;
   std::shared_ptr<HstsStore> hsts;
+  std::shared_ptr<CookieJar> cookies;
   uint64_t nextId = 1;
   std::unordered_map<uint64_t, std::unique_ptr<internal::Exchange>> exchanges;
   std::list<std::unique_ptr<internal::HttpConnection>> connections;
@@ -44,7 +45,8 @@ struct HttpClient::Impl {
       : loop(l),
         options(std::move(o)),
         resolver(options.resolver ? options.resolver : MakeSystemResolver(l)),
-        hsts(options.hsts ? options.hsts : std::make_shared<HstsStore>()) {}
+        hsts(options.hsts ? options.hsts : std::make_shared<HstsStore>()),
+        cookies(options.cookies ? options.cookies : std::make_shared<CookieJar>()) {}
   ~Impl();
 
   internal::HttpConnection* TakeIdle(const std::string& key);
@@ -80,7 +82,7 @@ std::string RefuseHeader(const std::string& name, const std::string& value) {
     if ((u < 0x20 && u != '\t') || u == 0x7F) return "invalid header value";
   }
   for (const char* forbidden : {"host", "content-length", "transfer-encoding", "connection", "upgrade", "accept-encoding", "keep-alive", "te",
-                                "trailer", "proxy-connection"}) {
+                                "trailer", "proxy-connection", "cookie", "cookie2"}) {
     if (EqualsIgnoreCase(name, forbidden)) return "the " + name + " header is not the caller's to set";
   }
   return "";
@@ -177,6 +179,7 @@ struct Exchange : Http1ResponseParser::Sink, Http2Stream {
   FetchOptions options;
   url::Url current;
   int redirects = 0;
+  bool crossSite = false;  // this request, or a request it was redirected from, is cross-site
 
   HttpConnection* conn = nullptr;
   int32_t streamId = 0;  // on an HTTP/2 connection, once the request is out
@@ -199,6 +202,7 @@ struct Exchange : Http1ResponseParser::Sink, Http2Stream {
   void Begin();
   void StartHop(bool forceFresh);
   std::vector<std::pair<std::string, std::string>> RequestFields() const;
+  CookieRequest AsCookieRequest() const { return {!crossSite, options.topLevelNavigation}; }
   std::string BuildRequest() const;
   void Dispatch();
   void EndHop(bool clean);
@@ -219,6 +223,11 @@ struct Exchange : Http1ResponseParser::Sink, Http2Stream {
     // Only a response over TLS, whose certificate has been checked, may set the policy.
     if (current.scheme == "https" && current.host) {
       if (auto policy = h.Header("strict-transport-security")) impl.hsts->Note(*current.host, *policy);
+    }
+    if (options.useCookies) {
+      for (const auto& [name, value] : h.headers) {
+        if (EqualsIgnoreCase(name, "set-cookie")) impl.cookies->Store(current, value, AsCookieRequest());
+      }
     }
     if (IsRedirectStatus(h.status)) {
       if (auto target = h.Header("location")) {
@@ -404,6 +413,10 @@ std::vector<std::pair<std::string, std::string>> Exchange::RequestFields() const
   }
   if (!hasUserAgent) fields.emplace_back("User-Agent", impl.options.userAgent);
   if (!hasAccept) fields.emplace_back("Accept", "*/*");
+  if (options.useCookies) {
+    std::string cookies = impl.cookies->HeaderFor(current, AsCookieRequest());
+    if (!cookies.empty()) fields.emplace_back("Cookie", std::move(cookies));
+  }
   fields.emplace_back("Accept-Encoding", "gzip, deflate, br, zstd");
   return fields;
 }
@@ -422,6 +435,7 @@ void Exchange::StartHop(bool forceFresh) {
   // A host that has asked for https is not spoken to in the clear, whatever the URL says. The port
   // stays as it is: a URL's default port is not in it, so port 80 was never there to change.
   if (current.scheme == "http" && current.host && impl.hsts->Covers(*current.host)) current.scheme = "https";
+  if (options.initiator && !url::IsSameSite(*options.initiator, current)) crossSite = true;
   hopComplete = false;
   redirecting = false;
   location.reset();

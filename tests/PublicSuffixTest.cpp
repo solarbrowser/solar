@@ -3,6 +3,7 @@
 #include <optional>
 #include <string>
 
+#include "solar/url/Origin.h"
 #include "solar/url/Parser.h"
 #include "solar/url/PublicSuffix.h"
 
@@ -86,6 +87,16 @@ int main(int argc, char** argv) {
   Check("a suffix has none", RegistrableDomain("co.uk").empty() && RegistrableDomain("com").empty() && RegistrableDomain("foo.ck").empty());
   Check("an address has none either", RegistrableDomain("127.0.0.1").empty());
   Check("an internationalized suffix, in punycode", PublicSuffix("example.xn--p1ai") == "xn--p1ai");
+
+  // Same-site, which cookies use.
+  const auto sameSite = [](const char* a, const char* b) { return solar::url::IsSameSite(*solar::url::Parse(a), *solar::url::Parse(b)); };
+  Check("subdomains of one registrable domain are same-site", sameSite("https://a.example.com/", "https://b.example.com/") && sameSite("https://example.com/", "https://www.example.com/x"));
+  Check("different registrable domains are not", !sameSite("https://example.com/", "https://example.org/") && !sameSite("https://a.github.io/", "https://b.github.io/"));
+  Check("under a public suffix, hosts are same-site only if the same", !sameSite("https://a.co.uk/", "https://b.co.uk/") && sameSite("https://a.co.uk/", "https://a.co.uk/"));
+  Check("the scheme counts and the port does not", !sameSite("http://example.com/", "https://example.com/") && sameSite("https://example.com:8443/", "https://example.com/"));
+  Check("addresses and localhost have no registrable domain", sameSite("http://127.0.0.1:1/", "http://127.0.0.1:2/") && !sameSite("http://127.0.0.1/", "http://127.0.0.2/") &&
+                                                             sameSite("http://localhost/", "http://localhost:3/") && !sameSite("http://localhost/", "http://other.localhost/"));
+  Check("an opaque origin is same-site with nothing", !sameSite("file:///a", "file:///a") && !sameSite("data:,x", "https://example.com/"));
 
   std::printf("public suffix: %d/%d passed\n", total - failed, total);
   return failed == 0 ? 0 : 1;

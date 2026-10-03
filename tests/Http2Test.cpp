@@ -375,6 +375,19 @@ int main() {
     Check("an idle connection is closed after the idle timeout", a.ended && b.ended && server.connections() == 2, std::to_string(server.connections()));
   }
 
+  // Cookies over HTTP/2: the same jar, the headers one to a field.
+  {
+    Http2TestServer server(identity, [](const H2Request& r) {
+      H2Reply reply = Plain("cookie=" + r.Header("cookie"));
+      if (r.path == "/set") reply.headers = {{"set-cookie", "a=1"}, {"set-cookie", "b=2; Secure; HttpOnly"}};
+      return reply;
+    });
+    Session s(pki);
+    s.Get(Url(server, "/set"));
+    Result r = s.Get(Url(server, "/after"));
+    Check("cookies set over HTTP/2 come back on it", r.ended && r.body == "cookie=a=1; b=2", Mentioned(r) + " " + r.body);
+  }
+
   // HTTP/1.1 servers still work, and HTTP/2 can be turned off.
   {
     TlsTestServer server(identity, [](ssl_st* connection) {

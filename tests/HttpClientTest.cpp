@@ -879,6 +879,83 @@ int main() {
     }
   }
 
+
+  // ---- Cookies ----
+  {
+    Log log;
+    TestServer server(Serves(log, [](const std::string& path) {
+      if (path == "/set") return Response("200 OK", "set", "Set-Cookie: a=1\r\nSet-Cookie: b=2; Path=/; HttpOnly\r\n");
+      if (path == "/start") return Response("302 Found", "", "Set-Cookie: r=1\r\nLocation: /landed\r\n");
+      return Response("200 OK", "ok");
+    }));
+    Session s;
+    s.Get(Origin(server) + "/set");
+    s.Get(Origin(server) + "/other");
+    Check("cookies a response sets come back on the next request", Has(log.Head(1), "\r\nCookie: a=1; b=2\r\n"), log.Head(1));
+    Check("none went out before", !Has(log.Head(0), "Cookie"));
+
+    s.Get(Origin(server) + "/start");
+    Check("one set by a redirect goes with the redirected request", Has(log.Head(3), "Cookie: ") && Has(log.Head(3), "r=1"), log.Head(3));
+
+    FetchOptions without;
+    without.useCookies = false;
+    s.Get(Origin(server) + "/other", without);
+    Check("a fetch can leave cookies out", !Has(log.Head(4), "Cookie"), log.Head(4));
+
+    FetchOptions forged;
+    forged.headers = {{"Cookie", "forged=1"}};
+    Result refused = s.Get(Origin(server) + "/other", forged);
+    Check("the Cookie header is not the caller's to set", refused.error && Has(*refused.error, "not the caller's"), refused.error.value_or("accepted"));
+  }
+  {
+    Log log;
+    TestServer server(Serves(log, [](const std::string& path) {
+      if (path == "/set") return Response("200 OK", "set", "Set-Cookie: strict=1; SameSite=Strict\r\nSet-Cookie: lax=1; SameSite=Lax\r\nSet-Cookie: plain=1\r\n");
+      return Response("200 OK", "ok");
+    }));
+    Session s;
+    s.Get(Origin(server) + "/set");
+
+    FetchOptions crossSite;
+    crossSite.initiator = *solar::url::Parse("https://elsewhere.example/page");
+    s.Get(Origin(server) + "/a", crossSite);
+    Check("a request made for another site carries no SameSite cookies", !Has(log.Head(1), "Cookie"), log.Head(1));
+
+    crossSite.topLevelNavigation = true;
+    s.Get(Origin(server) + "/b", crossSite);
+    Check("unless it is a navigation, which carries Lax ones", Has(log.Head(2), "Cookie: lax=1; plain=1") && !Has(log.Head(2), "strict"), log.Head(2));
+
+    FetchOptions sameSite;
+    sameSite.initiator = *solar::url::Parse(Origin(server) + "/page");
+    s.Get(Origin(server) + "/c", sameSite);
+    Check("a request made for the same site carries all", Has(log.Head(3), "strict=1") && Has(log.Head(3), "lax=1") && Has(log.Head(3), "plain=1"), log.Head(3));
+  }
+  {
+    // A request that is redirected through another site stays cross-site, even when it comes back.
+    Log log;
+    std::atomic<uint16_t> portA{0};
+    TestServer b(Serves(log, [&](const std::string&) { return Redirect("302 Found", "http://127.0.0.1:" + std::to_string(portA) + "/final"); }));
+    TestServer a(Serves(log, [&](const std::string& path) {
+      if (path == "/set") return Response("200 OK", "set", "Set-Cookie: plain=1\r\n");
+      if (path == "/hop") return Redirect("302 Found", "http://localhost:" + std::to_string(b.port()) + "/away");
+      return Response("200 OK", "ok");
+    }));
+    portA = a.port();
+    Session s;
+    s.Get(Origin(a) + "/set");
+
+    FetchOptions options;
+    options.initiator = *solar::url::Parse(Origin(a) + "/page");
+    s.Get(Origin(a) + "/final", options);
+    Check("the same request made directly carries the cookie", Has(log.Head(1), "Cookie: plain=1"), log.Head(1));
+
+    Result r = s.Get(Origin(a) + "/hop", options);
+    // The heads go to one log in the order they arrive: /hop, then (at b) /away, then /final.
+    Check("a chain through another site completes", r.ended && r.body == "ok", r.error.value_or(""));
+    Check("the first request of it, still same-site, carries the cookie", Has(log.Head(2), "GET /hop") && Has(log.Head(2), "Cookie: plain=1"), log.Head(2));
+    Check("the last, back on the first site, does not", Has(log.Head(4), "GET /final") && !Has(log.Head(4), "Cookie"), log.Head(4));
+  }
+
   std::printf("http client: %d/%d passed\n", total - failed, total);
   return failed == 0 ? 0 : 1;
 }

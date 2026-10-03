@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -11,6 +12,7 @@
 
 #include "solar/net/ContentDecoder.h"
 #include "solar/net/Http1Parser.h"
+#include "solar/net/Cookies.h"
 #include "solar/net/Hsts.h"
 #include "solar/net/Loop.h"
 #include "solar/net/Resolver.h"
@@ -45,6 +47,15 @@ struct FetchOptions {
   // two is refused too. Authorization is dropped when a redirect leaves the origin.
   std::vector<std::pair<std::string, std::string>> headers;
   int maxRedirects = 20;
+  // Whether the request carries the jar's cookies and the responses to it may set some. The Cookie
+  // header is the client's to write, like Host, and is refused in `headers`.
+  bool useCookies = true;
+  // The page on whose behalf this is fetched. A request to a site other than the page's, or that
+  // is redirected through one, is cross-site, and SameSite cookies are held back from it. Unset
+  // means the user went there themselves, which is never cross-site.
+  std::optional<url::Url> initiator;
+  // The request loads a page into the top-level browsing context, where Lax cookies go cross-site.
+  bool topLevelNavigation = false;
   // The most a compressed body may decode to. It is what stops a few kilobytes from becoming
   // gigabytes; a body that is not compressed is not limited by it.
   uint64_t maxDecodedBodyBytes = uint64_t{1} << 30;
@@ -64,6 +75,9 @@ struct HttpClientOptions {
   // The hosts that have asked to be reached over https only, whose http URLs are changed to https
   // before anything is sent. When there is none the client keeps one for its own lifetime.
   std::shared_ptr<HstsStore> hsts;
+  // The cookies requests carry and responses set. When there is none the client keeps one for its
+  // own lifetime.
+  std::shared_ptr<CookieJar> cookies;
 };
 
 class HttpClient;
