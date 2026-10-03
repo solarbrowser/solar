@@ -1,5 +1,5 @@
 CXX = clang++
-CXXFLAGS = -std=c++20 -Wall -Wextra -O2 -pthread -Iinclude -Itests -isystem third_party/quanta/include -MMD -MP
+CXXFLAGS = -std=c++20 -Wall -Wextra -O2 -pthread -Iinclude -Isrc -Itests -isystem third_party/quanta/include -MMD -MP
 
 BUILD_DIR = build
 OBJ_DIR = $(BUILD_DIR)/obj
@@ -82,6 +82,18 @@ $(BUILD_DIR)/NetTest: $(OBJ_DIR)/tests/NetTest.o $(OBJ_DIR)/tests/support/TestSe
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -Itests -o $@ $^ $(NET_LIBS)
 
+$(BUILD_DIR)/AddressRaceTest: $(OBJ_DIR)/tests/AddressRaceTest.o $(OBJ_DIR)/src/net/AddressRace.o
+	@echo "[LINK] $@"
+	@$(CXX) $(CXXFLAGS) -o $@ $^
+
+$(BUILD_DIR)/ResolverTest: $(OBJ_DIR)/tests/ResolverTest.o $(NET_OBJECTS) $(URL_OBJECTS)
+	@echo "[LINK] $@"
+	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
+
+$(BUILD_DIR)/LoopTest: $(OBJ_DIR)/tests/LoopTest.o $(NET_OBJECTS) $(URL_OBJECTS)
+	@echo "[LINK] $@"
+	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
+
 $(BUILD_DIR)/HttpClientTest: $(OBJ_DIR)/tests/HttpClientTest.o $(OBJ_DIR)/tests/support/TestServer.o $(OBJ_DIR)/tests/support/Compress.o $(URL_OBJECTS) $(NET_OBJECTS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
@@ -119,8 +131,8 @@ $(BUILD_DIR)/GenIdnaTables: tools/GenIdnaTables.cpp
 	@echo "[BUILD] $<"
 	@$(CXX) -std=c++20 -Wall -Wextra -O2 -o $@ $<
 
-PORTABLE_TESTS = UrlTest SearchParamsTest ValidationErrorTest NormalizerTest Http1ParserTest ContentDecoderTest
-NET_TESTS = NetTest HttpClientTest TlsTest
+PORTABLE_TESTS = UrlTest SearchParamsTest ValidationErrorTest NormalizerTest Http1ParserTest ContentDecoderTest AddressRaceTest
+NET_TESTS = LoopTest ResolverTest NetTest HttpClientTest TlsTest
 QUANTA_TESTS = UrlBindingsTest UrlRealmsTest
 ifeq ($(PLATFORM),linux)
 TESTS = $(PORTABLE_TESTS) $(NET_TESTS) $(QUANTA_TESTS)

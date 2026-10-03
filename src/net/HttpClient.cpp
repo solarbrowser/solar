@@ -7,6 +7,7 @@
 #include <optional>
 #include <unordered_map>
 
+#include "ConnectRace.h"
 #include "Socket.h"
 #include "solar/url/Origin.h"
 #include "solar/url/Parser.h"
@@ -24,13 +25,15 @@ struct HttpConnection;
 struct HttpClient::Impl {
   Loop& loop;
   HttpClientOptions options;
+  // Connections hold races that hold lookups with this resolver, so it is destroyed after them.
+  std::shared_ptr<Resolver> resolver;
   uint64_t nextId = 1;
   std::unordered_map<uint64_t, std::unique_ptr<internal::Exchange>> exchanges;
   std::list<std::unique_ptr<internal::HttpConnection>> connections;
   std::unordered_map<std::string, std::vector<internal::HttpConnection*>> idle;
   bool reapQueued = false;
 
-  Impl(Loop& l, HttpClientOptions o) : loop(l), options(o) {}
+  Impl(Loop& l, HttpClientOptions o) : loop(l), options(std::move(o)), resolver(options.resolver ? options.resolver : MakeSystemResolver(l)) {}
   ~Impl();
 
   internal::HttpConnection* TakeIdle(const std::string& key);
@@ -41,47 +44,6 @@ struct HttpClient::Impl {
 };
 
 namespace {
-
-// Blocks while the system resolver runs. This stands in until DNS moves off the loop's thread.
-bool Resolve(const std::string& host, uint16_t port, std::vector<SocketAddress>& out, std::string& error) {
-  InitializeSockets();
-  std::string name = host;
-  if (name.size() >= 2 && name.front() == '[' && name.back() == ']') name = name.substr(1, name.size() - 2);
-
-  addrinfo hints{};
-  hints.ai_socktype = SOCK_STREAM;
-  hints.ai_flags = AI_NUMERICSERV;
-  addrinfo* results = nullptr;
-  const int code = ::getaddrinfo(name.c_str(), std::to_string(port).c_str(), &hints, &results);
-  if (code != 0) {
-#ifdef _WIN32
-    error = std::string("cannot resolve ") + host + ": " + ErrorMessage(code);
-#else
-    error = std::string("cannot resolve ") + host + ": " + ::gai_strerror(code);
-#endif
-    return false;
-  }
-  for (addrinfo* entry = results; entry; entry = entry->ai_next) {
-    SocketAddress address;
-    address.port = port;
-    if (entry->ai_family == AF_INET6) {
-      address.family = SocketAddress::Family::IPv6;
-      std::memcpy(address.bytes.data(), &reinterpret_cast<sockaddr_in6*>(entry->ai_addr)->sin6_addr, 16);
-    } else if (entry->ai_family == AF_INET) {
-      address.family = SocketAddress::Family::IPv4;
-      std::memcpy(address.bytes.data(), &reinterpret_cast<sockaddr_in*>(entry->ai_addr)->sin_addr, 4);
-    } else {
-      continue;
-    }
-    out.push_back(address);
-  }
-  ::freeaddrinfo(results);
-  if (out.empty()) {
-    error = "no usable address for " + host;
-    return false;
-  }
-  return true;
-}
 
 char Lower(char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c + 0x20) : c; }
 
@@ -144,12 +106,10 @@ struct HttpConnection : ConnectionHandler {
   std::string key;
   std::string tlsName;  // empty for plain HTTP
   std::shared_ptr<TlsContext> tlsContext;
-  std::vector<SocketAddress> addresses;
-  size_t nextAddress = 0;
 
+  // Lives until this connection does: it is on the stack when it reports its result.
+  std::unique_ptr<ConnectRace> race;
   std::unique_ptr<TlsLayer> tls;
-  // A layer that has called OnClosed is still on the stack; it lives until this connection does.
-  std::vector<std::unique_ptr<TlsLayer>> retired;
   Connection* connection = nullptr;
   Transport* transport = nullptr;
 
@@ -161,10 +121,19 @@ struct HttpConnection : ConnectionHandler {
 
   explicit HttpConnection(HttpClient::Impl& i) : impl(i) {}
 
-  void ConnectNext();
+  void Begin(const std::string& host, uint16_t port);
   void Close() {
-    if (transport) transport->Close();
+    if (transport) {
+      transport->Close();
+    } else if (race && !dead) {
+      // Still looking for an address to connect to: nothing to close, only to stop.
+      dead = true;
+      race.reset();
+      impl.ScheduleReap();
+    }
   }
+  void OnRaceWon(Connection* winner);
+  void OnRaceFailed(const std::string& message);
 
   void OnConnected() override;
   void OnData(std::span<const uint8_t> data) override;
@@ -207,7 +176,7 @@ struct Exchange : Http1ResponseParser::Sink {
 
   void OnConnectionReady();
   void OnData(std::span<const uint8_t> data);
-  void OnConnectionClosed(int error, const std::string& tlsFailure);
+  void OnConnectionClosed(int error, const std::string& failure);
 
   void OnHead(const HttpResponseHead& h) override {
     if (finished) return;
@@ -252,18 +221,38 @@ struct Exchange : Http1ResponseParser::Sink {
   }
 };
 
-void HttpConnection::ConnectNext() {
-  const SocketAddress& address = addresses[nextAddress++];
+void HttpConnection::Begin(const std::string& host, uint16_t port) {
+  std::string name = host;
+  if (name.size() >= 2 && name.front() == '[') name = name.substr(1, name.size() - 2);
+  race = std::make_unique<ConnectRace>(
+      impl.loop, *impl.resolver, std::move(name), port, AddressRace::Config{}, [this](Connection* winner) { OnRaceWon(winner); },
+      [this](const std::string& message) { OnRaceFailed(message); });
+  race->Start();
+}
+
+void HttpConnection::OnRaceWon(Connection* winner) {
+  connection = winner;
   if (tlsName.empty()) {
-    connection = impl.loop.Connect(address, this);
-    transport = connection;
+    winner->SetHandler(this);
+    transport = winner;
+    OnConnected();
     return;
   }
-  if (tls) retired.push_back(std::move(tls));
   tls = std::make_unique<TlsLayer>(tlsContext, tlsName, *this);
-  connection = impl.loop.Connect(address, tls.get());
-  tls->Attach(connection);
+  winner->SetHandler(tls.get());
+  tls->Attach(winner);
   transport = tls.get();
+  tls->OnConnected();  // the handshake starts now; OnConnected reaches this connection when it is done
+}
+
+void HttpConnection::OnRaceFailed(const std::string& message) {
+  dead = true;
+  if (exchange) {
+    Exchange* user = exchange;
+    exchange = nullptr;
+    user->OnConnectionClosed(0, message);
+  }
+  impl.ScheduleReap();
 }
 
 void HttpConnection::OnConnected() {
@@ -282,12 +271,6 @@ void HttpConnection::OnData(std::span<const uint8_t> data) {
 void HttpConnection::OnClosed(int error) {
   transport = nullptr;
   connection = nullptr;
-  const bool tlsFailed = tls && !tls->failure().empty();
-  if (exchange && !established && !tlsFailed && error != 0 && nextAddress < addresses.size()) {
-    ConnectNext();  // this address could not be reached; try the next
-    return;
-  }
-
   dead = true;
   if (idleTimer != 0) {
     impl.loop.CancelTimer(idleTimer);
@@ -376,24 +359,17 @@ void Exchange::StartHop(bool forceFresh) {
     }
   }
 
-  std::vector<SocketAddress> addresses;
-  std::string error;
-  if (!Resolve(*current.host, port, addresses, error)) {
-    Fail(error);
-    return;
-  }
   auto fresh = std::make_unique<HttpConnection>(impl);
   conn = fresh.get();
   conn->key = std::move(key);
   conn->tlsContext = std::move(context);
-  conn->addresses = std::move(addresses);
   if (secure) {
     conn->tlsName = *current.host;
     if (conn->tlsName.size() >= 2 && conn->tlsName.front() == '[') conn->tlsName = conn->tlsName.substr(1, conn->tlsName.size() - 2);
   }
   conn->exchange = this;
   impl.connections.push_back(std::move(fresh));
-  conn->ConnectNext();
+  conn->Begin(*current.host, port);
 }
 
 void Exchange::OnConnectionReady() {
@@ -415,7 +391,7 @@ void Exchange::OnData(std::span<const uint8_t> data) {
   if (error) Fail(*error);
 }
 
-void Exchange::OnConnectionClosed(int error, const std::string& tlsFailure) {
+void Exchange::OnConnectionClosed(int error, const std::string& failure) {
   conn = nullptr;
   if (finished) return;
   if (reusedConnection && !anyResponseByte && !staleRetried) {
@@ -424,8 +400,8 @@ void Exchange::OnConnectionClosed(int error, const std::string& tlsFailure) {
     StartHop(true);
     return;
   }
-  if (!tlsFailure.empty()) {
-    Fail(tlsFailure);
+  if (!failure.empty()) {
+    Fail(failure);
     return;
   }
   if (error != 0) {

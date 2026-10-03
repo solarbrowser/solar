@@ -70,6 +70,8 @@ class IocpBackend final : public Backend {
 
   const char* Name() const override { return "iocp"; }
 
+  void Wake() override { PostQueuedCompletionStatus(port_, 0, 0, nullptr); }
+
   void Connect(ConnectionState& c) override {
     auto* data = new Data(&c);
     c.backendData = data;

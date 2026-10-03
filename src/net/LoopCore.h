@@ -2,6 +2,7 @@
 
 #include <deque>
 #include <map>
+#include <mutex>
 #include <memory>
 #include <set>
 #include <span>
@@ -57,6 +58,8 @@ class Backend {
   // Waits up to `timeoutMs` (-1: until something happens) and reports what it finds. False on a
   // failure the loop cannot go on after.
   virtual bool Wait(int timeoutMs) = 0;
+  // Makes a Wait in progress, or the next one, return. Callable from any thread.
+  virtual void Wake() = 0;
 };
 
 }  // namespace solar::net::internal
@@ -82,7 +85,14 @@ struct solar::net::Loop::Impl {
   std::unordered_map<TimerId, Timer> timers;
   size_t foregroundTimers = 0;
 
-  bool Pending() const { return busyConnections != 0 || foregroundTimers != 0; }
+  // Tasks handed over by other threads, and work they are doing for us.
+  std::mutex postedMutex;
+  std::vector<Task> posted;
+  size_t externalWork = 0;
+
+  bool Pending() const { return busyConnections != 0 || foregroundTimers != 0 || externalWork != 0; }
+  bool HasPosted();
+  void RunPosted();
   void RunTimers();
   void DrainFinalizable();
   int TimeoutMs() const;

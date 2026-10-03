@@ -51,6 +51,12 @@ bool SetNonBlocking(SocketHandle socket);
 // The platform's text for an error code, which also covers kProtocolError.
 std::string ErrorMessage(int error);
 
+#ifndef _WIN32
+// A pipe with both ends non-blocking and close-on-exec, which is what wakes a waiting poller from
+// another thread. False if it cannot be made.
+bool MakeWakePipe(int fds[2]);
+#endif
+
 // Fills `storage` for `address` and returns its length.
 int ToSockaddr(const SocketAddress& address, sockaddr_storage& storage);
 

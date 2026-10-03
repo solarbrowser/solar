@@ -51,6 +51,17 @@ std::string ErrorMessage(int error) {
 #endif
 }
 
+#ifndef _WIN32
+bool MakeWakePipe(int fds[2]) {
+  if (::pipe(fds) != 0) return false;
+  for (int i = 0; i < 2; ++i) {
+    SetNonBlocking(fds[i]);
+    ::fcntl(fds[i], F_SETFD, FD_CLOEXEC);
+  }
+  return true;
+}
+#endif
+
 int ToSockaddr(const SocketAddress& address, sockaddr_storage& storage) {
   std::memset(&storage, 0, sizeof(storage));
   if (address.family == SocketAddress::Family::IPv6) {

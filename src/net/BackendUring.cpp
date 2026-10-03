@@ -18,7 +18,7 @@ constexpr unsigned kBufferSize = 16 * 1024;
 constexpr int kBufferGroup = 0;
 constexpr unsigned kCompletionBatch = 64;
 
-enum class Op { Connect, Recv, Send, Cancel };
+enum class Op { Connect, Recv, Send, Cancel, Wake };
 
 struct Data;
 
@@ -54,6 +54,10 @@ class UringBackend final : public Backend {
   explicit UringBackend(Loop::Impl& core) : core_(core) {}
 
   ~UringBackend() override {
+    if (wake_[0] >= 0) {
+      ::close(wake_[0]);
+      ::close(wake_[1]);
+    }
     if (!initialized_) return;
     io_uring_free_buf_ring(&ring_, bufferRing_, kBufferCount, kBufferGroup);
     io_uring_queue_exit(&ring_);
@@ -77,7 +81,16 @@ class UringBackend final : public Backend {
                             io_uring_buf_ring_mask(kBufferCount), static_cast<int>(id));
     }
     io_uring_buf_ring_advance(bufferRing_, kBufferCount);
+
+    if (!MakeWakePipe(wake_)) return false;
+    ArmWake();
     return true;
+  }
+
+  void Wake() override {
+    const char byte = 1;
+    // A full pipe already has a wake-up in it, so a failed write loses nothing.
+    [[maybe_unused]] const ssize_t written = ::write(wake_[1], &byte, 1);
   }
 
   const char* Name() const override { return "io_uring"; }
@@ -188,8 +201,18 @@ class UringBackend final : public Backend {
     ++d.inflight;
   }
 
+  void ArmWake() {
+    io_uring_sqe* sqe = NextSqe();
+    io_uring_prep_read(sqe, wake_[0], wakeBuffer_, sizeof(wakeBuffer_), 0);
+    io_uring_sqe_set_data(sqe, &wakeTag_);
+  }
+
   void Handle(const io_uring_cqe& cqe) {
     Tag* tag = static_cast<Tag*>(io_uring_cqe_get_data(&cqe));
+    if (tag->op == Op::Wake) {
+      ArmWake();  // what woke the loop is drained; Run does what was posted
+      return;
+    }
     ConnectionState& c = *tag->connection;
     Data& d = *tag->data;
     const int result = cqe.res;
@@ -237,6 +260,9 @@ class UringBackend final : public Backend {
       case Op::Cancel:
         --d.inflight;
         break;
+
+      case Op::Wake:
+        break;
     }
 
     if (c.closing && d.inflight == 0) core_.Quiescent(c);
@@ -247,6 +273,9 @@ class UringBackend final : public Backend {
   io_uring_buf_ring* bufferRing_ = nullptr;
   uint8_t* buffers_ = nullptr;
   bool initialized_ = false;
+  int wake_[2] = {-1, -1};
+  char wakeBuffer_[64];
+  Tag wakeTag_{nullptr, nullptr, Op::Wake};
 };
 
 }  // namespace

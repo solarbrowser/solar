@@ -96,6 +96,20 @@ void Loop::Impl::DrainFinalizable() {
   }
 }
 
+bool Loop::Impl::HasPosted() {
+  std::lock_guard<std::mutex> lock(postedMutex);
+  return !posted.empty();
+}
+
+void Loop::Impl::RunPosted() {
+  std::vector<Task> batch;
+  {
+    std::lock_guard<std::mutex> lock(postedMutex);
+    batch.swap(posted);
+  }
+  for (Task& task : batch) task();
+}
+
 void Loop::Impl::RunTimers() {
   while (!timerOrder.empty() && timerOrder.begin()->first <= Clock::now()) {
     const TimerId id = timerOrder.begin()->second;
@@ -159,6 +173,17 @@ Connection* Loop::Connect(const SocketAddress& address, ConnectionHandler* handl
   return c;
 }
 
+void Loop::Post(Task task) {
+  {
+    std::lock_guard<std::mutex> lock(impl_->postedMutex);
+    impl_->posted.push_back(std::move(task));
+  }
+  impl_->backend->Wake();
+}
+
+void Loop::BeginExternalWork() { ++impl_->externalWork; }
+void Loop::EndExternalWork() { --impl_->externalWork; }
+
 Loop::TimerId Loop::PostDelayed(std::chrono::milliseconds delay, Task task, bool background) {
   const TimerId id = impl_->nextTimer++;
   const auto when = Impl::Clock::now() + delay;
@@ -183,9 +208,10 @@ void Loop::Run() {
   Impl& core = *impl_;
   core.stopped = false;
   while (!core.stopped) {
+    core.RunPosted();
     core.RunTimers();
     core.DrainFinalizable();
-    if (!core.Pending() && core.finalizable.empty()) break;
+    if (!core.Pending() && core.finalizable.empty() && !core.HasPosted()) break;
     if (core.stopped) break;
     if (!core.backend->Wait(core.TimeoutMs())) break;
   }
@@ -199,6 +225,8 @@ void Connection::Send(std::string data) {
 }
 
 void Connection::Close() { State(this).loop->CloseConnection(State(this)); }
+
+void Connection::SetHandler(ConnectionHandler* handler) { State(this).handler = handler; }
 
 void Connection::SetIdle(bool idle) {
   ConnectionState& c = State(this);

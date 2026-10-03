@@ -53,6 +53,9 @@ class Connection : public Transport {
  public:
   void Send(std::string data) override;
   void Close() override;
+  // Hands the connection to another handler, as when a connection that was one of several
+  // raced has won and the real handler takes over. Events after this go to the new one.
+  void SetHandler(ConnectionHandler* handler);
   // An idle connection does not keep Loop::Run going: a pool's idle connections wait for the next
   // request, which may never come. A connection starts out busy.
   void SetIdle(bool idle);
@@ -88,6 +91,15 @@ class Loop {
 
   using Task = std::function<void()>;
   using TimerId = uint64_t;
+
+  // The one call that is safe from any thread: `task` runs on the loop's thread soon, and the
+  // loop is woken if it is waiting.
+  void Post(Task task);
+  // Work being done elsewhere, such as a lookup on another thread, that Run must not return
+  // before it is finished. Both are for the loop's own thread.
+  void BeginExternalWork();
+  void EndExternalWork();
+
   // A background timer does not keep Loop::Run going either, as for housekeeping that only
   // matters while something else is.
   TimerId PostDelayed(std::chrono::milliseconds delay, Task task, bool background = false);

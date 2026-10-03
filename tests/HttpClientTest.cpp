@@ -10,6 +10,7 @@
 #include "solar/url/Parser.h"
 #include "solar/url/Serializer.h"
 #include "support/Compress.h"
+#include "support/FakeResolver.h"
 #include "support/TestLoop.h"
 #include "support/TestServer.h"
 
@@ -22,6 +23,8 @@ using solar::net::HttpClient;
 using solar::net::HttpClientOptions;
 using solar::net::HttpResponseHead;
 using solar::net::Loop;
+using solar::net::SocketAddress;
+using solar::test::FakeResolver;
 using solar::test::TestServer;
 
 struct Result {
@@ -708,6 +711,166 @@ int main() {
     Check("each used a connection of its own", log.connections == 30, std::to_string(log.connections));
     Result reuse = s.Get(Origin(server) + "/after");
     Check("one of them is reused afterwards", reuse.ended && log.connections == 30, std::to_string(log.connections));
+  }
+
+
+  // ---- Names, and which address to try ----
+  {
+    using Family = SocketAddress::Family;
+    const auto v4 = [](uint8_t last) {
+      SocketAddress a;
+      a.family = Family::IPv4;
+      a.bytes = {127, 0, 0, last};
+      return a;
+    };
+    const auto v6 = [] {
+      SocketAddress a;
+      a.family = Family::IPv6;
+      a.bytes = {};
+      a.bytes[15] = 1;
+      return a;
+    };
+    const auto elapsed = [](std::chrono::steady_clock::time_point since) {
+      return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - since).count();
+    };
+
+    {
+      Log log;
+      TestServer server(Serves(log, [](const std::string&) { return Response("200 OK", "named"); }));
+      auto loop = solar::test::MakeLoop();
+      auto fake = std::make_shared<FakeResolver>(*loop);
+      fake->Set("fake.test", Family::IPv4, {{{v4(1)}, ""}, 0ms});
+      HttpClientOptions options;
+      options.resolver = fake;
+      HttpClient client(*loop, options);
+      Collector c;
+      client.Fetch(*solar::url::Parse("http://fake.test:" + std::to_string(server.port()) + "/"), c);
+      loop->Run();
+      Check("a name is looked up and connected to", c.result.ended && c.result.body == "named", c.result.error.value_or(""));
+      Check("both families were asked for", fake->lookups == 2, std::to_string(fake->lookups));
+    }
+    {
+      Log log;
+      TestServer server(Serves(log, [](const std::string&) { return Response("200 OK", "fell back"); }));
+      auto loop = solar::test::MakeLoop();
+      auto fake = std::make_shared<FakeResolver>(*loop);
+      // Nothing listens on the IPv6 address of this port, so that attempt is refused (or has no
+      // route) at once, and the IPv4 one must not wait out the attempt delay for it.
+      fake->Set("fake.test", Family::IPv6, {{{v6()}, ""}, 0ms});
+      fake->Set("fake.test", Family::IPv4, {{{v4(1)}, ""}, 0ms});
+      HttpClientOptions options;
+      options.resolver = fake;
+      HttpClient client(*loop, options);
+      Collector c;
+      const auto start = std::chrono::steady_clock::now();
+      client.Fetch(*solar::url::Parse("http://fake.test:" + std::to_string(server.port()) + "/"), c);
+      loop->Run();
+      Check("a refused address makes the next start at once", c.result.ended && c.result.body == "fell back", c.result.error.value_or(""));
+      Check("without waiting for the attempt delay", elapsed(start) < 200, std::to_string(elapsed(start)) + " ms");
+    }
+    {
+      Log log;
+      TestServer server(Serves(log, [](const std::string&) { return Response("200 OK", "v6"); }), true);
+      if (server.ok()) {
+        auto loop = solar::test::MakeLoop();
+        auto fake = std::make_shared<FakeResolver>(*loop);
+        fake->Set("fake.test", Family::IPv6, {{{v6()}, ""}, 20ms});  // inside the resolution delay
+        fake->Set("fake.test", Family::IPv4, {{{v4(1)}, ""}, 0ms});
+        HttpClientOptions options;
+        options.resolver = fake;
+        HttpClient client(*loop, options);
+        Collector c;
+        client.Fetch(*solar::url::Parse("http://fake.test:" + std::to_string(server.port()) + "/"), c);
+        loop->Run();
+        Check("an IPv6 answer that comes soon enough is preferred", c.result.ended && c.result.body == "v6" && log.connections == 1,
+              c.result.error.value_or(std::to_string(log.connections)));
+      }
+    }
+    {
+      Log log;
+      TestServer server(Serves(log, [](const std::string&) { return Response("200 OK", "v4"); }));
+      auto loop = solar::test::MakeLoop();
+      auto fake = std::make_shared<FakeResolver>(*loop);
+      fake->Set("fake.test", Family::IPv6, {{{v6()}, ""}, 5000ms});  // an AAAA answer that never comes in time
+      fake->Set("fake.test", Family::IPv4, {{{v4(1)}, ""}, 0ms});
+      HttpClientOptions options;
+      options.resolver = fake;
+      HttpClient client(*loop, options);
+      Collector c;
+      const auto start = std::chrono::steady_clock::now();
+      client.Fetch(*solar::url::Parse("http://fake.test:" + std::to_string(server.port()) + "/"), c);
+      loop->Run();
+      Check("a slow IPv6 answer does not hold IPv4 back for long", c.result.ended && c.result.body == "v4" && elapsed(start) < 1000,
+            c.result.error.value_or(std::to_string(elapsed(start)) + " ms"));
+      Check("and the lookup it gave up on is cancelled", fake->cancelled == 1, std::to_string(fake->cancelled));
+    }
+    {
+      auto loop = solar::test::MakeLoop();
+      auto fake = std::make_shared<FakeResolver>(*loop);
+      fake->Set("fake.test", Family::IPv6, {{{}, "no such host"}, 0ms});
+      fake->Set("fake.test", Family::IPv4, {{{}, "no such host"}, 10ms});
+      HttpClientOptions options;
+      options.resolver = fake;
+      HttpClient client(*loop, options);
+      Collector c;
+      client.Fetch(*solar::url::Parse("http://fake.test:9/"), c);
+      loop->Run();
+      Check("a name that does not resolve is an error that says why",
+            !c.result.ended && c.result.error && c.result.error->find("no such host") != std::string::npos, c.result.error.value_or("no error"));
+    }
+    {
+      auto loop = solar::test::MakeLoop();
+      auto fake = std::make_shared<FakeResolver>(*loop);
+      fake->Set("fake.test", Family::IPv6, {{{v6()}, ""}, 5000ms});
+      fake->Set("fake.test", Family::IPv4, {{{v4(1)}, ""}, 5000ms});
+      HttpClientOptions options;
+      options.resolver = fake;
+      HttpClient client(*loop, options);
+      Collector c;
+      FetchHandle handle = client.Fetch(*solar::url::Parse("http://fake.test:9/"), c);
+      const auto start = std::chrono::steady_clock::now();
+      loop->PostDelayed(20ms, [&] { handle.Cancel(); });
+      loop->Run();
+      Check("cancelling while the name is being looked up ends the fetch", c.result.error == std::string("aborted") && c.result.terminalCalls == 1,
+            c.result.error.value_or("no error"));
+      Check("and stops both lookups instead of waiting for them", fake->cancelled == 2 && elapsed(start) < 1000,
+            std::to_string(fake->cancelled) + ", " + std::to_string(elapsed(start)) + " ms");
+    }
+    {
+      Log log;
+      TestServer server(Serves(log, [](const std::string&) { return Response("200 OK", "quick"); }));
+      auto loop = solar::test::MakeLoop();
+      solar::net::SystemResolverOptions resolverOptions;
+      resolverOptions.lookup = [&](const std::string&, uint16_t port, Family family) {
+        solar::net::ResolveResult result;
+        std::this_thread::sleep_for(400ms);
+        if (family == Family::IPv4) {
+          SocketAddress a;
+          a.family = Family::IPv4;
+          a.bytes = {127, 0, 0, 1};
+          a.port = port;
+          result.addresses.push_back(a);
+        }
+        return result;
+      };
+      HttpClientOptions options;
+      options.resolver = std::shared_ptr<solar::net::Resolver>(solar::net::MakeSystemResolver(*loop, resolverOptions));
+      HttpClient client(*loop, options);
+      Collector slow;
+      Collector quick;
+      const std::string port = std::to_string(server.port());
+      client.Fetch(*solar::url::Parse("http://slow.test:" + port + "/"), slow);
+      const auto start = std::chrono::steady_clock::now();
+      std::optional<long long> quickAt;
+      client.Fetch(*solar::url::Parse("http://127.0.0.1:" + port + "/"), quick);
+      RunUntil(*loop, [&] {
+        if (quick.result.ended && !quickAt) quickAt = elapsed(start);
+        return slow.result.ended && quick.result.ended;
+      });
+      loop->Run();
+      Check("a slow name does not hold up another fetch", quick.result.ended && quickAt && *quickAt < 300, std::to_string(quickAt.value_or(-1)) + " ms");
+      Check("and is connected to when it is answered", slow.result.ended && slow.result.body == "quick", slow.result.error.value_or(""));
+    }
   }
 
   std::printf("http client: %d/%d passed\n", total - failed, total);

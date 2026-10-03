@@ -36,6 +36,25 @@ class ReadinessBackend final : public Backend {
   ReadinessBackend(Loop::Impl& core, std::unique_ptr<Poller> poller)
       : core_(core), poller_(std::move(poller)), buffer_(kReceiveBufferSize) {}
 
+  ~ReadinessBackend() override {
+    if (wake_[0] >= 0) {
+      poller_->Remove(wake_[0]);
+      ::close(wake_[0]);
+      ::close(wake_[1]);
+    }
+  }
+
+  bool Initialize() {
+    if (!MakeWakePipe(wake_)) return false;
+    return poller_->Set(wake_[0], kWakeId, Poller::kRead);
+  }
+
+  void Wake() override {
+    const char byte = 1;
+    // A full pipe already has a wake-up in it, so a failed write loses nothing.
+    [[maybe_unused]] const ssize_t written = ::write(wake_[1], &byte, 1);
+  }
+
   const char* Name() const override { return poller_->Name(); }
 
   void Connect(ConnectionState& c) override {
@@ -113,6 +132,12 @@ class ReadinessBackend final : public Backend {
   }
 
   void Handle(const Poller::Event& event) {
+    if (event.id == kWakeId) {
+      char drained[64];
+      while (::read(wake_[0], drained, sizeof(drained)) > 0) {
+      }
+      return;
+    }
     // A connection may be gone by now, finalized by an earlier event of this same batch.
     auto it = core_.connections.find(event.id);
     if (it == core_.connections.end()) return;
@@ -172,9 +197,13 @@ class ReadinessBackend final : public Backend {
     }
   }
 
+  // No connection has this id, which the loop counts up from 1.
+  static constexpr uint64_t kWakeId = 0;
+
   Loop::Impl& core_;
   std::unique_ptr<Poller> poller_;
   std::vector<uint8_t> buffer_;
+  int wake_[2] = {-1, -1};
   // Connects that finished or failed in the call that began them; Wait reports them.
   std::vector<std::pair<uint64_t, int>> immediate_;
 };
@@ -184,7 +213,9 @@ class ReadinessBackend final : public Backend {
 std::unique_ptr<Backend> MakeReadinessBackend(Loop::Impl& core) {
   std::unique_ptr<Poller> poller = MakePoller();
   if (!poller) return nullptr;
-  return std::make_unique<ReadinessBackend>(core, std::move(poller));
+  auto backend = std::make_unique<ReadinessBackend>(core, std::move(poller));
+  if (!backend->Initialize()) return nullptr;
+  return backend;
 }
 
 }  // namespace solar::net::internal

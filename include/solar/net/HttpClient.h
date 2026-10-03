@@ -12,6 +12,7 @@
 #include "solar/net/ContentDecoder.h"
 #include "solar/net/Http1Parser.h"
 #include "solar/net/Loop.h"
+#include "solar/net/Resolver.h"
 #include "solar/net/Tls.h"
 #include "solar/net/UserAgent.h"
 #include "solar/url/Url.h"
@@ -54,6 +55,9 @@ struct HttpClientOptions {
   // Sent with every request unless a fetch gives its own User-Agent header. Where this comes from
   // is not the network layer's business: a settings file or the user's choice sets it.
   std::string userAgent = DefaultUserAgent();
+  // Looks names up. When there is none the client makes a system one of its own; a caller that
+  // wants the cache shared with others, or answers it controls, gives its own.
+  std::shared_ptr<Resolver> resolver;
 };
 
 class HttpClient;
