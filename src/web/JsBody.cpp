@@ -79,12 +79,6 @@ void Settle(FetchHost* host, Context& ctx, const qe::Persistent& resolve, const 
     case BodyKind::Bytes: {
       Value array = qe::NewUint8Array(ctx, {reinterpret_cast<const uint8_t*>(buffer.bytes.data()), buffer.bytes.size()});
       result = !qe::HasException(ctx) && kind == BodyKind::ArrayBuffer ? qe::Get(ctx, array, "buffer") : array;
-      // Quanta makes the buffer of NewUint8Array without a prototype, so it is not yet an ArrayBuffer to
-      // script. Giving it the realm's is what the engine should have done.
-      if (kind == BodyKind::ArrayBuffer && qe::IsObject(result) && !result.as_object()->get_prototype_raw()) {
-        Value prototype = host->ArrayBufferPrototype();
-        if (qe::IsObject(prototype)) result.as_object()->set_prototype(prototype.as_object());
-      }
       break;
     }
   }

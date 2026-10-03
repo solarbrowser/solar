@@ -18,7 +18,6 @@ FetchHost::FetchHost(Quanta::Context& ctx, Config config) : config_(std::move(co
   Quanta::Value json = qe::Get(ctx, qe::FromObject(ctx.get_global_object()), "JSON");
   jsonParse_ = qe::Persistent(ctx, qe::Get(ctx, json, "parse"));
   jsonStringify_ = qe::Persistent(ctx, qe::Get(ctx, json, "stringify"));
-  arrayBufferPrototype_ = qe::Persistent(ctx, qe::Get(ctx, qe::Get(ctx, qe::FromObject(ctx.get_global_object()), "ArrayBuffer"), "prototype"));
 }
 
 FetchHost::~FetchHost() {

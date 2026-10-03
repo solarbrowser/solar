@@ -3,7 +3,6 @@ urlencoded-parser.any.js	response.formData()	needs the Fetch API
 urlsearchparams-constructor.any.js	URLSearchParams constructor, FormData.	needs FormData
 urlsearchparams-constructor.any.js	URLSearchParams constructor, DOMException as argument	needs DOMException
 IdnaTestV2.any.js	ToASCII("𾢬	assigned in Unicode 18.0, which WPT's expectations predate
-headers-record.any.js	Correct operation ordering with undefined descriptors	Quanta: a Proxy whose target is a Proxy that hides a property wrongly fails the getOwnPropertyDescriptor invariant
 request-headers.any.js	Testing empty Request Content-Type header	needs Blob
 request-structure.any.js	Request has blob method	needs Blob
 request-structure.any.js	Request has formData method	needs FormData

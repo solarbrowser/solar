@@ -242,7 +242,11 @@ void CancelOperation(FetchOperation& operation) {
 
 namespace {
 
-Value Fetch(Context& ctx, Value, qe::Args args, Value) {
+Value Fetch(Context& ctx, Value, qe::Args args, Value newTarget) {
+  if (!qe::IsUndefined(newTarget)) {
+    qe::ThrowTypeError(ctx, "fetch is not a constructor");
+    return qe::Undefined();
+  }
   qe::PromiseCapability capability = qe::NewPromiseCapability(ctx);
   const auto reject = [&](const Value& reason) {
     qe::Call(ctx, capability.reject, qe::Undefined(), qe::Args(&reason, 1));
@@ -326,11 +330,6 @@ Value Fetch(Context& ctx, Value, qe::Args args, Value) {
 
 }  // namespace
 
-void DefineFetchFunction(Context& ctx) {
-  // fetch is a function on the global object, which the embedding surface can only make as a class's
-  // interface object; the script that follows turns it into the plain function it should be.
-  qe::ClassRef fetch = qe::DefineClass(ctx, "fetch", Fetch, 1);
-  qe::DefineGlobal(ctx, "fetch", fetch.constructor);
-}
+void DefineFetchFunction(Context& ctx) { qe::DefineGlobalFunction(ctx, "fetch", Fetch, 1); }
 
 }  // namespace solar::web

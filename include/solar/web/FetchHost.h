@@ -43,8 +43,6 @@ class FetchHost {
   // them does not change what Response.json and json() do.
   Quanta::Value JsonParse() const { return jsonParse_.Get(); }
   Quanta::Value JsonStringify() const { return jsonStringify_.Get(); }
-  // ArrayBuffer.prototype of the realm, for buffers the engine makes without one.
-  Quanta::Value ArrayBufferPrototype() const { return arrayBufferPrototype_.Get(); }
 
   // For fetch(): takes the operation, which then lives until it ends.
   void Adopt(std::unique_ptr<FetchOperation> operation);
@@ -56,7 +54,6 @@ class FetchHost {
   Quanta::Context* ctx_;
   Quanta::Embed::Persistent jsonParse_;
   Quanta::Embed::Persistent jsonStringify_;
-  Quanta::Embed::Persistent arrayBufferPrototype_;
   std::vector<std::unique_ptr<FetchOperation>> operations_;
   // What a deferred task checks before it touches the host, which may be gone by then.
   std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
