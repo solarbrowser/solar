@@ -108,6 +108,11 @@ bool IsForbiddenRequestHeader(std::string_view name, std::string_view value) {
 
 bool IsForbiddenResponseHeaderName(std::string_view name) { return EqualsIgnoreCase(name, "set-cookie") || EqualsIgnoreCase(name, "set-cookie2"); }
 
+bool IsNoCorsSafelistedRequestHeaderName(std::string_view name) {
+  return EqualsIgnoreCase(name, "accept") || EqualsIgnoreCase(name, "accept-language") || EqualsIgnoreCase(name, "content-language") ||
+         EqualsIgnoreCase(name, "content-type");
+}
+
 bool IsNoCorsSafelistedRequestHeader(std::string_view name, std::string_view value) {
   if (value.size() > 128) return false;
   if (EqualsIgnoreCase(name, "accept")) return std::none_of(value.begin(), value.end(), [](char c) { return IsCorsUnsafeByte(static_cast<unsigned char>(c)); });
@@ -174,7 +179,8 @@ FetchHeaders::Status FetchHeaders::Set(std::string_view name, std::string_view r
 FetchHeaders::Status FetchHeaders::Delete(std::string_view name) {
   if (guard_ == HeadersGuard::Immutable) return Status::Immutable;
   if (!Allows(name, "")) return Status::Ok;
-  if (guard_ == HeadersGuard::RequestNoCors && !IsNoCorsSafelistedRequestHeader(name, "")) return Status::Ok;
+  // Only the name counts for a removal; what would stay out is decided when a value is added.
+  if (guard_ == HeadersGuard::RequestNoCors && !IsNoCorsSafelistedRequestHeaderName(name)) return Status::Ok;
   std::erase_if(list_, [&](const Entry& e) { return EqualsIgnoreCase(e.first, name); });
   return Status::Ok;
 }

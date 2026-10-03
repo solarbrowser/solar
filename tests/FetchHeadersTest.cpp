@@ -135,6 +135,13 @@ int main() {
     Check("values that could start a preflight are refused", g.list().size() == 1 && g.list()[0].first == "Content-Type" && g.list()[0].second.starts_with("Multipart"), Joined(g.list()));
     g.Set("content-type", "application/xml");
     g.Delete("x-nothing");
+    FetchHeaders d(HeadersGuard::RequestNoCors);
+    d.Append("Content-Type", "text/plain");
+    d.Delete("Content-Type");
+    d.Append("Accept", "*/*");
+    d.AppendUnchecked("X-Other", "kept");
+    d.Delete("x-other");
+    Check("a removal looks at the name only", !d.Has("content-type") && d.Has("accept") && d.Has("x-other"));
     Check("set and delete take the same care", g.Get("content-type")->starts_with("Multipart"));
     FetchHeaders c(HeadersGuard::RequestNoCors);
     c.Append("Accept", "a");

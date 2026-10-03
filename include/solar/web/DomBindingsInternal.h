@@ -112,6 +112,8 @@ void ThrowDomException(Quanta::Context& ctx, const std::string& message, const s
 
 // A signal that is not aborted, and one that is, in the realm of `ctx`.
 JsAbortSignal* NewAbortSignal(Quanta::Context& ctx);
+// Makes `follower` abort when `source` does, with its reason, and aborted at once if it already has.
+void FollowSignal(Quanta::Context& ctx, JsAbortSignal* follower, JsAbortSignal* source);
 // Aborts it as the standard's "signal abort" does: sets the reason (a DOMException "AbortError" when
 // it is undefined), runs its algorithms, fires abort and aborts the signals that follow it.
 void SignalAbort(Quanta::Context& ctx, JsAbortSignal* signal, Quanta::Value reason);

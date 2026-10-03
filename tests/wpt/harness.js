@@ -191,7 +191,7 @@
   const realFetch = globalThis.fetch;
   globalThis.fetch = (path, ...rest) => {
     const name = String(path).split('/').pop();
-    if (realFetch && !String(path).startsWith('resources/') && !(name in globalThis.__resources)) return realFetch(path, ...rest);
+    if (realFetch && !(name in globalThis.__resources)) return realFetch(path, ...rest);
     return Promise.resolve({ json: () => Promise.resolve(globalThis.__resources[name]) });
   };
 

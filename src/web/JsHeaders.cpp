@@ -123,6 +123,30 @@ bool ReadRecord(Context& ctx, const Value& init, Pairs& out) {
       });
 }
 
+}  // namespace
+
+bool FillHeaders(Context& ctx, JsHeaders* target, const Value& init, const char* what) {
+  if (!qe::IsObject(init)) {
+    qe::ThrowTypeError(ctx, std::string(what) + ": The provided value is not of type '(sequence<sequence<ByteString>> or record<ByteString, ByteString>)'.");
+    return false;
+  }
+  Value method = qe::GetIteratorMethod(ctx, init);
+  if (qe::HasException(ctx)) return false;
+  Pairs pairs;
+  const bool ok = qe::IsUndefined(method) ? ReadRecord(ctx, init, pairs) : ReadSequence(ctx, init, method, pairs);
+  if (!ok) return false;
+  for (const auto& [name, value] : pairs) {
+    if (!net::IsValidHeaderName(name)) {
+      qe::ThrowTypeError(ctx, std::string(what) + ": Invalid name");
+      return false;
+    }
+    if (!Report(ctx, target->headers.Append(name, value), "append")) return false;
+  }
+  return true;
+}
+
+namespace {
+
 Value Construct(Context& ctx, Value, qe::Args args, Value newTarget) {
   if (qe::IsUndefined(newTarget)) {
     qe::ThrowTypeError(ctx, "Failed to construct 'Headers': Please use the 'new' operator, this DOM object constructor cannot be called as a function.");
@@ -134,24 +158,7 @@ Value Construct(Context& ctx, Value, qe::Args args, Value newTarget) {
   JsHeaders* headers = AllocateHeaders(ctx, net::HeadersGuard::None);
   if (prototype) headers->initialize_prototype(prototype);
 
-  if (!args.empty() && !qe::IsUndefined(args[0])) {
-    if (!qe::IsObject(args[0])) {
-      qe::ThrowTypeError(ctx, "Failed to construct 'Headers': The provided value is not of type '(sequence<sequence<ByteString>> or record<ByteString, ByteString>)'.");
-      return qe::Undefined();
-    }
-    Value method = qe::GetIteratorMethod(ctx, args[0]);
-    if (qe::HasException(ctx)) return qe::Undefined();
-    Pairs pairs;
-    const bool ok = qe::IsUndefined(method) ? ReadRecord(ctx, args[0], pairs) : ReadSequence(ctx, args[0], method, pairs);
-    if (!ok) return qe::Undefined();
-    for (const auto& [name, value] : pairs) {
-      if (!net::IsValidHeaderName(name)) {
-        qe::ThrowTypeError(ctx, "Failed to construct 'Headers': Invalid name");
-        return qe::Undefined();
-      }
-      if (!Report(ctx, headers->headers.Append(name, value), "constructor")) return qe::Undefined();
-    }
-  }
+  if (!args.empty() && !qe::IsUndefined(args[0]) && !FillHeaders(ctx, headers, args[0], "Failed to construct 'Headers'")) return qe::Undefined();
   return qe::FromObject(headers);
 }
 
@@ -286,6 +293,15 @@ JsHeaders* AllocateHeaders(Context& ctx, net::HeadersGuard guard) {
   headers->headers.SetGuard(guard);
   headers->iteratorPrototype = IteratorPrototype(ctx);
   headers->initialize_prototype(Prototype(ctx));
+  return headers;
+}
+
+JsHeaders* NewResponseHeaders(Context& ctx, const std::vector<std::pair<std::string, std::string>>& list) {
+  JsHeaders* headers = AllocateHeaders(ctx, net::HeadersGuard::Response);
+  for (const auto& [name, value] : list) {
+    if (net::IsValidHeaderName(name)) headers->headers.Append(name, value);  // what is not valid is left out
+  }
+  headers->headers.SetGuard(net::HeadersGuard::Immutable);
   return headers;
 }
 

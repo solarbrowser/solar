@@ -28,6 +28,7 @@ std::string IsomorphicDecode(std::string_view bytes);
 bool IsForbiddenRequestHeader(std::string_view name, std::string_view value);
 bool IsForbiddenResponseHeaderName(std::string_view name);
 // The few a no-cors request may carry, and only with values that cannot start a preflight.
+bool IsNoCorsSafelistedRequestHeaderName(std::string_view name);
 bool IsNoCorsSafelistedRequestHeader(std::string_view name, std::string_view value);
 
 // A header list with the rules of the Headers class (Fetch Standard §2.2 and §5.2). Names and values

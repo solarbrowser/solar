@@ -91,6 +91,27 @@ Value AbortStatic(Context& ctx, Value, qe::Args args, Value) {
   return qe::FromObject(signal);
 }
 
+}  // namespace
+
+void FollowSignal(Context& ctx, JsAbortSignal* follower, JsAbortSignal* source) {
+  (void)ctx;
+  if (source->aborted) {
+    follower->aborted = true;
+    follower->reason = source->reason;
+    follower->NoteWrite(follower->reason);
+    return;
+  }
+  const std::vector<JsAbortSignal*> sources = source->isDependent ? source->sources : std::vector<JsAbortSignal*>{source};
+  for (JsAbortSignal* each : sources) {
+    follower->sources.push_back(each);
+    each->dependents.push_back(follower);
+    each->NoteWrite(qe::FromObject(follower));
+  }
+  follower->isDependent = true;
+}
+
+namespace {
+
 Value AnyStatic(Context& ctx, Value, qe::Args args, Value) {
   if (!RequireArguments(ctx, args, 1, "Failed to execute 'any' on 'AbortSignal'")) return qe::Undefined();
   std::vector<JsAbortSignal*> given;

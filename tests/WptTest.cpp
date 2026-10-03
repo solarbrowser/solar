@@ -9,7 +9,11 @@
 
 #include "quanta/Embed.h"
 #include "solar/web/DomBindings.h"
+#include "solar/net/HttpClient.h"
+#include "solar/url/Parser.h"
 #include "solar/web/FetchBindings.h"
+#include "solar/web/FetchHost.h"
+#include "solar/web/JsEventLoop.h"
 #include "solar/web/UrlBindings.h"
 
 namespace {
@@ -84,10 +88,22 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
     }
   }
 
+  // Declared in the order they must be destroyed in, last first: the host goes before the client it
+  // cancels through, and before the runtime whose realm it settles promises in.
   auto runtime = qe::Runtime::Create();
+  auto loop = solar::net::Loop::Create();
+  solar::net::HttpClient client(*loop);
   solar::web::InstallUrlApis(*runtime);
   solar::web::InstallDomApis(*runtime);
   solar::web::InstallFetchApis(*runtime);
+  solar::web::FetchHost::Config hostConfig;
+  hostConfig.loop = loop.get();
+  hostConfig.client = &client;
+  hostConfig.pageUrl = *solar::url::Parse("http://web-platform.test:8000/fetch/api/");
+  solar::web::JsEventLoop events(*loop, {[&] { runtime->PerformMicrotaskCheckpoint(); }, [&] { runtime->RunDueTimers(); },
+                                         [&] { return runtime->NextTimerDelayMs(); }});
+  hostConfig.afterScript = [&] { events.AfterScript(); };
+  solar::web::FetchHost host(runtime->GetContext(), hostConfig);
 
   std::string skips = "globalThis.__skip = [";
   for (const std::string& prefix : SkipsFor(skipFile, name)) skips += JsString(prefix) + ",";
@@ -102,15 +118,9 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
     return false;
   }
   runtime->PerformMicrotaskCheckpoint();
-  // Tests that wait for a timer: let each come due, up to a limit so that a test that never ends
-  // does not hold the run.
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-  while (auto delay = runtime->NextTimerDelayMs()) {
-    if (std::chrono::steady_clock::now() > deadline) break;
-    if (*delay > 0) std::this_thread::sleep_for(std::chrono::milliseconds(*delay));
-    runtime->RunDueTimers();
-    runtime->PerformMicrotaskCheckpoint();
-  }
+  // Tests that wait for the network or for a timer: run both, up to a limit so that a test that never
+  // ends does not hold the run.
+  events.Run(std::chrono::seconds(10));
 
   result = runtime->Evaluate("__wptFinish()", name);
   return result.ok;
