@@ -22,8 +22,7 @@ bool ReadFile(const std::string& path, std::string& out) {
 }
 
 // The JSON files as one script that defines globalThis.__resources. JSON text is valid
-// JavaScript, and Quanta's JSON.parse rejects non-ASCII characters and decodes \u escapes above
-// U+007F as '?', so the data goes through the script parser instead.
+// JavaScript, so the data loads as literals and the runner needs no host function to read files.
 std::string LoadResources(const std::string& dir) {
   std::string script = "globalThis.__resources = {";
   for (const auto& entry : std::filesystem::directory_iterator(dir)) {
