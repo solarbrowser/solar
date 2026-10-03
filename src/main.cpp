@@ -25,7 +25,7 @@ class PrintingHandler : public solar::net::FetchHandler {
   bool failed = false;
 };
 
-int RunFetch(const char* typed) {
+int RunFetch(const char* typed, const char* userAgent) {
   std::optional<solar::url::Url> url = solar::url::Parse(solar::url::Normalize(typed));
   if (!url) {
     std::fprintf(stderr, "invalid url: %s\n", typed);
@@ -37,7 +37,9 @@ int RunFetch(const char* typed) {
     return 1;
   }
   PrintingHandler handler;
-  solar::net::HttpClient client(*loop);
+  solar::net::HttpClientOptions options;
+  if (userAgent) options.userAgent = userAgent;
+  solar::net::HttpClient client(*loop, options);
   client.Fetch(*url, handler);
   loop->Run();
   return handler.failed ? 1 : 0;
@@ -46,9 +48,10 @@ int RunFetch(const char* typed) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc == 3 && std::string(argv[1]) == "fetch") return RunFetch(argv[2]);
+  if (argc == 3 && std::string(argv[1]) == "fetch") return RunFetch(argv[2], nullptr);
+  if (argc == 5 && std::string(argv[1]) == "fetch" && std::string(argv[2]) == "--user-agent") return RunFetch(argv[4], argv[3]);
   if (argc != 2) {
-    std::fprintf(stderr, "usage: %s <url>\n       %s fetch <url>\n", argv[0], argv[0]);
+    std::fprintf(stderr, "usage: %s <url>\n       %s fetch [--user-agent <text>] <url>\n", argv[0], argv[0]);
     return 2;
   }
 

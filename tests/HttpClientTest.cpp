@@ -294,6 +294,38 @@ int main() {
     Check("a refused header sends nothing", log.Count() == before, std::to_string(log.Count() - before));
   }
 
+  // ---- User-Agent ----
+  {
+    const std::string fallback = solar::net::DefaultUserAgent();
+    Check("the default claims to be Chrome and says what it is", fallback.starts_with("Mozilla/5.0 (") && fallback.find(" Chrome/") != std::string::npos &&
+              fallback.ends_with(" Solar/Developer") && fallback.find_first_of("\r\n") == std::string::npos, fallback);
+
+    Log log;
+    TestServer server(Serves(log, [](const std::string&) { return Response("200 OK", "x"); }));
+    Session defaults;
+    defaults.Get(Origin(server) + "/");
+    Check("a request carries the default", Has(log.Head(0), "User-Agent: " + fallback + "\r\n"), log.Head(0));
+
+    HttpClientOptions configured;
+    configured.userAgent = "Custom/9.9 (from settings)";
+    Session custom(configured);
+    custom.Get(Origin(server) + "/");
+    Check("the client's setting replaces it", Has(log.Head(1), "User-Agent: Custom/9.9 (from settings)\r\n") && !Has(log.Head(1), "Chrome/"), log.Head(1));
+
+    FetchOptions own;
+    own.headers = {{"User-Agent", "PerFetch/1"}};
+    custom.Get(Origin(server) + "/", own);
+    Check("a fetch's own header wins over the setting", Has(log.Head(2), "User-Agent: PerFetch/1\r\n") && !Has(log.Head(2), "Custom/9.9"), log.Head(2));
+
+    HttpClientOptions injected;
+    injected.userAgent = "Bad\r\nInjected: yes";
+    Session refused(injected);
+    const size_t before = log.Count();
+    Result bad = refused.Get(Origin(server) + "/");
+    Check("a User-Agent that would break the request is refused", bad.error == std::optional<std::string>("invalid User-Agent") && log.Count() == before,
+          bad.error.value_or("sent"));
+  }
+
   // ---- Connections ----
   {
     Log log;

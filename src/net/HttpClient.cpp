@@ -319,6 +319,10 @@ void Exchange::Begin() {
       return;
     }
   }
+  if (!RefuseHeader("User-Agent", impl.options.userAgent).empty()) {
+    Fail("invalid User-Agent");
+    return;
+  }
   timer = impl.loop.PostDelayed(options.timeout, [this] {
     timer = 0;
     Fail("timed out");
@@ -338,7 +342,7 @@ std::string Exchange::BuildRequest() const {
     hasAccept = hasAccept || EqualsIgnoreCase(name, "accept");
     out += name + ": " + value + "\r\n";
   }
-  if (!hasUserAgent) out += "User-Agent: Solar\r\n";
+  if (!hasUserAgent) out += "User-Agent: " + impl.options.userAgent + "\r\n";
   if (!hasAccept) out += "Accept: */*\r\n";
   out += "Accept-Encoding: gzip, deflate, br, zstd\r\n\r\n";
   return out;

@@ -13,6 +13,7 @@
 #include "solar/net/Http1Parser.h"
 #include "solar/net/Loop.h"
 #include "solar/net/Tls.h"
+#include "solar/net/UserAgent.h"
 #include "solar/url/Url.h"
 
 namespace solar::net {
@@ -50,6 +51,9 @@ struct FetchOptions {
 struct HttpClientOptions {
   // How long a connection waits in the pool for another request before it is closed.
   std::chrono::milliseconds idleTimeout{60000};
+  // Sent with every request unless a fetch gives its own User-Agent header. Where this comes from
+  // is not the network layer's business: a settings file or the user's choice sets it.
+  std::string userAgent = DefaultUserAgent();
 };
 
 class HttpClient;
