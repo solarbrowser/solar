@@ -39,6 +39,14 @@ class FetchHandler {
 };
 
 struct FetchOptions {
+  // GET, HEAD, POST, PUT, DELETE, OPTIONS and PATCH are the ones to use. get, post, head, delete,
+  // options and put are written in capitals as the Fetch Standard has it; any other name is sent
+  // as it is. CONNECT, TRACE and TRACK are refused, and so is anything that is not a token.
+  std::string method = "GET";
+  // The request body. It is shared and must not change while the fetch runs, because a redirect
+  // that keeps the method (307, 308) and a retry send it again. GET and HEAD have none. A POST or
+  // PUT without one says Content-Length: 0. Content-Type is the caller's to give in `headers`.
+  std::shared_ptr<const std::string> body;
   // For the whole fetch, redirects included.
   std::chrono::milliseconds timeout{30000};
   // For https. Null means the shared context that trusts the system's roots.

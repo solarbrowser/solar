@@ -303,4 +303,10 @@ void HttpCache::Remove(const std::string& key, const RequestFields& request) {
   if (auto it = FindVariant(key, request); it != lru_.end()) Erase(it);
 }
 
+void HttpCache::RemoveAll(const std::string& key) {
+  auto found = variants_.find(key);
+  if (found == variants_.end()) return;
+  for (List::iterator it : std::vector<List::iterator>(found->second)) Erase(it);
+}
+
 }  // namespace solar::net

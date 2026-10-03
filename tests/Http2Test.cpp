@@ -418,6 +418,135 @@ int main() {
           Mentioned(stale) + " " + std::to_string(seen.size()));
   }
 
+  // Methods and request bodies over HTTP/2.
+  {
+    Http2TestServer server(identity, [](const H2Request& r) {
+      H2Reply reply = Plain(r.method + "|" + r.path + "|" + r.Header("content-length") + "|" + r.Header("content-type") + "|" + r.body);
+      return reply;
+    });
+    Session s(pki);
+    const auto send = [&](const std::string& method, std::shared_ptr<const std::string> body = nullptr) {
+      solar::net::FetchOptions options = s.fetch;
+      options.method = method;
+      options.body = std::move(body);
+      options.headers = {{"Content-Type", "text/plain"}};
+      Collector c;
+      s.client->Fetch(*solar::url::Parse(Url(server, "/m")), c, options);
+      s.loop->Run();
+      return c.result;
+    };
+    Result post = send("POST", std::make_shared<const std::string>("hello"));
+    Check("a POST with a body", post.ended && post.body == "POST|/m|5|text/plain|hello", Mentioned(post) + " " + post.body);
+    Result empty = send("POST");
+    Check("a POST without one says its length is 0", empty.ended && empty.body == "POST|/m|0|text/plain|", Mentioned(empty) + " " + empty.body);
+    Result get = send("GET");
+    Check("a GET says nothing of length", get.ended && get.body == "GET|/m||text/plain|", Mentioned(get) + " " + get.body);
+    Result put = send("put", std::make_shared<const std::string>("p"));
+    Check("put in capitals", put.body == "PUT|/m|1|text/plain|p", put.body);
+    Check("all on one connection", server.connections() == 1, std::to_string(server.connections()));
+  }
+  {
+    std::string big(3 << 20, '\0');
+    for (size_t i = 0; i < big.size(); ++i) big[i] = static_cast<char>((i * 13 + i / 97) % 251);
+    Http2TestServer server(identity, [&](const H2Request& r) { return Plain(r.body == big ? "same" : "different " + std::to_string(r.body.size())); });
+    Session s(pki);
+    solar::net::FetchOptions options = s.fetch;
+    options.method = "POST";
+    options.body = std::make_shared<const std::string>(big);
+    Collector c;
+    s.client->Fetch(*solar::url::Parse(Url(server)), c, options);
+    s.loop->Run();
+    Check("a 3 MiB body goes through the flow-control windows whole", c.result.ended && c.result.body == "same", Mentioned(c.result) + " " + c.result.body);
+  }
+  {
+    std::vector<Collector> collectors(10);
+    Http2TestServer server(identity, [](const H2Request& r) {
+      H2Reply reply = Plain("got " + r.body);
+      reply.delay = 100ms;
+      return reply;
+    });
+    Session s(pki);
+    for (size_t i = 0; i < collectors.size(); ++i) {
+      solar::net::FetchOptions options = s.fetch;
+      options.method = "POST";
+      options.body = std::make_shared<const std::string>("body" + std::to_string(i));
+      s.client->Fetch(*solar::url::Parse(Url(server)), collectors[i], options);
+    }
+    s.loop->Run();
+    bool all = true;
+    for (size_t i = 0; i < collectors.size(); ++i) all = all && collectors[i].result.ended && collectors[i].result.body == "got body" + std::to_string(i);
+    Check("ten POSTs at once each carry their own body", all && server.connections() == 1, std::to_string(server.connections()));
+  }
+  for (int status : {303, 307}) {
+    Http2TestServer server(identity, [&](const H2Request& r) {
+      if (r.path == "/start") {
+        H2Reply reply = Plain("");
+        reply.status = status;
+        reply.headers = {{"location", "/next"}};
+        return reply;
+      }
+      return Plain(r.method + " " + r.body);
+    });
+    Session s(pki);
+    solar::net::FetchOptions options = s.fetch;
+    options.method = "POST";
+    options.body = std::make_shared<const std::string>("payload");
+    Collector c;
+    s.client->Fetch(*solar::url::Parse(Url(server, "/start")), c, options);
+    s.loop->Run();
+    Check("a " + std::to_string(status) + " redirect over HTTP/2", c.result.ended && c.result.body == (status == 307 ? "POST payload" : "GET "), Mentioned(c.result) + " " + c.result.body);
+  }
+  {
+    std::atomic<bool> refused{false};
+    Http2TestServer server(identity, [&](const H2Request& r) {
+      H2Reply reply = Plain("served " + r.method + " " + r.body);
+      if (r.path == "/second" && !refused.exchange(true)) reply.goAwayInstead = true;
+      return reply;
+    });
+    Session s(pki);
+    s.Get(Url(server, "/first"));
+    solar::net::FetchOptions options = s.fetch;
+    options.method = "POST";
+    options.body = std::make_shared<const std::string>("kept");
+    Collector c;
+    s.client->Fetch(*solar::url::Parse(Url(server, "/second")), c, options);
+    s.loop->Run();
+    Check("a POST the server refused with GOAWAY is sent again, body and all", c.result.ended && c.result.body == "served POST kept" && server.connections() == 2,
+          Mentioned(c.result) + " " + c.result.body + " " + std::to_string(server.connections()));
+  }
+  {
+    Http2TestServer server(identity, [](const H2Request& r) {
+      H2Reply reply;
+      reply.headers = {{"x-kind", r.method}};
+      reply.contentLength = 1000;
+      return reply;
+    });
+    Session s(pki);
+    solar::net::FetchOptions options = s.fetch;
+    options.method = "HEAD";
+    Collector c;
+    s.client->Fetch(*solar::url::Parse(Url(server)), c, options);
+    s.loop->Run();
+    Check("a HEAD response over HTTP/2 ends at its head", c.result.ended && c.result.body.empty() && c.result.status == 200, Mentioned(c.result));
+  }
+  {
+    // Giving up on an upload frees its stream and leaves the connection to the others.
+    std::string big(8 << 20, 'u');
+    Http2TestServer server(identity, [](const H2Request& r) { return Plain("done " + std::to_string(r.body.size())); });
+    Session s(pki);
+    solar::net::FetchOptions options = s.fetch;
+    options.method = "POST";
+    options.body = std::make_shared<const std::string>(big);
+    Collector cancelled;
+    solar::net::FetchHandle handle = s.client->Fetch(*solar::url::Parse(Url(server, "/up")), cancelled, options);
+    Collector other;
+    s.Start(Url(server, "/other"), other);
+    s.loop->PostDelayed(5ms, [&] { handle.Cancel(); });
+    s.loop->Run();
+    Check("a cancelled upload is an error", cancelled.result.error == std::string("aborted") && cancelled.result.terminalCalls == 1, Mentioned(cancelled.result));
+    Check("the other stream is unharmed", other.result.ended && other.result.body.starts_with("done"), Mentioned(other.result));
+  }
+
   // HTTP/1.1 servers still work, and HTTP/2 can be turned off.
   {
     TlsTestServer server(identity, [](ssl_st* connection) {

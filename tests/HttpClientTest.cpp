@@ -168,6 +168,23 @@ TestServer::Script ServesHeads(Log& log, std::function<std::string(const std::st
   };
 }
 
+// Like ServesHeads, with the request's body read as well and given to the function.
+TestServer::Script ServesRequests(Log& log, std::function<std::string(const std::string& head, const std::string& body)> respond) {
+  return [&log, respond = std::move(respond)](int client) {
+    ++log.connections;
+    while (true) {
+      std::string head = TestServer::ReadHead(client);
+      if (head.empty()) break;
+      log.Add(head);
+      size_t length = 0;
+      if (const size_t at = head.find("Content-Length: "); at != std::string::npos) length = std::stoul(head.substr(at + 16));
+      const std::string body = TestServer::ReadBytes(client, length);
+      TestServer::SendAll(client, respond(head, body));
+    }
+    ++log.closed;
+  };
+}
+
 bool Has(const std::string& head, const std::string& text) { return head.find(text) != std::string::npos; }
 
 // Runs the loop until `done()` holds, looking every few milliseconds, or `limit` has passed. A
@@ -1191,6 +1208,194 @@ int main() {
     Result a = s.Get(Origin(server) + "/");
     Result b = s.Get(Origin(server) + "/");
     Check("one too large for the cache is delivered and fetched again", a.body == big && b.body == big && log.Count() == 2 && options.cache->entries() == 0, std::to_string(log.Count()));
+  }
+
+
+  // ---- Methods and request bodies ----
+  {
+    Log log;
+    TestServer server(ServesRequests(log, [](const std::string& head, const std::string& body) {
+      return Response("200 OK", Path(head) + "|" + head.substr(0, head.find(' ')) + "|" + body, "Echo: yes\r\n");
+    }));
+    Session s;
+    const auto send = [&](const std::string& method, std::shared_ptr<const std::string> body = nullptr, std::vector<std::pair<std::string, std::string>> headers = {}) {
+      FetchOptions options;
+      options.method = method;
+      options.body = std::move(body);
+      options.headers = std::move(headers);
+      return s.Get(Origin(server) + "/m", options);
+    };
+    Result post = send("POST", std::make_shared<const std::string>("hello=world"), {{"Content-Type", "application/x-www-form-urlencoded"}});
+    Check("a POST with a body", post.ended && post.body == "/m|POST|hello=world", post.error.value_or(post.body));
+    Check("which says its length and type", Has(log.Head(0), "Content-Length: 11\r\n") && Has(log.Head(0), "Content-Type: application/x-www-form-urlencoded\r\n"), log.Head(0));
+
+    send("POST");
+    Check("a POST without a body says Content-Length: 0", Has(log.Head(1), "Content-Length: 0\r\n"), log.Head(1));
+    send("PUT");
+    Check("so does a PUT", Has(log.Head(2), "PUT /m") && Has(log.Head(2), "Content-Length: 0\r\n"), log.Head(2));
+    send("DELETE");
+    send("GET");
+    send("OPTIONS");
+    Check("others without a body say nothing of length", !Has(log.Head(3), "Content-Length") && !Has(log.Head(4), "Content-Length") && !Has(log.Head(5), "Content-Length"));
+
+    Result put = send("put", std::make_shared<const std::string>("replacement"));
+    Check("put is written in capitals, and has its body", put.body == "/m|PUT|replacement", put.body);
+    Result patch = send("PATCH", std::make_shared<const std::string>("{\"a\":1}"));
+    Check("PATCH is sent as given", patch.body == "/m|PATCH|{\"a\":1}", patch.body);
+    Result lowerPatch = send("patch", std::make_shared<const std::string>("x"));
+    Check("and patch in lower case is a different method", lowerPatch.body == "/m|patch|x", lowerPatch.body);
+    Result empty = send("POST", std::make_shared<const std::string>());
+    Check("an empty body is a body of nothing", empty.ended && Has(log.Head(9), "Content-Length: 0\r\n"), log.Head(9));
+
+    for (const char* method : {"CONNECT", "connect", "TRACE", "track"}) {
+      Result r = send(method);
+      Check(std::string("the ") + method + " method is refused", !r.ended && r.error && Has(*r.error, "not allowed"), r.error.value_or("accepted"));
+    }
+    Check("a method that is not a token is refused", !send("GE T").ended && !send("").ended && !send("G\r\nET").ended);
+    Result getBody = send("GET", std::make_shared<const std::string>("x"));
+    Result headBody = send("HEAD", std::make_shared<const std::string>("x"));
+    Check("GET and HEAD cannot have a body", !getBody.ended && Has(getBody.error.value_or(""), "cannot have a body") && !headBody.ended, getBody.error.value_or(""));
+    Check("and none of those reached the server", log.Count() == 10, std::to_string(log.Count()));
+  }
+  {
+    // A body is delivered whole, whatever its size, and byte for byte.
+    Log log;
+    TestServer server(ServesRequests(log, [](const std::string&, const std::string& body) {
+      size_t sum = 0;
+      for (unsigned char c : body) sum = sum * 31 + c;
+      return Response("200 OK", std::to_string(body.size()) + ":" + std::to_string(sum));
+    }));
+    std::string big(5 << 20, '\0');
+    for (size_t i = 0; i < big.size(); ++i) big[i] = static_cast<char>((i * 7 + i / 251) % 251);
+    size_t sum = 0;
+    for (unsigned char c : big) sum = sum * 31 + c;
+    Session s;
+    FetchOptions options;
+    options.method = "POST";
+    options.body = std::make_shared<const std::string>(big);
+    Result r = s.Get(Origin(server) + "/upload", options);
+    Check("a 5 MiB body arrives whole", r.ended && r.body == std::to_string(big.size()) + ":" + std::to_string(sum), r.error.value_or(r.body));
+  }
+  {
+    // What a redirect does to the method and the body.
+    struct Case {
+      const char* status;
+      const char* method;
+      const char* expectedMethod;
+      bool keepsBody;
+    };
+    for (const Case& c : {Case{"301 Moved Permanently", "POST", "GET", false}, Case{"302 Found", "POST", "GET", false}, Case{"303 See Other", "POST", "GET", false},
+                          Case{"303 See Other", "PUT", "GET", false}, Case{"301 Moved Permanently", "PUT", "PUT", true}, Case{"302 Found", "DELETE", "DELETE", false},
+                          Case{"307 Temporary Redirect", "POST", "POST", true}, Case{"308 Permanent Redirect", "PUT", "PUT", true},
+                          Case{"303 See Other", "HEAD", "HEAD", false}}) {
+      Log log;
+      TestServer server(ServesRequests(log, [&](const std::string& head, const std::string& body) {
+        if (Path(head) == "/start") return Redirect(c.status, "/next");
+        return Response("200 OK", "got " + head.substr(0, head.find(' ')) + " " + body);
+      }));
+      Session s;
+      FetchOptions options;
+      options.method = c.method;
+      const bool hasBody = std::string(c.method) != "DELETE" && std::string(c.method) != "HEAD";
+      if (hasBody) options.body = std::make_shared<const std::string>("payload");
+      options.headers = {{"Content-Type", "text/plain"}};
+      Result r = s.Get(Origin(server) + "/start", options);
+      const std::string name = std::string(c.status).substr(0, 3) + " on " + c.method;
+      if (std::string(c.method) == "HEAD") {
+        Check(name + " keeps HEAD", r.ended && Has(log.Head(1), "HEAD /next"), r.error.value_or(log.Head(1)));
+        continue;
+      }
+      const std::string expected = std::string("got ") + c.expectedMethod + " " + (c.keepsBody ? "payload" : "");
+      Check(name + " is asked again with " + c.expectedMethod + (c.keepsBody ? " and the body" : " and no body"), r.ended && r.body == expected, r.error.value_or(r.body));
+      if (std::string(c.method) != c.expectedMethod) {
+        Check(name + " leaves out the headers that described the body", !Has(log.Head(1), "Content-Type") && !Has(log.Head(1), "Content-Length: 7"), log.Head(1));
+      } else {
+        Check(name + " keeps the caller's headers", Has(log.Head(1), "Content-Type: text/plain") && (Has(log.Head(1), "Content-Length: 7") == c.keepsBody), log.Head(1));
+      }
+    }
+  }
+  {
+    // HEAD: the headers of a GET, and no body whatever they say.
+    Log log;
+    TestServer server(ServesRequests(log, [](const std::string& head, const std::string&) {
+      if (head.starts_with("HEAD")) return std::string("HTTP/1.1 200 OK\r\nContent-Length: 1000\r\nX-Kind: head\r\n\r\n");
+      return Response("200 OK", std::string(1000, 'g'));
+    }));
+    Session s;
+    FetchOptions options;
+    options.method = "HEAD";
+    Result head = s.Get(Origin(server) + "/h", options);
+    Check("a HEAD response ends at its head", head.ended && head.body.empty() && head.status == 200 && head.terminalCalls == 1, head.error.value_or(""));
+    Result get = s.Get(Origin(server) + "/h");
+    Check("on a connection that goes on to serve a GET", get.ended && get.body.size() == 1000 && log.connections == 1, std::to_string(log.connections));
+  }
+  {
+    // Requests that change things leave the cache, and are not kept by it.
+    Log log;
+    TestServer server(ServesRequests(log, [](const std::string& head, const std::string&) {
+      return Response("200 OK", head.substr(0, head.find(' ')), "Cache-Control: max-age=3600\r\n");
+    }));
+    Session s;
+    s.Get(Origin(server) + "/r");
+    s.Get(Origin(server) + "/r");
+    Check("a GET is cached", log.Count() == 1);
+    FetchOptions post;
+    post.method = "POST";
+    post.body = std::make_shared<const std::string>("x");
+    Result posted = s.Get(Origin(server) + "/r", post);
+    Check("a POST is always sent, and its answer is not served in place of a GET", posted.body == "POST" && log.Count() == 2);
+    Result after = s.Get(Origin(server) + "/r");
+    Check("and a successful one makes what was kept for the URL out of date", after.body == "GET" && log.Count() == 3, after.body + " " + std::to_string(log.Count()));
+    s.Get(Origin(server) + "/r");
+    Check("a GET after it is kept again, not the POST", log.Count() == 3);
+    FetchOptions options;
+    options.method = "OPTIONS";
+    s.Get(Origin(server) + "/r", options);
+    s.Get(Origin(server) + "/r");
+    Check("a safe method does not disturb it", log.Count() == 4);
+  }
+  {
+    // A form sent across sites is not a link followed: Lax cookies stay home.
+    Log log;
+    TestServer server(ServesRequests(log, [](const std::string& head, const std::string&) {
+      if (Path(head) == "/set") return Response("200 OK", "set", "Set-Cookie: lax=1; SameSite=Lax\r\n");
+      return Response("200 OK", "ok");
+    }));
+    Session s;
+    s.Get(Origin(server) + "/set");
+    FetchOptions nav;
+    nav.initiator = *solar::url::Parse("https://elsewhere.example/");
+    nav.topLevelNavigation = true;
+    s.Get(Origin(server) + "/get", nav);
+    nav.method = "POST";
+    nav.body = std::make_shared<const std::string>("x");
+    s.Get(Origin(server) + "/post", nav);
+    Check("a cross-site navigation by GET carries the Lax cookie", Has(log.Head(1), "Cookie: lax=1"), log.Head(1));
+    Check("by POST it does not", !Has(log.Head(2), "Cookie"), log.Head(2));
+  }
+  {
+    // A connection the server had closed while it sat in the pool: the request goes again, body and all.
+    Log log;
+    std::atomic<int> served{0};
+    TestServer server([&](int client) {
+      ++log.connections;
+      const std::string head = TestServer::ReadHead(client);
+      size_t length = 0;
+      if (const size_t at = head.find("Content-Length: "); at != std::string::npos) length = std::stoul(head.substr(at + 16));
+      const std::string body = TestServer::ReadBytes(client, length);
+      log.Add(head + "BODY:" + body);
+      ++served;
+      TestServer::SendAll(client, Response("200 OK", "ok " + body));
+      // ...and the connection is dropped without a Connection: close, as a busy server may.
+    });
+    Session s;
+    FetchOptions options;
+    options.method = "POST";
+    options.body = std::make_shared<const std::string>("again");
+    s.Get(Origin(server) + "/a", options);
+    RunUntil(*s.loop, [&] { return log.closed >= 0; }, 100ms);  // let the close reach the pool
+    Result second = s.Get(Origin(server) + "/b", options);
+    Check("a POST is sent again on a new connection with its body", second.ended && second.body == "ok again" && log.Count() == 2 && Has(log.Head(1), "BODY:again"), second.error.value_or(second.body));
   }
 
   std::printf("http client: %d/%d passed\n", total - failed, total);

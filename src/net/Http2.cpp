@@ -25,6 +25,8 @@ nghttp2_nv Field(const std::string& name, const std::string& value) {
 
 struct Http2Session::StreamState {
   Http2Stream* sink;  // null once the caller has lost interest
+  std::shared_ptr<const std::string> body;  // the request's, until it has all been read
+  size_t bodySent = 0;
   HttpResponseHead head;
   size_t headerBytes = 0;
   bool headDelivered = false;
@@ -36,6 +38,16 @@ struct Http2Session::StreamState {
 struct Http2Session::Callbacks {
   static StreamState* StateOf(nghttp2_session* session, int32_t id) {
     return static_cast<StreamState*>(nghttp2_session_get_stream_user_data(session, id));
+  }
+
+  // nghttp2 asks for the next piece of the request body when the windows have room for it.
+  static nghttp2_ssize ReadBody(nghttp2_session*, int32_t, uint8_t* buffer, size_t length, uint32_t* flags, nghttp2_data_source* source, void*) {
+    auto* state = static_cast<StreamState*>(source->ptr);
+    const size_t take = std::min(length, state->body->size() - state->bodySent);
+    std::copy_n(state->body->data() + state->bodySent, take, reinterpret_cast<char*>(buffer));
+    state->bodySent += take;
+    if (state->bodySent == state->body->size()) *flags |= NGHTTP2_DATA_FLAG_EOF;
+    return static_cast<nghttp2_ssize>(take);
   }
 
   static int OnHeader(nghttp2_session* session, const nghttp2_frame* frame, const uint8_t* name, size_t nameLength, const uint8_t* value,
@@ -156,8 +168,8 @@ std::optional<std::string> Http2Session::Receive(std::span<const uint8_t> data) 
 int32_t Http2Session::Submit(const Http2Request& request, Http2Stream& stream) {
   std::vector<nghttp2_nv> fields;
   fields.reserve(request.headers.size() + 4);
-  static const std::string kMethod = ":method", kGet = "GET", kScheme = ":scheme", kAuthority = ":authority", kPath = ":path";
-  fields.push_back(Field(kMethod, kGet));
+  static const std::string kMethod = ":method", kScheme = ":scheme", kAuthority = ":authority", kPath = ":path";
+  fields.push_back(Field(kMethod, request.method));
   fields.push_back(Field(kScheme, request.scheme));
   fields.push_back(Field(kAuthority, request.authority));
   fields.push_back(Field(kPath, request.path));
@@ -165,9 +177,13 @@ int32_t Http2Session::Submit(const Http2Request& request, Http2Stream& stream) {
 
   auto state = std::make_unique<StreamState>();
   state->sink = &stream;
+  state->body = request.body;
   StreamState* raw = state.get();
-  // No body: the request ends with its headers.
-  const int32_t id = nghttp2_submit_request2(session_, nullptr, fields.data(), fields.size(), nullptr, raw);
+  // Without a body the request ends with its headers.
+  nghttp2_data_provider2 provider{};
+  provider.source.ptr = raw;
+  provider.read_callback = Callbacks::ReadBody;
+  const int32_t id = nghttp2_submit_request2(session_, nullptr, fields.data(), fields.size(), request.body ? &provider : nullptr, raw);
   if (id < 0) return id;
   streams_.emplace(id, std::move(state));
   if (!receiving_) Flush();

@@ -323,6 +323,28 @@ int main() {
     Check("an IP address gets no policy", first.result.ended && !second.result.ended, second.result.error.value_or(second.result.body));
   }
 
+  // A request body over TLS.
+  {
+    TlsTestServer server(pki.Issue({"127.0.0.1"}), [](ssl_st* connection) {
+      const std::string head = TlsTestServer::ReadHead(connection);
+      size_t length = 0;
+      if (const size_t at = head.find("Content-Length: "); at != std::string::npos) length = std::stoul(head.substr(at + 16));
+      const std::string body = TlsTestServer::ReadBytes(connection, length);
+      const std::string reply = head.substr(0, head.find(' ')) + " " + body;
+      TlsTestServer::SendAll(connection, "HTTP/1.1 200 OK\r\nContent-Length: " + std::to_string(reply.size()) + "\r\n\r\n" + reply);
+    });
+    auto loop = solar::test::MakeLoop();
+    solar::net::HttpClient client(*loop);
+    FetchOptions options;
+    options.tls = trusting;
+    options.method = "POST";
+    options.body = std::make_shared<const std::string>(std::string(300000, 'q'));  // several TLS records
+    Collector c;
+    client.Fetch(*solar::url::Parse(Url(server)), c, options);
+    loop->Run();
+    Check("a large POST body over TLS", c.result.ended && c.result.body == "POST " + std::string(300000, 'q'), c.result.error.value_or(std::to_string(c.result.body.size())));
+  }
+
   std::printf("tls: %d/%d passed\n", total - failed, total);
   return failed == 0 ? 0 : 1;
 }

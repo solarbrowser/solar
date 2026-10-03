@@ -75,6 +75,17 @@ std::string TestServer::ReadHead(int client) {
   return head;
 }
 
+std::string TestServer::ReadBytes(int client, size_t length) {
+  std::string out;
+  char buffer[65536];
+  while (out.size() < length) {
+    const long got = sock::Recv(static_cast<sock::Handle>(client), buffer, std::min(sizeof(buffer), length - out.size()));
+    if (got <= 0) break;
+    out.append(buffer, static_cast<size_t>(got));
+  }
+  return out;
+}
+
 void TestServer::SendAll(int client, std::string_view data) {
   while (!data.empty()) {
     const long sent = sock::Send(static_cast<sock::Handle>(client), data.data(), data.size());

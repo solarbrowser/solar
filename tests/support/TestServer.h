@@ -28,6 +28,8 @@ class TestServer {
 
   // Reads until the blank line that ends a request head.
   static std::string ReadHead(int client);
+  // Reads `length` bytes, or fewer if the peer closes first: a request body after its head.
+  static std::string ReadBytes(int client, size_t length);
   static void SendAll(int client, std::string_view data);
   static void SendSlowly(int client, std::string_view data, size_t piece, int delayMs);
   // Returns once the peer has closed its end.

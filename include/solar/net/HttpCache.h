@@ -78,6 +78,8 @@ class HttpCache {
                                             std::chrono::system_clock::time_point requestTime, std::chrono::system_clock::time_point responseTime);
   // The server said a response is not to be kept, so one kept before is let go.
   void Remove(const std::string& key, const RequestFields& request);
+  // Every variant kept for `key`: what a successful unsafe request, a POST say, has made out of date.
+  void RemoveAll(const std::string& key);
 
   // A response over this is not kept, so there is no point gathering its body.
   size_t maxEntryBytes() const { return options_.maxEntryBytes; }

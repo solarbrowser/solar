@@ -1,6 +1,8 @@
 #include <cstdio>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "solar/net/HttpClient.h"
 #include "solar/url/Normalizer.h"
@@ -25,10 +27,18 @@ class PrintingHandler : public solar::net::FetchHandler {
   bool failed = false;
 };
 
-int RunFetch(const char* typed, const char* userAgent) {
-  std::optional<solar::url::Url> url = solar::url::Parse(solar::url::Normalize(typed));
+struct FetchArguments {
+  const char* url = nullptr;
+  const char* userAgent = nullptr;
+  std::string method = "GET";
+  std::optional<std::string> data;
+  std::vector<std::pair<std::string, std::string>> headers;
+};
+
+int RunFetch(const FetchArguments& arguments) {
+  std::optional<solar::url::Url> url = solar::url::Parse(solar::url::Normalize(arguments.url));
   if (!url) {
-    std::fprintf(stderr, "invalid url: %s\n", typed);
+    std::fprintf(stderr, "invalid url: %s\n", arguments.url);
     return 1;
   }
   auto loop = solar::net::Loop::Create();
@@ -38,22 +48,65 @@ int RunFetch(const char* typed, const char* userAgent) {
   }
   PrintingHandler handler;
   solar::net::HttpClientOptions options;
-  if (userAgent) options.userAgent = userAgent;
+  if (arguments.userAgent) options.userAgent = arguments.userAgent;
   solar::net::HttpClient client(*loop, options);
-  client.Fetch(*url, handler);
+  solar::net::FetchOptions fetch;
+  fetch.method = arguments.method;
+  fetch.headers = arguments.headers;
+  if (arguments.data) fetch.body = std::make_shared<const std::string>(*arguments.data);
+  client.Fetch(*url, handler, fetch);
   loop->Run();
   return handler.failed ? 1 : 0;
+}
+
+// fetch [-X method] [-d data] [-H "Name: value"]... [--user-agent text] url
+std::optional<FetchArguments> ParseFetchArguments(int argc, char** argv) {
+  FetchArguments out;
+  for (int i = 2; i < argc; ++i) {
+    const std::string argument = argv[i];
+    const bool takesValue = argument == "-X" || argument == "-d" || argument == "-H" || argument == "--user-agent";
+    if (takesValue) {
+      if (i + 1 >= argc) return std::nullopt;
+      const char* value = argv[++i];
+      if (argument == "-X") {
+        out.method = value;
+      } else if (argument == "-d") {
+        out.data = value;
+        if (out.method == "GET") out.method = "POST";  // as curl has it
+      } else if (argument == "-H") {
+        const std::string header = value;
+        const size_t colon = header.find(':');
+        if (colon == std::string::npos) return std::nullopt;
+        size_t start = colon + 1;
+        while (start < header.size() && header[start] == ' ') ++start;
+        out.headers.emplace_back(header.substr(0, colon), header.substr(start));
+      } else {
+        out.userAgent = value;
+      }
+    } else if (!out.url) {
+      out.url = argv[i];
+    } else {
+      return std::nullopt;
+    }
+  }
+  if (!out.url) return std::nullopt;
+  return out;
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc == 3 && std::string(argv[1]) == "fetch") return RunFetch(argv[2], nullptr);
-  if (argc == 5 && std::string(argv[1]) == "fetch" && std::string(argv[2]) == "--user-agent") return RunFetch(argv[4], argv[3]);
-  if (argc != 2) {
-    std::fprintf(stderr, "usage: %s <url>\n       %s fetch [--user-agent <text>] <url>\n", argv[0], argv[0]);
+  const auto usage = [&] {
+    std::fprintf(stderr,
+                 "usage: %s <url>\n       %s fetch [-X <method>] [-d <data>] [-H \"Name: value\"]... [--user-agent <text>] <url>\n",
+                 argv[0], argv[0]);
     return 2;
+  };
+  if (argc >= 2 && std::string(argv[1]) == "fetch") {
+    const std::optional<FetchArguments> arguments = ParseFetchArguments(argc, argv);
+    return arguments ? RunFetch(*arguments) : usage();
   }
+  if (argc != 2) return usage();
 
   std::string normalized = solar::url::Normalize(argv[1]);
   solar::url::ValidationErrors errors;

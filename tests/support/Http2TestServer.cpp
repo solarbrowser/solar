@@ -124,18 +124,16 @@ int OnHeader(nghttp2_session*, const nghttp2_frame* frame, const uint8_t* name, 
   if (it == s->requests.end()) return 0;
   const std::string key(reinterpret_cast<const char*>(name), nameLength);
   const std::string text(reinterpret_cast<const char*>(value), valueLength);
-  if (key == ":path") it->second.path = text;
+  if (key == ":method") it->second.method = text;
+  else if (key == ":path") it->second.path = text;
   else if (key == ":authority") it->second.authority = text;
   else if (key == ":scheme") it->second.scheme = text;
   else if (key[0] != ':') it->second.headers.emplace_back(key, text);
   return 0;
 }
 
-int OnFrame(nghttp2_session*, const nghttp2_frame* frame, void* user) {
-  auto* s = static_cast<Session*>(user);
-  if (frame->hd.type == NGHTTP2_RST_STREAM) ++*s->resets;
-  if (frame->hd.type != NGHTTP2_HEADERS || frame->headers.cat != NGHTTP2_HCAT_REQUEST || !(frame->hd.flags & NGHTTP2_FLAG_END_STREAM)) return 0;
-  const int32_t stream = frame->hd.stream_id;
+// Answers a request once all of it has come.
+void Dispatch(Session* s, int32_t stream) {
   H2Request& request = s->requests[stream];
   s->record(request);
   ++s->open;
@@ -149,6 +147,23 @@ int OnFrame(nghttp2_session*, const nghttp2_frame* frame, void* user) {
     s->waiting.push_back({stream, std::move(reply), due});
   } else {
     Answer(*s, stream, reply);
+  }
+}
+
+int OnData(nghttp2_session*, uint8_t, int32_t stream, const uint8_t* data, size_t length, void* user) {
+  auto* s = static_cast<Session*>(user);
+  auto it = s->requests.find(stream);
+  if (it != s->requests.end()) it->second.body.append(reinterpret_cast<const char*>(data), length);
+  return 0;
+}
+
+int OnFrame(nghttp2_session*, const nghttp2_frame* frame, void* user) {
+  auto* s = static_cast<Session*>(user);
+  if (frame->hd.type == NGHTTP2_RST_STREAM) ++*s->resets;
+  if (!(frame->hd.flags & NGHTTP2_FLAG_END_STREAM)) return 0;
+  const bool requestHeaders = frame->hd.type == NGHTTP2_HEADERS && frame->headers.cat == NGHTTP2_HCAT_REQUEST;
+  if (requestHeaders || frame->hd.type == NGHTTP2_DATA) {
+    if (s->requests.count(frame->hd.stream_id)) Dispatch(s, frame->hd.stream_id);
   }
   return 0;
 }
@@ -190,6 +205,7 @@ void Http2TestServer::Serve(ssl_st* connection) {
   nghttp2_session_callbacks_set_on_begin_headers_callback(callbacks, OnBeginHeaders);
   nghttp2_session_callbacks_set_on_header_callback(callbacks, OnHeader);
   nghttp2_session_callbacks_set_on_frame_recv_callback(callbacks, OnFrame);
+  nghttp2_session_callbacks_set_on_data_chunk_recv_callback(callbacks, OnData);
   nghttp2_session_callbacks_set_on_stream_close_callback(callbacks, OnClose);
   nghttp2_option* option = nullptr;
   nghttp2_option_new(&option);

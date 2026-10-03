@@ -131,6 +131,18 @@ std::string TlsTestServer::ReadHead(ssl_st* connection) {
   return head;
 }
 
+std::string TlsTestServer::ReadBytes(ssl_st* connection, size_t length) {
+  std::string out(length, '\0');
+  size_t have = 0;
+  while (have < length) {
+    size_t got = 0;
+    if (!SSL_read_ex(connection, out.data() + have, length - have, &got)) break;
+    have += got;
+  }
+  out.resize(have);
+  return out;
+}
+
 void TlsTestServer::SendAll(ssl_st* connection, std::string_view data) {
   while (!data.empty()) {
     size_t written = 0;

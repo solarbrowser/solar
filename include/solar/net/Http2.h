@@ -33,10 +33,14 @@ class Http2Stream {
 };
 
 struct Http2Request {
+  std::string method = "GET";
   std::string scheme;
   std::string authority;
   std::string path;
   std::vector<std::pair<std::string, std::string>> headers;  // lower case names
+  // Sent as the request's body, read from here as the server's flow-control windows allow. It is
+  // shared, not copied, and must not change while the stream is open. Null for no body.
+  std::shared_ptr<const std::string> body;
 };
 
 // A client's side of one HTTP/2 connection (RFC 9113), many requests at once over a transport
@@ -57,7 +61,7 @@ class Http2Session {
   // unusable; nghttp2 has queued the GOAWAY for it, and it is sent before this returns.
   std::optional<std::string> Receive(std::span<const uint8_t> data);
 
-  // Sends a GET and returns its stream's id, or a negative number when the session cannot take
+  // Sends a request and returns its stream's id, or a negative number when the session cannot take
   // it. `stream` must stay valid until it has had OnEnd or OnReset, or Reset.
   int32_t Submit(const Http2Request& request, Http2Stream& stream);
   // The caller has lost interest in a stream: it gets no further calls.

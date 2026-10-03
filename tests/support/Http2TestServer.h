@@ -18,10 +18,12 @@ namespace solar::test {
 using Fields = std::vector<std::pair<std::string, std::string>>;
 
 struct H2Request {
+  std::string method;
   std::string path;
   std::string authority;
   std::string scheme;
   Fields headers;  // the ordinary ones, lower case
+  std::string body;
 
   std::string Header(const std::string& name) const {
     for (const auto& [key, value] : headers) {

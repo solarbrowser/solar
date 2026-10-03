@@ -98,6 +98,17 @@ std::string IsomorphicDecode(std::string_view bytes) {
   return out;
 }
 
+// RFC 9110 §9.2.1: methods that ask for something and change nothing.
+bool IsSafeMethod(std::string_view method) { return method == "GET" || method == "HEAD" || method == "OPTIONS" || method == "TRACE"; }
+
+// The Fetch Standard writes these six in capitals whatever case they come in, and no other.
+std::string NormalizeMethod(const std::string& method) {
+  for (const char* known : {"DELETE", "GET", "HEAD", "OPTIONS", "POST", "PUT"}) {
+    if (EqualsIgnoreCase(method, known)) return known;
+  }
+  return method;
+}
+
 bool IsRedirectStatus(int status) { return status == 301 || status == 302 || status == 303 || status == 307 || status == 308; }
 
 bool ConnectionHeaderSaysClose(const HttpResponseHead& head) {
@@ -182,6 +193,8 @@ struct Exchange : Http1ResponseParser::Sink, Http2Stream {
   FetchOptions options;
   url::Url current;
   int redirects = 0;
+  std::string method;                      // as sent: normalized, and changed by a redirect that turns a POST into a GET
+  std::shared_ptr<const std::string> body;  // dropped by that redirect too
   bool crossSite = false;  // this request, or a request it was redirected from, is cross-site
 
   // The cache. `mode` is the one in use, after the headers have had their say.
@@ -219,8 +232,10 @@ struct Exchange : Http1ResponseParser::Sink, Http2Stream {
   void Begin();
   void StartHop(bool forceFresh);
   std::vector<std::pair<std::string, std::string>> RequestFields() const;
-  CookieRequest AsCookieRequest() const { return {!crossSite, options.topLevelNavigation}; }
+  // A cross-site navigation carries Lax cookies only if it is a safe one: a link followed, not a form sent.
+  CookieRequest AsCookieRequest() const { return {!crossSite, options.topLevelNavigation && IsSafeMethod(method)}; }
   std::string BuildRequest() const;
+  void SendRequest();
   void Dispatch();
   void ReplayFromCache(const std::shared_ptr<const CacheEntry>& entry);
   std::string SiteOf(const url::Url& url) const;
@@ -255,11 +270,15 @@ struct Exchange : Http1ResponseParser::Sink, Http2Stream {
         revalidated = impl.cache->Freshen(validating, h, requestTime, responseTime);
         return;
       }
-      if (impl.cache->Storable(sentFields, h, mode)) {
-        collecting = true;
-        collected.clear();
-      } else if (mode != CacheMode::NoStore) {
-        impl.cache->Remove(cacheKey, sentFields);  // what it replaces is not to be served again
+      if (method == "GET") {
+        if (impl.cache->Storable(sentFields, h, mode)) {
+          collecting = true;
+          collected.clear();
+        } else if (mode != CacheMode::NoStore) {
+          impl.cache->Remove(cacheKey, sentFields);  // what it replaces is not to be served again
+        }
+      } else if (!IsSafeMethod(method) && h.status < 400) {
+        impl.cache->RemoveAll(cacheKey);  // a request that changes the resource has made what was kept out of date
       }
     }
     if (IsRedirectStatus(h.status)) {
@@ -441,6 +460,20 @@ void Exchange::Begin() {
     Fail("invalid User-Agent");
     return;
   }
+  method = NormalizeMethod(options.method);
+  if (method.empty() || !std::all_of(method.begin(), method.end(), IsTokenChar)) {
+    Fail("invalid method");
+    return;
+  }
+  if (EqualsIgnoreCase(method, "CONNECT") || EqualsIgnoreCase(method, "TRACE") || EqualsIgnoreCase(method, "TRACK")) {
+    Fail("the " + method + " method is not allowed");
+    return;
+  }
+  body = options.body;
+  if (body && (method == "GET" || method == "HEAD")) {
+    Fail("a " + method + " request cannot have a body");
+    return;
+  }
   // What the request's own headers say about the cache (Fetch Standard, HTTP-network-or-cache fetch).
   mode = options.cache;
   for (const auto& [name, value] : options.headers) {
@@ -498,10 +531,34 @@ std::string Exchange::BuildRequest() const {
   std::string target = url::SerializePath(current);
   if (current.query) target += "?" + *current.query;
 
-  std::string out = "GET " + target + " HTTP/1.1\r\nHost: " + url::GetHost(current) + "\r\n";
+  std::string out = method + " " + target + " HTTP/1.1\r\nHost: " + url::GetHost(current) + "\r\n";
   for (const auto& [name, value] : wireFields) out += name + ": " + value + "\r\n";
+  // A body has its length said; so does the absence of one for a method that is expected to have it.
+  if (body) {
+    out += "Content-Length: " + std::to_string(body->size()) + "\r\n";
+  } else if (method == "POST" || method == "PUT") {
+    out += "Content-Length: 0\r\n";
+  }
   out += "\r\n";
   return out;
+}
+
+// Sends the head, and the body after it in pieces. Nothing paces them: a Transport takes what it is
+// given and queues it, so a large body is in memory twice until it has been written.
+void Exchange::SendRequest() {
+  constexpr size_t kPiece = 64 * 1024;
+  std::string head = std::move(request);
+  size_t sent = 0;
+  if (body && !body->empty()) {
+    sent = std::min(kPiece, body->size());
+    head.append(*body, 0, sent);  // the first piece goes with the head: one write for a small request
+  }
+  conn->transport->Send(std::move(head));
+  while (body && sent < body->size()) {
+    const size_t take = std::min(kPiece, body->size() - sent);
+    conn->transport->Send(body->substr(sent, take));
+    sent += take;
+  }
 }
 
 void Exchange::StartHop(bool forceFresh) {
@@ -525,7 +582,7 @@ void Exchange::StartHop(bool forceFresh) {
   // The cache first. A fresh response is the answer; a stale one is checked with the server.
   cacheKey = partition + "\n" + url::Serialize(current, /*excludeFragment=*/true);
   sentFields = RequestFields();
-  if (current.scheme == "http" || current.scheme == "https") {
+  if (method == "GET" && (current.scheme == "http" || current.scheme == "https")) {
     const HttpCache::Found found = impl.cache->Find(cacheKey, sentFields, mode);
     if (found.freshness == HttpCache::Freshness::Fresh) {
       ReplayFromCache(found.entry);
@@ -542,7 +599,7 @@ void Exchange::StartHop(bool forceFresh) {
     for (auto& field : validating->Validators()) wireFields.push_back(std::move(field));
   }
   requestTime = impl.cache->Now();
-  parser = std::make_unique<Http1ResponseParser>(*this);
+  parser = std::make_unique<Http1ResponseParser>(*this, method == "HEAD");
   request = BuildRequest();
 
   const bool secure = current.scheme == "https";
@@ -567,7 +624,7 @@ void Exchange::StartHop(bool forceFresh) {
       conn = pooled;
       conn->Attach(this);
       reusedConnection = true;
-      conn->transport->Send(std::move(request));
+      SendRequest();
       return;
     }
     if (http2) {
@@ -597,18 +654,25 @@ void Exchange::StartHop(bool forceFresh) {
 // The connection is ready for this exchange's request, which goes out in whatever way it speaks.
 void Exchange::Dispatch() {
   if (!conn->h2) {
-    conn->transport->Send(std::move(request));
+    SendRequest();
     return;
   }
   std::string target = url::SerializePath(current);
   if (current.query) target += "?" + *current.query;
   Http2Request wire;
+  wire.method = method;
+  wire.body = body;
   wire.scheme = current.scheme;
   wire.authority = url::GetHost(current);
   wire.path = std::move(target);
   for (auto [name, value] : wireFields) {
     for (char& c : name) c = Lower(c);  // HTTP/2 names are lower case
     wire.headers.emplace_back(std::move(name), std::move(value));
+  }
+  if (body) {
+    wire.headers.emplace_back("content-length", std::to_string(body->size()));
+  } else if (method == "POST" || method == "PUT") {
+    wire.headers.emplace_back("content-length", "0");
   }
   streamId = conn->h2->Submit(wire, *this);
   if (streamId > 0) {
@@ -676,7 +740,8 @@ void Exchange::OnConnectionClosed(int error, const std::string& failure) {
   streamId = 0;
   if (finished) return;
   if (reusedConnection && !anyResponseByte && !staleRetried) {
-    // An idle connection the server had already closed: asking again is safe for a GET.
+    // An idle connection the server had already closed. Nothing of a response came, so it is very
+    // likely the request was never looked at, and browsers ask again whatever the method.
     staleRetried = true;
     StartHop(true);
     return;
@@ -771,6 +836,17 @@ void Exchange::FollowRedirect() {
     return;
   }
   if (!next->fragment) next->fragment = current.fragment;
+  // The Fetch Standard: a 301 or 302 to a POST, and a 303 to anything but GET and HEAD, are asked
+  // for again with GET and no body. The other redirects keep the method and send the body again.
+  const int status = head ? head->status : 0;
+  if (((status == 301 || status == 302) && method == "POST") || (status == 303 && method != "GET" && method != "HEAD")) {
+    method = "GET";
+    body.reset();
+    std::erase_if(options.headers, [](const auto& header) {
+      return EqualsIgnoreCase(header.first, "content-encoding") || EqualsIgnoreCase(header.first, "content-language") ||
+             EqualsIgnoreCase(header.first, "content-location") || EqualsIgnoreCase(header.first, "content-type");
+    });
+  }
   if (url::SerializeOrigin(*next) != url::SerializeOrigin(current)) {
     std::erase_if(options.headers, [](const auto& header) { return EqualsIgnoreCase(header.first, "authorization"); });
   }

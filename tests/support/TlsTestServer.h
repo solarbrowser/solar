@@ -37,6 +37,7 @@ class TlsTestServer {
   std::string version() const;
 
   static std::string ReadHead(ssl_st* connection);
+  static std::string ReadBytes(ssl_st* connection, size_t length);
   static void SendAll(ssl_st* connection, std::string_view data);
   static void WaitForClose(ssl_st* connection);
 
