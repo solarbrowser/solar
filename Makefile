@@ -8,9 +8,15 @@ URL_SOURCES = $(wildcard src/url/*.cpp)
 URL_OBJECTS = $(URL_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
 NET_SOURCES = $(wildcard src/net/*.cpp)
 NET_OBJECTS = $(NET_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
+
+# The event loop is io_uring and exists only for Linux so far. What does not touch it (the URL
+# library and the HTTP parser) is built and tested everywhere.
+UNAME := $(shell uname -s)
+ifeq ($(UNAME),Linux)
 LIBURING_LIBS = $(shell pkg-config --libs liburing)
 OPENSSL_LIBS = $(shell pkg-config --libs openssl)
 NET_LIBS = $(LIBURING_LIBS) $(OPENSSL_LIBS)
+endif
 WEB_SOURCES = $(wildcard src/web/*.cpp)
 WEB_OBJECTS = $(WEB_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
 
@@ -27,7 +33,7 @@ UCD_URL = https://www.unicode.org/Public/$(UNICODE_VERSION)
 UCD_DIR = $(BUILD_DIR)/ucd
 
 .DEFAULT_GOAL := all
-.PHONY: all test idna-tables clean quanta
+.PHONY: all test asan-test idna-tables clean quanta
 
 all: solar
 
@@ -89,18 +95,39 @@ $(BUILD_DIR)/GenIdnaTables: tools/GenIdnaTables.cpp
 	@echo "[BUILD] $<"
 	@$(CXX) -std=c++20 -Wall -Wextra -O2 -o $@ $<
 
-test: $(BUILD_DIR)/UrlTest $(BUILD_DIR)/SearchParamsTest $(BUILD_DIR)/ValidationErrorTest $(BUILD_DIR)/NormalizerTest $(BUILD_DIR)/Http1ParserTest $(BUILD_DIR)/NetTest $(BUILD_DIR)/HttpClientTest $(BUILD_DIR)/TlsTest $(BUILD_DIR)/UrlBindingsTest $(BUILD_DIR)/UrlRealmsTest $(BUILD_DIR)/WptTest
-	@$(BUILD_DIR)/UrlTest
-	@$(BUILD_DIR)/SearchParamsTest
-	@$(BUILD_DIR)/ValidationErrorTest
-	@$(BUILD_DIR)/NormalizerTest
-	@$(BUILD_DIR)/Http1ParserTest
-	@$(BUILD_DIR)/NetTest
-	@$(BUILD_DIR)/HttpClientTest
-	@$(BUILD_DIR)/TlsTest
-	@$(BUILD_DIR)/UrlBindingsTest
-	@$(BUILD_DIR)/UrlRealmsTest
+PORTABLE_TESTS = UrlTest SearchParamsTest ValidationErrorTest NormalizerTest Http1ParserTest
+LINUX_TESTS = NetTest HttpClientTest TlsTest UrlBindingsTest UrlRealmsTest
+ifeq ($(UNAME),Linux)
+TESTS = $(PORTABLE_TESTS) $(LINUX_TESTS)
+else
+TESTS = $(PORTABLE_TESTS)
+endif
+
+test: $(addprefix $(BUILD_DIR)/,$(TESTS)) $(if $(filter Linux,$(UNAME)),$(BUILD_DIR)/WptTest)
+	@for t in $(TESTS); do $(BUILD_DIR)/$$t || exit 1; done
+ifeq ($(UNAME),Linux)
 	@$(BUILD_DIR)/WptTest $(wildcard tests/wpt/url/*.any.js)
+endif
+
+# The tests that do not need Quanta, built with AddressSanitizer, UndefinedBehaviorSanitizer and
+# leak detection and run. Each is compiled straight from its sources.
+ASAN_FLAGS = -std=c++20 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined -Iinclude -Itests -pthread
+ASAN_URL = $(URL_SOURCES)
+ASAN_NET = $(NET_SOURCES) tests/support/TestServer.cpp
+ASAN_TLS = tests/support/TlsTestServer.cpp tests/support/Pki.cpp
+asan-test:
+	@mkdir -p $(BUILD_DIR)/asan
+	@for t in UrlTest SearchParamsTest ValidationErrorTest NormalizerTest; do \
+	    echo "[ASAN] $$t"; \
+	    $(CXX) $(ASAN_FLAGS) -o $(BUILD_DIR)/asan/$$t tests/$$t.cpp $(ASAN_URL) && $(BUILD_DIR)/asan/$$t || exit 1; \
+	done
+	@echo "[ASAN] Http1ParserTest"
+	@$(CXX) $(ASAN_FLAGS) -o $(BUILD_DIR)/asan/Http1ParserTest tests/Http1ParserTest.cpp src/net/Http1Parser.cpp && $(BUILD_DIR)/asan/Http1ParserTest
+	@for t in NetTest HttpClientTest TlsTest; do \
+	    echo "[ASAN] $$t"; \
+	    extra=""; [ $$t = TlsTest ] && extra="$(ASAN_TLS)"; \
+	    $(CXX) $(ASAN_FLAGS) -o $(BUILD_DIR)/asan/$$t tests/$$t.cpp $(ASAN_NET) $$extra $(ASAN_URL) $(NET_LIBS) && $(BUILD_DIR)/asan/$$t || exit 1; \
+	done
 
 idna-tables: $(BUILD_DIR)/GenIdnaTables
 	@mkdir -p $(UCD_DIR)

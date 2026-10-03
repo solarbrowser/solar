@@ -1,0 +1,2 @@
+# Test data is compared byte for byte, so git must not rewrite its line endings.
+tests/data/** -text

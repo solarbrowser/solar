@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Everything: the URL library, the network layer, and the Quanta bindings with WPT's url tests.
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang lld make pkg-config liburing-dev libssl-dev
+
+      - name: Show whether io_uring is available
+        run: |
+          uname -r
+          cat /proc/sys/kernel/io_uring_disabled || true
+
+      - name: Find the Quanta revision
+        id: quanta
+        run: echo "revision=$(git rev-parse HEAD:third_party/quanta)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the Quanta build
+        uses: actions/cache@v4
+        with:
+          path: third_party/quanta/build
+          key: quanta-${{ runner.os }}-${{ steps.quanta.outputs.revision }}
+
+      - run: make -j"$(nproc)" test
+
+  # The tests that need no Quanta, under AddressSanitizer, UndefinedBehaviorSanitizer and leak detection.
+  sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang make pkg-config liburing-dev libssl-dev
+      - run: make asan-test
+
+  # The event loop is io_uring, so only what does not depend on it is built here: the URL library
+  # and the HTTP parser.
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make -j"$(sysctl -n hw.ncpu)" test
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: true
+          install: make mingw-w64-clang-x86_64-clang
+      - run: make -j"$(nproc)" test
