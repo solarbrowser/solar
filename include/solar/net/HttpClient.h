@@ -58,6 +58,8 @@ struct HttpClientOptions {
   // Looks names up. When there is none the client makes a system one of its own; a caller that
   // wants the cache shared with others, or answers it controls, gives its own.
   std::shared_ptr<Resolver> resolver;
+  // Offer HTTP/2 to https servers. When false only HTTP/1.1 is offered, one request to a connection.
+  bool http2 = true;
 };
 
 class HttpClient;

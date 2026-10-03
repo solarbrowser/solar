@@ -21,7 +21,8 @@ class TlsTestServer {
   using Script = std::function<void(ssl_st*)>;
 
   // `sendCloseNotify`: end each connection with a close_notify, as a well-behaved server does.
-  TlsTestServer(const Identity& identity, Script script, bool sendCloseNotify = true);
+  // `protocols`: what ALPN may settle on, most preferred first, of those the client offers.
+  TlsTestServer(const Identity& identity, Script script, bool sendCloseNotify = true, std::vector<std::string> protocols = {"http/1.1"});
   ~TlsTestServer();
 
   TlsTestServer(const TlsTestServer&) = delete;
@@ -44,6 +45,7 @@ class TlsTestServer {
 
   Script script_;
   bool sendCloseNotify_;
+  std::string protocolList_;  // in ALPN's wire format
   ssl_ctx_st* context_ = nullptr;
   int listener_ = -1;
   uint16_t port_ = 0;

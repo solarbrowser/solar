@@ -8,6 +8,7 @@
 #include <unordered_map>
 
 #include "ConnectRace.h"
+#include "Http2.h"
 #include "Socket.h"
 #include "solar/url/Origin.h"
 #include "solar/url/Parser.h"
@@ -31,14 +32,24 @@ struct HttpClient::Impl {
   std::unordered_map<uint64_t, std::unique_ptr<internal::Exchange>> exchanges;
   std::list<std::unique_ptr<internal::HttpConnection>> connections;
   std::unordered_map<std::string, std::vector<internal::HttpConnection*>> idle;
+  // Connections that speak HTTP/2, which take new requests while they are busy.
+  std::unordered_map<std::string, std::vector<internal::HttpConnection*>> h2;
+  // An https connection still being made, whose protocol is not yet known: a request to the same
+  // origin waits for it rather than opening a second one an HTTP/2 server has no use for.
+  std::unordered_map<std::string, internal::HttpConnection*> connecting;
   bool reapQueued = false;
 
   Impl(Loop& l, HttpClientOptions o) : loop(l), options(std::move(o)), resolver(options.resolver ? options.resolver : MakeSystemResolver(l)) {}
   ~Impl();
 
   internal::HttpConnection* TakeIdle(const std::string& key);
+  internal::HttpConnection* TakeH2(const std::string& key);
   void Release(internal::HttpConnection* connection);
   void RemoveIdle(internal::HttpConnection* connection);
+  void RemoveH2(internal::HttpConnection* connection);
+  void StopConnecting(internal::HttpConnection* connection);
+  void StartIdle(internal::HttpConnection* connection);
+  void StopIdle(internal::HttpConnection* connection);
   void ScheduleReap();
   void Reap();
 };
@@ -63,7 +74,8 @@ std::string RefuseHeader(const std::string& name, const std::string& value) {
     const unsigned char u = static_cast<unsigned char>(c);
     if ((u < 0x20 && u != '\t') || u == 0x7F) return "invalid header value";
   }
-  for (const char* forbidden : {"host", "content-length", "transfer-encoding", "connection", "upgrade", "accept-encoding"}) {
+  for (const char* forbidden : {"host", "content-length", "transfer-encoding", "connection", "upgrade", "accept-encoding", "keep-alive", "te",
+                                "trailer", "proxy-connection"}) {
     if (EqualsIgnoreCase(name, forbidden)) return "the " + name + " header is not the caller's to set";
   }
   return "";
@@ -110,10 +122,15 @@ struct HttpConnection : ConnectionHandler {
   // Lives until this connection does: it is on the stack when it reports its result.
   std::unique_ptr<ConnectRace> race;
   std::unique_ptr<TlsLayer> tls;
+  std::unique_ptr<Http2Session> h2;  // set once the handshake has chosen HTTP/2
   Connection* connection = nullptr;
   Transport* transport = nullptr;
 
-  Exchange* exchange = nullptr;
+  // One exchange at a time with HTTP/1.1; with HTTP/2 one per open stream, and while an https
+  // connection is still being made, everything that is waiting for it.
+  std::vector<Exchange*> users;
+  std::string failure;  // why it closed, when it is this side that knows
+  bool offerHttp2 = false;
   bool established = false;
   bool dead = false;
   bool idle = false;
@@ -124,14 +141,21 @@ struct HttpConnection : ConnectionHandler {
   void Begin(const std::string& host, uint16_t port);
   void Close() {
     if (transport) {
+      impl.RemoveH2(this);
+      if (h2) h2->Shutdown();
       transport->Close();
     } else if (race && !dead) {
       // Still looking for an address to connect to: nothing to close, only to stop.
       dead = true;
       race.reset();
+      impl.StopConnecting(this);
       impl.ScheduleReap();
     }
   }
+  void Attach(Exchange* user) { users.push_back(user); }
+  void Detach(Exchange* user) { users.erase(std::remove(users.begin(), users.end(), user), users.end()); }
+  // After an HTTP/2 stream has come or gone: idle if it has no more, finished if nothing is left.
+  void UpdateIdle();
   void OnRaceWon(Connection* winner);
   void OnRaceFailed(const std::string& message);
 
@@ -141,7 +165,7 @@ struct HttpConnection : ConnectionHandler {
 };
 
 // One fetch: a request and the redirects that follow it, each a hop on some connection.
-struct Exchange : Http1ResponseParser::Sink {
+struct Exchange : Http1ResponseParser::Sink, Http2Stream {
   HttpClient::Impl& impl;
   const uint64_t id;
   FetchHandler& handler;
@@ -150,6 +174,7 @@ struct Exchange : Http1ResponseParser::Sink {
   int redirects = 0;
 
   HttpConnection* conn = nullptr;
+  int32_t streamId = 0;  // on an HTTP/2 connection, once the request is out
   std::unique_ptr<Http1ResponseParser> parser;
   std::unique_ptr<BodyDecoder> decoder;  // null when the body is delivered as it came
   std::string request;
@@ -168,7 +193,9 @@ struct Exchange : Http1ResponseParser::Sink {
 
   void Begin();
   void StartHop(bool forceFresh);
+  std::vector<std::pair<std::string, std::string>> RequestFields() const;
   std::string BuildRequest() const;
+  void Dispatch();
   void EndHop(bool clean);
   void FollowRedirect();
   void Fail(const std::string& message);
@@ -178,8 +205,11 @@ struct Exchange : Http1ResponseParser::Sink {
   void OnData(std::span<const uint8_t> data);
   void OnConnectionClosed(int error, const std::string& failure);
 
+  void OnEnd() override;
+  void OnReset(const std::string& reason, bool retryable) override;
   void OnHead(const HttpResponseHead& h) override {
     if (finished) return;
+    anyResponseByte = true;
     head = h;
     if (IsRedirectStatus(h.status)) {
       if (auto target = h.Header("location")) {
@@ -239,6 +269,7 @@ void HttpConnection::OnRaceWon(Connection* winner) {
     return;
   }
   tls = std::make_unique<TlsLayer>(tlsContext, tlsName, *this);
+  if (offerHttp2) tls->OfferHttp2();
   winner->SetHandler(tls.get());
   tls->Attach(winner);
   transport = tls.get();
@@ -247,42 +278,83 @@ void HttpConnection::OnRaceWon(Connection* winner) {
 
 void HttpConnection::OnRaceFailed(const std::string& message) {
   dead = true;
-  if (exchange) {
-    Exchange* user = exchange;
-    exchange = nullptr;
-    user->OnConnectionClosed(0, message);
-  }
+  impl.StopConnecting(this);
+  std::vector<Exchange*> affected = std::move(users);
+  users.clear();
+  for (Exchange* user : affected) user->OnConnectionClosed(0, message);
   impl.ScheduleReap();
 }
 
 void HttpConnection::OnConnected() {
   established = true;
-  if (exchange) exchange->OnConnectionReady();
+  impl.StopConnecting(this);
+  if (tls && tls->negotiatedProtocol() == "h2") {
+    h2 = std::make_unique<Http2Session>(*transport);
+    if (!h2->Start()) {
+      failure = "cannot start HTTP/2";
+      Close();
+      return;
+    }
+    impl.h2[key].push_back(this);
+  }
+
+  std::vector<Exchange*> waiting = users;
+  if (!h2 && waiting.size() > 1) {
+    // The server speaks HTTP/1.1, so this connection serves only the first; the rest get their own.
+    users.resize(1);
+    for (size_t i = 1; i < waiting.size(); ++i) {
+      waiting[i]->conn = nullptr;
+      waiting[i]->StartHop(true);
+    }
+    waiting.resize(1);
+  }
+  for (Exchange* user : waiting) user->OnConnectionReady();
 }
 
 void HttpConnection::OnData(std::span<const uint8_t> data) {
-  if (exchange) {
-    exchange->OnData(data);
+  if (h2) {
+    if (auto error = h2->Receive(data)) {
+      failure = *error;
+      Close();
+      return;
+    }
+    UpdateIdle();
+    return;
+  }
+  if (!users.empty()) {
+    users.front()->OnData(data);
   } else {
     Close();  // nobody asked for it: whatever this is, the connection can no longer be trusted
+  }
+}
+
+void HttpConnection::UpdateIdle() {
+  if (!h2 || dead || !connection) return;
+  if (h2->Finished()) {
+    Close();
+  } else if (users.empty() && h2->active() == 0) {
+    if (!idle) impl.StartIdle(this);
+  } else if (idle) {
+    impl.StopIdle(this);
   }
 }
 
 void HttpConnection::OnClosed(int error) {
   transport = nullptr;
   connection = nullptr;
+
   dead = true;
   if (idleTimer != 0) {
     impl.loop.CancelTimer(idleTimer);
     idleTimer = 0;
   }
   if (idle) impl.RemoveIdle(this);
-  const std::string tlsFailure = tls ? tls->failure() : std::string();
-  if (exchange) {
-    Exchange* user = exchange;
-    exchange = nullptr;
-    user->OnConnectionClosed(error, tlsFailure);
-  }
+  impl.RemoveH2(this);
+  impl.StopConnecting(this);
+  const std::string reason = !failure.empty() ? failure : (tls ? tls->failure() : std::string());
+  std::vector<Exchange*> affected = std::move(users);
+  users.clear();
+  for (Exchange* user : affected) user->OnConnectionClosed(error, reason);
   impl.ScheduleReap();
 }
 
@@ -313,21 +385,27 @@ void Exchange::Begin() {
   StartHop(false);
 }
 
+std::vector<std::pair<std::string, std::string>> Exchange::RequestFields() const {
+  std::vector<std::pair<std::string, std::string>> fields = options.headers;
+  bool hasUserAgent = false;
+  bool hasAccept = false;
+  for (const auto& [name, value] : fields) {
+    hasUserAgent = hasUserAgent || EqualsIgnoreCase(name, "user-agent");
+    hasAccept = hasAccept || EqualsIgnoreCase(name, "accept");
+  }
+  if (!hasUserAgent) fields.emplace_back("User-Agent", impl.options.userAgent);
+  if (!hasAccept) fields.emplace_back("Accept", "*/*");
+  fields.emplace_back("Accept-Encoding", "gzip, deflate, br, zstd");
+  return fields;
+}
+
 std::string Exchange::BuildRequest() const {
   std::string target = url::SerializePath(current);
   if (current.query) target += "?" + *current.query;
 
   std::string out = "GET " + target + " HTTP/1.1\r\nHost: " + url::GetHost(current) + "\r\n";
-  bool hasUserAgent = false;
-  bool hasAccept = false;
-  for (const auto& [name, value] : options.headers) {
-    hasUserAgent = hasUserAgent || EqualsIgnoreCase(name, "user-agent");
-    hasAccept = hasAccept || EqualsIgnoreCase(name, "accept");
-    out += name + ": " + value + "\r\n";
-  }
-  if (!hasUserAgent) out += "User-Agent: " + impl.options.userAgent + "\r\n";
-  if (!hasAccept) out += "Accept: */*\r\n";
-  out += "Accept-Encoding: gzip, deflate, br, zstd\r\n\r\n";
+  for (const auto& [name, value] : RequestFields()) out += name + ": " + value + "\r\n";
+  out += "\r\n";
   return out;
 }
 
@@ -349,13 +427,30 @@ void Exchange::StartHop(bool forceFresh) {
   std::string key = current.scheme + "://" + *current.host + ":" + std::to_string(port);
   if (secure) key += "|" + std::to_string(reinterpret_cast<uintptr_t>(context.get()));
 
+  const bool http2 = secure && impl.options.http2;
   if (!forceFresh) {
+    if (http2) {
+      if (HttpConnection* shared = impl.TakeH2(key)) {
+        conn = shared;
+        conn->Attach(this);
+        reusedConnection = true;
+        Dispatch();
+        return;
+      }
+    }
     if (HttpConnection* pooled = impl.TakeIdle(key)) {
       conn = pooled;
-      conn->exchange = this;
+      conn->Attach(this);
       reusedConnection = true;
       conn->transport->Send(std::move(request));
       return;
+    }
+    if (http2) {
+      if (auto it = impl.connecting.find(key); it != impl.connecting.end()) {
+        conn = it->second;
+        conn->Attach(this);
+        return;
+      }
     }
   }
 
@@ -363,18 +458,77 @@ void Exchange::StartHop(bool forceFresh) {
   conn = fresh.get();
   conn->key = std::move(key);
   conn->tlsContext = std::move(context);
+  conn->offerHttp2 = http2;
+  if (http2 && !forceFresh) impl.connecting[conn->key] = conn;
   if (secure) {
     conn->tlsName = *current.host;
     if (conn->tlsName.size() >= 2 && conn->tlsName.front() == '[') conn->tlsName = conn->tlsName.substr(1, conn->tlsName.size() - 2);
   }
-  conn->exchange = this;
+  conn->Attach(this);
   impl.connections.push_back(std::move(fresh));
   conn->Begin(*current.host, port);
 }
 
+// The connection is ready for this exchange's request, which goes out in whatever way it speaks.
+void Exchange::Dispatch() {
+  if (!conn->h2) {
+    conn->transport->Send(std::move(request));
+    return;
+  }
+  std::string target = url::SerializePath(current);
+  if (current.query) target += "?" + *current.query;
+  Http2Request wire;
+  wire.scheme = current.scheme;
+  wire.authority = url::GetHost(current);
+  wire.path = std::move(target);
+  for (auto& [name, value] : RequestFields()) {
+    for (char& c : name) c = Lower(c);  // HTTP/2 names are lower case
+    wire.headers.emplace_back(std::move(name), std::move(value));
+  }
+  streamId = conn->h2->Submit(wire, *this);
+  if (streamId > 0) {
+    conn->UpdateIdle();
+    return;
+  }
+  // The connection cannot take another stream after all: ask a new one, once.
+  streamId = 0;
+  conn->Detach(this);
+  conn = nullptr;
+  if (staleRetried) {
+    Fail("cannot send the request over HTTP/2");
+    return;
+  }
+  staleRetried = true;
+  StartHop(true);
+}
+
+void Exchange::OnEnd() {
+  if (finished) return;
+  OnComplete();  // finishes the decoding, which can still fail the fetch
+  if (finished) return;
+  hopComplete = false;
+  EndHop(true);
+}
+
+void Exchange::OnReset(const std::string& reason, bool retryable) {
+  streamId = 0;
+  if (finished) return;
+  if (conn) {
+    conn->Detach(this);
+    conn->UpdateIdle();
+    conn = nullptr;
+  }
+  if (!anyResponseByte && !staleRetried && (retryable || reusedConnection)) {
+    staleRetried = true;
+    StartHop(true);
+    return;
+  }
+  Fail(reason);
+}
+
 void Exchange::OnConnectionReady() {
   if (finished) return;
-  conn->transport->Send(std::move(request));
+  Dispatch();
 }
 
 void Exchange::OnData(std::span<const uint8_t> data) {
@@ -392,7 +546,9 @@ void Exchange::OnData(std::span<const uint8_t> data) {
 }
 
 void Exchange::OnConnectionClosed(int error, const std::string& failure) {
+  const bool http2 = conn && conn->h2;
   conn = nullptr;
+  streamId = 0;
   if (finished) return;
   if (reusedConnection && !anyResponseByte && !staleRetried) {
     // An idle connection the server had already closed: asking again is safe for a GET.
@@ -406,6 +562,10 @@ void Exchange::OnConnectionClosed(int error, const std::string& failure) {
   }
   if (error != 0) {
     Fail("connection failed: " + ErrorMessage(error));
+    return;
+  }
+  if (http2) {
+    Fail("the connection closed before the response was complete");
     return;
   }
   if (const auto parseError = parser->Finish()) {
@@ -422,13 +582,18 @@ void Exchange::EndHop(bool clean) {
   HttpConnection* used = conn;
   conn = nullptr;
   if (used && !used->dead) {
-    used->exchange = nullptr;
-    const bool reusable = clean && head && head->minorVersion == 1 && !ConnectionHeaderSaysClose(*head) &&
-                          !parser->closeDelimited();
-    if (reusable) {
-      impl.Release(used);
+    used->Detach(this);
+    if (used->h2) {
+      // A stream ending does not end the connection, which other streams may be using.
+      streamId = 0;
+      used->UpdateIdle();
     } else {
-      used->Close();
+      const bool reusable = clean && head && head->minorVersion == 1 && !ConnectionHeaderSaysClose(*head) && !parser->closeDelimited();
+      if (reusable) {
+        impl.Release(used);
+      } else {
+        used->Close();
+      }
     }
   }
   if (redirecting) {
@@ -470,8 +635,14 @@ void Exchange::Fail(const std::string& message) {
   if (conn) {
     HttpConnection* used = conn;
     conn = nullptr;
-    used->exchange = nullptr;
-    used->Close();
+    used->Detach(this);
+    if (used->h2) {
+      if (streamId > 0) used->h2->Reset(streamId);
+      streamId = 0;
+      used->UpdateIdle();
+    } else if (used->users.empty()) {
+      used->Close();  // nothing else is waiting for what this connection might become
+    }
   }
   handler.OnError(message);
   impl.ScheduleReap();
@@ -505,24 +676,54 @@ internal::HttpConnection* HttpClient::Impl::TakeIdle(const std::string& key) {
     internal::HttpConnection* candidate = it->second.back();
     it->second.pop_back();
     if (candidate->dead) continue;
-    loop.CancelTimer(candidate->idleTimer);
-    candidate->idleTimer = 0;
-    candidate->idle = false;
-    candidate->connection->SetIdle(false);
+    StopIdle(candidate);
     return candidate;
   }
   return nullptr;
 }
 
 void HttpClient::Impl::Release(internal::HttpConnection* connection) {
+  idle[connection->key].push_back(connection);
+  StartIdle(connection);
+}
+
+void HttpClient::Impl::StartIdle(internal::HttpConnection* connection) {
   connection->idle = true;
   connection->connection->SetIdle(true);
-  idle[connection->key].push_back(connection);
   // Background: waiting for a request that may never come must not keep Loop::Run from returning.
   connection->idleTimer = loop.PostDelayed(options.idleTimeout, [connection] {
     connection->idleTimer = 0;
     connection->Close();
   }, true);
+}
+
+void HttpClient::Impl::StopIdle(internal::HttpConnection* connection) {
+  if (connection->idleTimer != 0) loop.CancelTimer(connection->idleTimer);
+  connection->idleTimer = 0;
+  connection->idle = false;
+  connection->connection->SetIdle(false);
+}
+
+internal::HttpConnection* HttpClient::Impl::TakeH2(const std::string& key) {
+  auto it = h2.find(key);
+  if (it == h2.end()) return nullptr;
+  for (internal::HttpConnection* candidate : it->second) {
+    if (candidate->dead || !candidate->h2 || !candidate->h2->Available()) continue;
+    if (candidate->idle) StopIdle(candidate);
+    return candidate;
+  }
+  return nullptr;
+}
+
+void HttpClient::Impl::RemoveH2(internal::HttpConnection* connection) {
+  auto it = h2.find(connection->key);
+  if (it == h2.end()) return;
+  it->second.erase(std::remove(it->second.begin(), it->second.end(), connection), it->second.end());
+}
+
+void HttpClient::Impl::StopConnecting(internal::HttpConnection* connection) {
+  auto it = connecting.find(connection->key);
+  if (it != connecting.end() && it->second == connection) connecting.erase(it);
 }
 
 void HttpClient::Impl::RemoveIdle(internal::HttpConnection* connection) {
@@ -564,6 +765,11 @@ FetchHandle HttpClient::Fetch(const url::Url& url, FetchHandler& handler, FetchO
 void HttpClient::CloseIdleConnections() {
   for (auto& [key, connections] : impl_->idle) {
     for (internal::HttpConnection* connection : std::vector<internal::HttpConnection*>(connections)) connection->Close();
+  }
+  for (auto& [key, connections] : impl_->h2) {
+    for (internal::HttpConnection* connection : std::vector<internal::HttpConnection*>(connections)) {
+      if (connection->idle) connection->Close();
+    }
   }
 }
 

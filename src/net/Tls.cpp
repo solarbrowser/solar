@@ -89,6 +89,7 @@ std::shared_ptr<TlsContext> TlsContext::Create(const TlsOptions& options) {
   if (!context) return nullptr;
 
   SSL_CTX_set_min_proto_version(context, TLS1_2_VERSION);
+  SSL_CTX_set_options(context, SSL_OP_NO_RENEGOTIATION);  // HTTP/2 forbids it, and nothing here wants it
   SSL_CTX_set_verify(context, SSL_VERIFY_PEER, nullptr);
   SSL_CTX_set_default_verify_paths(context);
 
@@ -132,10 +133,22 @@ void TlsLayer::OnConnected() {
     SSL_set_hostflags(ssl, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
     SSL_set1_host(ssl, serverName_.c_str());
   }
-  static const unsigned char kAlpn[] = {8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
-  SSL_set_alpn_protos(ssl, kAlpn, sizeof(kAlpn));
+  static const unsigned char kHttp1[] = {8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
+  static const unsigned char kBoth[] = {2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
+  if (offerHttp2_) {
+    SSL_set_alpn_protos(ssl, kBoth, sizeof(kBoth));
+  } else {
+    SSL_set_alpn_protos(ssl, kHttp1, sizeof(kHttp1));
+  }
 
   Pump();
+}
+
+std::string TlsLayer::negotiatedProtocol() const {
+  const unsigned char* name = nullptr;
+  unsigned int length = 0;
+  if (state_ && state_->ssl) SSL_get0_alpn_selected(state_->ssl, &name, &length);
+  return name ? std::string(reinterpret_cast<const char*>(name), length) : std::string();
 }
 
 void TlsLayer::OnData(std::span<const uint8_t> data) {

@@ -50,6 +50,12 @@ class TlsLayer : public ConnectionHandler, public Transport {
   // Must be called with the connection this layer was given to, before the loop runs.
   void Attach(Connection* connection) { lower_ = connection; }
 
+  // Offers "h2" ahead of "http/1.1" in the handshake. Before OnConnected.
+  void OfferHttp2() { offerHttp2_ = true; }
+  // The protocol the handshake settled on, "h2" or "http/1.1"; empty when the server named none.
+  // Valid once the handler above has had OnConnected.
+  std::string negotiatedProtocol() const;
+
   void Send(std::string data) override;
   void Close() override;
 
@@ -71,6 +77,7 @@ class TlsLayer : public ConnectionHandler, public Transport {
   ConnectionHandler& upper_;
   Connection* lower_ = nullptr;
   std::unique_ptr<TlsState> state_;
+  bool offerHttp2_ = false;
   bool handshaken_ = false;
   bool closing_ = false;
   bool peerClosedCleanly_ = false;

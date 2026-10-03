@@ -19,9 +19,9 @@ int ServerNameCallback(ssl_st* ssl, int*, void* argument) {
 
 int AlpnCallback(ssl_st* ssl, const unsigned char** out, unsigned char* outLength, const unsigned char* in,
                  unsigned int inLength, void* argument) {
-  static const unsigned char kProtocols[] = {8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
   auto* server = static_cast<TlsTestServer*>(argument);
-  if (SSL_select_next_proto(const_cast<unsigned char**>(out), outLength, kProtocols, sizeof(kProtocols), in, inLength) !=
+  const auto* protocols = reinterpret_cast<const unsigned char*>(server->protocolList_.data());
+  if (SSL_select_next_proto(const_cast<unsigned char**>(out), outLength, protocols, static_cast<unsigned>(server->protocolList_.size()), in, inLength) !=
       OPENSSL_NPN_NEGOTIATED) {
     return SSL_TLSEXT_ERR_NOACK;
   }
@@ -31,8 +31,12 @@ int AlpnCallback(ssl_st* ssl, const unsigned char** out, unsigned char* outLengt
   return SSL_TLSEXT_ERR_OK;
 }
 
-TlsTestServer::TlsTestServer(const Identity& identity, Script script, bool sendCloseNotify)
+TlsTestServer::TlsTestServer(const Identity& identity, Script script, bool sendCloseNotify, std::vector<std::string> protocols)
     : script_(std::move(script)), sendCloseNotify_(sendCloseNotify) {
+  for (const std::string& protocol : protocols) {
+    protocolList_.push_back(static_cast<char>(protocol.size()));
+    protocolList_ += protocol;
+  }
   context_ = SSL_CTX_new(TLS_server_method());
   BIO* certificate = BIO_new_mem_buf(identity.certificatePem.data(), static_cast<int>(identity.certificatePem.size()));
   X509* x509 = PEM_read_bio_X509(certificate, nullptr, nullptr, nullptr);

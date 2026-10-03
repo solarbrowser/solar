@@ -20,7 +20,7 @@ jobs:
           submodules: recursive
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y clang lld make pkg-config liburing-dev libssl-dev zlib1g-dev libbrotli-dev libzstd-dev
+        run: sudo apt-get update && sudo apt-get install -y clang lld make pkg-config liburing-dev libssl-dev zlib1g-dev libbrotli-dev libzstd-dev libnghttp2-dev
 
       - name: Show whether io_uring is available
         run: |
@@ -45,7 +45,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y clang make pkg-config liburing-dev libssl-dev zlib1g-dev libbrotli-dev libzstd-dev
+        run: sudo apt-get update && sudo apt-get install -y clang make pkg-config liburing-dev libssl-dev zlib1g-dev libbrotli-dev libzstd-dev libnghttp2-dev
       - run: make asan-test
 
   # The URL library and the network layer, on kqueue. The Quanta bindings are Linux-only so far.
@@ -55,7 +55,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install dependencies
         run: |
-          brew install openssl@3 pkg-config zlib brotli zstd
+          brew install openssl@3 pkg-config zlib brotli zstd nghttp2
           echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix zlib)/lib/pkgconfig" >> "$GITHUB_ENV"
       - run: make -j"$(sysctl -n hw.ncpu)" test
 
@@ -71,5 +71,5 @@ jobs:
         with:
           msystem: CLANG64
           update: true
-          install: make mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-openssl mingw-w64-clang-x86_64-pkgconf mingw-w64-clang-x86_64-zlib mingw-w64-clang-x86_64-brotli mingw-w64-clang-x86_64-zstd
+          install: make mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-openssl mingw-w64-clang-x86_64-pkgconf mingw-w64-clang-x86_64-zlib mingw-w64-clang-x86_64-brotli mingw-w64-clang-x86_64-zstd mingw-w64-clang-x86_64-nghttp2
       - run: make -j"$(nproc)" test
