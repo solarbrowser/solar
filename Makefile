@@ -126,6 +126,10 @@ $(BUILD_DIR)/CookiesTest: $(OBJ_DIR)/tests/CookiesTest.o $(OBJ_DIR)/src/net/Cook
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^
 
+$(BUILD_DIR)/HttpCacheTest: $(OBJ_DIR)/tests/HttpCacheTest.o $(OBJ_DIR)/src/net/HttpCache.o $(OBJ_DIR)/src/net/HttpDate.o $(OBJ_DIR)/src/net/Http1Parser.o
+	@echo "[LINK] $@"
+	@$(CXX) $(CXXFLAGS) -o $@ $^
+
 $(BUILD_DIR)/NormalizerTest: $(OBJ_DIR)/tests/NormalizerTest.o $(URL_OBJECTS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^
@@ -151,7 +155,7 @@ $(BUILD_DIR)/GenIdnaTables: tools/GenIdnaTables.cpp
 	@echo "[BUILD] $<"
 	@$(CXX) -std=c++20 -Wall -Wextra -O2 -o $@ $<
 
-PORTABLE_TESTS = UrlTest SearchParamsTest ValidationErrorTest NormalizerTest PublicSuffixTest CookiesTest Http1ParserTest ContentDecoderTest AddressRaceTest HstsTest
+PORTABLE_TESTS = UrlTest SearchParamsTest ValidationErrorTest NormalizerTest PublicSuffixTest CookiesTest HttpCacheTest Http1ParserTest ContentDecoderTest AddressRaceTest HstsTest
 NET_TESTS = LoopTest ResolverTest NetTest HttpClientTest TlsTest Http2Test
 QUANTA_TESTS = UrlBindingsTest UrlRealmsTest
 ifeq ($(PLATFORM),linux)
@@ -186,6 +190,8 @@ asan-test:
 	@$(CXX) $(ASAN_FLAGS) -o $(BUILD_DIR)/asan/HstsTest tests/HstsTest.cpp src/net/Hsts.cpp $(ASAN_URL) && $(BUILD_DIR)/asan/HstsTest
 	@echo "[ASAN] CookiesTest"
 	@$(CXX) $(ASAN_FLAGS) -o $(BUILD_DIR)/asan/CookiesTest tests/CookiesTest.cpp src/net/Cookies.cpp src/net/HttpDate.cpp $(ASAN_URL) && $(BUILD_DIR)/asan/CookiesTest
+	@echo "[ASAN] HttpCacheTest"
+	@$(CXX) $(ASAN_FLAGS) -o $(BUILD_DIR)/asan/HttpCacheTest tests/HttpCacheTest.cpp src/net/HttpCache.cpp src/net/HttpDate.cpp src/net/Http1Parser.cpp && $(BUILD_DIR)/asan/HttpCacheTest
 	@echo "[ASAN] AddressRaceTest"
 	@$(CXX) $(ASAN_FLAGS) -o $(BUILD_DIR)/asan/AddressRaceTest tests/AddressRaceTest.cpp src/net/AddressRace.cpp && $(BUILD_DIR)/asan/AddressRaceTest
 	@echo "[ASAN] Http1ParserTest"

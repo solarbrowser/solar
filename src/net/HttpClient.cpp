@@ -11,6 +11,7 @@
 #include "solar/net/Http2.h"
 #include "solar/net/Socket.h"
 #include "solar/url/Origin.h"
+#include "solar/url/PublicSuffix.h"
 #include "solar/url/Parser.h"
 #include "solar/url/Serializer.h"
 #include "solar/url/UrlApi.h"
@@ -30,6 +31,7 @@ struct HttpClient::Impl {
   std::shared_ptr<Resolver> resolver;
   std::shared_ptr<HstsStore> hsts;
   std::shared_ptr<CookieJar> cookies;
+  std::shared_ptr<HttpCache> cache;
   uint64_t nextId = 1;
   std::unordered_map<uint64_t, std::unique_ptr<internal::Exchange>> exchanges;
   std::list<std::unique_ptr<internal::HttpConnection>> connections;
@@ -46,7 +48,8 @@ struct HttpClient::Impl {
         options(std::move(o)),
         resolver(options.resolver ? options.resolver : MakeSystemResolver(l)),
         hsts(options.hsts ? options.hsts : std::make_shared<HstsStore>()),
-        cookies(options.cookies ? options.cookies : std::make_shared<CookieJar>()) {}
+        cookies(options.cookies ? options.cookies : std::make_shared<CookieJar>()),
+        cache(options.cache ? options.cache : std::make_shared<HttpCache>()) {}
   ~Impl();
 
   internal::HttpConnection* TakeIdle(const std::string& key);
@@ -181,6 +184,20 @@ struct Exchange : Http1ResponseParser::Sink, Http2Stream {
   int redirects = 0;
   bool crossSite = false;  // this request, or a request it was redirected from, is cross-site
 
+  // The cache. `mode` is the one in use, after the headers have had their say.
+  CacheMode mode = CacheMode::Default;
+  std::string partition;  // keeps what one site caches from another, which could otherwise tell what it visited
+  std::string cacheKey;
+  RequestFields sentFields;  // what the request carries, for what a response varies on
+  RequestFields wireFields;  // and the checks for a stale response added to it, which go out
+  std::shared_ptr<const CacheEntry> validating;    // the stale response being checked with the server
+  std::shared_ptr<const CacheEntry> revalidated;   // ... which the server says is still good
+  bool fromCache = false;                          // the response being handled came from the cache
+  bool collecting = false;                         // its body is being kept, to be cached
+  std::string collected;
+  std::chrono::system_clock::time_point requestTime;
+  std::chrono::system_clock::time_point responseTime;
+
   HttpConnection* conn = nullptr;
   int32_t streamId = 0;  // on an HTTP/2 connection, once the request is out
   std::unique_ptr<Http1ResponseParser> parser;
@@ -205,6 +222,8 @@ struct Exchange : Http1ResponseParser::Sink, Http2Stream {
   CookieRequest AsCookieRequest() const { return {!crossSite, options.topLevelNavigation}; }
   std::string BuildRequest() const;
   void Dispatch();
+  void ReplayFromCache(const std::shared_ptr<const CacheEntry>& entry);
+  std::string SiteOf(const url::Url& url) const;
   void EndHop(bool clean);
   void FollowRedirect();
   void Fail(const std::string& message);
@@ -220,13 +239,27 @@ struct Exchange : Http1ResponseParser::Sink, Http2Stream {
     if (finished) return;
     anyResponseByte = true;
     head = h;
-    // Only a response over TLS, whose certificate has been checked, may set the policy.
-    if (current.scheme == "https" && current.host) {
-      if (auto policy = h.Header("strict-transport-security")) impl.hsts->Note(*current.host, *policy);
-    }
-    if (options.useCookies) {
-      for (const auto& [name, value] : h.headers) {
-        if (EqualsIgnoreCase(name, "set-cookie")) impl.cookies->Store(current, value, AsCookieRequest());
+    if (!fromCache) {
+      responseTime = impl.cache->Now();
+      // Only a response over TLS, whose certificate has been checked, may set the policy.
+      if (current.scheme == "https" && current.host) {
+        if (auto policy = h.Header("strict-transport-security")) impl.hsts->Note(*current.host, *policy);
+      }
+      if (options.useCookies) {
+        for (const auto& [name, value] : h.headers) {
+          if (EqualsIgnoreCase(name, "set-cookie")) impl.cookies->Store(current, value, AsCookieRequest());
+        }
+      }
+      if (validating && h.status == 304) {
+        // Still good. Nothing of this is shown; the kept response is, once this one is over.
+        revalidated = impl.cache->Freshen(validating, h, requestTime, responseTime);
+        return;
+      }
+      if (impl.cache->Storable(sentFields, h, mode)) {
+        collecting = true;
+        collected.clear();
+      } else if (mode != CacheMode::NoStore) {
+        impl.cache->Remove(cacheKey, sentFields);  // what it replaces is not to be served again
       }
     }
     if (IsRedirectStatus(h.status)) {
@@ -240,6 +273,14 @@ struct Exchange : Http1ResponseParser::Sink, Http2Stream {
     handler.OnResponseHead(h, current);
   }
   void OnBody(std::span<const uint8_t> data) override {
+    if (revalidated) return;
+    if (collecting && !fromCache) {
+      collected.append(reinterpret_cast<const char*>(data.data()), data.size());
+      if (collected.size() > impl.cache->maxEntryBytes()) {  // too big to keep; no need to go on gathering it
+        collecting = false;
+        collected = std::string();
+      }
+    }
     if (finished || redirecting) return;
     if (!decoder) {
       handler.OnBody(data);
@@ -266,6 +307,10 @@ struct Exchange : Http1ResponseParser::Sink, Http2Stream {
       }
     }
     hopComplete = true;
+    if (collecting && !fromCache) {
+      impl.cache->Store(cacheKey, sentFields, *head, std::move(collected), requestTime, responseTime);
+      collecting = false;
+    }
   }
 };
 
@@ -396,6 +441,25 @@ void Exchange::Begin() {
     Fail("invalid User-Agent");
     return;
   }
+  // What the request's own headers say about the cache (Fetch Standard, HTTP-network-or-cache fetch).
+  mode = options.cache;
+  for (const auto& [name, value] : options.headers) {
+    if (mode == CacheMode::Default && (EqualsIgnoreCase(name, "cache-control") || EqualsIgnoreCase(name, "pragma"))) {
+      const std::string lowered = [&] {
+        std::string out = value;
+        for (char& c : out) c = Lower(c);
+        return out;
+      }();
+      if (lowered.find("no-cache") != std::string::npos || lowered.find("max-age=0") != std::string::npos) mode = CacheMode::NoCache;
+    }
+  }
+  for (const auto& [name, value] : options.headers) {
+    for (const char* conditional : {"if-modified-since", "if-none-match", "if-unmodified-since", "if-match", "if-range"}) {
+      if (EqualsIgnoreCase(name, conditional)) mode = CacheMode::NoStore;  // the caller is doing the checking
+    }
+  }
+  partition = SiteOf(options.initiator ? *options.initiator : current);
+
   timer = impl.loop.PostDelayed(options.timeout, [this] {
     timer = 0;
     Fail("timed out");
@@ -410,6 +474,15 @@ std::vector<std::pair<std::string, std::string>> Exchange::RequestFields() const
   for (const auto& [name, value] : fields) {
     hasUserAgent = hasUserAgent || EqualsIgnoreCase(name, "user-agent");
     hasAccept = hasAccept || EqualsIgnoreCase(name, "accept");
+  }
+  const bool hasCacheControl = std::any_of(fields.begin(), fields.end(), [](const auto& f) { return EqualsIgnoreCase(f.first, "cache-control"); });
+  const bool hasPragma = std::any_of(fields.begin(), fields.end(), [](const auto& f) { return EqualsIgnoreCase(f.first, "pragma"); });
+  // The Fetch Standard has the modes that skip the cache say so to every cache on the way.
+  if ((mode == CacheMode::NoStore || mode == CacheMode::Reload) && !hasCacheControl && !hasPragma) {
+    fields.emplace_back("Pragma", "no-cache");
+    fields.emplace_back("Cache-Control", "no-cache");
+  } else if (mode == CacheMode::NoCache && !hasCacheControl) {
+    fields.emplace_back("Cache-Control", "max-age=0");
   }
   if (!hasUserAgent) fields.emplace_back("User-Agent", impl.options.userAgent);
   if (!hasAccept) fields.emplace_back("Accept", "*/*");
@@ -426,7 +499,7 @@ std::string Exchange::BuildRequest() const {
   if (current.query) target += "?" + *current.query;
 
   std::string out = "GET " + target + " HTTP/1.1\r\nHost: " + url::GetHost(current) + "\r\n";
-  for (const auto& [name, value] : RequestFields()) out += name + ": " + value + "\r\n";
+  for (const auto& [name, value] : wireFields) out += name + ": " + value + "\r\n";
   out += "\r\n";
   return out;
 }
@@ -443,6 +516,32 @@ void Exchange::StartHop(bool forceFresh) {
   decoder.reset();
   anyResponseByte = false;
   reusedConnection = false;
+  validating.reset();
+  revalidated.reset();
+  fromCache = false;
+  collecting = false;
+  collected.clear();
+
+  // The cache first. A fresh response is the answer; a stale one is checked with the server.
+  cacheKey = partition + "\n" + url::Serialize(current, /*excludeFragment=*/true);
+  sentFields = RequestFields();
+  if (current.scheme == "http" || current.scheme == "https") {
+    const HttpCache::Found found = impl.cache->Find(cacheKey, sentFields, mode);
+    if (found.freshness == HttpCache::Freshness::Fresh) {
+      ReplayFromCache(found.entry);
+      return;
+    }
+    if (found.freshness == HttpCache::Freshness::Stale) validating = found.entry;
+  }
+  if (mode == CacheMode::OnlyIfCached) {
+    Fail("no cached response");
+    return;
+  }
+  wireFields = sentFields;
+  if (validating) {
+    for (auto& field : validating->Validators()) wireFields.push_back(std::move(field));
+  }
+  requestTime = impl.cache->Now();
   parser = std::make_unique<Http1ResponseParser>(*this);
   request = BuildRequest();
 
@@ -507,7 +606,7 @@ void Exchange::Dispatch() {
   wire.scheme = current.scheme;
   wire.authority = url::GetHost(current);
   wire.path = std::move(target);
-  for (auto& [name, value] : RequestFields()) {
+  for (auto [name, value] : wireFields) {
     for (char& c : name) c = Lower(c);  // HTTP/2 names are lower case
     wire.headers.emplace_back(std::move(name), std::move(value));
   }
@@ -622,11 +721,39 @@ void Exchange::EndHop(bool clean) {
       }
     }
   }
+  if (revalidated) {
+    ReplayFromCache(std::exchange(revalidated, nullptr));
+  } else if (redirecting) {
+    FollowRedirect();
+  } else {
+    Finish();
+  }
+}
+
+// A response out of the cache goes the way one off the network does: head, body, end. It is not
+// news to the cookie jar or to HSTS, which have had it once already.
+void Exchange::ReplayFromCache(const std::shared_ptr<const CacheEntry>& entry) {
+  fromCache = true;
+  OnHead(entry->Head());
+  if (finished) return;
+  if (!entry->body->empty()) OnBody({reinterpret_cast<const uint8_t*>(entry->body->data()), entry->body->size()});
+  if (finished) return;
+  OnComplete();
+  if (finished) return;
+  hopComplete = false;
   if (redirecting) {
     FollowRedirect();
   } else {
     Finish();
   }
+}
+
+// What a cache is partitioned by: the scheme and registrable domain, so that a.example.com and
+// b.example.com share one and example.org does not.
+std::string Exchange::SiteOf(const url::Url& url) const {
+  const std::string host = url.host.value_or("");
+  const std::string_view site = url::RegistrableDomain(host);
+  return url.scheme + "://" + (site.empty() ? host : std::string(site));
 }
 
 void Exchange::FollowRedirect() {

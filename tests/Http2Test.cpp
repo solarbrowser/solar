@@ -388,6 +388,36 @@ int main() {
     Check("cookies set over HTTP/2 come back on it", r.ended && r.body == "cookie=a=1; b=2", Mentioned(r) + " " + r.body);
   }
 
+  // The cache over HTTP/2: a fresh response needs no stream, a stale one is checked on a new one.
+  {
+    Http2TestServer server(identity, [](const H2Request& r) {
+      if (r.path == "/fresh") {
+        H2Reply reply = Plain("fresh");
+        reply.headers = {{"cache-control", "max-age=3600"}};
+        return reply;
+      }
+      if (!r.Header("if-none-match").empty()) {
+        H2Reply reply;
+        reply.status = 304;
+        reply.headers = {{"etag", "\"e\""}, {"cache-control", "max-age=0"}};
+        return reply;
+      }
+      H2Reply reply = Plain("checked");
+      reply.headers = {{"etag", "\"e\""}, {"cache-control", "max-age=0"}};
+      return reply;
+    });
+    Session s(pki);
+    s.Get(Url(server, "/fresh"));
+    Result fresh = s.Get(Url(server, "/fresh"));
+    Check("a fresh response is served without a request over HTTP/2", fresh.ended && fresh.body == "fresh" && server.requests().size() == 1, Mentioned(fresh));
+    s.Get(Url(server, "/stale"));
+    Result stale = s.Get(Url(server, "/stale"));
+    const auto seen = server.requests();
+    Check("a stale one is checked with a conditional request", stale.ended && stale.status == 200 && stale.body == "checked" && seen.size() == 3 &&
+                                                                  seen[2].Header("if-none-match") == "\"e\"",
+          Mentioned(stale) + " " + std::to_string(seen.size()));
+  }
+
   // HTTP/1.1 servers still work, and HTTP/2 can be turned off.
   {
     TlsTestServer server(identity, [](ssl_st* connection) {

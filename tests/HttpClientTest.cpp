@@ -20,6 +20,9 @@ using namespace std::chrono_literals;
 using solar::net::FetchHandle;
 using solar::net::FetchOptions;
 using solar::net::HttpClient;
+using solar::net::CacheMode;
+using solar::net::HttpCache;
+using solar::net::HttpCacheOptions;
 using solar::net::HttpClientOptions;
 using solar::net::HttpResponseHead;
 using solar::net::Loop;
@@ -146,6 +149,20 @@ TestServer::Script Serves(Log& log, std::function<std::string(const std::string&
       log.Add(head);
       TestServer::SendAll(client, respond(Path(head)));
       if (closeAfterEach) break;
+    }
+    ++log.closed;
+  };
+}
+
+// Like Serves, but the function gets the whole request head, to answer a check of a stale response.
+TestServer::Script ServesHeads(Log& log, std::function<std::string(const std::string& head)> respond) {
+  return [&log, respond = std::move(respond)](int client) {
+    ++log.connections;
+    while (true) {
+      std::string head = TestServer::ReadHead(client);
+      if (head.empty()) break;
+      log.Add(head);
+      TestServer::SendAll(client, respond(head));
     }
     ++log.closed;
   };
@@ -954,6 +971,226 @@ int main() {
     Check("a chain through another site completes", r.ended && r.body == "ok", r.error.value_or(""));
     Check("the first request of it, still same-site, carries the cookie", Has(log.Head(2), "GET /hop") && Has(log.Head(2), "Cookie: plain=1"), log.Head(2));
     Check("the last, back on the first site, does not", Has(log.Head(4), "GET /final") && !Has(log.Head(4), "Cookie"), log.Head(4));
+  }
+
+
+  // ---- The cache ----
+  {
+    Log log;
+    TestServer server(ServesHeads(log, [](const std::string& head) {
+      const std::string path = Path(head);
+      if (path == "/fresh") return Response("200 OK", "fresh body", "Cache-Control: max-age=3600\r\n");
+      if (path == "/nostore") return Response("200 OK", "nostore", "Cache-Control: no-store, max-age=3600\r\n");
+      return Response("200 OK", "uncacheable");
+    }));
+    Session s;
+    Result a = s.Get(Origin(server) + "/fresh");
+    Result b = s.Get(Origin(server) + "/fresh");
+    Check("a fresh response is served without the network", a.body == "fresh body" && b.ended && b.body == "fresh body" && b.status == 200 && b.heads == 1 && log.Count() == 1,
+          std::to_string(log.Count()));
+    Check("with its final URL", b.finalUrl == Origin(server) + "/fresh", b.finalUrl);
+    s.Get(Origin(server) + "/nostore");
+    s.Get(Origin(server) + "/nostore");
+    s.Get(Origin(server) + "/plain");
+    s.Get(Origin(server) + "/plain");
+    Check("no-store and a response with no lifetime are fetched each time", log.Count() == 5, std::to_string(log.Count()));
+  }
+  {
+    // A stale response is checked, and kept when the server says it is still good.
+    Log log;
+    std::atomic<int> version{1};
+    TestServer server(ServesHeads(log, [&](const std::string& head) {
+      const std::string tag = "\"v" + std::to_string(version) + "\"";
+      if (Has(head, "If-None-Match: " + tag)) return std::string("HTTP/1.1 304 Not Modified\r\nETag: " + tag + "\r\nCache-Control: max-age=0\r\n\r\n");
+      return Response("200 OK", "body of v" + std::to_string(version), "ETag: " + tag + "\r\nCache-Control: max-age=0\r\nContent-Type: text/plain\r\n");
+    }));
+    Session s;
+    Result first = s.Get(Origin(server) + "/etag");
+    Result second = s.Get(Origin(server) + "/etag");
+    Check("a stale response is checked with If-None-Match", Has(log.Head(1), "If-None-Match: \"v1\""), log.Head(1));
+    Check("and a 304 means the kept one is shown, as a 200", second.ended && second.status == 200 && second.body == "body of v1" && second.heads == 1 && second.terminalCalls == 1,
+          second.error.value_or(second.body));
+    Check("the first request carried no check", !Has(log.Head(0), "If-None-Match"));
+    version = 2;
+    Result third = s.Get(Origin(server) + "/etag");
+    Check("a changed resource comes back whole", third.ended && third.body == "body of v2", third.body);
+    Result fourth = s.Get(Origin(server) + "/etag");
+    Check("and is what is checked next", Has(log.Head(3), "If-None-Match: \"v2\"") && fourth.body == "body of v2", log.Head(3));
+    Check("over one connection throughout", log.connections == 1, std::to_string(log.connections));
+  }
+  {
+    Log log;
+    TestServer server(ServesHeads(log, [](const std::string& head) {
+      if (Has(head, "If-Modified-Since: Mon, 01 Jan 2024 00:00:00 GMT")) return std::string("HTTP/1.1 304 Not Modified\r\nCache-Control: max-age=3600\r\n\r\n");
+      return Response("200 OK", "dated", "Last-Modified: Mon, 01 Jan 2024 00:00:00 GMT\r\nCache-Control: max-age=0\r\n");
+    }));
+    Session s;
+    s.Get(Origin(server) + "/");
+    Result r = s.Get(Origin(server) + "/");
+    Check("Last-Modified is checked with If-Modified-Since", r.body == "dated" && Has(log.Head(1), "If-Modified-Since: Mon, 01 Jan 2024 00:00:00 GMT"), log.Head(1));
+    Result again = s.Get(Origin(server) + "/");
+    Check("and a 304's new lifetime applies", again.body == "dated" && log.Count() == 2, std::to_string(log.Count()));
+  }
+  {
+    Log log;
+    TestServer server(ServesHeads(log, [](const std::string& head) {
+      std::string probe;
+      const size_t at = head.find("X-Probe: ");
+      if (at != std::string::npos) probe = head.substr(at + 9, head.find("\r\n", at) - at - 9);
+      return Response("200 OK", "for " + probe, "Cache-Control: max-age=3600\r\nVary: X-Probe\r\n");
+    }));
+    Session s;
+    const auto get = [&](const std::string& probe) {
+      FetchOptions options;
+      options.headers = {{"X-Probe", probe}};
+      return s.Get(Origin(server) + "/vary", options);
+    };
+    Result a1 = get("a");
+    Result b1 = get("b");
+    Result a2 = get("a");
+    Result b2 = get("b");
+    Check("each variant of a response is kept", a1.body == "for a" && b1.body == "for b" && a2.body == "for a" && b2.body == "for b" && log.Count() == 2, std::to_string(log.Count()));
+  }
+  {
+    Log log;
+    TestServer server(ServesHeads(log, [](const std::string& head) {
+      if (Path(head) == "/moved") return Response("301 Moved Permanently", "", "Location: /target\r\nCache-Control: max-age=3600\r\n");
+      return Response("200 OK", "target", "Cache-Control: no-store\r\n");
+    }));
+    Session s;
+    s.Get(Origin(server) + "/moved");
+    Result r = s.Get(Origin(server) + "/moved");
+    int moved = 0;
+    for (size_t i = 0; i < log.Count(); ++i) moved += Has(log.Head(i), "GET /moved ");
+    Check("a cached redirect is followed without asking again", r.ended && r.body == "target" && r.finalUrl == Origin(server) + "/target" && moved == 1, std::to_string(moved));
+  }
+
+  // The modes.
+  {
+    Log log;
+    TestServer server(ServesHeads(log, [](const std::string& head) {
+      if (Has(head, "If-None-Match: \"t\"")) return std::string("HTTP/1.1 304 Not Modified\r\nETag: \"t\"\r\nCache-Control: max-age=3600\r\n\r\n");
+      return Response("200 OK", "tagged", "ETag: \"t\"\r\nCache-Control: max-age=3600\r\n");
+    }));
+    Session s;
+    const auto get = [&](CacheMode mode) {
+      FetchOptions options;
+      options.cache = mode;
+      return s.Get(Origin(server) + "/m", options);
+    };
+    get(CacheMode::Default);
+    get(CacheMode::Default);
+    Check("Default: the second is served from the cache", log.Count() == 1);
+    Result noCache = get(CacheMode::NoCache);
+    Check("NoCache checks a fresh one", noCache.body == "tagged" && log.Count() == 2 && Has(log.Head(1), "If-None-Match: \"t\"") && Has(log.Head(1), "Cache-Control: max-age=0"), log.Head(1));
+    get(CacheMode::Reload);
+    Check("Reload goes to the network without a check", log.Count() == 3 && !Has(log.Head(2), "If-None-Match") && Has(log.Head(2), "Cache-Control: no-cache") && Has(log.Head(2), "Pragma: no-cache"), log.Head(2));
+    get(CacheMode::Default);
+    Check("but keeps what it got", log.Count() == 3);
+    get(CacheMode::NoStore);
+    get(CacheMode::NoStore);
+    Check("NoStore neither reads nor keeps", log.Count() == 5 && !Has(log.Head(3), "If-None-Match") && Has(log.Head(3), "Cache-Control: no-cache"), log.Head(3));
+    Result forced = get(CacheMode::ForceCache);
+    Check("ForceCache uses what is there", forced.body == "tagged" && log.Count() == 5);
+    Result only = get(CacheMode::OnlyIfCached);
+    Check("OnlyIfCached too", only.body == "tagged" && log.Count() == 5);
+    Result missing = s.Get(Origin(server) + "/never", [] { FetchOptions o; o.cache = CacheMode::OnlyIfCached; return o; }());
+    Check("and an error where there is nothing", !missing.ended && missing.error && Has(*missing.error, "no cached response") && log.Count() == 5, missing.error.value_or(""));
+  }
+  {
+    Log log;
+    TestServer server(ServesHeads(log, [](const std::string& head) {
+      const std::string path = Path(head);
+      if (path == "/stale") return Response("200 OK", "old", "Cache-Control: max-age=0\r\nETag: \"s\"\r\n");
+      return Response("200 OK", "x", "Cache-Control: max-age=3600\r\n");
+    }));
+    Session s;
+    s.Get(Origin(server) + "/stale");
+    FetchOptions force;
+    force.cache = CacheMode::ForceCache;
+    Result r = s.Get(Origin(server) + "/stale", force);
+    Check("ForceCache serves a stale response without checking it", r.body == "old" && log.Count() == 1);
+  }
+  {
+    // Conditions of the caller's own turn the cache off, as the Fetch Standard says.
+    Log log;
+    TestServer server(ServesHeads(log, [](const std::string&) { return Response("200 OK", "x", "Cache-Control: max-age=3600\r\n"); }));
+    Session s;
+    FetchOptions conditional;
+    conditional.headers = {{"If-None-Match", "\"mine\""}};
+    s.Get(Origin(server) + "/c", conditional);
+    s.Get(Origin(server) + "/c", conditional);
+    Check("a caller's conditional header means no cache", log.Count() == 2 && Has(log.Head(1), "If-None-Match: \"mine\""), std::to_string(log.Count()));
+    s.Get(Origin(server) + "/d");
+    FetchOptions noCache;
+    noCache.headers = {{"Cache-Control", "no-cache"}};
+    s.Get(Origin(server) + "/d", noCache);
+    Check("a Cache-Control: no-cache of the caller's means a check", log.Count() == 4, std::to_string(log.Count()));
+    FetchOptions authorized;
+    authorized.headers = {{"Authorization", "Bearer t"}};
+    s.Get(Origin(server) + "/e", authorized);
+    s.Get(Origin(server) + "/e", authorized);
+    Check("a response to an authorized request is not kept", log.Count() == 6, std::to_string(log.Count()));
+  }
+
+  // What a cache must not do to the rest.
+  {
+    Log log;
+    TestServer server(ServesHeads(log, [](const std::string& head) {
+      const std::string path = Path(head);
+      if (path == "/cached") return Response("200 OK", "c", "Cache-Control: max-age=3600\r\nSet-Cookie: t=1\r\n");
+      if (path == "/other") return Response("200 OK", "o", "Set-Cookie: t=2\r\n");
+      return Response("200 OK", "p");
+    }));
+    Session s;
+    s.Get(Origin(server) + "/cached");
+    s.Get(Origin(server) + "/other");
+    s.Get(Origin(server) + "/cached");  // from the cache: its Set-Cookie is old news
+    s.Get(Origin(server) + "/probe");
+    Check("a cache hit does not set its cookies again", Has(log.Head(2), "Cookie: t=2") && !Has(log.Head(2), "t=1"), log.Head(2));
+  }
+  {
+    Log log;
+    TestServer server(ServesHeads(log, [](const std::string&) { return Response("200 OK", "x", "Cache-Control: max-age=3600\r\n"); }));
+    Session s;
+    const auto get = [&](const char* site) {
+      FetchOptions options;
+      options.initiator = *solar::url::Parse(site);
+      return s.Get(Origin(server) + "/shared", options);
+    };
+    get("https://a.example/");
+    get("https://a.example/other-page");
+    Check("one site's page shares a cache entry", log.Count() == 1);
+    get("https://b.example/");
+    Check("another site's does not see it", log.Count() == 2, std::to_string(log.Count()));
+  }
+  {
+    // A response that stopped short is not one to keep.
+    Log log;
+    TestServer server([&](int client) {
+      ++log.connections;
+      TestServer::ReadHead(client);
+      log.Add("request");
+      TestServer::SendAll(client, "HTTP/1.1 200 OK\r\nCache-Control: max-age=3600\r\nContent-Length: 100\r\n\r\nshort");
+    });
+    Session s;
+    Result a = s.Get(Origin(server) + "/");
+    Result b = s.Get(Origin(server) + "/");
+    Check("a body cut short is an error and is not cached", !a.ended && !b.ended && log.Count() == 2, std::to_string(log.Count()));
+  }
+  {
+    // A response too big for the cache is delivered all the same.
+    Log log;
+    const std::string big(300000, 'z');
+    TestServer server(ServesHeads(log, [&](const std::string&) { return Response("200 OK", big, "Cache-Control: max-age=3600\r\n"); }));
+    HttpClientOptions options;
+    HttpCacheOptions limits;
+    limits.maxEntryBytes = 100000;
+    options.cache = std::make_shared<HttpCache>(limits);
+    Session s(options);
+    Result a = s.Get(Origin(server) + "/");
+    Result b = s.Get(Origin(server) + "/");
+    Check("one too large for the cache is delivered and fetched again", a.body == big && b.body == big && log.Count() == 2 && options.cache->entries() == 0, std::to_string(log.Count()));
   }
 
   std::printf("http client: %d/%d passed\n", total - failed, total);

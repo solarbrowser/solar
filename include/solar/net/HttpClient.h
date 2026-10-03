@@ -14,6 +14,7 @@
 #include "solar/net/Http1Parser.h"
 #include "solar/net/Cookies.h"
 #include "solar/net/Hsts.h"
+#include "solar/net/HttpCache.h"
 #include "solar/net/Loop.h"
 #include "solar/net/Resolver.h"
 #include "solar/net/Tls.h"
@@ -56,6 +57,9 @@ struct FetchOptions {
   std::optional<url::Url> initiator;
   // The request loads a page into the top-level browsing context, where Lax cookies go cross-site.
   bool topLevelNavigation = false;
+  // How the cache is used. Conditional headers in `headers`, and a Cache-Control or Pragma that
+  // says no-cache, take it away from Default as the Fetch Standard has it.
+  CacheMode cache = CacheMode::Default;
   // The most a compressed body may decode to. It is what stops a few kilobytes from becoming
   // gigabytes; a body that is not compressed is not limited by it.
   uint64_t maxDecodedBodyBytes = uint64_t{1} << 30;
@@ -78,6 +82,8 @@ struct HttpClientOptions {
   // The cookies requests carry and responses set. When there is none the client keeps one for its
   // own lifetime.
   std::shared_ptr<CookieJar> cookies;
+  // The responses kept for later requests. When there is none the client keeps one of its own.
+  std::shared_ptr<HttpCache> cache;
 };
 
 class HttpClient;
