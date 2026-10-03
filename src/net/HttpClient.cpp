@@ -275,7 +275,7 @@ struct Exchange : Http1ResponseParser::Sink, Http2Stream {
         impl.cache->RemoveAll(cacheKey);  // a request that changes the resource has made what was kept out of date
       }
     }
-    if (IsRedirectStatus(h.status)) {
+    if (IsRedirectStatus(h.status) && options.redirect != RedirectMode::Manual) {
       if (auto target = h.Header("location")) {
         location = std::string(*target);
         redirecting = true;  // the redirect response itself is not shown to the handler
@@ -816,6 +816,10 @@ std::string Exchange::SiteOf(const url::Url& url) const {
 }
 
 void Exchange::FollowRedirect() {
+  if (options.redirect == RedirectMode::Error) {
+    Fail("the server redirected, and redirects are not allowed");
+    return;
+  }
   if (++redirects > options.maxRedirects) {
     Fail("too many redirects");
     return;
@@ -843,6 +847,10 @@ void Exchange::FollowRedirect() {
   }
   if (url::SerializeOrigin(*next) != url::SerializeOrigin(current)) {
     std::erase_if(options.headers, [](const auto& header) { return EqualsIgnoreCase(header.first, "authorization"); });
+  }
+  if (!handler.OnRedirect(*head, *next, options.headers)) {
+    Fail("the redirect was refused");
+    return;
   }
   current = std::move(*next);
   StartHop(false);

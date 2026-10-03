@@ -27,6 +27,17 @@ class FetchHandler {
  public:
   virtual ~FetchHandler() = default;
 
+  // The server redirected to `next` and the fetch is about to follow, with redirect mode Follow.
+  // `redirect` is the response that did it. `headers` are the request's headers for the next hop, to
+  // change as the embedder's rules want (a cross-origin redirect turns Origin into null, say). False
+  // stops the fetch, which then ends with OnError.
+  virtual bool OnRedirect(const HttpResponseHead& redirect, const url::Url& next, std::vector<std::pair<std::string, std::string>>& headers) {
+    (void)redirect;
+    (void)next;
+    (void)headers;
+    return true;
+  }
+
   // `finalUrl` is where the response came from after any redirects, with the fragment the
   // standard carries across them. `head` is the response as the server sent it, so a body that
   // was compressed still lists its Content-Encoding and Content-Length; OnBody delivers it decoded.
@@ -36,6 +47,13 @@ class FetchHandler {
   // Exactly one of OnEnd and OnError is called, and it is the last call.
   virtual void OnEnd() = 0;
   virtual void OnError(std::string_view message) = 0;
+};
+
+// What a redirect response does to a fetch (Fetch Standard, request's redirect mode).
+enum class RedirectMode {
+  Follow,  // asked for again at the new address, up to maxRedirects times
+  Error,   // the fetch fails
+  Manual,  // the redirect response itself is the response
 };
 
 struct FetchOptions {
@@ -56,6 +74,7 @@ struct FetchOptions {
   // two is refused too. Authorization is dropped when a redirect leaves the origin.
   std::vector<std::pair<std::string, std::string>> headers;
   int maxRedirects = 20;
+  RedirectMode redirect = RedirectMode::Follow;
   // Whether the request carries the jar's cookies and the responses to it may set some. The Cookie
   // header is the client's to write, like Host, and is refused in `headers`.
   bool useCookies = true;

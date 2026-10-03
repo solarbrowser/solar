@@ -1398,6 +1398,64 @@ int main() {
     Check("a POST is sent again on a new connection with its body", second.ended && second.body == "ok again" && log.Count() == 2 && Has(log.Head(1), "BODY:again"), second.error.value_or(second.body));
   }
 
+
+  // ---- Redirect modes and the hook ----
+  {
+    Log log;
+    TestServer server(ServesHeads(log, [](const std::string& head) {
+      if (Path(head) == "/a") return Redirect("302 Found", "/b", "moved");
+      return Response("200 OK", "arrived");
+    }));
+    Session s;
+    FetchOptions manual;
+    manual.redirect = solar::net::RedirectMode::Manual;
+    Result m = s.Get(Origin(server) + "/a", manual);
+    Check("Manual: the redirect response is the response", m.ended && m.status == 302 && m.body == "moved" && m.finalUrl == Origin(server) + "/a" && log.Count() == 1, m.error.value_or(m.body));
+    FetchOptions error;
+    error.redirect = solar::net::RedirectMode::Error;
+    Result e = s.Get(Origin(server) + "/a", error);
+    Check("Error: the fetch fails, and the target is never asked", !e.ended && e.error && Has(*e.error, "redirect") && log.Count() == 2, e.error.value_or(""));
+    Result f = s.Get(Origin(server) + "/b", error);
+    Check("Error: a response that is no redirect is fine", f.ended && f.body == "arrived");
+  }
+  {
+    // The embedder sees each redirect and may change what goes to the next hop, or stop it.
+    struct Hooked : Collector {
+      std::function<bool(const HttpResponseHead&, const solar::url::Url&, std::vector<std::pair<std::string, std::string>>&)> hook;
+      bool OnRedirect(const HttpResponseHead& head, const solar::url::Url& next, std::vector<std::pair<std::string, std::string>>& headers) override {
+        return hook(head, next, headers);
+      }
+    };
+    Log log;
+    TestServer server(ServesHeads(log, [](const std::string& head) {
+      if (Path(head) == "/a") return Redirect("307 Temporary Redirect", "/b");
+      return Response("200 OK", "arrived");
+    }));
+    Session s;
+    {
+      Hooked h;
+      std::string seenTarget;
+      int seenStatus = 0;
+      h.hook = [&](const HttpResponseHead& head, const solar::url::Url& next, std::vector<std::pair<std::string, std::string>>& headers) {
+        seenStatus = head.status;
+        seenTarget = solar::url::Serialize(next);
+        headers.emplace_back("Origin", "null");
+        return true;
+      };
+      s.client->Fetch(*solar::url::Parse(Origin(server) + "/a"), h);
+      s.loop->Run();
+      Check("the hook is told of the redirect", seenStatus == 307 && seenTarget == Origin(server) + "/b", seenTarget);
+      Check("and what it adds goes with the next request", h.result.ended && Has(log.Head(1), "Origin: null") && !Has(log.Head(0), "Origin"), log.Head(1));
+    }
+    {
+      Hooked h;
+      h.hook = [](const HttpResponseHead&, const solar::url::Url&, std::vector<std::pair<std::string, std::string>>&) { return false; };
+      s.client->Fetch(*solar::url::Parse(Origin(server) + "/a"), h);
+      s.loop->Run();
+      Check("a hook that says no ends the fetch with an error", !h.result.ended && h.result.error && h.result.terminalCalls == 1 && log.Count() == 3, h.result.error.value_or(""));
+    }
+  }
+
   std::printf("http client: %d/%d passed\n", total - failed, total);
   return failed == 0 ? 0 : 1;
 }
