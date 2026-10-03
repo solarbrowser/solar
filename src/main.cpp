@@ -2,7 +2,7 @@
 #include <optional>
 #include <string>
 
-#include "solar/net/Fetch.h"
+#include "solar/net/HttpClient.h"
 #include "solar/url/Normalizer.h"
 #include "solar/url/Parser.h"
 #include "solar/url/Serializer.h"
@@ -11,8 +11,8 @@ namespace {
 
 class PrintingHandler : public solar::net::FetchHandler {
  public:
-  void OnResponseHead(const solar::net::HttpResponseHead& head) override {
-    std::printf("HTTP %d %s\n", head.status, head.reason.c_str());
+  void OnResponseHead(const solar::net::HttpResponseHead& head, const solar::url::Url& finalUrl) override {
+    std::printf("HTTP %d %s  (%s)\n", head.status, head.reason.c_str(), solar::url::Serialize(finalUrl).c_str());
     for (const auto& [name, value] : head.headers) std::printf("%s: %s\n", name.c_str(), value.c_str());
     std::printf("\n");
   }
@@ -37,7 +37,8 @@ int RunFetch(const char* typed) {
     return 1;
   }
   PrintingHandler handler;
-  solar::net::Fetch(*loop, *url, handler);
+  solar::net::HttpClient client(*loop);
+  client.Fetch(*url, handler);
   loop->Run();
   return handler.failed ? 1 : 0;
 }

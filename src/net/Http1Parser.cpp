@@ -109,6 +109,7 @@ std::optional<std::string> Http1ResponseParser::ParseHead(std::string_view head)
   if (statusLine.size() > 12 && statusLine[12] != ' ') return Fail("malformed status line");
 
   response_ = HttpResponseHead{};
+  response_.minorVersion = statusLine[7] - '0';
   response_.status = (statusLine[9] - '0') * 100 + (statusLine[10] - '0') * 10 + (statusLine[11] - '0');
   if (response_.status < 100) return Fail("status code below 100");
   if (statusLine.size() > 13) response_.reason = std::string(statusLine.substr(13));
@@ -184,6 +185,7 @@ std::optional<std::string> Http1ResponseParser::ChooseFraming() {
   }
 
   state_ = State::UntilClose;
+  closeDelimited_ = true;
   return std::nullopt;
 }
 

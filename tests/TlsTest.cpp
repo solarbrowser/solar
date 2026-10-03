@@ -1,8 +1,9 @@
+#include <atomic>
 #include <cstdio>
 #include <optional>
 #include <string>
 
-#include "solar/net/Fetch.h"
+#include "solar/net/HttpClient.h"
 #include "solar/url/Parser.h"
 #include "support/Pki.h"
 #include "support/TestServer.h"
@@ -26,7 +27,7 @@ struct Result {
 
 class Collector : public solar::net::FetchHandler {
  public:
-  void OnResponseHead(const solar::net::HttpResponseHead&) override {}
+  void OnResponseHead(const solar::net::HttpResponseHead&, const solar::url::Url&) override {}
   void OnBody(std::span<const uint8_t> data) override { result.body.append(reinterpret_cast<const char*>(data.data()), data.size()); }
   void OnEnd() override {
     ++result.terminalCalls;
@@ -56,7 +57,8 @@ Result Get(const std::string& url, std::shared_ptr<TlsContext> tls, std::chrono:
   FetchOptions options;
   options.tls = std::move(tls);
   options.timeout = timeout;
-  solar::net::Fetch(*loop, *parsed, collector, options);
+  solar::net::HttpClient client(*loop);
+  client.Fetch(*parsed, collector, options);
   loop->Run();
   return collector.result;
 }
@@ -185,6 +187,40 @@ int main() {
     TlsTestServer server(pki.Issue({"127.0.0.1"}), Hello(), /*sendCloseNotify=*/false);
     Result r = Get(Url(server), trusting);
     Check("a length-delimited body is complete without close_notify", r.ended && r.body == "hello" && r.terminalCalls == 1, r.error.value_or(""));
+  }
+
+  // Keep-alive and redirects over TLS: one handshake serves every request on the connection.
+  {
+    std::atomic<int> handshakes{0};
+    TlsTestServer server(pki.Issue({"127.0.0.1"}), [&](ssl_st* connection) {
+      ++handshakes;
+      while (true) {
+        std::string head = TlsTestServer::ReadHead(connection);
+        if (head.empty()) break;
+        const size_t start = head.find(' ');
+        const std::string path = head.substr(start + 1, head.find(' ', start + 1) - start - 1);
+        if (path == "/start") {
+          TlsTestServer::SendAll(connection, "HTTP/1.1 302 Found\r\nLocation: /final\r\nContent-Length: 0\r\n\r\n");
+        } else {
+          TlsTestServer::SendAll(connection, "HTTP/1.1 200 OK\r\nContent-Length: " + std::to_string(path.size()) + "\r\n\r\n" + path);
+        }
+      }
+    });
+
+    auto loop = solar::net::Loop::Create();
+    solar::net::HttpClient client(*loop);
+    FetchOptions options;
+    options.tls = trusting;
+
+    Collector first;
+    client.Fetch(*solar::url::Parse(Url(server) + "start"), first, options);
+    loop->Run();
+    Collector second;
+    client.Fetch(*solar::url::Parse(Url(server) + "again"), second, options);
+    loop->Run();
+    Check("a redirect over TLS", first.result.ended && first.result.body == "/final", first.result.error.value_or(first.result.body));
+    Check("a second request over TLS", second.result.ended && second.result.body == "/again", second.result.error.value_or(""));
+    Check("one TLS handshake served all three requests", handshakes == 1, std::to_string(handshakes));
   }
 
   std::printf("tls: %d/%d passed\n", total - failed, total);

@@ -235,7 +235,6 @@ void TlsLayer::OnClosed(int error) {
   }
   if (!failure_.empty() && reported == 0) reported = EPROTO;
   upper_.OnClosed(reported);
-  delete this;
 }
 
 }  // namespace solar::net

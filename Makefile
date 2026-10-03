@@ -56,6 +56,10 @@ $(BUILD_DIR)/NetTest: $(OBJ_DIR)/tests/NetTest.o $(OBJ_DIR)/tests/support/TestSe
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -Itests -o $@ $^ $(NET_LIBS)
 
+$(BUILD_DIR)/HttpClientTest: $(OBJ_DIR)/tests/HttpClientTest.o $(OBJ_DIR)/tests/support/TestServer.o $(URL_OBJECTS) $(NET_OBJECTS)
+	@echo "[LINK] $@"
+	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
+
 $(BUILD_DIR)/TlsTest: $(OBJ_DIR)/tests/TlsTest.o $(OBJ_DIR)/tests/support/TestServer.o $(OBJ_DIR)/tests/support/TlsTestServer.o $(OBJ_DIR)/tests/support/Pki.o $(URL_OBJECTS) $(NET_OBJECTS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
@@ -85,13 +89,14 @@ $(BUILD_DIR)/GenIdnaTables: tools/GenIdnaTables.cpp
 	@echo "[BUILD] $<"
 	@$(CXX) -std=c++20 -Wall -Wextra -O2 -o $@ $<
 
-test: $(BUILD_DIR)/UrlTest $(BUILD_DIR)/SearchParamsTest $(BUILD_DIR)/ValidationErrorTest $(BUILD_DIR)/NormalizerTest $(BUILD_DIR)/Http1ParserTest $(BUILD_DIR)/NetTest $(BUILD_DIR)/TlsTest $(BUILD_DIR)/UrlBindingsTest $(BUILD_DIR)/UrlRealmsTest $(BUILD_DIR)/WptTest
+test: $(BUILD_DIR)/UrlTest $(BUILD_DIR)/SearchParamsTest $(BUILD_DIR)/ValidationErrorTest $(BUILD_DIR)/NormalizerTest $(BUILD_DIR)/Http1ParserTest $(BUILD_DIR)/NetTest $(BUILD_DIR)/HttpClientTest $(BUILD_DIR)/TlsTest $(BUILD_DIR)/UrlBindingsTest $(BUILD_DIR)/UrlRealmsTest $(BUILD_DIR)/WptTest
 	@$(BUILD_DIR)/UrlTest
 	@$(BUILD_DIR)/SearchParamsTest
 	@$(BUILD_DIR)/ValidationErrorTest
 	@$(BUILD_DIR)/NormalizerTest
 	@$(BUILD_DIR)/Http1ParserTest
 	@$(BUILD_DIR)/NetTest
+	@$(BUILD_DIR)/HttpClientTest
 	@$(BUILD_DIR)/TlsTest
 	@$(BUILD_DIR)/UrlBindingsTest
 	@$(BUILD_DIR)/UrlRealmsTest

@@ -44,13 +44,22 @@ struct Loop::Impl {
   uint8_t* buffers = nullptr;
 
   std::unordered_set<ConnectionState*> connections;
+  size_t busyConnections = 0;  // open and not idle
   std::vector<ConnectionState*> finalizable;
   bool stopped = false;
 
   using Clock = std::chrono::steady_clock;
   TimerId nextTimer = 1;
   std::set<std::pair<Clock::time_point, TimerId>> timerOrder;
-  std::unordered_map<TimerId, std::pair<Clock::time_point, Task>> timers;
+  struct Timer {
+    Clock::time_point when;
+    Task task;
+    bool background;
+  };
+  std::unordered_map<TimerId, Timer> timers;
+  size_t foregroundTimers = 0;
+
+  bool Pending() const { return busyConnections != 0 || foregroundTimers != 0; }
 
   io_uring_sqe* NextSqe() {
     io_uring_sqe* sqe = io_uring_get_sqe(&ring);
@@ -80,7 +89,7 @@ struct Loop::Impl {
 
 namespace {
 
-struct ConnectionState : Connection {
+struct ConnectionState final : Connection {
   Loop::Impl* loop = nullptr;
   ConnectionHandler* handler = nullptr;
   int fd = -1;
@@ -100,6 +109,7 @@ struct ConnectionState : Connection {
   bool connected = false;
   bool closing = false;
   bool finalizeQueued = false;
+  bool idle = false;
 
   std::deque<std::string> sendQueue;
   size_t sendOffset = 0;
@@ -240,6 +250,7 @@ void Loop::Impl::DrainFinalizable() {
       if (c->fd >= 0) ::close(c->fd);
       ConnectionHandler* handler = c->handler;
       const int error = c->error;
+      if (!c->idle) --busyConnections;
       connections.erase(c);
       delete c;
       handler->OnClosed(error);
@@ -251,9 +262,10 @@ void Loop::Impl::RunTimers() {
   while (!timerOrder.empty() && timerOrder.begin()->first <= Clock::now()) {
     const TimerId id = timerOrder.begin()->second;
     timerOrder.erase(timerOrder.begin());
-    Task task = std::move(timers[id].second);
+    Timer timer = std::move(timers[id]);
     timers.erase(id);
-    task();
+    if (!timer.background) --foregroundTimers;
+    timer.task();
   }
 }
 
@@ -295,6 +307,7 @@ Connection* Loop::Connect(const SocketAddress& address, ConnectionHandler* handl
   c->loop = impl_.get();
   c->handler = handler;
   impl_->connections.insert(c);
+  ++impl_->busyConnections;
 
   if (address.family == SocketAddress::Family::IPv6) {
     auto* in6 = reinterpret_cast<sockaddr_in6*>(&c->address);
@@ -322,18 +335,20 @@ Connection* Loop::Connect(const SocketAddress& address, ConnectionHandler* handl
   return c;
 }
 
-Loop::TimerId Loop::PostDelayed(std::chrono::milliseconds delay, Task task) {
+Loop::TimerId Loop::PostDelayed(std::chrono::milliseconds delay, Task task, bool background) {
   const TimerId id = impl_->nextTimer++;
   const auto when = Impl::Clock::now() + delay;
   impl_->timerOrder.emplace(when, id);
-  impl_->timers.emplace(id, std::make_pair(when, std::move(task)));
+  impl_->timers.emplace(id, Impl::Timer{when, std::move(task), background});
+  if (!background) ++impl_->foregroundTimers;
   return id;
 }
 
 bool Loop::CancelTimer(TimerId id) {
   auto it = impl_->timers.find(id);
   if (it == impl_->timers.end()) return false;
-  impl_->timerOrder.erase({it->second.first, id});
+  impl_->timerOrder.erase({it->second.when, id});
+  if (!it->second.background) --impl_->foregroundTimers;
   impl_->timers.erase(it);
   return true;
 }
@@ -347,7 +362,7 @@ void Loop::Run() {
   while (!impl.stopped) {
     impl.RunTimers();
     impl.DrainFinalizable();
-    if (impl.connections.empty() && impl.timers.empty()) break;
+    if (!impl.Pending() && impl.finalizable.empty()) break;
     if (impl.stopped) break;
 
     io_uring_submit(&impl.ring);
@@ -381,5 +396,16 @@ void Connection::Send(std::string data) {
 }
 
 void Connection::Close() { State(this).loop->CloseConnection(State(this)); }
+
+void Connection::SetIdle(bool idle) {
+  ConnectionState& c = State(this);
+  if (c.idle == idle) return;
+  c.idle = idle;
+  if (idle) {
+    --c.loop->busyConnections;
+  } else {
+    ++c.loop->busyConnections;
+  }
+}
 
 }  // namespace solar::net

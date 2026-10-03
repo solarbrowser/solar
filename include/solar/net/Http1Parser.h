@@ -11,6 +11,7 @@
 namespace solar::net {
 
 struct HttpResponseHead {
+  int minorVersion = 1;  // the 1 of HTTP/1.1
   int status = 0;
   std::string reason;
   std::vector<std::pair<std::string, std::string>> headers;
@@ -48,6 +49,8 @@ class Http1ResponseParser {
   std::optional<std::string> Finish();
 
   bool complete() const { return state_ == State::Done; }
+  // True when the body ran until the connection closed, which leaves nothing to reuse.
+  bool closeDelimited() const { return closeDelimited_; }
 
  private:
   enum class State { Head, FixedBody, ChunkSize, ChunkData, ChunkDataEnd, Trailers, UntilClose, Done, Failed };
@@ -68,6 +71,7 @@ class Http1ResponseParser {
   size_t chunkEndSeen_ = 0;  // how much of the CRLF after chunk data has been seen
   HttpResponseHead response_;
   bool receivedAnything_ = false;
+  bool closeDelimited_ = false;
 };
 
 }  // namespace solar::net

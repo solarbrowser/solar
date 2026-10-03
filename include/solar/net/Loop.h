@@ -50,6 +50,9 @@ class Connection : public Transport {
  public:
   void Send(std::string data) override;
   void Close() override;
+  // An idle connection does not keep Loop::Run going: a pool's idle connections wait for the next
+  // request, which may never come. A connection starts out busy.
+  void SetIdle(bool idle);
 
  protected:
   Connection() = default;
@@ -73,11 +76,13 @@ class Loop {
 
   using Task = std::function<void()>;
   using TimerId = uint64_t;
-  TimerId PostDelayed(std::chrono::milliseconds delay, Task task);
+  // A background timer does not keep Loop::Run going either, as for housekeeping that only
+  // matters while something else is.
+  TimerId PostDelayed(std::chrono::milliseconds delay, Task task, bool background = false);
   // False when the timer already ran or never existed.
   bool CancelTimer(TimerId id);
 
-  // Runs until no connection is open and no timer is pending, or Stop() is called.
+  // Runs until no busy connection is open and no foreground timer is pending, or Stop() is called.
   void Run();
   void Stop();
 

@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-#include "solar/net/Fetch.h"
+#include "solar/net/HttpClient.h"
 #include "solar/url/Parser.h"
 #include "support/TestServer.h"
 
@@ -25,7 +25,7 @@ struct Result {
 
 class Collector : public solar::net::FetchHandler {
  public:
-  void OnResponseHead(const HttpResponseHead& head) override { result.head = head; }
+  void OnResponseHead(const HttpResponseHead& head, const solar::url::Url&) override { result.head = head; }
   void OnBody(std::span<const uint8_t> data) override {
     ++result.bodyCalls;
     result.body.append(reinterpret_cast<const char*>(data.data()), data.size());
@@ -59,7 +59,8 @@ Result Get(const std::string& url, FetchOptions options = {}) {
   }
   auto parsed = solar::url::Parse(url);
   Collector collector;
-  solar::net::Fetch(*loop, *parsed, collector, options);
+  solar::net::HttpClient client(*loop);
+  client.Fetch(*parsed, collector, options);
   loop->Run();
   return collector.result;
 }

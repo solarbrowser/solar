@@ -39,8 +39,8 @@ struct TlsState;
 // TLS over a connection. It is the handler of the connection below it and the transport of the
 // handler above it, which sees the plaintext: OnConnected comes when the handshake has finished
 // and the certificate has been checked. Ciphertext is read straight out of the buffer the
-// connection delivered, not copied into one of OpenSSL's first. It deletes itself after the
-// handler above has been told the connection is over.
+// connection delivered, not copied into one of OpenSSL's first. Its owner may destroy it once the
+// handler above has returned from OnClosed, but not from inside that call.
 class TlsLayer : public ConnectionHandler, public Transport {
  public:
   // `serverName` is what the certificate must name: a DNS name, or an IP address literal.
