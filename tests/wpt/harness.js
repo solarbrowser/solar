@@ -46,6 +46,21 @@
     Promise.resolve(promise).then(
       () => fail('promise resolved, but a ' + name + ' DOMException was expected', description),
       (e) => { if (!(e instanceof DOMException) || e.name !== name) fail('rejected with ' + describe(e) + ' instead of a ' + name, description); });
+  // Deep comparison of the plain objects tests build for expectations (not a full testharness one).
+  const sameShape = (a, b) => {
+    if (Object.is(a, b)) return true;
+    if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+    if (Object.getPrototypeOf(a) !== Object.getPrototypeOf(b)) return false;
+    const keysA = Reflect.ownKeys(a), keysB = Reflect.ownKeys(b);
+    return keysA.length === keysB.length && keysA.every((k) => keysB.includes(k) && sameShape(a[k], b[k]));
+  };
+  globalThis.assert_object_equals = (actual, expected, description) => {
+    if (!sameShape(actual, expected)) fail('expected ' + describe(JSON.stringify(expected)) + ' but got ' + describe(JSON.stringify(actual)), description);
+  };
+  globalThis.step_timeout = (f, ms, ...args) => setTimeout(() => f(...args), ms);
+  globalThis.assert_regexp_match = (actual, expected, description) => {
+    if (!expected.test(actual)) fail('expected a match for ' + String(expected) + ' but got ' + describe(actual), description);
+  };
   globalThis.assert_own_property = (object, name, description) => {
     if (!Object.prototype.hasOwnProperty.call(object, name)) fail('expected property ' + String(name) + ' missing', description);
   };

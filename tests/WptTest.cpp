@@ -20,6 +20,14 @@ namespace {
 
 namespace qe = Quanta::Embed;
 
+// The runtime of the file being run, for the gc() that WPT's garbageCollect looks for.
+qe::Runtime* g_runtime = nullptr;
+
+Quanta::Value CollectGarbage(Quanta::Context&, Quanta::Value, qe::Args, Quanta::Value) {
+  if (g_runtime) g_runtime->CollectGarbage();
+  return qe::Undefined();
+}
+
 bool ReadFile(const std::string& path, std::string& out) {
   std::ifstream file(path);
   if (!file) return false;
@@ -93,6 +101,8 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
   // Declared in the order they must be destroyed in, last first: the host goes before the client it
   // cancels through, and before the runtime whose realm it settles promises in.
   auto runtime = qe::Runtime::Create();
+  g_runtime = runtime.get();
+  qe::DefineGlobalFunction(runtime->GetContext(), "gc", CollectGarbage, 0);
   auto loop = solar::net::Loop::Create();
   solar::net::HttpClient client(*loop);
   solar::web::InstallUrlApis(*runtime);

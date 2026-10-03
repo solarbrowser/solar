@@ -40,7 +40,20 @@ endif
 CXXFLAGS += $(OPENSSL_CFLAGS) $(COMPRESSION_CFLAGS) $(HTTP2_CFLAGS)
 
 WEB_SOURCES = $(wildcard src/web/*.cpp)
-WEB_OBJECTS = $(WEB_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
+WEB_OBJECTS = $(WEB_SOURCES:%.cpp=$(OBJ_DIR)/%.o) $(OBJ_DIR)/$(GEN_DIR)/StreamsScript.o
+
+# The scripts in src/web/js are compiled into the program as C++ sources made from them.
+GEN_DIR = build/gen
+STREAMS_JS = $(sort $(wildcard src/web/js/streams-*.js))
+$(GEN_DIR)/StreamsScript.cpp: $(STREAMS_JS) $(BUILD_DIR)/EmbedScripts
+	@mkdir -p $(GEN_DIR)
+	@echo "[EMBED] $@"
+	@$(BUILD_DIR)/EmbedScripts Streams $(STREAMS_JS) > $@
+
+$(BUILD_DIR)/EmbedScripts: tools/EmbedScripts.cpp
+	@mkdir -p $(BUILD_DIR)
+	@echo "[BUILD] $<"
+	@$(CXX) -std=c++20 -Wall -Wextra -O2 -o $@ $<
 
 QUANTA_DIR = third_party/quanta
 LIBQUANTA = $(QUANTA_DIR)/build/lib/libquanta.a
@@ -168,6 +181,7 @@ $(BUILD_DIR)/GenIdnaTables: tools/GenIdnaTables.cpp
 	@$(CXX) -std=c++20 -Wall -Wextra -O2 -o $@ $<
 
 WPT_FETCH = $(wildcard tests/wpt/fetch/api/headers/*.any.js tests/wpt/fetch/api/request/*.any.js tests/wpt/fetch/api/response/*.any.js)
+WPT_STREAMS = $(wildcard tests/wpt/streams/*.any.js tests/wpt/streams/piping/*.any.js tests/wpt/streams/readable-byte-streams/*.any.js tests/wpt/streams/readable-streams/*.any.js tests/wpt/streams/transform-streams/*.any.js tests/wpt/streams/writable-streams/*.any.js)
 WPT_DOM = $(wildcard tests/wpt/dom/abort/*.any.js tests/wpt/dom/events/*.any.js tests/wpt/webidl/*.any.js tests/wpt/encoding/*.any.js tests/wpt/FileAPI/blob/*.any.js tests/wpt/FileAPI/file/*.any.js tests/wpt/xhr/formdata/*.any.js)
 
 PORTABLE_TESTS = UrlTest SearchParamsTest ValidationErrorTest NormalizerTest PublicSuffixTest CookiesTest HttpCacheTest FetchHeadersTest CorsTest Http1ParserTest ContentDecoderTest AddressRaceTest HstsTest
@@ -185,8 +199,8 @@ test: $(addprefix $(BUILD_DIR)/,$(TESTS)) $(if $(filter linux,$(PLATFORM)),$(BUI
 	@for t in $(TESTS); do $(BUILD_DIR)/$$t || exit 1; done
 ifeq ($(PLATFORM),linux)
 	@for t in $(NET_TESTS) FetchBindingsTest; do SOLAR_LOOP_BACKEND=readiness $(BUILD_DIR)/$$t || exit 1; done
-	@$(BUILD_DIR)/WptTest $(wildcard tests/wpt/url/*.any.js) $(WPT_DOM) $(WPT_FETCH)
-	@QUANTA_GC_STRESS=2 $(BUILD_DIR)/WptTest $(WPT_DOM) $(WPT_FETCH) > /dev/null
+	@$(BUILD_DIR)/WptTest $(wildcard tests/wpt/url/*.any.js) $(WPT_DOM) $(WPT_FETCH) $(WPT_STREAMS)
+	@QUANTA_GC_STRESS=2 $(BUILD_DIR)/WptTest $(WPT_DOM) $(WPT_FETCH) $(WPT_STREAMS) > /dev/null
 endif
 
 # The tests that do not need Quanta, built with AddressSanitizer, UndefinedBehaviorSanitizer and

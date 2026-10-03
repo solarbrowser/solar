@@ -18,3 +18,11 @@ request-init-contenttype.any.js	Can override Content-Type for Request with Reada
 request-disturbed.any.js	Request's body: initial state	needs ReadableStream
 request-disturbed.any.js	Check creating a new request with a new body from a disturbed request	needs ReadableStream
 request-disturbed.any.js	Input request used for creating new request became disturbed	needs ReadableStream
+async-iterator.any.js	Async iterator instances should have the correct list of properties	Quanta: %AsyncIteratorPrototype% has next, return and throw
+errors.any.js	abort should set the close reason for the writable when it happens before cancel during start, and cancel should reject	the standard and this test disagree on how a cancel races an error
+errors.any.js	controller.error() should close writable immediately after readable.cancel()	the standard and this test disagree on how a cancel races an error
+general.any.js	terminate() should abort writable immediately after readable.cancel()	the standard and this test disagree on how a cancel races an error
+non-transferable-buffers.any.js	*non-transferable buffer	needs WebAssembly
+general.any.js	*with a transferred	needs structuredClone
+read-min.any.js	*with a transferred	needs structuredClone
+templated.any.js	*(empty) BYOB reader: canceling via the reader	the test expects an undefined value, the standard gives an empty view

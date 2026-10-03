@@ -1,6 +1,10 @@
 #include "solar/web/FetchBindings.h"
 
+#include <cstdio>
+#include <string>
+
 #include "solar/web/FetchBindingsInternal.h"
+#include "solar/web/Scripts.h"
 
 namespace solar::web {
 
@@ -19,6 +23,12 @@ void Install(Host& host) {
   // Web IDL makes @@iterator the same function object as entries, and the embedding surface has no
   // symbol-keyed definitions, so it is installed from script.
   host.Evaluate("Headers.prototype[Symbol.iterator] = Headers.prototype.entries; FormData.prototype[Symbol.iterator] = FormData.prototype.entries; Object.setPrototypeOf(File, Blob);");
+
+  // The streams are a script, run here, after the classes it uses (AbortController among them) exist.
+  std::string streams;
+  for (const char* const* piece = kScriptStreams; *piece; ++piece) streams += *piece;
+  const auto result = host.Evaluate(streams, "streams.js");
+  if (!result.ok) std::fprintf(stderr, "streams.js: %s\n", result.error.c_str());
 
   // encodeInto returns a dictionary, a plain object, which a native cannot make; the native does the
   // work and this puts its answer in the shape the standard gives.
