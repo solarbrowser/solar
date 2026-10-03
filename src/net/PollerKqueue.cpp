@@ -1,6 +1,9 @@
 #include "Poller.h"
 
-#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__DragonFly__)
+// SOLAR_LIBKQUEUE builds this on Linux against libkqueue, which is how the poller is exercised
+// without a Mac, in place of the epoll one.
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__DragonFly__) || \
+    defined(SOLAR_LIBKQUEUE)
 
 #include <sys/event.h>
 #include <sys/time.h>

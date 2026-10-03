@@ -150,6 +150,18 @@ TestServer::Script Serves(Log& log, std::function<std::string(const std::string&
 
 bool Has(const std::string& head, const std::string& text) { return head.find(text) != std::string::npos; }
 
+// Runs the loop until `done()` holds, looking every few milliseconds, or `limit` has passed. A
+// fixed wait is too short on a busy machine and too long on an idle one; this is neither.
+void RunUntil(Loop& loop, const std::function<bool()>& done, std::chrono::milliseconds limit = 3000ms) {
+  const auto deadline = std::chrono::steady_clock::now() + limit;
+  std::function<void()> look = [&] {
+    if (done() || std::chrono::steady_clock::now() > deadline) return;
+    loop.PostDelayed(5ms, look);
+  };
+  loop.PostDelayed(5ms, look);
+  loop.Run();
+}
+
 std::string Sample() {
   std::string s;
   for (int i = 0; i < 4000; ++i) s += "sample line " + std::to_string(i * 7919 % 1000) + "\n";
@@ -297,8 +309,11 @@ int main() {
   // ---- User-Agent ----
   {
     const std::string fallback = solar::net::DefaultUserAgent();
-    Check("the default claims to be Chrome and says what it is", fallback.starts_with("Mozilla/5.0 (") && fallback.find(" Chrome/") != std::string::npos &&
-              fallback.ends_with(" Solar/Developer") && fallback.find_first_of("\r\n") == std::string::npos, fallback);
+    Check("the default says what Solar is and what it runs on", fallback.starts_with("Solar/Developer (") && fallback.find("; rv:development) ") != std::string::npos &&
+              fallback.ends_with(" Quanta/1.0") && fallback.find_first_of("\r\n") == std::string::npos, fallback);
+    const bool knownSystem = fallback.find("Linux") != std::string::npos || fallback.find("Windows") != std::string::npos ||
+                             fallback.find("Macintosh") != std::string::npos;
+    Check("with the system in the parentheses", knownSystem, fallback);
 
     Log log;
     TestServer server(Serves(log, [](const std::string&) { return Response("200 OK", "x"); }));
@@ -310,7 +325,7 @@ int main() {
     configured.userAgent = "Custom/9.9 (from settings)";
     Session custom(configured);
     custom.Get(Origin(server) + "/");
-    Check("the client's setting replaces it", Has(log.Head(1), "User-Agent: Custom/9.9 (from settings)\r\n") && !Has(log.Head(1), "Chrome/"), log.Head(1));
+    Check("the client's setting replaces it", Has(log.Head(1), "User-Agent: Custom/9.9 (from settings)\r\n") && !Has(log.Head(1), "Solar/Developer"), log.Head(1));
 
     FetchOptions own;
     own.headers = {{"User-Agent", "PerFetch/1"}};
@@ -396,8 +411,7 @@ int main() {
     options.idleTimeout = 100ms;
     Session s(options);
     s.Get(Origin(server) + "/");
-    s.loop->PostDelayed(400ms, [] {});  // lets the idle timeout pass inside Run
-    s.loop->Run();
+    RunUntil(*s.loop, [&] { return log.closed == 1; });
     Check("an idle connection is closed after its timeout", log.closed == 1, std::to_string(log.closed));
     Result again = s.Get(Origin(server) + "/");
     Check("and the next request opens another", again.ended && log.connections == 2, std::to_string(log.connections));
@@ -408,29 +422,35 @@ int main() {
     Session s;
     s.Get(Origin(server) + "/");
     s.client->CloseIdleConnections();
-    s.loop->PostDelayed(100ms, [] {});
-    s.loop->Run();
+    RunUntil(*s.loop, [&] { return log.closed == 1; });
     Check("CloseIdleConnections closes them", log.closed == 1, std::to_string(log.closed));
   }
   {
     // A server that sends something nobody asked for on an idle connection.
     Log log;
+    std::atomic<int> evilSent{0};
     TestServer server([&](int client) {
-      ++log.connections;
+      const int index = log.connections++;
       TestServer::ReadHead(client);
       TestServer::SendAll(client, Response("200 OK", "x"));
-      std::this_thread::sleep_for(50ms);
-      TestServer::SendAll(client, "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nevil");
-      TestServer::WaitForClose(client);
-      ++log.closed;
+      if (index == 0) {
+        std::this_thread::sleep_for(50ms);
+        TestServer::SendAll(client, "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nevil");
+        ++evilSent;
+        TestServer::WaitForClose(client);
+        ++log.closed;
+      }
     });
     Session s;
-    s.Get(Origin(server) + "/");
-    s.loop->PostDelayed(200ms, [] {});
-    s.loop->Run();
-    Check("unsolicited data closes an idle connection", log.closed == 1, std::to_string(log.closed));
+    Result first = s.Get(Origin(server) + "/");
+    RunUntil(*s.loop, [&] { return log.closed == 1; });
+    // What the test saw, so that a failure on a machine nobody can reach says why.
+    const std::string seen = "first fetch: " + (first.ended ? std::string("ok") : first.error.value_or("not ended")) +
+                             ", unsolicited data sent: " + std::to_string(evilSent.load()) + ", server saw the close: " + std::to_string(log.closed.load());
+    Check("unsolicited data closes an idle connection", log.closed == 1, seen);
     Result next = s.Get(Origin(server) + "/");
-    Check("and it is not used for the next request", next.ended && log.connections == 2, std::to_string(log.connections));
+    Check("and it is not used for the next request", next.ended && log.connections == 2,
+          seen + ", next fetch: " + (next.ended ? std::string("ok") : next.error.value_or("not ended")) + ", connections: " + std::to_string(log.connections.load()));
   }
 
   {
@@ -643,8 +663,7 @@ int main() {
     s.loop->Run();
     Check("cancel ends the fetch with 'aborted'", collector.result.error == std::optional<std::string>("aborted") && collector.result.terminalCalls == 1,
           collector.result.error.value_or("no error"));
-    s.loop->PostDelayed(100ms, [] {});
-    s.loop->Run();
+    RunUntil(*s.loop, [&] { return log.closed == 1; });
     Check("cancel closes the connection", log.closed == 1, std::to_string(log.closed));
     handle.Cancel();
     Check("cancelling again does nothing", collector.result.terminalCalls == 1);
