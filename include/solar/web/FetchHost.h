@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "quanta/Embed.h"
+#include "solar/net/Cors.h"
 #include "solar/net/HttpClient.h"
 #include "solar/url/Url.h"
 
@@ -44,6 +45,9 @@ class FetchHost {
   Quanta::Value JsonParse() const { return jsonParse_.Get(); }
   Quanta::Value JsonStringify() const { return jsonStringify_.Get(); }
 
+  // What CORS preflights have allowed, for every fetch of this realm.
+  net::PreflightCache& preflights() { return preflights_; }
+
   // For fetch(): takes the operation, which then lives until it ends.
   void Adopt(std::unique_ptr<FetchOperation> operation);
   // Called when an operation has ended; it is destroyed once the stack it ended on has unwound.
@@ -53,6 +57,7 @@ class FetchHost {
   Config config_;
   Quanta::Context* ctx_;
   Quanta::Embed::Persistent jsonParse_;
+  net::PreflightCache preflights_;
   Quanta::Embed::Persistent jsonStringify_;
   std::vector<std::unique_ptr<FetchOperation>> operations_;
   // What a deferred task checks before it touches the host, which may be gone by then.

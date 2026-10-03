@@ -136,22 +136,25 @@
     results.push(failure ? { name, ok: false, message: messageOf(failure) } : { name, ok: true });
   };
 
+  // As in testharness, promise tests run one after another: each starts when the one before it is done.
+  let promiseTests = Promise.resolve();
   globalThis.promise_test = (func, name) => {
     if (isSkipped(name)) {
       skipped++;
       return;
     }
-    let failure = null;
-    const t = makeTestObject((e) => { failure = failure || e; });
-    pending.push(
-      Promise.resolve()
+    promiseTests = promiseTests.then(() => {
+      let failure = null;
+      const t = makeTestObject((e) => { failure = failure || e; });
+      return Promise.resolve()
         .then(() => func.call(t, t))
         .catch((e) => { failure = failure || e; })
         .then(() => {
           t.runCleanups();
           results.push(failure ? { name, ok: false, message: messageOf(failure) } : { name, ok: true });
-        })
-    );
+        });
+    });
+    pending.push(promiseTests);
   };
 
   // A test that ends when it says so, from a callback or a timer.

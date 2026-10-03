@@ -5,6 +5,7 @@
 #include <csignal>
 #include <cstdio>
 #include <fstream>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -74,6 +75,9 @@ std::string Reply(const std::string& status, const std::string& body, const std:
 
 struct Servers {
   std::atomic<int> cacheable{0};
+  std::atomic<int> preflights{0};
+  std::mutex mutex;
+  std::string lastPreflight = "{}";
   std::string originA, originB;
 };
 
@@ -92,7 +96,36 @@ void Serve(int client, Servers& servers, bool isA) {
     const std::string cors = isA ? "" : "Access-Control-Allow-Origin: " + servers.originA + "\r\n";
     std::string response;
     const std::string& path = request.path;
-    if (path == "/text") {
+    if (request.method == "OPTIONS" && !isA) {
+      ++servers.preflights;
+      {
+        std::lock_guard<std::mutex> lock(servers.mutex);
+        servers.lastPreflight = "{\"origin\":" + JsonEscape(request.Header("origin")) + ",\"method\":" + JsonEscape(request.Header("access-control-request-method")) +
+                                ",\"headers\":" + JsonEscape(request.Header("access-control-request-headers")) + ",\"cookie\":" + JsonEscape(request.Header("cookie")) + "}";
+      }
+      const std::string allow = "Access-Control-Allow-Origin: " + servers.originA + "\r\n";
+      if (path == "/preflight-500") {
+        response = Reply("500 Internal Server Error", "", allow);
+      } else if (path == "/preflight-redirect") {
+        response = Reply("302 Found", "", allow + "Location: /text\r\n");
+      } else if (path == "/preflight-no-origin") {
+        response = Reply("204 No Content", "", "Access-Control-Allow-Methods: PUT\r\n");
+      } else if (path == "/preflight-bad-headers") {
+        response = Reply("204 No Content", "", allow + "Access-Control-Allow-Methods: PUT, DELETE\r\n");
+      } else if (path == "/preflight-star") {
+        response = Reply("204 No Content", "", allow + "Access-Control-Allow-Methods: *\r\nAccess-Control-Allow-Headers: *\r\n");
+      } else {
+        response = Reply("204 No Content", "", allow + "Access-Control-Allow-Methods: PUT, DELETE, PATCH\r\nAccess-Control-Allow-Headers: content-type, x-test, authorization\r\nAccess-Control-Max-Age: 60\r\n");
+      }
+      TestServer::SendAll(client, response);
+      continue;
+    }
+    if (path == "/preflight-count") {
+      response = Reply("200 OK", std::to_string(servers.preflights.load()), cors);
+    } else if (path == "/preflight-last") {
+      std::lock_guard<std::mutex> lock(servers.mutex);
+      response = Reply("200 OK", servers.lastPreflight, cors + "Content-Type: application/json\r\n");
+    } else if (path == "/text") {
       response = Reply("200 OK", "hello", cors + "Content-Type: text/plain\r\nX-Custom: yes\r\nSet-Cookie: hidden=1\r\n");
     } else if (path == "/json") {
       response = Reply("200 OK", "{\"a\":1,\"b\":[true,null]}", cors + "Content-Type: application/json\r\n");

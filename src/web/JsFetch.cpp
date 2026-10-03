@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <string>
 
+#include "solar/net/Cors.h"
 #include "solar/net/FetchHeaders.h"
 #include "solar/url/Origin.h"
 #include "solar/url/Serializer.h"
@@ -31,45 +32,6 @@ std::string_view Trimmed(std::string_view text) {
 
 bool IsRedirectStatus(int status) { return status == 301 || status == 302 || status == 303 || status == 307 || status == 308; }
 
-size_t CountHeaders(const net::HttpResponseHead& head, std::string_view name) {
-  return static_cast<size_t>(std::count_if(head.headers.begin(), head.headers.end(), [&](const auto& h) { return EqualsIgnoreCase(h.first, name); }));
-}
-
-// The CORS check of the Fetch Standard: the response names this origin, or anyone if the request
-// carried no credentials, and says so about credentials when it did.
-bool CorsCheck(const net::HttpResponseHead& head, const std::string& origin, bool includeCredentials) {
-  if (CountHeaders(head, "access-control-allow-origin") != 1) return false;
-  const std::string_view allowed = *head.Header("access-control-allow-origin");
-  if (!includeCredentials && allowed == "*") return true;
-  if (allowed != origin) return false;
-  if (!includeCredentials) return true;
-  const auto credentials = head.Header("access-control-allow-credentials");
-  return credentials && *credentials == "true";
-}
-
-// Which of a cors response's headers a script may see: the safelisted ones, and what the server exposes.
-bool IsCorsExposed(const std::string& name, const net::HttpResponseHead& head, bool includeCredentials) {
-  for (const char* safe : {"cache-control", "content-language", "content-length", "content-type", "expires", "last-modified", "pragma"}) {
-    if (EqualsIgnoreCase(name, safe)) return true;
-  }
-  std::string exposed;
-  for (const auto& [key, value] : head.headers) {
-    if (!EqualsIgnoreCase(key, "access-control-expose-headers")) continue;
-    if (!exposed.empty()) exposed += ",";
-    exposed += value;
-  }
-  size_t start = 0;
-  while (start <= exposed.size()) {
-    size_t end = exposed.find(',', start);
-    if (end == std::string::npos) end = exposed.size();
-    const std::string_view token = Trimmed(std::string_view(exposed).substr(start, end - start));
-    if (token == "*" && !includeCredentials) return true;
-    if (!token.empty() && EqualsIgnoreCase(token, name)) return true;
-    start = end + 1;
-  }
-  return false;
-}
-
 // What a Referer header carries under the request's referrer policy (Referrer Policy, "determine the
 // request's referrer"), or nothing.
 std::optional<std::string> RefererFor(const std::string& policy, const url::Url& page, const url::Url& target) {
@@ -94,14 +56,6 @@ std::optional<std::string> RefererFor(const std::string& policy, const url::Url&
   // strict-origin-when-cross-origin
   if (sameOrigin) return fullText;
   return downgrade ? std::nullopt : std::optional<std::string>(originText);
-}
-
-bool NeedsPreflight(const std::string& method, const net::FetchHeaders& headers) {
-  if (method != "GET" && method != "HEAD" && method != "POST") return true;
-  for (const auto& [name, value] : headers.list()) {
-    if (!net::IsNoCorsSafelistedRequestHeader(name, value)) return true;
-  }
-  return false;
 }
 
 }  // namespace
@@ -134,12 +88,17 @@ bool FetchOperation::OnRedirect(const net::HttpResponseHead& redirect, const url
   const bool nextCrossOrigin = url::SerializeOrigin(next) != pageOrigin;
   // A cors request that has gone cross-origin must have its redirects allowed by each server.
   if (mode == RequestMode::Cors && url::SerializeOrigin(currentUrl) != pageOrigin &&
-      !CorsCheck(redirect, taintedOrigin ? "null" : pageOrigin, credentials == RequestCredentials::Include)) {
+      !net::CorsAllowsResponse(redirect, taintedOrigin ? "null" : pageOrigin, credentials == RequestCredentials::Include)) {
     FailWith(MakeTypeError(host.context(), "Failed to fetch: a redirect was not allowed by CORS"), "a redirect was not allowed by CORS");
     return false;
   }
   if (next.scheme != "http" && next.scheme != "https") return false;
   if (mode == RequestMode::Cors && nextCrossOrigin && next.IncludesCredentials()) return false;
+  if (preflightNeeded) {
+    // The permission was asked for the address that was fetched, not for where it now points.
+    FailWith(MakeTypeError(host.context(), "Failed to fetch: a request that needs a CORS preflight was redirected"), "a request that needs a CORS preflight was redirected");
+    return false;
+  }
 
   // Having gone from one origin to another, and then on to a third, the request's origin is unknown.
   if (url::SerializeOrigin(next) != url::SerializeOrigin(currentUrl) && url::SerializeOrigin(currentUrl) != pageOrigin) taintedOrigin = true;
@@ -154,11 +113,23 @@ bool FetchOperation::OnRedirect(const net::HttpResponseHead& redirect, const url
 
 void FetchOperation::OnResponseHead(const net::HttpResponseHead& head, const url::Url& finalUrl) {
   if (settled) return;  // aborted, or failed already
+  if (preflighting) {
+    const bool includeCredentials = credentials == RequestCredentials::Include;
+    net::PreflightVerdict verdict = net::CheckPreflightResponse(head, pageOrigin, includeCredentials, method, unsafeHeaders);
+    if (!verdict.ok) {
+      const std::string text = "Failed to fetch (CORS preflight failed: " + verdict.reason + ")";
+      FailWith(MakeTypeError(host.context(), text), text);
+      handle.Cancel();
+      return;
+    }
+    host.preflights().Store(pageOrigin, preflightUrl, includeCredentials, std::move(verdict.permission));
+    return;  // the request itself goes when the preflight has ended
+  }
   Context& ctx = host.context();
   currentUrl = finalUrl;
   const bool includeCredentials = credentials == RequestCredentials::Include;
 
-  if (mode == RequestMode::Cors && (corsTainted || crossOrigin) && !CorsCheck(head, taintedOrigin ? "null" : pageOrigin, includeCredentials)) {
+  if (mode == RequestMode::Cors && (corsTainted || crossOrigin) && !net::CorsAllowsResponse(head, taintedOrigin ? "null" : pageOrigin, includeCredentials)) {
     FailWith(MakeTypeError(ctx, "Failed to fetch: the response was not allowed by CORS"), "the response was not allowed by CORS");
     handle.Cancel();
     return;
@@ -184,7 +155,7 @@ void FetchOperation::OnResponseHead(const net::HttpResponseHead& head, const url
     r->redirected = redirects > 0;
     std::vector<std::pair<std::string, std::string>> list;
     for (const auto& header : head.headers) {
-      if (r->type == ResponseType::Cors && !IsCorsExposed(header.first, head, includeCredentials)) continue;
+      if (r->type == ResponseType::Cors && !net::IsCorsExposedHeader(header.first, head, includeCredentials)) continue;
       list.push_back(header);
     }
     r->headers = NewResponseHeaders(ctx, list);
@@ -206,10 +177,20 @@ void FetchOperation::OnResponseHead(const net::HttpResponseHead& head, const url
 }
 
 void FetchOperation::OnBody(std::span<const uint8_t> data) {
+  if (preflighting) return;
   if (body && !body->failure) body->bytes.append(reinterpret_cast<const char*>(data.data()), data.size());
 }
 
+void FetchOperation::StartMain() {
+  handle = host.config().client->Fetch(requestUrl, *this, std::move(mainOptions));
+}
+
 void FetchOperation::OnEnd() {
+  if (preflighting) {
+    preflighting = false;
+    if (!settled) StartMain();
+    return;
+  }
   if (body && !body->failure) {
     body->complete = true;
     qe::ReportExternalAllocation(body->bytes.size());
@@ -223,7 +204,7 @@ void FetchOperation::OnEnd() {
 
 void FetchOperation::OnError(std::string_view message) {
   if (!abortedByScript && !finished) {
-    const std::string text = "Failed to fetch (" + std::string(message) + ")";
+    const std::string text = std::string("Failed to fetch (") + (preflighting ? "CORS preflight: " : "") + std::string(message) + ")";
     FailWith(MakeTypeError(host.context(), text), text);
   }
   Done();
@@ -280,10 +261,7 @@ Value Fetch(Context& ctx, Value, qe::Args args, Value newTarget) {
   op->crossOrigin = url::SerializeOrigin(request->url) != op->pageOrigin;
 
   if (op->crossOrigin && request->mode == RequestMode::SameOrigin) return reject(MakeTypeError(ctx, "Failed to fetch: a same-origin request to another origin"));
-  if (op->crossOrigin && request->mode == RequestMode::Cors) {
-    op->corsTainted = true;
-    if (NeedsPreflight(request->method, request->headers->headers)) return reject(MakeTypeError(ctx, "Failed to fetch: a CORS preflight is not supported yet"));
-  }
+  if (op->crossOrigin && request->mode == RequestMode::Cors) op->corsTainted = true;
 
   net::FetchOptions options;
   options.method = request->method;
@@ -323,7 +301,41 @@ Value Fetch(Context& ctx, Value, qe::Args args, Value newTarget) {
     op->signal->abortAlgorithms.push_back(op->abortListener);
   }
 
+  op->method = request->method;
   host->Adopt(std::move(operation));
+
+  // A cors request that is not simple asks the server first, unless it has been told lately that it may.
+  if (op->corsTainted && net::NeedsPreflight(request->method, request->headers->headers)) {
+    op->preflightNeeded = true;
+    op->unsafeHeaders = net::CorsUnsafeRequestHeaderNames(request->headers->headers);
+    url::Url withoutFragment = request->url;
+    withoutFragment.fragment.reset();
+    op->preflightUrl = url::Serialize(withoutFragment);
+    const bool includeCredentials = request->credentials == RequestCredentials::Include;
+    if (!host->preflights().Allows(op->pageOrigin, op->preflightUrl, includeCredentials, op->method, op->unsafeHeaders)) {
+      net::FetchOptions preflight;
+      preflight.method = "OPTIONS";
+      preflight.headers.emplace_back("Origin", op->pageOrigin);
+      preflight.headers.emplace_back("Access-Control-Request-Method", op->method);
+      if (!op->unsafeHeaders.empty()) {
+        std::string names;
+        for (const std::string& name : op->unsafeHeaders) names += (names.empty() ? "" : ",") + name;
+        preflight.headers.emplace_back("Access-Control-Request-Headers", names);
+      }
+      for (const auto& [name, value] : options.headers) {
+        if (EqualsIgnoreCase(name, "referer")) preflight.headers.emplace_back(name, value);
+      }
+      preflight.redirect = net::RedirectMode::Error;  // a preflight that is redirected has failed
+      preflight.cache = net::CacheMode::NoStore;
+      preflight.useCookies = false;                   // it never carries credentials
+      preflight.timeout = options.timeout;
+      preflight.initiator = page;
+      op->mainOptions = std::move(options);
+      op->preflighting = true;
+      op->handle = host->config().client->Fetch(request->url, *op, std::move(preflight));
+      return capability.promise;
+    }
+  }
   op->handle = host->config().client->Fetch(request->url, *op, std::move(options));
   return capability.promise;
 }

@@ -37,6 +37,15 @@ struct FetchOperation : net::FetchHandler {
   bool taintedOrigin = false;     // a redirect crossed origins twice over: Origin is null
   int redirects = 0;
 
+  // A cors request that has to ask first: the request waits here while the preflight is out.
+  bool preflighting = false;
+  bool preflightNeeded = false;  // it asked, or an earlier preflight allowed it: a redirect cannot be followed
+  net::FetchOptions mainOptions;
+  std::string method;
+  std::vector<std::string> unsafeHeaders;
+  std::string preflightUrl;
+  void StartMain();
+
   // What has happened.
   bool settled = false;   // the promise has been resolved or rejected
   bool finished = false;  // the network has had its last word

@@ -274,3 +274,71 @@ promise_test(async () => {
   const response = await fetch(SERVER + '/redirect/302/redirect-away');
   assert_equals(response.status, 404);
 }, 'a redirect inside the origin goes on');
+
+// ---- CORS preflight ----
+
+promise_test(async () => {
+  const before = Number(await (await fetch(OTHER + '/preflight-count')).text());
+  const body = JSON.stringify({ k: 'v' });
+  const response = await fetch(OTHER + '/echo', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Test': 'one' }, body });
+  assert_equals(response.type, 'cors');
+  const echo = await response.json();
+  assert_equals(echo.method, 'POST');
+  assert_equals(echo.body, body);
+  assert_equals(echo.origin, SERVER);
+  const after = Number(await (await fetch(OTHER + '/preflight-count')).text());
+  assert_equals(after, before + 1, 'one preflight asked');
+
+  const last = await (await fetch(OTHER + '/preflight-last')).json();
+  assert_equals(last.origin, SERVER);
+  assert_equals(last.method, 'POST');
+  assert_equals(last.headers, 'content-type,x-test', 'the unsafe headers, lower case and sorted');
+  assert_equals(last.cookie, '', 'a preflight carries no credentials');
+
+  await fetch(OTHER + '/echo', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Test': 'two' }, body });
+  const again = Number(await (await fetch(OTHER + '/preflight-count')).text());
+  assert_equals(again, after, 'the second request needs no preflight: the first one is remembered');
+}, 'a request that is not simple is preceded by a preflight, once');
+
+promise_test(async () => {
+  const put = await (await fetch(OTHER + '/echo', { method: 'PUT', body: 'x' })).json();
+  assert_equals(put.method, 'PUT', 'a method that is not simple asks as well');
+  const get = await (await fetch(OTHER + '/echo', { headers: { 'X-Test': 'custom' } })).json();
+  assert_equals(get.x, 'custom', 'and so does a custom header on a GET');
+}, 'the method and the headers each can call for a preflight');
+
+promise_test(async () => {
+  const notAllowed = await fetch(OTHER + '/echo', { headers: { 'X-Not-Allowed': '1' } }).then(() => 'resolved', (e) => e);
+  assert_true(notAllowed instanceof TypeError, 'a header the server did not allow');
+  const method = await fetch(OTHER + '/echo', { method: 'LINK' }).then(() => 'resolved', (e) => e);
+  assert_true(method instanceof TypeError, 'a method the server did not allow');
+}, 'a preflight that does not allow the request rejects it');
+
+promise_test(async () => {
+  for (const path of ['/preflight-500', '/preflight-redirect', '/preflight-no-origin', '/preflight-bad-headers']) {
+    const outcome = await fetch(OTHER + path, { method: 'DELETE', headers: { 'X-Test': '1' } }).then(() => 'resolved', (e) => e);
+    assert_true(outcome instanceof TypeError, path + ' fails the preflight');
+  }
+}, 'a preflight that fails, redirects or lacks the origin rejects');
+
+promise_test(async () => {
+  const response = await fetch(OTHER + '/preflight-star', { method: 'PATCH', headers: { 'X-Test': '1' } });
+  assert_equals(response.status, 404, 'the preflight allowed it with *, and the request went out');
+  const authorization = await fetch(OTHER + '/preflight-star', { method: 'PATCH', headers: { Authorization: 'x' } }).then(() => 'resolved', (e) => e);
+  assert_true(authorization instanceof TypeError, '* does not cover Authorization');
+  const credentials = await fetch(OTHER + '/preflight-star', { method: 'PATCH', credentials: 'include' }).then(() => 'resolved', (e) => e);
+  assert_true(credentials instanceof TypeError, 'and does not count with credentials');
+}, 'the wildcard allows, within its limits');
+
+promise_test(async () => {
+  const outcome = await fetch(OTHER + '/redirect/307/echo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then(() => 'resolved', (e) => e);
+  assert_true(outcome instanceof TypeError, 'a request that had to ask cannot be redirected');
+}, 'a preflighted request is not followed through a redirect');
+
+promise_test(async () => {
+  const before = Number(await (await fetch(OTHER + '/preflight-count')).text());
+  await fetch(OTHER + '/text');
+  await fetch(OTHER + '/echo', { method: 'POST', body: 'plain text' });
+  const after = Number(await (await fetch(OTHER + '/preflight-count')).text());
+  assert_equals(after, before, 'simple requests are sent without asking');
+}, 'a simple request is not preceded by a preflight');

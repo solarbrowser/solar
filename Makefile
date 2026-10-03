@@ -134,6 +134,10 @@ $(BUILD_DIR)/FetchHeadersTest: $(OBJ_DIR)/tests/FetchHeadersTest.o $(OBJ_DIR)/sr
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^
 
+$(BUILD_DIR)/CorsTest: $(OBJ_DIR)/tests/CorsTest.o $(OBJ_DIR)/src/net/Cors.o $(OBJ_DIR)/src/net/FetchHeaders.o $(OBJ_DIR)/src/net/Http1Parser.o
+	@echo "[LINK] $@"
+	@$(CXX) $(CXXFLAGS) -o $@ $^
+
 $(BUILD_DIR)/NormalizerTest: $(OBJ_DIR)/tests/NormalizerTest.o $(URL_OBJECTS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^
@@ -166,7 +170,7 @@ $(BUILD_DIR)/GenIdnaTables: tools/GenIdnaTables.cpp
 WPT_FETCH = $(wildcard tests/wpt/fetch/api/headers/*.any.js tests/wpt/fetch/api/request/*.any.js tests/wpt/fetch/api/response/*.any.js)
 WPT_DOM = $(wildcard tests/wpt/dom/abort/*.any.js tests/wpt/dom/events/*.any.js tests/wpt/webidl/*.any.js)
 
-PORTABLE_TESTS = UrlTest SearchParamsTest ValidationErrorTest NormalizerTest PublicSuffixTest CookiesTest HttpCacheTest FetchHeadersTest Http1ParserTest ContentDecoderTest AddressRaceTest HstsTest
+PORTABLE_TESTS = UrlTest SearchParamsTest ValidationErrorTest NormalizerTest PublicSuffixTest CookiesTest HttpCacheTest FetchHeadersTest CorsTest Http1ParserTest ContentDecoderTest AddressRaceTest HstsTest
 NET_TESTS = LoopTest ResolverTest NetTest HttpClientTest TlsTest Http2Test
 QUANTA_TESTS = UrlBindingsTest UrlRealmsTest FetchBindingsTest
 ifeq ($(PLATFORM),linux)
