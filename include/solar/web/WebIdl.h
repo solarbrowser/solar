@@ -55,4 +55,25 @@ inline bool Iterate(Quanta::Context& ctx, const Quanta::Value& iterable, const Q
 }
 
 
+// The conversion of an object to a record, in the steps and the order Web IDL gives, which a Proxy can
+// see: [[OwnPropertyKeys]], then for each key a [[GetOwnProperty]] and, if the property is enumerable,
+// the key's conversion to the record's key type, then a [[Get]] of the value. `convertKey` is that
+// conversion (a symbol cannot be converted to a string, so it throws there); `visit` gets the value.
+// False from either stops. False, with an exception pending, when anything fails.
+template <typename ConvertKey, typename Visit>
+inline bool IterateRecord(Quanta::Context& ctx, const Quanta::Value& object, ConvertKey convertKey, Visit visit) {
+  Quanta::Embed::ValueList keys = Quanta::Embed::OwnPropertyKeys(ctx, object);
+  if (Quanta::Embed::HasException(ctx)) return false;
+  for (const Quanta::Value& key : keys) {
+    const bool enumerable = Quanta::Embed::GetOwnEnumerable(ctx, object, key);
+    if (Quanta::Embed::HasException(ctx)) return false;
+    if (!enumerable) continue;
+    if (!convertKey(key)) return false;
+    Quanta::Value value = Quanta::Embed::Get(ctx, object, key);
+    if (Quanta::Embed::HasException(ctx)) return false;
+    if (!visit(value)) return false;
+  }
+  return true;
+}
+
 }  // namespace solar::web

@@ -72,24 +72,24 @@ bool ReadSequence(Context& ctx, const Value& init, const Value& method, std::vec
 
 // record<USVString, USVString>. A repeated key keeps its first position and takes the last value.
 bool ReadRecord(Context& ctx, const Value& init, std::vector<Pair>& out) {
-  std::vector<std::string> keys = qe::OwnKeys(ctx, init);
-  if (qe::HasException(ctx)) return false;
-
-  for (const std::string& rawKey : keys) {
-    Value value = qe::Get(ctx, init, rawKey);
-    if (qe::HasException(ctx)) return false;
-    std::string text = qe::ToUsvUtf8(ctx, value);
-    if (qe::HasException(ctx)) return false;
-
-    std::string key = ScrubSurrogates(rawKey);
-    auto existing = std::find_if(out.begin(), out.end(), [&](const Pair& pair) { return pair.first == key; });
-    if (existing != out.end()) {
-      existing->second = std::move(text);
-    } else {
-      out.emplace_back(std::move(key), std::move(text));
-    }
-  }
-  return true;
+  std::string key;
+  return IterateRecord(
+      ctx, init,
+      [&](const Value& rawKey) {
+        key = qe::ToUsvUtf8(ctx, rawKey);
+        return !qe::HasException(ctx);
+      },
+      [&](const Value& value) {
+        std::string text = qe::ToUsvUtf8(ctx, value);
+        if (qe::HasException(ctx)) return false;
+        auto existing = std::find_if(out.begin(), out.end(), [&](const Pair& pair) { return pair.first == key; });
+        if (existing != out.end()) {
+          existing->second = std::move(text);
+        } else {
+          out.emplace_back(key, std::move(text));
+        }
+        return true;
+      });
 }
 
 Value Construct(Context& ctx, Value, qe::Args args, Value newTarget) {

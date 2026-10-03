@@ -109,7 +109,8 @@ check('undefined init', new URLSearchParams(undefined).size, 0);
 check('string init', new URLSearchParams('x=1&x=2').size, 2);
 
 check('record init', new URLSearchParams({ a: '1', b: '2' }).toString(), 'a=1&b=2');
-check('record skips symbols', new URLSearchParams({ a: '1', [Symbol('s')]: '2' }).toString(), 'a=1');
+throwsTypeError('record with an enumerable symbol key', () => new URLSearchParams({ a: '1', [Symbol('s')]: '2' }));
+check('record skips non-enumerable symbols', new URLSearchParams(Object.defineProperty({ a: '1' }, Symbol('s'), { value: '2', enumerable: false })).toString(), 'a=1');
 check('record converts values', new URLSearchParams({ n: 5, t: true, z: null }).toString(), 'n=5&t=true&z=null');
 check('sequence init', new URLSearchParams([['a', '1'], ['b', '2']]).toString(), 'a=1&b=2');
 check('sequence keeps duplicates', new URLSearchParams([['a', '1'], ['a', '2']]).toString(), 'a=1&a=2');

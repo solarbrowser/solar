@@ -77,16 +77,11 @@ bool Report(Context& ctx, net::FetchHeaders::Status status, const char* method) 
   return false;
 }
 
-// Adds one name and value from an init, which stops the whole init on the first one that will not do.
-bool AppendPair(Context& ctx, JsHeaders* target, const Value& nameValue, const Value& valueValue) {
-  std::string name, value;
-  if (!ReadName(ctx, nameValue, name, "constructor")) return false;
-  if (!ToByteString(ctx, valueValue, value, "the header value")) return false;
-  return Report(ctx, target->headers.Append(name, value), "constructor");
-}
+using Pairs = std::vector<std::pair<std::string, std::string>>;
 
-// sequence<sequence<ByteString>>, each inner sequence being a name and a value.
-bool FillFromSequence(Context& ctx, JsHeaders* target, const Value& init, const Value& method) {
+// sequence<sequence<ByteString>>, each inner sequence being a name and a value. Everything is
+// converted before anything is added, as Web IDL has it.
+bool ReadSequence(Context& ctx, const Value& init, const Value& method, Pairs& out) {
   return Iterate(ctx, init, method, [&](const Value& pair) {
     if (!qe::IsObject(pair)) {
       qe::ThrowTypeError(ctx, "Failed to construct 'Headers': The provided value cannot be converted to a sequence.");
@@ -98,9 +93,11 @@ bool FillFromSequence(Context& ctx, JsHeaders* target, const Value& init, const 
       qe::ThrowTypeError(ctx, "Failed to construct 'Headers': The provided value cannot be converted to a sequence.");
       return false;
     }
-    std::vector<Value> items;
+    std::vector<std::string> items;
     bool ok = Iterate(ctx, pair, innerMethod, [&](const Value& item) {
-      items.push_back(item);
+      std::string bytes;
+      if (!ToByteString(ctx, item, bytes, "a header name or value")) return false;
+      items.push_back(std::move(bytes));
       return true;
     });
     if (!ok) return false;
@@ -108,20 +105,22 @@ bool FillFromSequence(Context& ctx, JsHeaders* target, const Value& init, const 
       qe::ThrowTypeError(ctx, "Failed to construct 'Headers': Each header pair must be an iterable [name, value] tuple");
       return false;
     }
-    return AppendPair(ctx, target, items[0], items[1]);
+    out.emplace_back(std::move(items[0]), std::move(items[1]));
+    return true;
   });
 }
 
 // record<ByteString, ByteString>.
-bool FillFromRecord(Context& ctx, JsHeaders* target, const Value& init) {
-  const std::vector<std::string> keys = qe::OwnKeys(ctx, init);
-  if (qe::HasException(ctx)) return false;
-  for (const std::string& rawKey : keys) {
-    Value value = qe::Get(ctx, init, rawKey);
-    if (qe::HasException(ctx)) return false;
-    if (!AppendPair(ctx, target, qe::FromUtf8(ctx, ScrubSurrogates(rawKey)), value)) return false;
-  }
-  return true;
+bool ReadRecord(Context& ctx, const Value& init, Pairs& out) {
+  std::string name;
+  return IterateRecord(
+      ctx, init, [&](const Value& key) { return ToByteString(ctx, key, name, "the header name"); },
+      [&](const Value& value) {
+        std::string bytes;
+        if (!ToByteString(ctx, value, bytes, "the header value")) return false;
+        out.emplace_back(name, std::move(bytes));
+        return true;
+      });
 }
 
 Value Construct(Context& ctx, Value, qe::Args args, Value newTarget) {
@@ -142,8 +141,16 @@ Value Construct(Context& ctx, Value, qe::Args args, Value newTarget) {
     }
     Value method = qe::GetIteratorMethod(ctx, args[0]);
     if (qe::HasException(ctx)) return qe::Undefined();
-    const bool ok = qe::IsUndefined(method) ? FillFromRecord(ctx, headers, args[0]) : FillFromSequence(ctx, headers, args[0], method);
+    Pairs pairs;
+    const bool ok = qe::IsUndefined(method) ? ReadRecord(ctx, args[0], pairs) : ReadSequence(ctx, args[0], method, pairs);
     if (!ok) return qe::Undefined();
+    for (const auto& [name, value] : pairs) {
+      if (!net::IsValidHeaderName(name)) {
+        qe::ThrowTypeError(ctx, "Failed to construct 'Headers': Invalid name");
+        return qe::Undefined();
+      }
+      if (!Report(ctx, headers->headers.Append(name, value), "constructor")) return qe::Undefined();
+    }
   }
   return qe::FromObject(headers);
 }
