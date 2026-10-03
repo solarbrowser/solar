@@ -1,5 +1,6 @@
 #include "solar/url/Host.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <vector>
@@ -383,6 +384,11 @@ std::optional<std::string> ParseHost(std::string_view input, bool isOpaque, Vali
     return ParseIpv4(*asciiDomain, errors);
   }
   return asciiDomain;
+}
+
+bool IsIpAddressHost(std::string_view host) {
+  if (host.starts_with('[')) return true;
+  return !host.empty() && std::all_of(host.begin(), host.end(), [](char c) { return IsAsciiDigit(c) || c == '.'; });
 }
 
 }  // namespace solar::url

@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <optional>
 
+#include "solar/url/Host.h"
+
 namespace solar::net {
 
 namespace {
@@ -13,11 +15,6 @@ bool IsTokenChar(char c) {
 }
 
 char Lower(char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c + 0x20) : c; }
-
-bool IsIpAddress(std::string_view host) {
-  if (host.starts_with('[')) return true;
-  return !host.empty() && std::all_of(host.begin(), host.end(), [](char c) { return (c >= '0' && c <= '9') || c == '.'; });
-}
 
 struct Policy {
   uint64_t maxAge = 0;
@@ -104,7 +101,7 @@ std::optional<Policy> ParsePolicy(std::string_view text) {
 HstsStore::HstsStore(Clock clock) : clock_(clock ? std::move(clock) : Clock([] { return std::chrono::system_clock::now(); })) {}
 
 void HstsStore::Note(std::string_view host, std::string_view headerValue) {
-  if (host.empty() || IsIpAddress(host)) return;
+  if (host.empty() || url::IsIpAddressHost(host)) return;
   const std::optional<Policy> policy = ParsePolicy(headerValue);
   if (!policy) return;
 

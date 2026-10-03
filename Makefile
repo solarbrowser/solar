@@ -53,9 +53,11 @@ QUANTA_LIBS = $(LIBQUANTA) $(QUANTA_OVERRIDE)
 UNICODE_VERSION = 18.0.0
 UCD_URL = https://www.unicode.org/Public/$(UNICODE_VERSION)
 UCD_DIR = $(BUILD_DIR)/ucd
+PSL_URL = https://publicsuffix.org/list/public_suffix_list.dat
+PSL_FILE = $(BUILD_DIR)/psl/public_suffix_list.dat
 
 .DEFAULT_GOAL := all
-.PHONY: all test asan-test idna-tables clean quanta
+.PHONY: all test asan-test idna-tables public-suffix-tables clean quanta
 
 all: solar
 
@@ -88,7 +90,7 @@ $(BUILD_DIR)/AddressRaceTest: $(OBJ_DIR)/tests/AddressRaceTest.o $(OBJ_DIR)/src/
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^
 
-$(BUILD_DIR)/HstsTest: $(OBJ_DIR)/tests/HstsTest.o $(OBJ_DIR)/src/net/Hsts.o
+$(BUILD_DIR)/HstsTest: $(OBJ_DIR)/tests/HstsTest.o $(OBJ_DIR)/src/net/Hsts.o $(URL_OBJECTS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^
 
@@ -116,6 +118,10 @@ $(BUILD_DIR)/ContentDecoderTest: $(OBJ_DIR)/tests/ContentDecoderTest.o $(OBJ_DIR
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^ $(COMPRESSION_LIBS)
 
+$(BUILD_DIR)/PublicSuffixTest: $(OBJ_DIR)/tests/PublicSuffixTest.o $(URL_OBJECTS)
+	@echo "[LINK] $@"
+	@$(CXX) $(CXXFLAGS) -o $@ $^
+
 $(BUILD_DIR)/NormalizerTest: $(OBJ_DIR)/tests/NormalizerTest.o $(URL_OBJECTS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^
@@ -141,7 +147,7 @@ $(BUILD_DIR)/GenIdnaTables: tools/GenIdnaTables.cpp
 	@echo "[BUILD] $<"
 	@$(CXX) -std=c++20 -Wall -Wextra -O2 -o $@ $<
 
-PORTABLE_TESTS = UrlTest SearchParamsTest ValidationErrorTest NormalizerTest Http1ParserTest ContentDecoderTest AddressRaceTest HstsTest
+PORTABLE_TESTS = UrlTest SearchParamsTest ValidationErrorTest NormalizerTest PublicSuffixTest Http1ParserTest ContentDecoderTest AddressRaceTest HstsTest
 NET_TESTS = LoopTest ResolverTest NetTest HttpClientTest TlsTest Http2Test
 QUANTA_TESTS = UrlBindingsTest UrlRealmsTest
 ifeq ($(PLATFORM),linux)
@@ -168,12 +174,12 @@ ASAN_TLS = tests/support/TlsTestServer.cpp tests/support/Pki.cpp
 ASAN_HTTP2 = tests/support/Http2TestServer.cpp
 asan-test:
 	@mkdir -p $(BUILD_DIR)/asan
-	@for t in UrlTest SearchParamsTest ValidationErrorTest NormalizerTest; do \
+	@for t in UrlTest SearchParamsTest ValidationErrorTest NormalizerTest PublicSuffixTest; do \
 	    echo "[ASAN] $$t"; \
 	    $(CXX) $(ASAN_FLAGS) -o $(BUILD_DIR)/asan/$$t tests/$$t.cpp $(ASAN_URL) && $(BUILD_DIR)/asan/$$t || exit 1; \
 	done
 	@echo "[ASAN] HstsTest"
-	@$(CXX) $(ASAN_FLAGS) -o $(BUILD_DIR)/asan/HstsTest tests/HstsTest.cpp src/net/Hsts.cpp && $(BUILD_DIR)/asan/HstsTest
+	@$(CXX) $(ASAN_FLAGS) -o $(BUILD_DIR)/asan/HstsTest tests/HstsTest.cpp src/net/Hsts.cpp $(ASAN_URL) && $(BUILD_DIR)/asan/HstsTest
 	@echo "[ASAN] AddressRaceTest"
 	@$(CXX) $(ASAN_FLAGS) -o $(BUILD_DIR)/asan/AddressRaceTest tests/AddressRaceTest.cpp src/net/AddressRace.cpp && $(BUILD_DIR)/asan/AddressRaceTest
 	@echo "[ASAN] Http1ParserTest"
@@ -188,6 +194,18 @@ asan-test:
 	        SOLAR_LOOP_BACKEND=$$b $(BUILD_DIR)/asan/$$t || exit 1; \
 	    done; \
 	done
+
+# It needs the URL parser to turn the list's names into hosts, but not the list it is making.
+$(BUILD_DIR)/GenPublicSuffix: tools/GenPublicSuffix.cpp $(filter-out %/PublicSuffix.o %/PublicSuffixTables.o,$(URL_OBJECTS))
+	@echo "[LINK] $@"
+	@$(CXX) $(CXXFLAGS) -o $@ $^
+
+# The list changes daily; regenerate to take a newer one, and commit the result with its version.
+public-suffix-tables: $(BUILD_DIR)/GenPublicSuffix
+	@mkdir -p $(dir $(PSL_FILE))
+	@curl -sfL $(PSL_URL) -o $(PSL_FILE)
+	@$(BUILD_DIR)/GenPublicSuffix $(PSL_FILE) > src/url/PublicSuffixTables.cpp
+	@echo "[OK] src/url/PublicSuffixTables.cpp"
 
 idna-tables: $(BUILD_DIR)/GenIdnaTables
 	@mkdir -p $(UCD_DIR)
