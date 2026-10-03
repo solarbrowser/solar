@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "quanta/Embed.h"
+#include "solar/web/FetchBindings.h"
 #include "solar/web/UrlBindings.h"
 
 namespace {
@@ -68,6 +69,7 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
 
   auto runtime = qe::Runtime::Create();
   solar::web::InstallUrlApis(*runtime);
+  solar::web::InstallFetchApis(*runtime);
 
   std::string skips = "globalThis.__skip = [";
   for (const std::string& prefix : SkipsFor(skipFile, name)) skips += JsString(prefix) + ",";

@@ -2,6 +2,7 @@
 #include <string>
 
 #include "solar/web/UrlBindingsInternal.h"
+#include "solar/web/WebIdl.h"
 
 namespace solar::web {
 
@@ -39,53 +40,6 @@ JsUrlSearchParams* This(Context& ctx, const Value& thisValue) {
 }
 
 using Pair = url::UrlSearchParams::Pair;
-
-// The engine keeps a lone surrogate as a 3-byte sequence, which USVString turns into one
-// U+FFFD; the keys OwnKeys returns have not been through that yet.
-std::string ScrubSurrogates(const std::string& s) {
-  std::string out;
-  out.reserve(s.size());
-  for (size_t i = 0; i < s.size(); ++i) {
-    bool surrogate = static_cast<unsigned char>(s[i]) == 0xED && i + 2 < s.size() &&
-                     static_cast<unsigned char>(s[i + 1]) >= 0xA0;
-    if (surrogate) {
-      out += "\xEF\xBF\xBD";
-      i += 2;
-    } else {
-      out.push_back(s[i]);
-    }
-  }
-  return out;
-}
-
-// Calls `visit` with each value `iterable`'s iterator produces. False, with an exception
-// pending, when anything fails or `visit` returns false.
-template <typename Visit>
-bool Iterate(Context& ctx, const Value& iterable, const Value& method, Visit visit) {
-  Value iterator = qe::Call(ctx, method, iterable);
-  if (qe::HasException(ctx)) return false;
-  if (!qe::IsObject(iterator)) {
-    qe::ThrowTypeError(ctx, "The iterator method did not return an object");
-    return false;
-  }
-  Value next = qe::Get(ctx, iterator, "next");
-  if (qe::HasException(ctx)) return false;
-
-  while (true) {
-    Value result = qe::Call(ctx, next, iterator);
-    if (qe::HasException(ctx)) return false;
-    if (!qe::IsObject(result)) {
-      qe::ThrowTypeError(ctx, "The iterator result is not an object");
-      return false;
-    }
-    Value done = qe::Get(ctx, result, "done");
-    if (qe::HasException(ctx)) return false;
-    if (done.to_boolean()) return true;
-    Value item = qe::Get(ctx, result, "value");
-    if (qe::HasException(ctx)) return false;
-    if (!visit(item)) return false;
-  }
-}
 
 // sequence<sequence<USVString>>, each inner sequence being a name and a value.
 bool ReadSequence(Context& ctx, const Value& init, const Value& method, std::vector<Pair>& out) {

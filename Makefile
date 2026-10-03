@@ -130,6 +130,10 @@ $(BUILD_DIR)/HttpCacheTest: $(OBJ_DIR)/tests/HttpCacheTest.o $(OBJ_DIR)/src/net/
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^
 
+$(BUILD_DIR)/FetchHeadersTest: $(OBJ_DIR)/tests/FetchHeadersTest.o $(OBJ_DIR)/src/net/FetchHeaders.o
+	@echo "[LINK] $@"
+	@$(CXX) $(CXXFLAGS) -o $@ $^
+
 $(BUILD_DIR)/NormalizerTest: $(OBJ_DIR)/tests/NormalizerTest.o $(URL_OBJECTS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^
@@ -138,24 +142,27 @@ $(BUILD_DIR)/ValidationErrorTest: $(OBJ_DIR)/tests/ValidationErrorTest.o $(URL_O
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^
 
-$(BUILD_DIR)/UrlBindingsTest: $(OBJ_DIR)/tests/UrlBindingsTest.o $(URL_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
+$(BUILD_DIR)/UrlBindingsTest: $(OBJ_DIR)/tests/UrlBindingsTest.o $(URL_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
-	@$(CXX) $(CXXFLAGS) -o $@ $^
+	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
 
-$(BUILD_DIR)/UrlRealmsTest: $(OBJ_DIR)/tests/UrlRealmsTest.o $(URL_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
+$(BUILD_DIR)/UrlRealmsTest: $(OBJ_DIR)/tests/UrlRealmsTest.o $(URL_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
-	@$(CXX) $(CXXFLAGS) -o $@ $^
+	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
 
-$(BUILD_DIR)/WptTest: $(OBJ_DIR)/tests/WptTest.o $(URL_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
+$(BUILD_DIR)/WptTest: $(OBJ_DIR)/tests/WptTest.o $(URL_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
-	@$(CXX) $(CXXFLAGS) -o $@ $^
+	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
 
 $(BUILD_DIR)/GenIdnaTables: tools/GenIdnaTables.cpp
 	@mkdir -p $(BUILD_DIR)
 	@echo "[BUILD] $<"
 	@$(CXX) -std=c++20 -Wall -Wextra -O2 -o $@ $<
 
-PORTABLE_TESTS = UrlTest SearchParamsTest ValidationErrorTest NormalizerTest PublicSuffixTest CookiesTest HttpCacheTest Http1ParserTest ContentDecoderTest AddressRaceTest HstsTest
+# headers-no-cors needs Request, which is not here yet.
+WPT_FETCH = $(filter-out %/headers-no-cors.any.js,$(wildcard tests/wpt/fetch/api/headers/*.any.js))
+
+PORTABLE_TESTS = UrlTest SearchParamsTest ValidationErrorTest NormalizerTest PublicSuffixTest CookiesTest HttpCacheTest FetchHeadersTest Http1ParserTest ContentDecoderTest AddressRaceTest HstsTest
 NET_TESTS = LoopTest ResolverTest NetTest HttpClientTest TlsTest Http2Test
 QUANTA_TESTS = UrlBindingsTest UrlRealmsTest
 ifeq ($(PLATFORM),linux)
@@ -170,7 +177,7 @@ test: $(addprefix $(BUILD_DIR)/,$(TESTS)) $(if $(filter linux,$(PLATFORM)),$(BUI
 	@for t in $(TESTS); do $(BUILD_DIR)/$$t || exit 1; done
 ifeq ($(PLATFORM),linux)
 	@for t in $(NET_TESTS); do SOLAR_LOOP_BACKEND=readiness $(BUILD_DIR)/$$t || exit 1; done
-	@$(BUILD_DIR)/WptTest $(wildcard tests/wpt/url/*.any.js)
+	@$(BUILD_DIR)/WptTest $(wildcard tests/wpt/url/*.any.js) $(WPT_FETCH)
 endif
 
 # The tests that do not need Quanta, built with AddressSanitizer, UndefinedBehaviorSanitizer and
@@ -192,6 +199,8 @@ asan-test:
 	@$(CXX) $(ASAN_FLAGS) -o $(BUILD_DIR)/asan/CookiesTest tests/CookiesTest.cpp src/net/Cookies.cpp src/net/HttpDate.cpp $(ASAN_URL) && $(BUILD_DIR)/asan/CookiesTest
 	@echo "[ASAN] HttpCacheTest"
 	@$(CXX) $(ASAN_FLAGS) -o $(BUILD_DIR)/asan/HttpCacheTest tests/HttpCacheTest.cpp src/net/HttpCache.cpp src/net/HttpDate.cpp src/net/Http1Parser.cpp && $(BUILD_DIR)/asan/HttpCacheTest
+	@echo "[ASAN] FetchHeadersTest"
+	@$(CXX) $(ASAN_FLAGS) -o $(BUILD_DIR)/asan/FetchHeadersTest tests/FetchHeadersTest.cpp src/net/FetchHeaders.cpp && $(BUILD_DIR)/asan/FetchHeadersTest
 	@echo "[ASAN] AddressRaceTest"
 	@$(CXX) $(ASAN_FLAGS) -o $(BUILD_DIR)/asan/AddressRaceTest tests/AddressRaceTest.cpp src/net/AddressRace.cpp && $(BUILD_DIR)/asan/AddressRaceTest
 	@echo "[ASAN] Http1ParserTest"

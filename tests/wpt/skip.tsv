@@ -3,3 +3,9 @@ urlencoded-parser.any.js	response.formData()	needs the Fetch API
 urlsearchparams-constructor.any.js	URLSearchParams constructor, FormData.	needs FormData
 urlsearchparams-constructor.any.js	URLSearchParams constructor, DOMException as argument	needs DOMException
 IdnaTestV2.any.js	ToASCII("𾢬	assigned in Unicode 18.0, which WPT's expectations predate
+headers-basic.any.js	Check keys method	Quanta: [][Symbol.iterator]() does not reach Iterator.prototype, so no host iterator can share its chain
+headers-basic.any.js	Check values method	Quanta: [][Symbol.iterator]() does not reach Iterator.prototype, so no host iterator can share its chain
+headers-basic.any.js	Check entries method	Quanta: [][Symbol.iterator]() does not reach Iterator.prototype, so no host iterator can share its chain
+headers-record.any.js	Basic operation with	needs [[OwnPropertyKeys]] and [[GetOwnProperty]] from Quanta, to convert a record in the observable order
+headers-record.any.js	Correct operation ordering	needs [[OwnPropertyKeys]] and [[GetOwnProperty]] from Quanta, to convert a record in the observable order
+headers-record.any.js	Operation with non-enumerable Symbol keys	needs [[OwnPropertyKeys]] and [[GetOwnProperty]] from Quanta, to convert a record in the observable order

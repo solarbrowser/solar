@@ -10,6 +10,7 @@
 #include "solar/net/ConnectRace.h"
 #include "solar/net/Http2.h"
 #include "solar/net/Socket.h"
+#include "solar/net/FetchHeaders.h"
 #include "solar/url/Origin.h"
 #include "solar/url/PublicSuffix.h"
 #include "solar/url/Parser.h"
@@ -89,13 +90,6 @@ std::string RefuseHeader(const std::string& name, const std::string& value) {
     if (EqualsIgnoreCase(name, forbidden)) return "the " + name + " header is not the caller's to set";
   }
   return "";
-}
-
-// The Fetch Standard decodes a Location header as Latin-1 before parsing it as a URL.
-std::string IsomorphicDecode(std::string_view bytes) {
-  std::string out;
-  for (char c : bytes) url::AppendUtf8(out, static_cast<unsigned char>(c));
-  return out;
 }
 
 // RFC 9110 §9.2.1: methods that ask for something and change nothing.

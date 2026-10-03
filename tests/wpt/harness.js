@@ -59,16 +59,31 @@
     return skips.some((prefix) => String(name).startsWith(prefix));
   }
 
+  // Setup code is just run; a test file that names its setup tests asynchronously is not supported.
+  globalThis.setup = (func) => { if (typeof func === 'function') func(); };
+
+  // What testharness passes to a test as `this` and as the argument of a promise test.
+  const makeTestObject = () => {
+    const cleanups = [];
+    return {
+      add_cleanup: (f) => cleanups.push(f),
+      runCleanups: () => { for (const f of cleanups.splice(0).reverse()) f(); },
+    };
+  };
+
   globalThis.test = (func, name) => {
     if (isSkipped(name)) {
       skipped++;
       return;
     }
+    const t = makeTestObject();
     try {
-      func();
+      func.call(t, t);
       results.push({ name, ok: true });
     } catch (e) {
       results.push({ name, ok: false, message: String(e && e.message !== undefined ? e.message : e) });
+    } finally {
+      t.runCleanups();
     }
   };
 
@@ -77,22 +92,28 @@
       skipped++;
       return;
     }
+    const t = makeTestObject();
     pending.push(
       Promise.resolve()
-        .then(() => func())
+        .then(() => func.call(t, t))
         .then(
           () => results.push({ name, ok: true }),
           (e) => results.push({ name, ok: false, message: String(e && e.message !== undefined ? e.message : e) })
         )
+        .then(() => t.runCleanups())
     );
   };
 
   // The subset-tests-by-key helper only narrows a run by a URL variant; there is none here.
   globalThis.subsetTestByKey = (key, testFunc, ...args) => testFunc(...args);
 
-  globalThis.fetch = (path) => {
-    const data = globalThis.__resources[String(path).split('/').pop()];
-    return Promise.resolve({ json: () => Promise.resolve(data) });
+  // The URL tests read their data with fetch("resources/..."), which here comes from the files
+  // tests/data holds. A real fetch, when the realm has one, still answers for everything else.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (path, ...rest) => {
+    const name = String(path).split('/').pop();
+    if (realFetch && !String(path).startsWith('resources/') && !(name in globalThis.__resources)) return realFetch(path, ...rest);
+    return Promise.resolve({ json: () => Promise.resolve(globalThis.__resources[name]) });
   };
 
   globalThis.__wptFinish = () => {
