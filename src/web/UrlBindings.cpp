@@ -12,9 +12,23 @@ bool RequireArguments(Quanta::Context& ctx, Quanta::Embed::Args args, size_t cou
   return false;
 }
 
-void InstallUrlApis(Quanta::Embed::Runtime& runtime) {
-  DefineUrlSearchParamsClass(runtime);
-  DefineUrlClass(runtime);
+namespace {
+
+// Realm and Runtime both offer GetContext and Evaluate, which is all setup needs.
+template <typename Host>
+void Install(Host& host) {
+  Quanta::Context& ctx = host.GetContext();
+  DefineUrlSearchParamsClass(ctx);
+  DefineUrlClass(ctx);
+
+  // Web IDL makes @@iterator the same function object as entries, and the embedding surface
+  // has no symbol-keyed definitions, so it is installed from script.
+  host.Evaluate("URLSearchParams.prototype[Symbol.iterator] = URLSearchParams.prototype.entries;");
 }
+
+}  // namespace
+
+void InstallUrlApis(Quanta::Embed::Realm& realm) { Install(realm); }
+void InstallUrlApis(Quanta::Embed::Runtime& runtime) { Install(runtime); }
 
 }  // namespace solar::web

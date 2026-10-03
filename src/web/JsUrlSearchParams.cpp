@@ -14,8 +14,12 @@ using Quanta::Value;
 
 namespace {
 
-Object* g_prototype = nullptr;
-Object* g_iteratorPrototype = nullptr;
+// The prototypes live in the realm, under these keys, so a second realm does not replace them.
+char g_prototypeKey;
+char g_iteratorPrototypeKey;
+
+Object* Prototype(Context& ctx) { return static_cast<Object*>(qe::GetRealmData(ctx, &g_prototypeKey)); }
+Object* IteratorPrototype(Context& ctx) { return static_cast<Object*>(qe::GetRealmData(ctx, &g_iteratorPrototypeKey)); }
 
 enum class IterationKind { Entries, Keys, Values };
 
@@ -160,14 +164,13 @@ Value Construct(Context& ctx, Value, qe::Args args, Value newTarget) {
   Object* prototype = qe::PrototypeFromNewTarget(ctx, newTarget);
   if (qe::HasException(ctx)) return qe::Undefined();
 
-  JsUrlSearchParams* params = Heap::Allocate<JsUrlSearchParams>();
+  JsUrlSearchParams* params = AllocateSearchParams(prototype ? prototype : Prototype(ctx), IteratorPrototype(ctx));
   if (fromObject) {
     params->own.emplace();
     for (const Pair& pair : pairs) params->own->Append(pair.first, pair.second);
   } else {
     params->own.emplace(init);
   }
-  params->initialize_prototype(prototype ? prototype : g_prototype);
   return qe::FromObject(params);
 }
 
@@ -293,7 +296,7 @@ Value MakeIterator(Context& ctx, Value thisValue, qe::Args, Value) {
   JsUrlSearchParamsIterator* iterator = Heap::Allocate<JsUrlSearchParamsIterator>();
   iterator->target = self;
   iterator->kind = Kind;
-  iterator->initialize_prototype(g_iteratorPrototype);
+  iterator->initialize_prototype(self->iteratorPrototype);
   return qe::FromObject(iterator);
 }
 
@@ -333,19 +336,26 @@ Value IllegalConstructor(Context& ctx, Value, qe::Args, Value) {
 
 }  // namespace
 
-Object* UrlSearchParamsPrototype() { return g_prototype; }
+Object* UrlSearchParamsPrototype(Context& ctx) { return Prototype(ctx); }
 
-void DefineUrlSearchParamsClass(qe::Runtime& runtime) {
-  Context& ctx = runtime.GetContext();
+Object* UrlSearchParamsIteratorPrototype(Context& ctx) { return IteratorPrototype(ctx); }
 
+JsUrlSearchParams* AllocateSearchParams(Object* prototype, Object* iteratorPrototype) {
+  JsUrlSearchParams* params = Heap::Allocate<JsUrlSearchParams>();
+  params->iteratorPrototype = iteratorPrototype;
+  params->initialize_prototype(prototype);
+  return params;
+}
+
+void DefineUrlSearchParamsClass(Context& ctx) {
   qe::ClassRef iterator = qe::DefineClass(ctx, "URLSearchParams Iterator", IllegalConstructor, 0,
                                           qe::GetIteratorPrototype(ctx));
-  g_iteratorPrototype = iterator.prototype;
+  qe::SetRealmData(ctx, &g_iteratorPrototypeKey, iterator.prototype);
   qe::DefineMethod(iterator.prototype, "next", IteratorNext, 0);
   qe::DefineToStringTag(iterator.prototype, "URLSearchParams Iterator");
 
   qe::ClassRef params = qe::DefineClass(ctx, "URLSearchParams", Construct, 0);
-  g_prototype = params.prototype;
+  qe::SetRealmData(ctx, &g_prototypeKey, params.prototype);
 
   qe::DefineAccessor(params.prototype, "size", GetSize, nullptr);
   qe::DefineMethod(params.prototype, "append", Append, 2);
@@ -361,10 +371,6 @@ void DefineUrlSearchParamsClass(qe::Runtime& runtime) {
   qe::DefineMethod(params.prototype, "keys", MakeIterator<IterationKind::Keys>, 0);
   qe::DefineMethod(params.prototype, "values", MakeIterator<IterationKind::Values>, 0);
   qe::DefineGlobal(ctx, "URLSearchParams", params.constructor);
-
-  // Web IDL makes @@iterator the same function object as entries, and the embedding surface
-  // has no symbol-keyed definitions, so it is installed from script.
-  runtime.Evaluate("URLSearchParams.prototype[Symbol.iterator] = URLSearchParams.prototype.entries;");
 }
 
 }  // namespace solar::web

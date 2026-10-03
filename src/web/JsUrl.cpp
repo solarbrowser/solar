@@ -13,7 +13,10 @@ using Quanta::Value;
 
 namespace {
 
-Object* g_prototype = nullptr;
+// The prototype lives in the realm, under this key, so a second realm does not replace it.
+char g_prototypeKey;
+
+Object* Prototype(Context& ctx) { return static_cast<Object*>(qe::GetRealmData(ctx, &g_prototypeKey)); }
 
 JsUrl* This(Context& ctx, const Value& thisValue) {
   JsUrl* self = DOMObject::Cast<JsUrl>(thisValue);
@@ -21,9 +24,11 @@ JsUrl* This(Context& ctx, const Value& thisValue) {
   return self;
 }
 
-JsUrl* Allocate(std::unique_ptr<url::UrlObject> url, Object* prototype) {
+JsUrl* Allocate(Context& ctx, std::unique_ptr<url::UrlObject> url, Object* prototype) {
   JsUrl* js = Heap::Allocate<JsUrl>();
   js->url = std::move(url);
+  js->queryPrototype = UrlSearchParamsPrototype(ctx);
+  js->queryIteratorPrototype = UrlSearchParamsIteratorPrototype(ctx);
   js->initialize_prototype(prototype);
   return js;
 }
@@ -55,7 +60,7 @@ Value Construct(Context& ctx, Value, qe::Args args, Value newTarget) {
 
   Object* prototype = qe::PrototypeFromNewTarget(ctx, newTarget);
   if (qe::HasException(ctx)) return qe::Undefined();
-  return qe::FromObject(Allocate(std::move(url), prototype ? prototype : g_prototype));
+  return qe::FromObject(Allocate(ctx, std::move(url), prototype ? prototype : Prototype(ctx)));
 }
 
 Value Parse(Context& ctx, Value, qe::Args args, Value) {
@@ -67,7 +72,7 @@ Value Parse(Context& ctx, Value, qe::Args args, Value) {
 
   std::unique_ptr<url::UrlObject> url = url::UrlObject::Create(input, base);
   if (!url) return qe::Null();
-  return qe::FromObject(Allocate(std::move(url), g_prototype));
+  return qe::FromObject(Allocate(ctx, std::move(url), Prototype(ctx)));
 }
 
 Value CanParse(Context& ctx, Value, qe::Args args, Value) {
@@ -110,9 +115,8 @@ Value GetSearchParams(Context& ctx, Value thisValue, qe::Args, Value) {
   if (!self) return qe::Undefined();
 
   if (!self->searchParams) {
-    JsUrlSearchParams* params = Heap::Allocate<JsUrlSearchParams>();
+    JsUrlSearchParams* params = AllocateSearchParams(self->queryPrototype, self->queryIteratorPrototype);
     params->owner = self;
-    params->initialize_prototype(UrlSearchParamsPrototype());
     self->searchParams = params;
     // self may already have survived a collection, which would then not trace it again.
     self->NoteWrite();
@@ -122,11 +126,9 @@ Value GetSearchParams(Context& ctx, Value thisValue, qe::Args, Value) {
 
 }  // namespace
 
-void DefineUrlClass(qe::Runtime& runtime) {
-  Context& ctx = runtime.GetContext();
-
+void DefineUrlClass(Context& ctx) {
   qe::ClassRef urlClass = qe::DefineClass(ctx, "URL", Construct, 1);
-  g_prototype = urlClass.prototype;
+  qe::SetRealmData(ctx, &g_prototypeKey, urlClass.prototype);
 
   qe::DefineStaticMethod(urlClass.constructor, "parse", Parse, 1);
   qe::DefineStaticMethod(urlClass.constructor, "canParse", CanParse, 1);
