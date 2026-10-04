@@ -204,6 +204,8 @@ $(BUILD_DIR)/GenIdnaTables: tools/GenIdnaTables.cpp
 
 WPT_FETCH = $(wildcard tests/wpt/fetch/api/headers/*.any.js tests/wpt/fetch/api/request/*.any.js tests/wpt/fetch/api/response/*.any.js)
 WPT_STREAMS = $(wildcard tests/wpt/streams/*.any.js tests/wpt/streams/piping/*.any.js tests/wpt/streams/readable-byte-streams/*.any.js tests/wpt/streams/readable-streams/*.any.js tests/wpt/streams/transform-streams/*.any.js tests/wpt/streams/writable-streams/*.any.js)
+# The WPT pages (dom/nodes, dom/ranges) that pass whole; a page is added to the list when it does.
+WPT_PAGES = $(shell cat tests/wpt/dom/passing.txt)
 WPT_DOM = $(wildcard tests/dom/*.any.js tests/wpt/dom/abort/*.any.js tests/wpt/dom/events/*.any.js tests/wpt/webidl/*.any.js tests/wpt/encoding/*.any.js tests/wpt/encoding/streams/*.any.js tests/wpt/FileAPI/blob/*.any.js tests/wpt/FileAPI/file/*.any.js tests/wpt/xhr/formdata/*.any.js)
 
 PORTABLE_TESTS = HtmlTokenizerTest UrlTest SearchParamsTest ValidationErrorTest NormalizerTest PublicSuffixTest CookiesTest HttpCacheTest FetchHeadersTest CorsTest Http1ParserTest ContentDecoderTest AddressRaceTest HstsTest
@@ -221,7 +223,7 @@ test: $(addprefix $(BUILD_DIR)/,$(TESTS)) $(if $(filter linux,$(PLATFORM)),$(BUI
 	@for t in $(TESTS); do $(BUILD_DIR)/$$t || exit 1; done
 ifeq ($(PLATFORM),linux)
 	@for t in $(NET_TESTS) FetchBindingsTest; do SOLAR_LOOP_BACKEND=readiness $(BUILD_DIR)/$$t || exit 1; done
-	@$(BUILD_DIR)/WptTest $(wildcard tests/wpt/url/*.any.js) $(WPT_DOM) $(WPT_FETCH) $(WPT_STREAMS)
+	@$(BUILD_DIR)/WptTest $(wildcard tests/wpt/url/*.any.js) $(WPT_DOM) $(WPT_FETCH) $(WPT_STREAMS) $(WPT_PAGES)
 endif
 
 # The WPT tests and the fetch binding tests again with the collector run at every allocation. Quanta

@@ -2,6 +2,7 @@
 #include <string>
 
 #include "solar/dom/NodeBindingsInternal.h"
+#include "solar/dom/Range.h"
 
 namespace solar::dom {
 
@@ -345,8 +346,12 @@ void Normalize(Node* node) {
       if (text->data.empty()) {
         RemoveUnchecked(text);
       } else {
+        uint32_t length = NodeLength(text);
         while (next && next->nodeType == NodeType::Text) {
-          AppendCharacterData(text, static_cast<CharacterData*>(next)->data);
+          const std::string& joinedData = static_cast<CharacterData*>(next)->data;
+          AppendCharacterData(text, joinedData);
+          RangesJoinText(text, next, length);
+          length += Utf16Length(joinedData);
           Node* after = next->nextSibling;
           RemoveUnchecked(next);
           next = after;

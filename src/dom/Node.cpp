@@ -1,6 +1,7 @@
 #include "solar/dom/Node.h"
 
 #include "solar/dom/Mutation.h"
+#include "solar/dom/Range.h"
 
 #include <algorithm>
 
@@ -33,6 +34,7 @@ void Document::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(implementation);
   visitor.Mark(templateContentsOwner);
   visitor.Mark(currentScript);
+  visitor.Mark(selection);
   visitor.Mark(window);
 }
 
@@ -365,6 +367,7 @@ void RemoveImpl(Node* node, bool suppress) {
   Node* oldNext = node->nextSibling;
   const bool observed = HasMutationObservers();
   if (observed) RegisterTransientObservers(node, parent);
+  if (HasLiveRanges()) RangesBeforeRemove(node, parent, static_cast<uint32_t>(node->IndexInParent()));
   Unlink(node);
   if (observed && !suppress) QueueChildListRecord(parent, {}, {node}, oldPrevious, oldNext);
 }
@@ -385,6 +388,7 @@ void InsertImpl(Node* node, Node* parent, Node* child, bool suppress) {
   const std::vector<Node*> nodes = NodesOf(node);
   if (nodes.empty()) return;
   Node* previous = child ? child->previousSibling : parent->lastChild;
+  if (child && HasLiveRanges()) RangesBeforeInsert(parent, static_cast<uint32_t>(child->IndexInParent()), static_cast<uint32_t>(nodes.size()));
   if (node->IsFragment()) {
     for (Node* n : nodes) RemoveImpl(n, true);
   }
@@ -453,12 +457,108 @@ void SetTextContent(Context& ctx, Node* node, std::string text) {
   ReplaceAll(node, text.empty() ? nullptr : NewText(ctx, DocumentOf(node), std::move(text)));
 }
 
+// ---- Character data, in the UTF-16 units the standard counts it in ----
+// The data is kept as WTF-8: a lone surrogate is the three bytes its code point has, as the engine keeps it.
+
+std::u16string ToUtf16(std::string_view text) {
+  std::u16string out;
+  for (size_t at = 0; at < text.size();) {
+    const unsigned char lead = static_cast<unsigned char>(text[at]);
+    uint32_t point;
+    int length;
+    if (lead < 0x80) { point = lead; length = 1; }
+    else if (lead >= 0xF0) { point = lead & 0x07; length = 4; }
+    else if (lead >= 0xE0) { point = lead & 0x0F; length = 3; }
+    else { point = lead & 0x1F; length = 2; }
+    for (int i = 1; i < length && at + i < text.size(); ++i) point = (point << 6) | (static_cast<unsigned char>(text[at + i]) & 0x3F);
+    at += length;
+    if (point >= 0x10000) {
+      point -= 0x10000;
+      out.push_back(static_cast<char16_t>(0xD800 + (point >> 10)));
+      out.push_back(static_cast<char16_t>(0xDC00 + (point & 0x3FF)));
+    } else {
+      out.push_back(static_cast<char16_t>(point));
+    }
+  }
+  return out;
+}
+
+std::string FromUtf16(std::u16string_view text) {
+  std::string out;
+  const auto append = [&out](uint32_t point) {
+    if (point < 0x80) {
+      out.push_back(static_cast<char>(point));
+    } else if (point < 0x800) {
+      out.push_back(static_cast<char>(0xC0 | (point >> 6)));
+      out.push_back(static_cast<char>(0x80 | (point & 0x3F)));
+    } else if (point < 0x10000) {
+      out.push_back(static_cast<char>(0xE0 | (point >> 12)));
+      out.push_back(static_cast<char>(0x80 | ((point >> 6) & 0x3F)));
+      out.push_back(static_cast<char>(0x80 | (point & 0x3F)));
+    } else {
+      out.push_back(static_cast<char>(0xF0 | (point >> 18)));
+      out.push_back(static_cast<char>(0x80 | ((point >> 12) & 0x3F)));
+      out.push_back(static_cast<char>(0x80 | ((point >> 6) & 0x3F)));
+      out.push_back(static_cast<char>(0x80 | (point & 0x3F)));
+    }
+  };
+  for (size_t i = 0; i < text.size(); ++i) {
+    const char16_t unit = text[i];
+    if (unit >= 0xD800 && unit <= 0xDBFF && i + 1 < text.size() && text[i + 1] >= 0xDC00 && text[i + 1] <= 0xDFFF) {
+      append(0x10000 + ((unit - 0xD800) << 10) + (text[i + 1] - 0xDC00));
+      ++i;
+    } else {
+      append(unit);
+    }
+  }
+  return out;
+}
+
+uint32_t Utf16Length(std::string_view text) { return static_cast<uint32_t>(ToUtf16(text).size()); }
+
+uint32_t NodeLength(const Node* node) {
+  switch (node->nodeType) {
+    case NodeType::DocumentType:
+    case NodeType::Attribute:
+      return 0;
+    case NodeType::Text:
+    case NodeType::CdataSection:
+    case NodeType::ProcessingInstruction:
+    case NodeType::Comment:
+      return Utf16Length(static_cast<const CharacterData*>(node)->data);
+    default:
+      return static_cast<uint32_t>(node->ChildCount());
+  }
+}
+
+std::optional<DomError> ReplaceData(CharacterData* node, uint32_t offset, uint32_t count, std::string_view replacement) {
+  std::u16string units = ToUtf16(node->data);
+  if (offset > units.size()) {
+    return DomError{"IndexSizeError", "The offset " + std::to_string(offset) + " is larger than the node's length (" + std::to_string(units.size()) + ")."};
+  }
+  if (count > units.size() - offset) count = static_cast<uint32_t>(units.size() - offset);
+  const std::u16string inserted = ToUtf16(replacement);
+  if (HasMutationObservers()) QueueCharacterDataRecord(node, node->data);
+  units.replace(offset, count, inserted);
+  node->data = FromUtf16(units);
+  if (HasLiveRanges()) RangesReplaceData(node, offset, count, static_cast<uint32_t>(inserted.size()));
+  return std::nullopt;
+}
+
 void SetCharacterData(CharacterData* node, std::string data) {
+  if (HasLiveRanges()) {
+    ReplaceData(node, 0, Utf16Length(node->data), data);
+    return;
+  }
   if (HasMutationObservers()) QueueCharacterDataRecord(node, node->data);
   node->data = std::move(data);
 }
 
 void AppendCharacterData(CharacterData* node, std::string_view data) {
+  if (HasLiveRanges()) {
+    ReplaceData(node, Utf16Length(node->data), 0, data);
+    return;
+  }
   if (HasMutationObservers()) QueueCharacterDataRecord(node, node->data);
   node->data += data;
 }

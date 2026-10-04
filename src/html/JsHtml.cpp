@@ -283,6 +283,16 @@ Value GetDefaultView(Context& ctx, Value t, qe::Args, Value) {
 // __solarDocument() and __solarSetWindow(target): what the window's script is made of.
 Value GlobalDocument(Context& ctx, Value, qe::Args, Value) { return qe::FromObject(dom::AssociatedDocument(ctx)); }
 
+// __solarSetDocumentUrl(url): where a fragment navigation moves the page's address.
+Value SetDocumentUrl(Context& ctx, Value, qe::Args args, Value) {
+  dom::Document* document = dom::AssociatedDocument(ctx);
+  if (document && !args.empty()) {
+    document->url = qe::ToWtf8(ctx, args[0]);
+    document->NoteWrite();
+  }
+  return qe::Undefined();
+}
+
 Value SetWindowTarget(Context& ctx, Value, qe::Args args, Value) {
   dom::Document* document = dom::AssociatedDocument(ctx);
   web::JsEventTarget* target = args.empty() ? nullptr : DOMObject::Cast<web::JsEventTarget>(args[0]);
@@ -311,6 +321,7 @@ void Install(Host& host) {
   qe::DefineAccessor(document, "defaultView", GetDefaultView, nullptr);
   qe::DefineGlobalFunction(ctx, "__solarDocument", GlobalDocument, 0);
   qe::DefineGlobalFunction(ctx, "__solarSetWindow", SetWindowTarget, 1);
+  qe::DefineGlobalFunction(ctx, "__solarSetDocumentUrl", SetDocumentUrl, 1);
 
   qe::ClassRef parser = qe::DefineClass(ctx, "DOMParser", ConstructDomParser, 0);
   qe::SetRealmData(ctx, &g_domParserKey, parser.prototype);
@@ -329,12 +340,37 @@ const char* const kWindowScript = R"JS(
   const target = new EventTarget();
   __solarSetWindow(target);
   const getDocument = __solarDocument;
+  const setDocumentUrl = __solarSetDocumentUrl;
   delete globalThis.__solarSetWindow;
   delete globalThis.__solarDocument;
+  delete globalThis.__solarSetDocumentUrl;
+  // window.location: the address of the document, as the parts of a URL. Going to another document is not
+  // something a page can do yet, so only the fragment can change.
+  const url = () => new URL(getDocument().URL);
+  const fragmentOnly = (next) => {
+    const current = url();
+    const target = new URL(next, current);
+    const withoutHash = (u) => { const copy = new URL(u.href); copy.hash = ""; return copy.href; };
+    if (withoutHash(current) === withoutHash(target)) setDocumentUrl(target.href);
+  };
+  const location = {};
+  for (const name of ["origin", "protocol", "host", "hostname", "port", "pathname", "search"]) {
+    Object.defineProperty(location, name, { get() { return url()[name]; }, set(value) {}, enumerable: true, configurable: false });
+  }
+  Object.defineProperty(location, "href", { get() { return url().href; }, set(value) { fragmentOnly(String(value)); }, enumerable: true, configurable: false });
+  Object.defineProperty(location, "hash", { get() { return url().hash; }, set(value) { const next = url(); next.hash = value; setDocumentUrl(next.href); }, enumerable: true, configurable: false });
+  for (const name of ["assign", "replace"]) {
+    Object.defineProperty(location, name, { value: function (next) { fragmentOnly(String(next)); }, writable: false, enumerable: true, configurable: false });
+  }
+  Object.defineProperty(location, "reload", { value: function () {}, writable: false, enumerable: true, configurable: false });
+  Object.defineProperty(location, "toString", { value: function () { return url().href; }, writable: false, enumerable: true, configurable: false });
+  Object.defineProperty(globalThis, "location", { get() { return location; }, set(value) { fragmentOnly(String(value)); }, enumerable: true, configurable: false });
+  Object.defineProperty(Document.prototype, "location", { get() { return this === getDocument() ? location : null; }, set(value) { if (this === getDocument()) fragmentOnly(String(value)); }, enumerable: true, configurable: true });
   Object.defineProperty(globalThis, "document", { get: getDocument, set: undefined, enumerable: true, configurable: true });
   for (const name of ["window", "self", "top", "parent", "frames"]) {
     Object.defineProperty(globalThis, name, { value: globalThis, writable: true, enumerable: true, configurable: true });
   }
+  Object.defineProperty(globalThis, "getSelection", { value: function getSelection() { return getDocument().getSelection(); }, writable: true, enumerable: true, configurable: true });
   for (const name of ["addEventListener", "removeEventListener", "dispatchEvent"]) {
     const method = EventTarget.prototype[name];
     Object.defineProperty(globalThis, name, { value: function (...args) { return method.apply(target, args); }, writable: true, enumerable: true, configurable: true });

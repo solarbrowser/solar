@@ -2,6 +2,7 @@
 
 #include "solar/dom/Mutation.h"
 #include "solar/dom/NodeBindingsInternal.h"
+#include "solar/dom/Range.h"
 
 namespace solar::dom {
 
@@ -17,6 +18,8 @@ void Install(Host& host) {
   DefineElementClass(ctx);
   DefineDocumentClasses(ctx);
   DefineMutationClasses(ctx);
+  DefineRangeClasses(ctx);
+  DefineSelectionClass(ctx);
 
   // What Web IDL has and the embedding surface cannot say: the constants, which are on the interface
   // object and its prototype, and the static side of each interface inheriting its parent's.
@@ -35,6 +38,10 @@ void Install(Host& host) {
         DOCUMENT_POSITION_DISCONNECTED: 1, DOCUMENT_POSITION_PRECEDING: 2, DOCUMENT_POSITION_FOLLOWING: 4,
         DOCUMENT_POSITION_CONTAINS: 8, DOCUMENT_POSITION_CONTAINED_BY: 16, DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32,
       };
+      define(Range, { START_TO_START: 0, START_TO_END: 1, END_TO_END: 2, END_TO_START: 3 });
+      define(Range.prototype, { START_TO_START: 0, START_TO_END: 1, END_TO_END: 2, END_TO_START: 3 });
+      Object.setPrototypeOf(Range, AbstractRange);
+      Object.setPrototypeOf(StaticRange, AbstractRange);
       define(Node, nodeTypes);
       define(Node.prototype, nodeTypes);
       for (const [child, parent] of [[CharacterData, Node], [Text, CharacterData], [CDATASection, Text], [ProcessingInstruction, CharacterData],

@@ -1,6 +1,7 @@
 #include <string>
 
 #include "solar/dom/NodeBindingsInternal.h"
+#include "solar/dom/Range.h"
 
 namespace solar::dom {
 
@@ -14,64 +15,6 @@ namespace {
 
 char g_characterDataKey;
 
-// ---- UTF-16 offsets ----
-// The standard counts and cuts character data in UTF-16 code units; the data is kept as WTF-8. A lone
-// surrogate is kept as the three bytes its code point has (WTF-8), as the engine keeps it.
-
-std::u16string ToUtf16(std::string_view text) {
-  std::u16string out;
-  for (size_t at = 0; at < text.size();) {
-    const unsigned char lead = static_cast<unsigned char>(text[at]);
-    uint32_t point;
-    int length;
-    if (lead < 0x80) { point = lead; length = 1; }
-    else if (lead >= 0xF0) { point = lead & 0x07; length = 4; }
-    else if (lead >= 0xE0) { point = lead & 0x0F; length = 3; }
-    else { point = lead & 0x1F; length = 2; }
-    for (int i = 1; i < length && at + i < text.size(); ++i) point = (point << 6) | (static_cast<unsigned char>(text[at + i]) & 0x3F);
-    at += length;
-    if (point >= 0x10000) {
-      point -= 0x10000;
-      out.push_back(static_cast<char16_t>(0xD800 + (point >> 10)));
-      out.push_back(static_cast<char16_t>(0xDC00 + (point & 0x3FF)));
-    } else {
-      out.push_back(static_cast<char16_t>(point));
-    }
-  }
-  return out;
-}
-
-std::string FromUtf16(std::u16string_view text) {
-  std::string out;
-  const auto append = [&out](uint32_t point) {
-    if (point < 0x80) {
-      out.push_back(static_cast<char>(point));
-    } else if (point < 0x800) {
-      out.push_back(static_cast<char>(0xC0 | (point >> 6)));
-      out.push_back(static_cast<char>(0x80 | (point & 0x3F)));
-    } else if (point < 0x10000) {
-      out.push_back(static_cast<char>(0xE0 | (point >> 12)));
-      out.push_back(static_cast<char>(0x80 | ((point >> 6) & 0x3F)));
-      out.push_back(static_cast<char>(0x80 | (point & 0x3F)));
-    } else {
-      out.push_back(static_cast<char>(0xF0 | (point >> 18)));
-      out.push_back(static_cast<char>(0x80 | ((point >> 12) & 0x3F)));
-      out.push_back(static_cast<char>(0x80 | ((point >> 6) & 0x3F)));
-      out.push_back(static_cast<char>(0x80 | (point & 0x3F)));
-    }
-  };
-  for (size_t i = 0; i < text.size(); ++i) {
-    const char16_t unit = text[i];
-    if (unit >= 0xD800 && unit <= 0xDBFF && i + 1 < text.size() && text[i + 1] >= 0xDC00 && text[i + 1] <= 0xDFFF) {
-      append(0x10000 + ((unit - 0xD800) << 10) + (text[i + 1] - 0xDC00));
-      ++i;
-    } else {
-      append(unit);
-    }
-  }
-  return out;
-}
-
 bool Missing(Context& ctx, qe::Args args, size_t count, const char* interface, const char* member) {
   if (args.size() >= count) return false;
   qe::ThrowTypeError(ctx, std::string("Failed to execute '") + member + "' on '" + interface + "': " + std::to_string(count) + " argument" + (count == 1 ? "" : "s") +
@@ -84,16 +27,12 @@ Value IllegalConstructor(Context& ctx, Value, qe::Args, Value) {
   return qe::Undefined();
 }
 
-// "replace data": the offset and count are code units; false, with the error raised, if the offset is past the end.
+// "replace data": false, with the error raised, if the offset is past the end.
 bool ReplaceData(Context& ctx, CharacterData* node, uint32_t offset, uint32_t count, std::string_view replacement) {
-  std::u16string units = ToUtf16(node->data);
-  if (offset > units.size()) {
-    Throw(ctx, {"IndexSizeError", "The offset " + std::to_string(offset) + " is larger than the node's length (" + std::to_string(units.size()) + ")."});
+  if (auto error = dom::ReplaceData(node, offset, count, replacement)) {
+    Throw(ctx, *error);
     return false;
   }
-  if (count > units.size() - offset) count = static_cast<uint32_t>(units.size() - offset);
-  units.replace(offset, count, ToUtf16(replacement));
-  SetCharacterData(node, FromUtf16(units));
   return true;
 }
 
@@ -214,7 +153,10 @@ Value SplitText(Context& ctx, Value t, qe::Args args, Value) {
   }
   const uint32_t count = static_cast<uint32_t>(units.size() - offset);
   CharacterData* created = NewText(ctx, self->nodeDocument, FromUtf16(std::u16string_view(units).substr(offset, count)));
-  if (self->parentNode) InsertUnchecked(created, self->parentNode, self->nextSibling);
+  if (self->parentNode) {
+    InsertUnchecked(created, self->parentNode, self->nextSibling);
+    RangesSplitText(self, created, offset);
+  }
   ReplaceData(ctx, self, offset, count, "");
   return qe::FromObject(created);
 }

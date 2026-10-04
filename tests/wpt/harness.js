@@ -158,6 +158,14 @@
     return skips.some((skip) => (skip.startsWith('*') ? String(name).includes(skip.slice(1)) : String(name).startsWith(skip)));
   }
 
+  // generate_tests(func, [[name, ...args], ...]): a test of each, which calls func with the args.
+  globalThis.generate_tests = (func, args, properties) => {
+    for (const row of args) {
+      const [name, ...params] = row;
+      globalThis.test(function () { return func.apply(this, params); }, name, properties);
+    }
+  };
+
   // Setup code is just run; a test file that names its setup tests asynchronously is not supported.
   globalThis.setup = (func) => { if (typeof func === 'function') func(); };
 

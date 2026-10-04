@@ -189,6 +189,8 @@ struct Document : Node {
   std::string readyState = "complete";
   // The script element that is running, for document.currentScript.
   Element* currentScript = nullptr;
+  // document.getSelection(): the same object each time.
+  Quanta::Object* selection = nullptr;
   // The window this document is the document of, which an event on the document goes on to; null for any other.
   web::JsEventTarget* window = nullptr;
 
@@ -258,6 +260,14 @@ void Adopt(Node* node, Document* document);
 
 // "replace all": makes `node` (null for none; a fragment's children) the only child of `parent`.
 void ReplaceAll(Node* parent, Node* node);
+// Character data counts and cuts in UTF-16 units, which these convert from and to the WTF-8 it is kept in.
+std::u16string ToUtf16(std::string_view text);
+std::string FromUtf16(std::u16string_view units);
+uint32_t Utf16Length(std::string_view text);
+// A node's length as the standard has it: its characters for character data, its children for the rest.
+uint32_t NodeLength(const Node* node);
+// "replace data": IndexSizeError if the offset is past the end. Live ranges and observers hear of it.
+std::optional<DomError> ReplaceData(CharacterData* node, uint32_t offset, uint32_t count, std::string_view replacement);
 // "replace data" with the whole of it, and the setting of an attribute's value and its appending to an element:
 // the changes the observers hear of. Native code that changes these goes through them.
 void SetCharacterData(CharacterData* node, std::string data);

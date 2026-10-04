@@ -14,6 +14,8 @@ using Quanta::DOMObject;
 using Quanta::Object;
 using Quanta::Value;
 
+void DefineStyleDeclaration(Quanta::Context& ctx);
+
 namespace {
 
 // The selector in `args[0]`, or nullopt with the exception pending.
@@ -98,6 +100,7 @@ Value Escape(Context& ctx, Value, qe::Args args, Value) {
 template <typename Host>
 void Install(Host& host) {
   Context& ctx = host.GetContext();
+  DefineStyleDeclaration(ctx);
   for (dom::Interface interface : {dom::Interface::Element, dom::Interface::Document, dom::Interface::DocumentFragment}) {
     Object* prototype = dom::InterfacePrototype(ctx, interface);
     qe::DefineMethod(prototype, "querySelector", QuerySelector, 1);
