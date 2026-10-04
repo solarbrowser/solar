@@ -25,6 +25,8 @@ void Node::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(nodeDocument);
   visitor.Mark(childNodesList);
   visitor.Mark(childrenList);
+  visitor.Mark(assignedSlot);
+  visitor.Mark(manualSlot);
   if (registrations) {
     for (const Registration& registration : *registrations) visitor.Mark(registration.observer);
   }
@@ -55,6 +57,9 @@ void Element::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(attributeMap);
   visitor.Mark(tokenList);
   visitor.Mark(templateContents);
+  visitor.Mark(shadowRoot);
+  for (Node* node : assignedNodes) visitor.Mark(node);
+  for (Node* node : manuallyAssignedNodes) visitor.Mark(node);
 }
 
 // ---- Making nodes ----
@@ -68,7 +73,7 @@ void NoteTreeChange() { ++g_treeVersion; }
 
 namespace {
 
-char g_prototypeKeys[10];
+char g_prototypeKeys[11];
 
 char* PrototypeKey(Interface interface) { return &g_prototypeKeys[static_cast<int>(interface)]; }
 
@@ -77,9 +82,7 @@ T* Make(Context& ctx, Interface interface, NodeType type, Document* document) {
   T* node = Heap::Allocate<T>();
   node->nodeType = type;
   node->nodeDocument = document;
-  // An event goes on from a node to the node it is in.
-  node->eventParent = type == NodeType::Document ? [](web::JsEventTarget* target) -> web::JsEventTarget* { return static_cast<Document*>(target)->window; }
-                                                  : [](web::JsEventTarget* target) -> web::JsEventTarget* { return static_cast<Node*>(target)->parentNode; };
+  node->ops = NodeEventOps();
   node->initialize_prototype(InterfacePrototype(ctx, interface));
   return node;
 }
@@ -92,6 +95,7 @@ Object* InterfacePrototype(Context& ctx, Interface interface) { return static_ca
 
 Document* NewDocument(Context& ctx, bool isHtml) {
   Document* document = Make<Document>(ctx, Interface::Document, NodeType::Document, nullptr);
+  document->context = &ctx;
   document->isHtml = isHtml;
   document->contentType = isHtml ? "text/html" : "application/xml";
   return document;
@@ -229,6 +233,42 @@ DocumentType* Document::Doctype() const {
   return nullptr;
 }
 
+// ---- The names of the window ----
+
+// The names elements under `subtree` have for window[name]: ids, and the names of those that may have one.
+void WindowNamesOf(const Node* subtree, std::vector<std::string>& names) {
+  for (const Node* node = subtree; node; node = const_cast<Node*>(node)->NextInTree(subtree)) {
+    const Element* element = AsElement(node);
+    if (!element) continue;
+    if (const Attr* id = element->FindAttribute("", "id"); id && !id->value.empty()) names.push_back(id->value);
+    if (element->IsHtml() && (element->localName == "embed" || element->localName == "form" || element->localName == "img" || element->localName == "object")) {
+      if (const Attr* name = element->FindAttribute("", "name"); name && !name->value.empty()) names.push_back(name->value);
+    }
+  }
+}
+
+namespace {
+
+// Told when something under `node` has come or gone, in a document that has a window.
+void NoteWindowNames(Node* node, Document* document) {
+  if (!document || !document->window || !document->context) return;
+  std::vector<std::string> names;
+  WindowNamesOf(node, names);
+  for (const std::string& name : names) WindowNamesChanged(*document->context, name);
+}
+
+// An attribute that names an element for the window has changed.
+void NoteWindowAttribute(Element* element, const std::string& attribute, const std::string& namespaceUri, const std::optional<std::string>& oldValue,
+                         const std::optional<std::string>& newValue) {
+  if (!namespaceUri.empty() || (attribute != "id" && attribute != "name")) return;
+  Document* document = element->Root()->IsDocument() ? static_cast<Document*>(element->Root()) : nullptr;
+  if (!document || !document->window || !document->context) return;
+  if (oldValue && !oldValue->empty()) WindowNamesChanged(*document->context, *oldValue);
+  if (newValue && !newValue->empty()) WindowNamesChanged(*document->context, *newValue);
+}
+
+}  // namespace
+
 // ---- Insertion and removal ----
 
 namespace {
@@ -262,7 +302,7 @@ bool ElementPrecedes(const Node* child) {
 // that is going away, which does not count against the node that takes its place.
 std::optional<DomError> Validate(Node* node, Node* parent, Node* child, bool replacing) {
   if (!parent->IsDocument() && !parent->IsFragment() && !parent->IsElement()) return HierarchyRequest("The parent is not a Document, DocumentFragment or Element");
-  if (node->Contains(parent)) return HierarchyRequest("The new child contains the parent");
+  if (IsShadowIncludingInclusiveAncestor(node, parent)) return HierarchyRequest("The new child contains the parent");
   if (child && child->parentNode != parent) return DomError{"NotFoundError", "The child is not a child of this node"};
   if (!node->IsFragment() && !node->IsDocumentType() && !node->IsElement() && !node->IsCharacterData()) return HierarchyRequest("This node type cannot be inserted");
   if (node->IsText() && parent->IsDocument()) return HierarchyRequest("A Text node cannot be a child of a Document");
@@ -370,7 +410,11 @@ void RemoveImpl(Node* node, bool suppress) {
   if (observed) RegisterTransientObservers(node, parent);
   if (HasLiveRanges()) RangesBeforeRemove(node, parent, static_cast<uint32_t>(node->IndexInParent()));
   if (HasNodeIterators()) NodeIteratorsBeforeRemove(node);
+  Element* wasAssignedTo = node->assignedSlot;
+  Document* wasIn = node->Root()->IsDocument() ? static_cast<Document*>(node->Root()) : nullptr;
   Unlink(node);
+  if (wasIn) NoteWindowNames(node, wasIn);
+  if (HasShadowTrees()) ShadowAfterRemove(node, parent, wasAssignedTo);
   if (observed && !suppress) QueueChildListRecord(parent, {}, {node}, oldPrevious, oldNext);
 }
 
@@ -399,6 +443,8 @@ void InsertImpl(Node* node, Node* parent, Node* child, bool suppress) {
     if (n->parentNode) RemoveImpl(n, false);
     if (n->nodeDocument != document) SetDocumentOfTree(n, document);
     Link(n, parent, child);
+    if (HasShadowTrees()) ShadowAfterInsert(n, parent);
+    if (document && n->Root() == document) NoteWindowNames(n, document);
   }
   if (!suppress && HasMutationObservers()) QueueChildListRecord(parent, nodes, {}, previous, child);
 }
@@ -566,9 +612,13 @@ void AppendCharacterData(CharacterData* node, std::string_view data) {
 }
 
 void SetAttrValue(Attr* attribute, std::string value) {
-  if (attribute->ownerElement && HasMutationObservers()) QueueAttributeRecord(attribute->ownerElement, attribute->localName, attribute->namespaceUri, attribute->value);
+  Element* owner = attribute->ownerElement;
+  if (owner && HasMutationObservers()) QueueAttributeRecord(owner, attribute->localName, attribute->namespaceUri, attribute->value);
+  const std::string old = attribute->value;
   attribute->value = std::move(value);
   NoteTreeChange();
+  if (owner && HasShadowTrees()) ShadowAttributeChanged(owner, attribute->localName, attribute->namespaceUri, old, attribute->value);
+  if (owner) NoteWindowAttribute(owner, attribute->localName, attribute->namespaceUri, old, attribute->value);
 }
 
 void AppendAttr(Element* element, Attr* attribute) {
@@ -579,6 +629,8 @@ void AppendAttr(Element* element, Attr* attribute) {
   attribute->NoteWrite();
   NoteTreeChange();
   if (HasMutationObservers()) QueueAttributeRecord(element, attribute->localName, attribute->namespaceUri, std::nullopt);
+  if (HasShadowTrees()) ShadowAttributeChanged(element, attribute->localName, attribute->namespaceUri, std::nullopt, attribute->value);
+  NoteWindowAttribute(element, attribute->localName, attribute->namespaceUri, std::nullopt, attribute->value);
 }
 
 // ---- Clone, equality, position ----
@@ -607,6 +659,14 @@ Node* CloneNode(Context& ctx, Node* node, bool deep) {
         clone->attributes.push_back(attributeCopy);
       }
       clone->NoteWrite();
+      if (original->shadowRoot && original->shadowRoot->clonable) {
+        ShadowRoot* shadow = nullptr;
+        const ShadowRoot* source = original->shadowRoot;
+        if (!AttachShadow(ctx, clone, source->mode, source->slotAssignment, source->delegatesFocus, source->clonable, source->serializable, shadow) && shadow) {
+          shadow->declarative = source->declarative;
+          for (Node* child = source->firstChild; child; child = child->nextSibling) InsertUnchecked(CloneNode(ctx, child, true), shadow, nullptr);
+        }
+      }
       if (deep && original->templateContents && clone->templateContents) {
         for (Node* child = original->templateContents->firstChild; child; child = child->nextSibling) {
           InsertUnchecked(CloneNode(ctx, child, true), clone->templateContents, nullptr);
@@ -880,6 +940,7 @@ std::optional<DomError> SetAttributeNode(Element* element, Attr* attribute, Attr
     element->NoteWrite();
     NoteTreeChange();
     if (HasMutationObservers()) QueueAttributeRecord(element, attribute->localName, attribute->namespaceUri, old->value);
+    if (HasShadowTrees()) ShadowAttributeChanged(element, attribute->localName, attribute->namespaceUri, old->value, attribute->value);
   } else {
     AppendAttr(element, attribute);
   }
@@ -893,6 +954,8 @@ void RemoveAttributeNode(Element* element, Attr* attribute) {
   attribute->ownerElement = nullptr;
   attribute->NoteWrite();
   NoteTreeChange();
+  if (HasShadowTrees()) ShadowAttributeChanged(element, attribute->localName, attribute->namespaceUri, attribute->value, std::nullopt);
+  NoteWindowAttribute(element, attribute->localName, attribute->namespaceUri, attribute->value, std::nullopt);
 }
 
 bool RemoveAttribute(Element* element, std::string_view name) {

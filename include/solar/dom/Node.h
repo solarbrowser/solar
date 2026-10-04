@@ -84,6 +84,9 @@ struct Node : web::JsEventTarget {
   // What script gets from childNodes and children, which is the same object each time.
   Quanta::Object* childNodesList = nullptr;
   Quanta::Object* childrenList = nullptr;
+  // Slottables (elements and text) have a slot they are assigned to, and one a script assigned them to by hand.
+  Element* assignedSlot = nullptr;
+  Element* manualSlot = nullptr;
   // The mutation observers that watch this node; none for nearly every node.
   std::unique_ptr<std::vector<Registration>> registrations;
 
@@ -133,9 +136,26 @@ struct DocumentType : Node {
 
 struct DocumentFragment : Node {
   using Parent = Node;
-  Element* host = nullptr;  // for the content of a <template>
+  Element* host = nullptr;  // for the content of a <template>, or the shadow host of a shadow root
+  bool isShadowRoot = false;
 
   void Visit(Quanta::Visitor& visitor);
+};
+
+enum class ShadowMode { Open, Closed };
+enum class SlotAssignment { Named, Manual };
+
+// A shadow root: the root of a tree of its own that an element, its host, carries beside its children.
+struct ShadowRoot : DocumentFragment {
+  using Parent = DocumentFragment;
+  ShadowMode mode = ShadowMode::Open;
+  SlotAssignment slotAssignment = SlotAssignment::Named;
+  bool delegatesFocus = false;
+  bool clonable = false;
+  bool serializable = false;
+  bool declarative = false;  // made by the parser, from a template
+  bool availableToElementInternals = false;
+  void Visit(Quanta::Visitor& visitor) { DocumentFragment::Visit(visitor); }
 };
 
 // An attribute: a node of its own, so that script can hold one and see it change.
@@ -163,6 +183,10 @@ struct Element : Node {
   Quanta::Object* tokenList = nullptr;
   // A template element's contents, which are not its children.
   DocumentFragment* templateContents = nullptr;
+  ShadowRoot* shadowRoot = nullptr;
+  // A slot's: the slottables it has been given, and those a script asked it to take in (slot assignment "manual").
+  std::vector<Node*> assignedNodes;
+  std::vector<Node*> manuallyAssignedNodes;
 
   std::string QualifiedName() const { return prefix.empty() ? localName : prefix + ":" + localName; }
   // `name` is compared as the standard does for a name on an HTML element in an HTML document: after
@@ -189,6 +213,8 @@ struct Document : Node {
   std::string readyState = "complete";
   // The script element that is running, for document.currentScript.
   Element* currentScript = nullptr;
+  // The context the document was made in, which the algorithms that must queue a microtask need.
+  Quanta::Context* context = nullptr;
   // document.getSelection(): the same object each time.
   Quanta::Object* selection = nullptr;
   // The window this document is the document of, which an event on the document goes on to; null for any other.
@@ -208,7 +234,7 @@ inline const CharacterData* AsCharacterData(const Node* node) { return node && n
 // ---- Making nodes ----
 
 // The interfaces a node can have, for the prototype the realm's bindings give each.
-enum class Interface { Document, Element, HtmlElement, Text, CdataSection, ProcessingInstruction, Comment, DocumentType, DocumentFragment, Attr };
+enum class Interface { ShadowRoot, Document, Element, HtmlElement, Text, CdataSection, ProcessingInstruction, Comment, DocumentType, DocumentFragment, Attr };
 // What DefineClass made for `interface`; the DOM bindings record it, and a node made before they have
 // has none.
 void SetInterfacePrototype(Quanta::Context& ctx, Interface interface, Quanta::Object* prototype);
@@ -238,6 +264,45 @@ void NoteTreeChange();
 Quanta::Object* HtmlElementPrototype(Quanta::Context& ctx, std::string_view localName);
 void RegisterHtmlElementInterface(Quanta::Context& ctx, std::string_view localName, Quanta::Object* prototype);
 void SetUnknownHtmlElementInterface(Quanta::Context& ctx, Quanta::Object* prototype);
+
+// ---- Shadow trees ----
+// "attach a shadow root" to `element`, which has to be one that can host one: DomError if it is not.
+std::optional<DomError> AttachShadow(Quanta::Context& ctx, Element* element, ShadowMode mode, SlotAssignment slotAssignment, bool delegatesFocus, bool clonable, bool serializable,
+                                     ShadowRoot*& out);
+bool IsValidCustomElementName(std::string_view name);
+// Whether `a` is, or has, `b` in its shadow-including tree: a shadow-including inclusive ancestor of b (the
+// same as host-including).
+bool IsShadowIncludingInclusiveAncestor(const Node* a, const Node* b);
+// A node's root, but through shadow hosts: the root of the tree that hosts the shadow tree it is in.
+Node* ShadowIncludingRoot(Node* node);
+// "retarget": `a` as seen from `against`.
+Node* Retarget(Node* a, Node* against);
+// The shadow root a node is in the tree of, if it is in one.
+ShadowRoot* ContainingShadowRoot(Node* node);
+// Slots (https://dom.spec.whatwg.org/#finding-slots-and-slottables).
+bool IsSlot(const Node* node);
+bool IsSlottable(const Node* node);
+std::string SlotName(const Element* slot);
+Element* FindSlot(Node* slottable, bool open);
+std::vector<Node*> FindFlattenedSlottables(Element* slot);
+void AssignSlottablesForSlot(Element* slot);
+void AssignSlottablesForTree(Node* root);
+// What the tree algorithms tell the shadow trees (when there are any).
+bool HasShadowTrees();
+void ShadowAfterInsert(Node* node, Node* parent);
+void ShadowAfterRemove(Node* node, Node* parent, Element* wasAssignedTo);
+void ShadowAttributeChanged(Element* element, const std::string& name, const std::string& namespaceUri, const std::optional<std::string>& oldValue,
+                            const std::optional<std::string>& newValue);
+// The functions dispatch asks a node about its tree.
+const web::EventTargetOps* NodeEventOps();
+
+// The names a page's window gains and loses as its elements come and go, which the window's script follows.
+void WindowNamesOf(const Node* subtree, std::vector<std::string>& names);
+// Whether `element` is named `name` for window[name]: its id does, or its name does if it is one of the few that may be.
+bool HasWindowName(const Element* element, const std::string& name);
+// "named access on the Window object": a name that elements gain or lose, which the window's script follows.
+void WindowNamesChanged(Quanta::Context& ctx, const std::string& name);
+bool HasWindowNames();
 
 // ---- The tree ----
 // Each is the algorithm of that name in the standard. All but the last return the error the standard

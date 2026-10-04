@@ -39,7 +39,13 @@ std::string AttributeName(const dom::Attr* attribute) {
   return attribute->QualifiedName();
 }
 
-void SerializeInto(const Node* node, bool scripting, std::string& out);
+struct Options {
+  bool scripting = false;
+  bool serializableShadowRoots = false;
+  const std::vector<const dom::ShadowRoot*>* shadowRoots = nullptr;
+};
+
+void SerializeInto(const Node* node, const Options& options, std::string& out);
 
 bool TextIsLiteral(const Node* text, bool scripting) {
   const Element* parent = dom::AsElement(text->parentNode);
@@ -49,7 +55,8 @@ bool TextIsLiteral(const Node* text, bool scripting) {
 }
 
 // A node's own markup and what is under it.
-void SerializeOne(const Node* node, bool scripting, std::string& out) {
+void SerializeOne(const Node* node, const Options& options, std::string& out) {
+  const bool scripting = options.scripting;
   switch (node->nodeType) {
     case dom::NodeType::Element: {
       const Element* element = static_cast<const Element*>(node);
@@ -63,7 +70,7 @@ void SerializeOne(const Node* node, bool scripting, std::string& out) {
       }
       out += ">";
       if (IsVoid(element)) return;
-      SerializeInto(element, scripting, out);
+      SerializeInto(element, options, out);
       out += "</" + tagName + ">";
       return;
     }
@@ -88,27 +95,54 @@ void SerializeOne(const Node* node, bool scripting, std::string& out) {
   }
 }
 
-void SerializeInto(const Node* node, bool scripting, std::string& out) {
+void SerializeInto(const Node* node, const Options& options, std::string& out) {
   // An element that serializes as void has no children to give; a template's are its contents'.
   if (const Element* element = dom::AsElement(node)) {
     if (IsVoid(element)) return;
     if (element->namespaceUri == dom::kHtmlNamespace && element->localName == "template" && element->templateContents) node = element->templateContents;
+    if (const dom::ShadowRoot* shadow = element->shadowRoot) {
+      const bool listed = options.shadowRoots && std::find(options.shadowRoots->begin(), options.shadowRoots->end(), shadow) != options.shadowRoots->end();
+      if ((options.serializableShadowRoots && shadow->serializable) || listed) {
+        out += std::string("<template shadowrootmode=\"") + (shadow->mode == dom::ShadowMode::Open ? "open" : "closed") + "\"";
+        if (shadow->delegatesFocus) out += " shadowrootdelegatesfocus=\"\"";
+        if (shadow->serializable) out += " shadowrootserializable=\"\"";
+        if (shadow->slotAssignment == dom::SlotAssignment::Manual) out += " shadowrootslotassignment=\"manual\"";
+        if (shadow->clonable) out += " shadowrootclonable=\"\"";
+        out += ">";
+        SerializeInto(shadow, options, out);
+        out += "</template>";
+      }
+    }
   }
-  for (const Node* child = node->firstChild; child; child = child->nextSibling) SerializeOne(child, scripting, out);
+  for (const Node* child = node->firstChild; child; child = child->nextSibling) SerializeOne(child, options, out);
 }
 
 }  // namespace
 
 std::string SerializeChildren(const Node* node, bool scripting) {
   std::string out;
-  SerializeInto(node, scripting, out);
+  Options options;
+  options.scripting = scripting;
+  SerializeInto(node, options, out);
+  return out;
+}
+
+std::string SerializeChildrenWithShadowRoots(const Node* node, bool serializableShadowRoots, const std::vector<const dom::ShadowRoot*>& shadowRoots, bool scripting) {
+  std::string out;
+  Options options;
+  options.scripting = scripting;
+  options.serializableShadowRoots = serializableShadowRoots;
+  options.shadowRoots = &shadowRoots;
+  SerializeInto(node, options, out);
   return out;
 }
 
 std::string SerializeNode(const Node* node, bool scripting) {
   std::string out;
-  if (node->IsDocument() || node->IsFragment()) SerializeInto(node, scripting, out);
-  else SerializeOne(node, scripting, out);
+  Options options;
+  options.scripting = scripting;
+  if (node->IsDocument() || node->IsFragment()) SerializeInto(node, options, out);
+  else SerializeOne(node, options, out);
   return out;
 }
 

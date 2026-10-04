@@ -154,7 +154,7 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
       if (const solar::dom::Attr* src = script->FindAttribute("", "src")) {
         const std::string given = src->value;
         // The harness is already in place; any other script is a file of the tests.
-        if (given.ends_with("testharness.js") || given.ends_with("testharnessreport.js")) return;
+        if (given.ends_with("testharness.js") || given.ends_with("testharnessreport.js") || given.find("testdriver") != std::string::npos) return;
         const std::string wanted = given.starts_with("/") ? "tests/wpt" + given : (std::filesystem::path(path).parent_path() / given).string();
         if (!ReadFile(wanted, code)) {
           std::printf("  FAIL cannot load script %s\n", given.c_str());

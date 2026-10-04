@@ -46,7 +46,7 @@ std::string TagNameOf(const Element* element);
 // standard says they stay current with the tree. What they find is looked up again when the tree has
 // changed since the last time.
 struct JsCollection : Quanta::DOMObject {
-  enum class Kind { ChildNodes, Children, ByTagName, ByTagNameNS, ByClassName, Static };
+  enum class Kind { ChildNodes, Children, ByTagName, ByTagNameNS, ByClassName, WindowNamed, Static };
   Kind kind = Kind::Static;
   bool isNodeList = false;  // NodeList and not HTMLCollection
   Node* root = nullptr;
@@ -76,6 +76,8 @@ void DefineCollectionClasses(Quanta::Context& ctx);
 // getElementsByTagName and friends, on an element or a document.
 Quanta::Value GetElementsByTagName(Quanta::Context& ctx, Node* root, std::string_view name);
 Quanta::Value GetElementsByTagNameNS(Quanta::Context& ctx, Node* root, std::string_view ns, std::string_view local);
+// The elements window[name] is when more than one has the name.
+Quanta::Value NewWindowNamedCollection(Quanta::Context& ctx, Node* root, std::string_view name);
 Quanta::Value GetElementsByClassName(Quanta::Context& ctx, Node* root, std::string_view classes);
 
 // The Document that nodes made by script constructors (new Text, new DocumentFragment) belong to: the
@@ -96,5 +98,6 @@ void DefineNodeClass(Quanta::Context& ctx);
 void DefineCharacterDataClasses(Quanta::Context& ctx);
 void DefineElementClass(Quanta::Context& ctx);
 void DefineDocumentClasses(Quanta::Context& ctx);
+void DefineShadowClasses(Quanta::Context& ctx);
 
 }  // namespace solar::dom

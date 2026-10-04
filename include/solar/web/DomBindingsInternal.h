@@ -37,8 +37,18 @@ struct JsEvent : Quanta::DOMObject {
   double timeStamp = 0;
   JsEventTarget* target = nullptr;
   JsEventTarget* currentTarget = nullptr;
-  // The event path while the event is dispatched: the target, then each parent of it in turn.
-  std::vector<JsEventTarget*> path;
+  // The event's relatedTarget, which MouseEvent, FocusEvent and the like give it, and dispatch retargets.
+  JsEventTarget* relatedTarget = nullptr;
+  // One step of the event path: where the event is invoked, and what it is said to be at, with the related
+  // target as seen from there.
+  struct PathItem {
+    JsEventTarget* invocationTarget = nullptr;
+    JsEventTarget* shadowAdjustedTarget = nullptr;
+    JsEventTarget* relatedTarget = nullptr;
+    bool rootOfClosedTree = false;
+    bool slotInClosedTree = false;
+  };
+  std::vector<PathItem> eventPath;
 
   void Visit(Quanta::Visitor& visitor);
 };
@@ -65,10 +75,23 @@ struct Listener {
   bool isEventHandler = false;  // reads the target's on<type> attribute when it runs
 };
 
+// What an event target that sits in a tree (a node) tells dispatch about the tree, which a cell with no virtual
+// functions cannot be asked: the standard's "get the parent" and "retarget" and the questions about shadow
+// trees that the event path asks.
+struct EventTargetOps {
+  JsEventTarget* (*getParent)(JsEventTarget* self, JsEvent* event);
+  JsEventTarget* (*retarget)(JsEventTarget* a, JsEventTarget* against);
+  // A's root is a shadow-including inclusive ancestor of B.
+  bool (*rootIncludes)(JsEventTarget* a, JsEventTarget* b);
+  bool (*rootIsShadowRoot)(JsEventTarget* a);
+  bool (*rootIsClosedShadowRoot)(JsEventTarget* a);
+  bool (*isClosedShadowRoot)(JsEventTarget* a);
+  bool (*isAssigned)(JsEventTarget* a);
+};
+
 struct JsEventTarget : Quanta::DOMObject {
-  // "get the parent" of the standard: where an event goes after this target, or null. A type that sits in
-  // a tree sets it (a cell has no virtual functions to override); an event target with none is a path of one.
-  JsEventTarget* (*eventParent)(JsEventTarget*) = nullptr;
+  // Set by a type that sits in a tree; an event target without it is a path of one.
+  const EventTargetOps* ops = nullptr;
   std::vector<std::shared_ptr<Listener>> listeners;
   // The on<type> attributes' values, which are callables or null.
   std::map<std::string, Quanta::Value> eventHandlers;

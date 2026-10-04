@@ -17,7 +17,12 @@ using Quanta::Value;
 void JsEvent::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(target);
   visitor.Mark(currentTarget);
-  for (JsEventTarget* node : path) visitor.Mark(node);
+  visitor.Mark(relatedTarget);
+  for (const PathItem& item : eventPath) {
+    visitor.Mark(item.invocationTarget);
+    visitor.Mark(item.shadowAdjustedTarget);
+    visitor.Mark(item.relatedTarget);
+  }
 }
 
 void JsEventTarget::Visit(Quanta::Visitor& visitor) {
@@ -250,6 +255,23 @@ Value SetReturnValue(Context& ctx, Value t, qe::Args args, Value) {
 }
 
 // initEvent(type, bubbles, cancelable): the old way to fill an event in.
+// __solarEventSetRelatedTarget(event, target) and __solarEventRelatedTarget(event): where the events that have a
+// relatedTarget keep it, which is where dispatch retargets it.
+Value SetRelatedTarget(Context&, Value, qe::Args args, Value) {
+  if (args.size() > 1) {
+    if (JsEvent* event = DOMObject::Cast<JsEvent>(args[0])) {
+      event->relatedTarget = DOMObject::Cast<JsEventTarget>(args[1]);
+      event->NoteWrite();
+    }
+  }
+  return qe::Undefined();
+}
+
+Value GetRelatedTarget(Context&, Value, qe::Args args, Value) {
+  JsEvent* event = args.empty() ? nullptr : DOMObject::Cast<JsEvent>(args[0]);
+  return event && event->relatedTarget ? qe::FromObject(event->relatedTarget) : qe::Null();
+}
+
 // __solarEventUninitialized(event): what createEvent leaves an event as, until it is initialized.
 Value MakeUninitialized(Context&, Value, qe::Args args, Value) {
   if (!args.empty()) {
@@ -274,14 +296,49 @@ Value InitEvent(Context& ctx, Value t, qe::Args args, Value) {
   return qe::Undefined();
 }
 
+// What composedPath() gives: the path as the current target can see it, with what is in a closed shadow
+// tree left out when the current target is outside of it.
 Value ComposedPath(Context& ctx, Value t, qe::Args, Value) {
   JsEvent* self = ThisEvent(ctx, t);
   if (!self) return qe::Undefined();
-  Value path = qe::NewArray(ctx);
-  if (self->dispatching) {
-    for (JsEventTarget* node : self->path) qe::ArrayPush(ctx, path, qe::FromObject(node));
+  std::vector<JsEventTarget*> composed;
+  const auto& path = self->eventPath;
+  if (!path.empty() && self->currentTarget) {
+    composed.push_back(self->currentTarget);
+    long currentTargetIndex = 0;
+    long currentTargetHiddenSubtreeLevel = 0;
+    for (long index = static_cast<long>(path.size()) - 1; index >= 0; --index) {
+      if (path[index].rootOfClosedTree) ++currentTargetHiddenSubtreeLevel;
+      if (path[index].invocationTarget == self->currentTarget) {
+        currentTargetIndex = index;
+        break;
+      }
+      if (path[index].slotInClosedTree) --currentTargetHiddenSubtreeLevel;
+    }
+    long currentHiddenLevel = currentTargetHiddenSubtreeLevel;
+    long maxHiddenLevel = currentTargetHiddenSubtreeLevel;
+    for (long index = currentTargetIndex - 1; index >= 0; --index) {
+      if (path[index].rootOfClosedTree) ++currentHiddenLevel;
+      if (currentHiddenLevel <= maxHiddenLevel) composed.insert(composed.begin(), path[index].invocationTarget);
+      if (path[index].slotInClosedTree) {
+        --currentHiddenLevel;
+        if (currentHiddenLevel < maxHiddenLevel) maxHiddenLevel = currentHiddenLevel;
+      }
+    }
+    currentHiddenLevel = currentTargetHiddenSubtreeLevel;
+    maxHiddenLevel = currentTargetHiddenSubtreeLevel;
+    for (size_t index = static_cast<size_t>(currentTargetIndex) + 1; index < path.size(); ++index) {
+      if (path[index].slotInClosedTree) ++currentHiddenLevel;
+      if (currentHiddenLevel <= maxHiddenLevel) composed.push_back(path[index].invocationTarget);
+      if (path[index].rootOfClosedTree) {
+        --currentHiddenLevel;
+        if (currentHiddenLevel < maxHiddenLevel) maxHiddenLevel = currentHiddenLevel;
+      }
+    }
   }
-  return path;
+  Value array = qe::NewArray(ctx);
+  for (JsEventTarget* node : composed) qe::ArrayPush(ctx, array, qe::FromObject(node));
+  return array;
 }
 
 // ---- EventTarget ----
@@ -459,11 +516,39 @@ Value DispatchEvent(Context& ctx, Value thisValue, qe::Args args, Value) {
 
 namespace {
 
-// "invoke": the listeners of one target on the path, the capturing ones or the others.
-void InvokeAll(Context& ctx, JsEventTarget* current, JsEvent* event, uint16_t phase, bool capturing) {
-  if (event->stopPropagation) return;
-  event->currentTarget = current;
+// What a target can say about its tree, or the answers of one that sits in none.
+JsEventTarget* GetParentOf(JsEventTarget* target, JsEvent* event) { return target->ops ? target->ops->getParent(target, event) : nullptr; }
+JsEventTarget* RetargetOf(JsEventTarget* a, JsEventTarget* against) { return a && a->ops ? a->ops->retarget(a, against) : a; }
+bool RootIsShadowRoot(JsEventTarget* a) { return a && a->ops && a->ops->rootIsShadowRoot(a); }
+bool RootIsClosedShadowRoot(JsEventTarget* a) { return a && a->ops && a->ops->rootIsClosedShadowRoot(a); }
+bool IsClosedShadowRoot(JsEventTarget* a) { return a && a->ops && a->ops->isClosedShadowRoot(a); }
+bool IsAssigned(JsEventTarget* a) { return a && a->ops && a->ops->isAssigned(a); }
+
+void AppendToPath(JsEvent* event, JsEventTarget* invocationTarget, JsEventTarget* shadowAdjustedTarget, JsEventTarget* relatedTarget, bool slotInClosedTree) {
+  JsEvent::PathItem item;
+  item.invocationTarget = invocationTarget;
+  item.shadowAdjustedTarget = shadowAdjustedTarget;
+  item.relatedTarget = relatedTarget;
+  item.rootOfClosedTree = IsClosedShadowRoot(invocationTarget);
+  item.slotInClosedTree = slotInClosedTree;
+  event->eventPath.push_back(item);
+}
+
+// "invoke": the listeners of one step of the path, the capturing ones or the others.
+void InvokeAt(Context& ctx, JsEvent* event, size_t index, uint16_t phase, bool capturing) {
+  // The event is at what the last step up to this one that has a target is said to be.
+  for (size_t i = index + 1; i-- > 0;) {
+    if (event->eventPath[i].shadowAdjustedTarget) {
+      event->target = event->eventPath[i].shadowAdjustedTarget;
+      break;
+    }
+  }
+  const JsEvent::PathItem item = event->eventPath[index];
+  event->relatedTarget = item.relatedTarget;
   event->phase = phase;
+  if (event->stopPropagation) return;
+  JsEventTarget* current = item.invocationTarget;
+  event->currentTarget = current;
   event->NoteWrite(qe::FromObject(current));
   const std::vector<std::shared_ptr<Listener>> snapshot = current->listeners;
   for (const std::shared_ptr<Listener>& listener : snapshot) {
@@ -475,31 +560,73 @@ void InvokeAll(Context& ctx, JsEventTarget* current, JsEvent* event, uint16_t ph
 
 }  // namespace
 
-// The event goes down the path to its target, capturing listeners only, and then back up it (if it
-// bubbles) to the listeners that do not capture. At the target both are run, the capturing ones first.
+// The standard's dispatch: the path of the event is made first, from the target out through every parent (a
+// shadow root's host, a slot for what is assigned to it), and then the event goes down it with the capturing
+// listeners and back up it, if it bubbles, with the others.
 bool DispatchOn(Context& ctx, JsEventTarget* target, JsEvent* event) {
   event->dispatching = true;
   event->target = target;
-  event->path.clear();
-  event->path.push_back(target);
-  for (JsEventTarget* parent = target->eventParent ? target->eventParent(target) : nullptr; parent; parent = parent->eventParent ? parent->eventParent(parent) : nullptr) {
-    event->path.push_back(parent);
-  }
-  event->NoteWrite(qe::FromObject(target));
-  const std::vector<JsEventTarget*> path = event->path;
+  event->eventPath.clear();
+  JsEventTarget* const originalRelated = event->relatedTarget;
+  JsEventTarget* relatedTarget = RetargetOf(originalRelated, target);
+  bool clearTargets = false;
 
-  for (size_t i = path.size(); i-- > 0;) InvokeAll(ctx, path[i], event, i == 0 ? 2 : 1, true);
-  for (size_t i = 0; i < path.size(); ++i) {
-    if (i != 0 && !event->bubbles) break;
-    InvokeAll(ctx, path[i], event, i == 0 ? 2 : 3, false);
+  if (target != relatedTarget || target == originalRelated) {
+    AppendToPath(event, target, target, relatedTarget, false);
+    JsEventTarget* slottable = IsAssigned(target) ? target : nullptr;
+    bool slotInClosedTree = false;
+    JsEventTarget* current = target;
+    JsEventTarget* parent = GetParentOf(target, event);
+    while (parent) {
+      if (slottable) {
+        slottable = nullptr;
+        if (RootIsClosedShadowRoot(parent)) slotInClosedTree = true;
+      }
+      if (IsAssigned(parent)) slottable = parent;
+      relatedTarget = RetargetOf(originalRelated, parent);
+      // A parent that is no node is the window; one in the tree of the target, or a shadow-including ancestor of it, is on the way.
+      const bool inTree = !parent->ops || (current->ops && current->ops->rootIncludes(current, parent));
+      // The shadow-adjusted target is the parent when it is the first one past the boundary of a shadow tree.
+      if (!parent->ops || inTree) {
+        // The event stays at the same target: this is an ancestor of it, or the window.
+        AppendToPath(event, parent, nullptr, relatedTarget, slotInClosedTree);
+      } else if (parent == relatedTarget) {
+        parent = nullptr;
+      } else {
+        current = parent;
+        AppendToPath(event, parent, parent, relatedTarget, slotInClosedTree);
+      }
+      if (parent) parent = GetParentOf(parent, event);
+      slotInClosedTree = false;
+    }
+    for (size_t i = event->eventPath.size(); i-- > 0;) {
+      const JsEvent::PathItem& item = event->eventPath[i];
+      if (item.shadowAdjustedTarget) {
+        clearTargets = RootIsShadowRoot(item.shadowAdjustedTarget) || RootIsShadowRoot(item.relatedTarget);
+        break;
+      }
+    }
+    for (size_t i = event->eventPath.size(); i-- > 0;) InvokeAt(ctx, event, i, event->eventPath[i].shadowAdjustedTarget ? 2 : 1, true);
+    for (size_t i = 0; i < event->eventPath.size(); ++i) {
+      uint16_t phase = 2;
+      if (!event->eventPath[i].shadowAdjustedTarget) {
+        if (!event->bubbles) continue;
+        phase = 3;
+      }
+      InvokeAt(ctx, event, i, phase, false);
+    }
   }
 
   event->dispatching = false;
   event->phase = 0;
   event->currentTarget = nullptr;
-  event->path.clear();
+  event->eventPath.clear();
   event->stopPropagation = false;
   event->stopImmediatePropagation = false;
+  if (clearTargets) {
+    event->target = nullptr;
+    event->relatedTarget = nullptr;
+  }
   return !event->defaultPrevented;
 }
 
@@ -564,6 +691,8 @@ void DefineEventClasses(Context& ctx) {
   qe::DefineGlobal(ctx, "CustomEvent", custom.constructor);
 
   qe::DefineGlobalFunction(ctx, "__solarEventUninitialized", MakeUninitialized, 1);
+  qe::DefineGlobalFunction(ctx, "__solarEventSetRelatedTarget", SetRelatedTarget, 2);
+  qe::DefineGlobalFunction(ctx, "__solarEventRelatedTarget", GetRelatedTarget, 1);
 
   qe::ClassRef target = qe::DefineClass(ctx, "EventTarget", ConstructTarget, 0);
   qe::SetRealmData(ctx, &g_targetPrototypeKey, target.prototype);

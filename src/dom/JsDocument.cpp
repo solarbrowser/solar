@@ -50,15 +50,6 @@ HtmlTable* TableOf(Context& ctx, bool create) {
   return table;
 }
 
-// A valid custom element name: a lower case letter, a hyphen, no upper case, and not one of the few the standard reserves.
-bool IsCustomElementName(std::string_view name) {
-  if (name.empty() || name[0] < 'a' || name[0] > 'z' || name.find('-') == std::string_view::npos) return false;
-  for (char c : name) {
-    if (c >= 'A' && c <= 'Z') return false;
-  }
-  static const std::string_view kReserved[] = {"annotation-xml", "color-profile", "font-face", "font-face-src", "font-face-uri", "font-face-format", "font-face-name", "missing-glyph"};
-  return std::find(std::begin(kReserved), std::end(kReserved), name) == std::end(kReserved);
-}
 
 bool Missing(Context& ctx, qe::Args args, size_t count, const char* interface, const char* member) {
   if (args.size() >= count) return false;
@@ -392,12 +383,31 @@ Value GetImplementationOf(Context& ctx, Value t, qe::Args, Value) {
 
 Object* RealmHolder(Context& ctx) { return Holder(ctx); }
 
+bool HasWindowName(const Element* element, const std::string& name) {
+  if (const Attr* id = element->FindAttribute("", "id"); id && id->value == name) return true;
+  if (element->IsHtml() && (element->localName == "embed" || element->localName == "form" || element->localName == "img" || element->localName == "object")) {
+    if (const Attr* attribute = element->FindAttribute("", "name"); attribute && attribute->value == name) return true;
+  }
+  return false;
+}
+
+// The window's script keeps its own record of which names are properties of it; it is told of each that changes.
+void WindowNamesChanged(Context& ctx, const std::string& name) {
+  Object* holder = Holder(ctx);
+  if (!holder) return;
+  Value update = qe::Get(ctx, qe::FromObject(holder), "windowNamedUpdate");
+  if (!qe::IsCallable(update)) return;
+  Value argument = qe::FromWtf8(ctx, name);
+  qe::Call(ctx, update, qe::Undefined(), qe::Args(&argument, 1));
+  if (qe::HasException(ctx)) ctx.clear_exception();
+}
+
 Object* HtmlElementPrototype(Context& ctx, std::string_view localName) {
   HtmlTable* table = TableOf(ctx, false);
   if (!table) return nullptr;
   const auto found = table->byTag.find(std::string(localName));
   if (found != table->byTag.end()) return found->second;
-  if (IsCustomElementName(localName)) return nullptr;  // HTMLElement itself
+  if (IsValidCustomElementName(localName)) return nullptr;  // HTMLElement itself
   return table->unknown;
 }
 

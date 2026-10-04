@@ -211,7 +211,7 @@ Value GetBaseUri(Context& ctx, Value t, qe::Args, Value) {
 
 Value GetIsConnected(Context& ctx, Value t, qe::Args, Value) {
   Node* self = ThisNode(ctx, t);
-  return self ? qe::FromBool(self->Root()->IsDocument()) : qe::Undefined();
+  return self ? qe::FromBool(ShadowIncludingRoot(self)->IsDocument()) : qe::Undefined();
 }
 
 Value GetOwnerDocument(Context& ctx, Value t, qe::Args, Value) {
@@ -373,6 +373,10 @@ Value NormalizeMethod(Context& ctx, Value t, qe::Args, Value) {
 Value CloneNodeMethod(Context& ctx, Value t, qe::Args args, Value) {
   Node* self = ThisNode(ctx, t);
   if (!self) return qe::Undefined();
+  if (self->IsFragment() && static_cast<DocumentFragment*>(self)->isShadowRoot) {
+    Throw(ctx, {"NotSupportedError", "ShadowRoot nodes are not clonable."});
+    return qe::Undefined();
+  }
   return qe::FromObject(CloneNode(ctx, self, !args.empty() && args[0].to_boolean()));
 }
 
@@ -406,9 +410,16 @@ Value ContainsMethod(Context& ctx, Value t, qe::Args args, Value) {
   return other ? qe::FromBool(self->Contains(other)) : qe::Undefined();
 }
 
-Value GetRootNodeMethod(Context& ctx, Value t, qe::Args, Value) {
+Value GetRootNodeMethod(Context& ctx, Value t, qe::Args args, Value) {
   Node* self = ThisNode(ctx, t);
-  return self ? qe::FromObject(self->Root()) : qe::Undefined();
+  if (!self) return qe::Undefined();
+  bool composed = false;
+  if (!args.empty() && qe::IsObject(args[0])) {
+    Value value = qe::Get(ctx, args[0], "composed");
+    if (qe::HasException(ctx)) return qe::Undefined();
+    composed = value.to_boolean();
+  }
+  return qe::FromObject(composed ? ShadowIncludingRoot(self) : self->Root());
 }
 
 Value LookupPrefix(Context& ctx, Value t, qe::Args args, Value) {

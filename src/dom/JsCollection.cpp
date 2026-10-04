@@ -96,6 +96,12 @@ const std::vector<Node*>& JsCollection::Items() {
       }
       break;
     }
+    case Kind::WindowNamed:
+      for (Node* node = root->NextInTree(root); node; node = node->NextInTree(root)) {
+        Element* element = AsElement(node);
+        if (element && HasWindowName(element, name)) items.push_back(element);
+      }
+      break;
     case Kind::Static:
       break;
   }
@@ -166,6 +172,12 @@ JsCollection* NewStaticNodeList(Context& ctx, std::vector<Node*> nodes) {
   collection->items = std::move(nodes);
   collection->NoteWrite();
   return collection;
+}
+
+Value NewWindowNamedCollection(Context& ctx, Node* root, std::string_view name) {
+  JsCollection* collection = NewCollection(ctx, JsCollection::Kind::WindowNamed, root, false);
+  collection->name = name;
+  return qe::FromObject(collection);
 }
 
 Value GetElementsByTagName(Context& ctx, Node* root, std::string_view name) {

@@ -21,6 +21,9 @@ void QueueCharacterDataRecord(Node* node, const std::string& oldValue);
 // The part of "remove" that leaves what the observers of a subtree watch with the node that is going.
 void RegisterTransientObservers(Node* node, Node* oldParent);
 
+// "signal a slot change": the slot gets a slotchange event when the observers' microtask runs.
+void QueueSlotChange(Element* slot);
+
 void DefineMutationClasses(Quanta::Context& ctx);
 
 }  // namespace solar::dom

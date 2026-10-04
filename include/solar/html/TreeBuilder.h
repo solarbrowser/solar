@@ -32,6 +32,10 @@ class TreeBuilder {
   // holds only itself are then kept alive for the collector, which script lets run.
   void SetScriptHandler(ScriptHandler handler);
 
+  // Whether a template with a shadowrootmode makes a shadow root of its parent, as the parser of a page and of
+  // setHTMLUnsafe does, and not an ordinary template as innerHTML does.
+  void SetAllowDeclarativeShadowRoots(bool allow) { allowDeclarativeShadowRoots_ = allow; }
+
   void Run();
 
   // The parse errors, by name, in the tokenizer's and then the tree builder's order of finding them.
@@ -177,6 +181,7 @@ class TreeBuilder {
   bool fosterParenting_ = false;
   bool skipNextLineFeed_ = false;
   bool done_ = false;
+  bool allowDeclarativeShadowRoots_ = false;
   std::vector<std::string> pendingTableCharacters_;
 
   ScriptHandler scriptHandler_;

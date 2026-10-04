@@ -22,6 +22,7 @@ void Install(Host& host) {
   DefineAttributeClasses(ctx);
   DefineElementClass(ctx);
   DefineDocumentClasses(ctx);
+  DefineShadowClasses(ctx);
   DefineMutationClasses(ctx);
   DefineRangeClasses(ctx);
   DefineSelectionClass(ctx);
@@ -64,7 +65,7 @@ void Install(Host& host) {
       define(Node.prototype, nodeTypes);
       for (const [child, parent] of [[CharacterData, Node], [Text, CharacterData], [CDATASection, Text], [ProcessingInstruction, CharacterData],
                                      [Comment, CharacterData], [DocumentType, Node], [DocumentFragment, Node], [Attr, Node], [Element, Node],
-                                     [HTMLElement, Element], [Document, Node]]) {
+                                     [HTMLElement, Element], [Document, Node], [ShadowRoot, DocumentFragment]]) {
         Object.setPrototypeOf(child, parent);
       }
       // What Web IDL gives an interface with an indexed getter that is iterable: the iteration methods

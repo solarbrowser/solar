@@ -12,7 +12,11 @@ const WeakMapSet = WeakMap.prototype.set;
 const eventInit = Event.prototype.initEvent;
 const eventPhaseGetter = Object.getOwnPropertyDescriptor(Event.prototype, 'eventPhase').get;
 const makeUninitialized = global.__solarEventUninitialized;
+const setRelatedTarget = global.__solarEventSetRelatedTarget;
+const getRelatedTarget = global.__solarEventRelatedTarget;
 delete global.__solarEventUninitialized;
+delete global.__solarEventSetRelatedTarget;
+delete global.__solarEventRelatedTarget;
 
 // Web IDL's conversions, for the members of the dictionaries.
 const toBoolean = (v) => !!v;
@@ -66,6 +70,7 @@ const defineInterface = (name, parent, members, legacyInit, extras) => {
           values[m.name] = v === undefined ? m.fallback() : m.convert(v);
         }
         WeakMapSet.call(slots, this, values);
+        if (Object.prototype.hasOwnProperty.call(values, 'relatedTarget')) setRelatedTarget(this, values.relatedTarget);
       }
     },
   })[name];
@@ -75,7 +80,7 @@ const defineInterface = (name, parent, members, legacyInit, extras) => {
     return values;
   };
   for (const m of members) {
-    const getter = ({ get [m.name]() { return check(this)[m.name]; } });
+    const getter = m.name === 'relatedTarget' ? ({ get relatedTarget() { check(this); return getRelatedTarget(this); } }) : ({ get [m.name]() { return check(this)[m.name]; } });
     defineProperty(C.prototype, m.name, { get: Object.getOwnPropertyDescriptor(getter, m.name).get, enumerable: true, configurable: true });
   }
   if (legacyInit) {
@@ -89,7 +94,10 @@ const defineInterface = (name, parent, members, legacyInit, extras) => {
         Reflect.apply(eventInit, this, [args[0], toBoolean(args[1]), toBoolean(args[2])]);
         for (let i = 3; i < parameters.length; i++) {
           const m = parameters[i];
-          if (m !== null && i < args.length) values[m.name] = m.convert(args[i]);
+          if (m !== null && i < args.length) {
+            values[m.name] = m.convert(args[i]);
+            if (m.name === 'relatedTarget') setRelatedTarget(this, values[m.name]);
+          }
         }
       },
     })[initName];

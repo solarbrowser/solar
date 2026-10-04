@@ -729,7 +729,36 @@ void TreeBuilder::InHead(Token& token) {
     framesetOk_ = false;
     mode_ = Mode::InTemplate;
     templateModes_.push_back(Mode::InTemplate);
-    InsertHtmlElement(token);
+    const std::string* modeAttribute = token.Attribute("shadowrootmode");
+    const std::string shadowMode = modeAttribute ? LowerAscii(*modeAttribute) : "";
+    if (shadowMode != "open" && shadowMode != "closed") {
+      InsertHtmlElement(token);
+      return;
+    }
+    // A declarative shadow root: the template becomes the shadow root of the element it is in, if that can have one.
+    if (!allowDeclarativeShadowRoots_ || AdjustedCurrentNode() == open_[0]) {
+      InsertHtmlElement(token);
+      return;
+    }
+    const Location location = AdjustedInsertionLocation();
+    Element* host = AdjustedCurrentNode();
+    Element* templateElement = InsertForeignElement(token, kHtml, true);
+    const std::string* slotAssignment = token.Attribute("shadowrootslotassignment");
+    const bool manual = slotAssignment && LowerAscii(*slotAssignment) == "manual";
+    if (host->shadowRoot) {
+      InsertElementAt(templateElement, location);
+      return;
+    }
+    dom::ShadowRoot* shadow = nullptr;
+    if (dom::AttachShadow(ctx_, host, shadowMode == "open" ? dom::ShadowMode::Open : dom::ShadowMode::Closed, manual ? dom::SlotAssignment::Manual : dom::SlotAssignment::Named,
+                          token.Attribute("shadowrootdelegatesfocus") != nullptr, token.Attribute("shadowrootclonable") != nullptr, token.Attribute("shadowrootserializable") != nullptr, shadow) ||
+        !shadow) {
+      InsertElementAt(templateElement, location);
+      return;
+    }
+    shadow->availableToElementInternals = true;
+    shadow->declarative = true;
+    templateElement->templateContents = shadow;
     return;
   }
   if (IsEnd(token, "template")) {

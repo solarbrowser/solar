@@ -168,6 +168,13 @@
     }
   };
 
+  // testdriver is what drives the browser from a test (clicks, keys, the accessibility tree), which there is
+  // nothing to do here: its operations fail, and a test that needs one is a failure.
+  globalThis.test_driver = new Proxy({}, {
+    get: (target, name) => (typeof name === 'string' ? () => Promise.reject(new Error('test_driver.' + name + ' is not available')) : undefined),
+  });
+  globalThis.test_driver_internal = globalThis.test_driver;
+
   // assert_implements(condition, description) fails a test that needs what is not there; the optional one only
   // leaves the test aside, as a precondition that did not hold.
   globalThis.assert_implements = (condition, description) => {
@@ -298,3 +305,8 @@
     if (failures.length) throw new Error(failures.length + ' tests failed');
   };
 })();
+
+// A page has a window.location of its own; a script run without a page is given the address WPT serves tests from.
+if (typeof location === "undefined") {
+  globalThis.location = { href: "http://web-platform.test:8000/", protocol: "http:", host: "web-platform.test:8000", hostname: "web-platform.test", port: "8000", pathname: "/", search: "", hash: "", origin: "http://web-platform.test:8000" };
+}

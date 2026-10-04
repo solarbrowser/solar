@@ -77,16 +77,26 @@ struct MutationState : DOMObject {
   Value queueMicrotask;
   Value notify;
   std::vector<JsMutationObserver*> pending;
+  std::vector<Element*> signalSlots;
   bool queued = false;
 
   void Visit(Quanta::Visitor& visitor) {
     visitor.Mark(queueMicrotask);
     visitor.Mark(notify);
     for (JsMutationObserver* observer : pending) visitor.Mark(observer);
+    for (Element* slot : signalSlots) visitor.Mark(slot);
   }
 };
 
 MutationState* StateOf(Context& ctx) { return static_cast<MutationState*>(qe::GetRealmData(ctx, &g_stateKey)); }
+
+// "queue a mutation observer microtask".
+void ScheduleNotification(Context& ctx, MutationState* state) {
+  if (state->queued) return;
+  state->queued = true;
+  Value notify = state->notify;
+  qe::Call(ctx, state->queueMicrotask, qe::Undefined(), qe::Args(&notify, 1));
+}
 
 void Schedule(JsMutationObserver* observer) {
   Context& ctx = *observer->ctx;
@@ -97,10 +107,7 @@ void Schedule(JsMutationObserver* observer) {
     state->pending.push_back(observer);
     state->NoteWrite();
   }
-  if (state->queued) return;
-  state->queued = true;
-  Value notify = state->notify;
-  qe::Call(ctx, state->queueMicrotask, qe::Undefined(), qe::Args(&notify, 1));
+  ScheduleNotification(ctx, state);
 }
 
 bool Contains(const std::vector<std::string>& list, const std::string& name) { return std::find(list.begin(), list.end(), name) != list.end(); }
@@ -176,6 +183,9 @@ Value Notify(Context& ctx, Value, qe::Args, Value) {
   state->queued = false;
   std::vector<JsMutationObserver*> observers = std::move(state->pending);
   state->pending.clear();
+  // The slots signalled so far are the ones to hear of it now; those signalled by an observer wait for the next time.
+  std::vector<Element*> slots = std::move(state->signalSlots);
+  state->signalSlots.clear();
   for (JsMutationObserver* observer : observers) {
     observer->pending = false;
     std::vector<PendingRecord> records = std::move(observer->queue);
@@ -192,6 +202,12 @@ Value Notify(Context& ctx, Value, qe::Args, Value) {
     Value args[2] = {array, self};
     qe::Call(ctx, observer->callback, self, qe::Args(args, 2));
     // An exception in a callback is reported, and the other observers still get theirs.
+    if (qe::HasException(ctx)) ctx.clear_exception();
+  }
+  // The slots whose assigned nodes changed hear of it after the observers.
+  for (Element* slot : slots) {
+    web::JsEvent* event = web::NewEvent(ctx, "slotchange", true, false);
+    web::DispatchOn(ctx, slot, event);
     if (qe::HasException(ctx)) ctx.clear_exception();
   }
   return qe::Undefined();
@@ -382,6 +398,19 @@ Value GetOldValue(Context& ctx, Value t, qe::Args, Value) {
 }  // namespace
 
 bool HasMutationObservers() { return g_registrations > 0; }
+
+void QueueSlotChange(Element* slot) {
+  Document* document = slot->nodeDocument;
+  if (!document || !document->context) return;
+  Context& ctx = *document->context;
+  MutationState* state = StateOf(ctx);
+  if (!state) return;
+  if (std::find(state->signalSlots.begin(), state->signalSlots.end(), slot) == state->signalSlots.end()) {
+    state->signalSlots.push_back(slot);
+    state->NoteWrite();
+  }
+  ScheduleNotification(ctx, state);
+}
 
 void QueueChildListRecord(Node* target, const std::vector<Node*>& added, const std::vector<Node*>& removed, Node* previousSibling, Node* nextSibling) {
   PendingRecord record;

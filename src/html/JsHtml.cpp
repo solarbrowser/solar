@@ -45,21 +45,82 @@ std::optional<std::string> ReadMarkup(Context& ctx, qe::Args args) {
   return text;
 }
 
+// The element a fragment is parsed for, and the node its result goes into: a shadow root stands for its host, and a
+// template for its contents.
+dom::Element* FragmentContext(dom::Node* node) {
+  if (dom::Element* element = dom::AsElement(node)) return element;
+  if (node && node->IsFragment() && static_cast<dom::DocumentFragment*>(node)->isShadowRoot) return static_cast<dom::ShadowRoot*>(node)->host;
+  return nullptr;
+}
+
+dom::Node* FragmentTarget(dom::Node* node) {
+  dom::Element* element = dom::AsElement(node);
+  if (element && element->namespaceUri == dom::kHtmlNamespace && element->localName == "template" && element->templateContents) return element->templateContents;
+  return node;
+}
+
 Value GetInnerHtml(Context& ctx, Value t, qe::Args, Value) {
-  dom::Element* self = dom::ThisElement(ctx, t);
-  return self ? qe::FromWtf8(ctx, SerializeChildren(self)) : qe::Undefined();
+  dom::Node* self = dom::ThisNode(ctx, t);
+  return self ? qe::FromWtf8(ctx, SerializeChildren(FragmentTarget(self))) : qe::Undefined();
 }
 
 Value SetInnerHtml(Context& ctx, Value t, qe::Args args, Value) {
-  dom::Element* self = dom::ThisElement(ctx, t);
+  dom::Node* self = dom::ThisNode(ctx, t);
   if (!self) return qe::Undefined();
   const std::optional<std::string> markup = ReadMarkup(ctx, args);
   if (!markup) return qe::Undefined();
-  dom::DocumentFragment* fragment = ParseFragment(ctx, self, *markup);
-  dom::Node* target = self;
-  if (self->namespaceUri == dom::kHtmlNamespace && self->localName == "template" && self->templateContents) target = self->templateContents;
-  dom::ReplaceAll(target, fragment);
+  dom::DocumentFragment* fragment = ParseFragment(ctx, FragmentContext(self), *markup);
+  dom::ReplaceAll(FragmentTarget(self), fragment);
   return qe::Undefined();
+}
+
+Value SetHtmlUnsafe(Context& ctx, Value t, qe::Args args, Value) {
+  dom::Node* self = dom::ThisNode(ctx, t);
+  if (!self) return qe::Undefined();
+  if (Missing(ctx, args, 1, "Element", "setHTMLUnsafe")) return qe::Undefined();
+  const std::string markup = qe::IsNull(args[0]) ? std::string() : qe::ToWtf8(ctx, args[0]);
+  if (qe::HasException(ctx)) return qe::Undefined();
+  dom::DocumentFragment* fragment = ParseFragment(ctx, FragmentContext(self), markup, ScriptingMode::Inert, nullptr, true);
+  dom::ReplaceAll(FragmentTarget(self), fragment);
+  return qe::Undefined();
+}
+
+Value GetHtml(Context& ctx, Value t, qe::Args args, Value) {
+  dom::Node* self = dom::ThisNode(ctx, t);
+  if (!self) return qe::Undefined();
+  bool serializable = false;
+  std::vector<const dom::ShadowRoot*> roots;
+  if (!args.empty() && qe::IsObject(args[0])) {
+    serializable = qe::Get(ctx, args[0], "serializableShadowRoots").to_boolean();
+    if (qe::HasException(ctx)) return qe::Undefined();
+    Value list = qe::Get(ctx, args[0], "shadowRoots");
+    if (qe::HasException(ctx)) return qe::Undefined();
+    if (!qe::IsUndefined(list)) {
+      const uint32_t length = qe::ToUint32(ctx, qe::Get(ctx, list, "length"));
+      for (uint32_t i = 0; i < length && !qe::HasException(ctx); ++i) {
+        dom::Node* node = DOMObject::Cast<dom::Node>(qe::Get(ctx, list, qe::FromWtf8(ctx, std::to_string(i))));
+        if (qe::HasException(ctx)) return qe::Undefined();
+        const dom::ShadowRoot* root = node && node->IsFragment() && static_cast<dom::DocumentFragment*>(node)->isShadowRoot ? static_cast<dom::ShadowRoot*>(node) : nullptr;
+        if (!root) {
+          qe::ThrowTypeError(ctx, "Failed to execute 'getHTML': member shadowRoots is not of type ShadowRoot.");
+          return qe::Undefined();
+        }
+        roots.push_back(root);
+      }
+      if (qe::HasException(ctx)) return qe::Undefined();
+    }
+  }
+  return qe::FromWtf8(ctx, SerializeChildrenWithShadowRoots(FragmentTarget(self), serializable, roots));
+}
+
+Value ParseHtmlUnsafe(Context& ctx, Value, qe::Args args, Value) {
+  if (Missing(ctx, args, 1, "Document", "parseHTMLUnsafe")) return qe::Undefined();
+  const std::string markup = qe::IsNull(args[0]) ? std::string() : qe::ToWtf8(ctx, args[0]);
+  if (qe::HasException(ctx)) return qe::Undefined();
+  dom::Document* document = dom::NewDocument(ctx, true);
+  document->contentType = "text/html";
+  ParseDocument(ctx, document, markup, ScriptingMode::Disabled, nullptr, nullptr, true);
+  return qe::FromObject(document);
 }
 
 Value GetOuterHtml(Context& ctx, Value t, qe::Args, Value) {
@@ -152,7 +213,7 @@ Value ParseFromString(Context& ctx, Value t, qe::Args args, Value) {
     dom::Document* document = dom::NewDocument(ctx, true);
     document->contentType = "text/html";
     if (dom::Document* current = dom::AssociatedDocument(ctx)) document->url = current->url;
-    ParseDocument(ctx, document, markup, ScriptingMode::Disabled);
+    ParseDocument(ctx, document, markup, ScriptingMode::Disabled, nullptr, nullptr, false);
     return qe::FromObject(document);
   }
   if (type == "text/xml" || type == "application/xml" || type == "application/xhtml+xml" || type == "image/svg+xml") {
@@ -283,6 +344,32 @@ Value GetDefaultView(Context& ctx, Value t, qe::Args, Value) {
 // __solarDocument() and __solarSetWindow(target): what the window's script is made of.
 Value GlobalDocument(Context& ctx, Value, qe::Args, Value) { return qe::FromObject(dom::AssociatedDocument(ctx)); }
 
+// __solarNamedLookup(name): what window[name] is: the element with that name, or a collection of them, or undefined.
+Value NamedLookup(Context& ctx, Value, qe::Args args, Value) {
+  dom::Document* document = dom::AssociatedDocument(ctx);
+  if (!document || args.empty()) return qe::Undefined();
+  const std::string name = qe::ToWtf8(ctx, args[0]);
+  if (qe::HasException(ctx)) return qe::Undefined();
+  dom::Element* first = nullptr;
+  size_t count = 0;
+  for (dom::Node* node = document->NextInTree(document); node; node = node->NextInTree(document)) {
+    dom::Element* element = dom::AsElement(node);
+    if (element && dom::HasWindowName(element, name)) {
+      if (!first) first = element;
+      ++count;
+    }
+  }
+  if (count == 0) return qe::Undefined();
+  if (count == 1) return qe::FromObject(first);
+  return dom::NewWindowNamedCollection(ctx, document, name);
+}
+
+// __solarRegisterNamed(update): the window script's function that follows the names.
+Value RegisterNamed(Context& ctx, Value, qe::Args args, Value) {
+  if (Object* holder = dom::RealmHolder(ctx); holder && !args.empty()) qe::Set(ctx, qe::FromObject(holder), "windowNamedUpdate", args[0]);
+  return qe::Undefined();
+}
+
 // __solarSetDocumentUrl(url): where a fragment navigation moves the page's address.
 Value SetDocumentUrl(Context& ctx, Value, qe::Args args, Value) {
   dom::Document* document = dom::AssociatedDocument(ctx);
@@ -310,6 +397,12 @@ void Install(Host& host) {
   qe::DefineAccessor(element, "innerHTML", GetInnerHtml, SetInnerHtml);
   qe::DefineAccessor(element, "outerHTML", GetOuterHtml, SetOuterHtml);
   qe::DefineMethod(element, "insertAdjacentHTML", InsertAdjacentHtml, 2);
+  qe::DefineMethod(element, "setHTMLUnsafe", SetHtmlUnsafe, 1);
+  qe::DefineMethod(element, "getHTML", GetHtml, 0);
+  Object* shadowRoot = dom::InterfacePrototype(ctx, dom::Interface::ShadowRoot);
+  qe::DefineAccessor(shadowRoot, "innerHTML", GetInnerHtml, SetInnerHtml);
+  qe::DefineMethod(shadowRoot, "setHTMLUnsafe", SetHtmlUnsafe, 1);
+  qe::DefineMethod(shadowRoot, "getHTML", GetHtml, 0);
 
   DefineHtmlElementInterfaces(ctx);
   Object* document = dom::InterfacePrototype(ctx, dom::Interface::Document);
@@ -322,6 +415,10 @@ void Install(Host& host) {
   qe::DefineGlobalFunction(ctx, "__solarDocument", GlobalDocument, 0);
   qe::DefineGlobalFunction(ctx, "__solarSetWindow", SetWindowTarget, 1);
   qe::DefineGlobalFunction(ctx, "__solarSetDocumentUrl", SetDocumentUrl, 1);
+  qe::DefineGlobalFunction(ctx, "__solarNamedLookup", NamedLookup, 1);
+  qe::DefineGlobalFunction(ctx, "__solarRegisterNamed", RegisterNamed, 1);
+
+  qe::DefineStaticMethod(qe::Get(ctx, qe::FromObject(dom::InterfacePrototype(ctx, dom::Interface::Document)), "constructor").as_object(), "parseHTMLUnsafe", ParseHtmlUnsafe, 1);
 
   qe::ClassRef parser = qe::DefineClass(ctx, "DOMParser", ConstructDomParser, 0);
   qe::SetRealmData(ctx, &g_domParserKey, parser.prototype);
@@ -341,6 +438,10 @@ const char* const kWindowScript = R"JS(
   __solarSetWindow(target);
   const getDocument = __solarDocument;
   const setDocumentUrl = __solarSetDocumentUrl;
+  const lookup = __solarNamedLookup;
+  const registerNamed = __solarRegisterNamed;
+  delete globalThis.__solarNamedLookup;
+  delete globalThis.__solarRegisterNamed;
   delete globalThis.__solarSetWindow;
   delete globalThis.__solarDocument;
   delete globalThis.__solarSetDocumentUrl;
@@ -353,6 +454,26 @@ const char* const kWindowScript = R"JS(
     const withoutHash = (u) => { const copy = new URL(u.href); copy.hash = ""; return copy.href; };
     if (withoutHash(current) === withoutHash(target)) setDocumentUrl(target.href);
   };
+  // window[name], for the elements of the document that have the name: a property that is there while one does,
+  // unless the page has made one of its own.
+  const named = new Set();
+  const hasOwn = Object.prototype.hasOwnProperty;
+  registerNamed((name) => {
+    const present = lookup(name) !== undefined;
+    if (present && !named.has(name)) {
+      if (hasOwn.call(globalThis, name)) return;
+      named.add(name);
+      Object.defineProperty(globalThis, name, {
+        get() { return lookup(name); },
+        set(value) { named.delete(name); delete globalThis[name]; Object.defineProperty(globalThis, name, { value, writable: true, enumerable: true, configurable: true }); },
+        enumerable: false,
+        configurable: true,
+      });
+    } else if (!present && named.has(name)) {
+      named.delete(name);
+      delete globalThis[name];
+    }
+  });
   const location = {};
   for (const name of ["origin", "protocol", "host", "hostname", "port", "pathname", "search"]) {
     Object.defineProperty(location, name, { get() { return url()[name]; }, set(value) {}, enumerable: true, configurable: false });
