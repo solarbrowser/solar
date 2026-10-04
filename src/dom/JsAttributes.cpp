@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <string>
 
+#include "solar/dom/CustomElements.h"
 #include "solar/dom/NodeBindingsInternal.h"
 
 namespace solar::dom {
@@ -386,10 +387,10 @@ void DefineAttributeClasses(Context& ctx) {
   qe::DefineMethod(map.prototype, "item", MapItem, 1);
   qe::DefineMethod(map.prototype, "getNamedItem", GetNamedItem, 1);
   qe::DefineMethod(map.prototype, "getNamedItemNS", GetNamedItemNs, 2);
-  qe::DefineMethod(map.prototype, "setNamedItem", SetNamedItem, 1);
-  qe::DefineMethod(map.prototype, "setNamedItemNS", SetNamedItem, 1);
-  qe::DefineMethod(map.prototype, "removeNamedItem", RemoveNamedItem, 1);
-  qe::DefineMethod(map.prototype, "removeNamedItemNS", RemoveNamedItemNs, 2);
+  qe::DefineMethod(map.prototype, "setNamedItem", Reactions<SetNamedItem>, 1);
+  qe::DefineMethod(map.prototype, "setNamedItemNS", Reactions<SetNamedItem>, 1);
+  qe::DefineMethod(map.prototype, "removeNamedItem", Reactions<RemoveNamedItem>, 1);
+  qe::DefineMethod(map.prototype, "removeNamedItemNS", Reactions<RemoveNamedItemNs>, 2);
   qe::DefineGlobal(ctx, "NamedNodeMap", map.constructor);
 
   qe::ClassRef list = qe::DefineClass(ctx, "DOMTokenList", IllegalConstructor, 0);
@@ -397,12 +398,12 @@ void DefineAttributeClasses(Context& ctx) {
   qe::DefineAccessor(list.prototype, "length", ListLength, nullptr);
   qe::DefineMethod(list.prototype, "item", ListItem, 1);
   qe::DefineMethod(list.prototype, "contains", ListContains, 1);
-  qe::DefineMethod(list.prototype, "add", ListAdd, 0);
-  qe::DefineMethod(list.prototype, "remove", ListRemove, 0);
-  qe::DefineMethod(list.prototype, "toggle", ListToggle, 1);
-  qe::DefineMethod(list.prototype, "replace", ListReplace, 2);
+  qe::DefineMethod(list.prototype, "add", Reactions<ListAdd>, 0);
+  qe::DefineMethod(list.prototype, "remove", Reactions<ListRemove>, 0);
+  qe::DefineMethod(list.prototype, "toggle", Reactions<ListToggle>, 1);
+  qe::DefineMethod(list.prototype, "replace", Reactions<ListReplace>, 2);
   qe::DefineMethod(list.prototype, "supports", ListSupports, 1);
-  qe::DefineAccessor(list.prototype, "value", GetListValue, SetListValue);
+  qe::DefineAccessor(list.prototype, "value", GetListValue, Reactions<SetListValue>);
   qe::DefineGlobal(ctx, "DOMTokenList", list.constructor);
 }
 

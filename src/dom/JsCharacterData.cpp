@@ -1,5 +1,6 @@
 #include <string>
 
+#include "solar/dom/CustomElements.h"
 #include "solar/dom/NodeBindingsInternal.h"
 #include "solar/dom/Range.h"
 
@@ -324,7 +325,7 @@ void DefineCharacterDataClasses(Context& ctx) {
   qe::DefineAccessor(attr.prototype, "prefix", GetAttrPrefix, nullptr);
   qe::DefineAccessor(attr.prototype, "localName", GetAttrLocalName, nullptr);
   qe::DefineAccessor(attr.prototype, "name", GetAttrName, nullptr);
-  qe::DefineAccessor(attr.prototype, "value", GetAttrValue, SetAttrValue);
+  qe::DefineAccessor(attr.prototype, "value", GetAttrValue, Reactions<SetAttrValue>);
   qe::DefineAccessor(attr.prototype, "ownerElement", GetOwnerElement, nullptr);
   qe::DefineAccessor(attr.prototype, "specified", GetSpecified, nullptr);
   qe::DefineGlobal(ctx, "Attr", attr.constructor);

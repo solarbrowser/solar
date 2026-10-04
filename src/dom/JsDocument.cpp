@@ -2,6 +2,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "solar/dom/CustomElements.h"
 #include "solar/dom/NodeBindingsInternal.h"
 
 namespace solar::dom {
@@ -142,7 +143,18 @@ Value GetElementsByNameDocument(Context& ctx, Value t, qe::Args args, Value) {
   return qe::HasException(ctx) ? qe::Undefined() : GetElementsByName(ctx, self, name);
 }
 
-Value CreateElement(Context& ctx, Value t, qe::Args args, Value) {
+// The `is` of the ElementCreationOptions that createElement and createElementNS take as their last argument; a
+// string there is the older form of the same argument and means nothing.
+bool ReadIs(Context& ctx, qe::Args args, size_t index, std::optional<std::string>& is) {
+  if (args.size() <= index || !qe::IsObject(args[index])) return true;
+  Value value = qe::Get(ctx, args[index], "is");
+  if (qe::HasException(ctx)) return false;
+  if (qe::IsUndefined(value)) return true;
+  is = qe::ToWtf8(ctx, value);
+  return !qe::HasException(ctx);
+}
+
+Value CreateElementMethod(Context& ctx, Value t, qe::Args args, Value) {
   Document* self = ThisDocument(ctx, t);
   if (!self || Missing(ctx, args, 1, "Document", "createElement")) return qe::Undefined();
   std::string name = qe::ToWtf8(ctx, args[0]);
@@ -154,7 +166,10 @@ Value CreateElement(Context& ctx, Value t, qe::Args args, Value) {
   if (self->isHtml) name = Lower(name);
   // An HTML document, or an XHTML one, makes HTML elements; another XML document makes elements of no namespace.
   const bool html = self->isHtml || self->contentType == "application/xhtml+xml";
-  return qe::FromObject(NewElement(ctx, self, name, html ? kHtmlNamespace : std::string_view()));
+  std::optional<std::string> is;
+  if (!ReadIs(ctx, args, 1, is)) return qe::Undefined();
+  ReactionsScope reactions(ctx);
+  return qe::FromObject(CreateElement(ctx, self, name, html ? kHtmlNamespace : std::string_view(), "", is, true));
 }
 
 Value CreateElementNs(Context& ctx, Value t, qe::Args args, Value) {
@@ -168,7 +183,10 @@ Value CreateElementNs(Context& ctx, Value t, qe::Args args, Value) {
     Throw(ctx, *error);
     return qe::Undefined();
   }
-  return qe::FromObject(NewElement(ctx, self, parts.localName, parts.namespaceUri, parts.prefix));
+  std::optional<std::string> is;
+  if (!ReadIs(ctx, args, 2, is)) return qe::Undefined();
+  ReactionsScope reactions(ctx);
+  return qe::FromObject(CreateElement(ctx, self, parts.localName, parts.namespaceUri, parts.prefix, is, true));
 }
 
 Value CreateDocumentFragment(Context& ctx, Value t, qe::Args, Value) {
@@ -422,6 +440,16 @@ void RegisterHtmlElementInterface(Context& ctx, std::string_view localName, Obje
   if (HtmlTable* table = TableOf(ctx, true)) table->byTag[std::string(localName)] = prototype;
 }
 
+Object* UnknownHtmlElementPrototype(Context& ctx) {
+  HtmlTable* table = TableOf(ctx, false);
+  return table ? table->unknown : nullptr;
+}
+
+bool IsUnknownHtmlElementName(Context& ctx, std::string_view localName) {
+  HtmlTable* table = TableOf(ctx, false);
+  return table && table->byTag.find(std::string(localName)) == table->byTag.end() && !IsValidCustomElementName(localName);
+}
+
 void SetUnknownHtmlElementInterface(Context& ctx, Object* prototype) {
   if (HtmlTable* table = TableOf(ctx, true)) table->unknown = prototype;
 }
@@ -469,15 +497,15 @@ void DefineDocumentClasses(Context& ctx) {
   qe::DefineMethod(p, "getElementsByTagNameNS", GetElementsByTagNameNsDocument, 2);
   qe::DefineMethod(p, "getElementsByClassName", GetElementsByClassNameDocument, 1);
   qe::DefineMethod(p, "getElementsByName", GetElementsByNameDocument, 1);
-  qe::DefineMethod(p, "createElement", CreateElement, 1);
+  qe::DefineMethod(p, "createElement", CreateElementMethod, 1);
   qe::DefineMethod(p, "createElementNS", CreateElementNs, 2);
   qe::DefineMethod(p, "createDocumentFragment", CreateDocumentFragment, 0);
   qe::DefineMethod(p, "createTextNode", CreateTextNode, 1);
   qe::DefineMethod(p, "createCDATASection", CreateCdataSection, 1);
   qe::DefineMethod(p, "createComment", CreateComment, 1);
   qe::DefineMethod(p, "createProcessingInstruction", CreateProcessingInstruction, 2);
-  qe::DefineMethod(p, "importNode", ImportNode, 1);
-  qe::DefineMethod(p, "adoptNode", AdoptNode, 1);
+  qe::DefineMethod(p, "importNode", Reactions<ImportNode>, 1);
+  qe::DefineMethod(p, "adoptNode", Reactions<AdoptNode>, 1);
   qe::DefineMethod(p, "createAttribute", CreateAttribute, 1);
   qe::DefineMethod(p, "createAttributeNS", CreateAttributeNs, 2);
   qe::DefineMethod(p, "getElementById", GetElementById, 1);

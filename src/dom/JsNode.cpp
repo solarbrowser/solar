@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <string>
 
+#include "solar/dom/CustomElements.h"
 #include "solar/dom/NodeBindingsInternal.h"
 #include "solar/dom/Range.h"
 
@@ -667,17 +668,17 @@ void DefineParentNode(Object* prototype) {
   qe::DefineAccessor(prototype, "firstElementChild", GetFirstElementChild, nullptr);
   qe::DefineAccessor(prototype, "lastElementChild", GetLastElementChild, nullptr);
   qe::DefineAccessor(prototype, "childElementCount", GetChildElementCount, nullptr);
-  qe::DefineMethod(prototype, "prepend", PrependMethod, 0);
-  qe::DefineMethod(prototype, "append", AppendMethod, 0);
-  qe::DefineMethod(prototype, "replaceChildren", ReplaceChildrenMethod, 0);
-  qe::DefineMethod(prototype, "moveBefore", MoveBeforeMethod, 2);
+  qe::DefineMethod(prototype, "prepend", Reactions<PrependMethod>, 0);
+  qe::DefineMethod(prototype, "append", Reactions<AppendMethod>, 0);
+  qe::DefineMethod(prototype, "replaceChildren", Reactions<ReplaceChildrenMethod>, 0);
+  qe::DefineMethod(prototype, "moveBefore", Reactions<MoveBeforeMethod>, 2);
 }
 
 void DefineChildNode(Object* prototype) {
-  qe::DefineMethod(prototype, "before", BeforeMethod, 0);
-  qe::DefineMethod(prototype, "after", AfterMethod, 0);
-  qe::DefineMethod(prototype, "replaceWith", ReplaceWithMethod, 0);
-  qe::DefineMethod(prototype, "remove", RemoveMethod, 0);
+  qe::DefineMethod(prototype, "before", Reactions<BeforeMethod>, 0);
+  qe::DefineMethod(prototype, "after", Reactions<AfterMethod>, 0);
+  qe::DefineMethod(prototype, "replaceWith", Reactions<ReplaceWithMethod>, 0);
+  qe::DefineMethod(prototype, "remove", Reactions<RemoveMethod>, 0);
 }
 
 void DefineNonDocumentTypeChildNode(Object* prototype) {
@@ -702,10 +703,10 @@ void DefineNodeClass(Context& ctx) {
   qe::DefineAccessor(p, "lastChild", GetLastChild, nullptr);
   qe::DefineAccessor(p, "previousSibling", GetPreviousSibling, nullptr);
   qe::DefineAccessor(p, "nextSibling", GetNextSibling, nullptr);
-  qe::DefineAccessor(p, "nodeValue", GetNodeValue, SetNodeValue);
-  qe::DefineAccessor(p, "textContent", GetTextContent, SetTextContentValue);
-  qe::DefineMethod(p, "normalize", NormalizeMethod, 0);
-  qe::DefineMethod(p, "cloneNode", CloneNodeMethod, 0);
+  qe::DefineAccessor(p, "nodeValue", GetNodeValue, Reactions<SetNodeValue>);
+  qe::DefineAccessor(p, "textContent", GetTextContent, Reactions<SetTextContentValue>);
+  qe::DefineMethod(p, "normalize", Reactions<NormalizeMethod>, 0);
+  qe::DefineMethod(p, "cloneNode", Reactions<CloneNodeMethod>, 0);
   qe::DefineMethod(p, "isEqualNode", IsEqualNodeMethod, 1);
   qe::DefineMethod(p, "isSameNode", IsSameNodeMethod, 1);
   qe::DefineMethod(p, "compareDocumentPosition", CompareDocumentPositionMethod, 1);
@@ -713,10 +714,10 @@ void DefineNodeClass(Context& ctx) {
   qe::DefineMethod(p, "lookupPrefix", LookupPrefix, 1);
   qe::DefineMethod(p, "lookupNamespaceURI", LookupNamespaceUri, 1);
   qe::DefineMethod(p, "isDefaultNamespace", IsDefaultNamespace, 1);
-  qe::DefineMethod(p, "insertBefore", InsertBefore, 2);
-  qe::DefineMethod(p, "appendChild", AppendChildMethod, 1);
-  qe::DefineMethod(p, "replaceChild", ReplaceChildMethod, 2);
-  qe::DefineMethod(p, "removeChild", RemoveChildMethod, 1);
+  qe::DefineMethod(p, "insertBefore", Reactions<InsertBefore>, 2);
+  qe::DefineMethod(p, "appendChild", Reactions<AppendChildMethod>, 1);
+  qe::DefineMethod(p, "replaceChild", Reactions<ReplaceChildMethod>, 2);
+  qe::DefineMethod(p, "removeChild", Reactions<RemoveChildMethod>, 1);
   qe::DefineGlobal(ctx, "Node", node.constructor);
   qe::SetRealmData(ctx, &g_nodePrototypeKey, node.prototype);
 }

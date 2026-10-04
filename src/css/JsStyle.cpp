@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 
+#include "solar/dom/CustomElements.h"
 #include "solar/dom/NodeBindingsInternal.h"
 
 namespace solar::css {
@@ -150,6 +151,7 @@ struct JsStyle : DOMObject {
     return true;
   }
   static void NamedSetter(Context& ctx, JsStyle& self, const std::string& name, const Value& value) {
+    dom::ReactionsScope reactions(ctx);
     const std::string property = DashedName(name);
     if (property.empty()) return;
     const std::string text = qe::ToWtf8(ctx, value);
@@ -278,12 +280,12 @@ void DefineStyleDeclaration(Context& ctx) {
   qe::SetRealmData(ctx, &g_styleKey, declaration.prototype);
   Object* p = declaration.prototype;
   qe::DefineAccessor(p, "length", GetLength, nullptr);
-  qe::DefineAccessor(p, "cssText", GetCssText, SetCssText);
+  qe::DefineAccessor(p, "cssText", GetCssText, dom::Reactions<SetCssText>);
   qe::DefineMethod(p, "item", Item, 1);
   qe::DefineMethod(p, "getPropertyValue", GetPropertyValue, 1);
   qe::DefineMethod(p, "getPropertyPriority", GetPropertyPriority, 1);
-  qe::DefineMethod(p, "setProperty", SetProperty, 2);
-  qe::DefineMethod(p, "removeProperty", RemoveProperty, 1);
+  qe::DefineMethod(p, "setProperty", dom::Reactions<SetProperty>, 2);
+  qe::DefineMethod(p, "removeProperty", dom::Reactions<RemoveProperty>, 1);
   qe::DefineGlobal(ctx, "CSSStyleDeclaration", declaration.constructor);
   if (Object* element = dom::InterfacePrototype(ctx, dom::Interface::HtmlElement)) qe::DefineAccessor(element, "style", GetStyle, nullptr);
 }

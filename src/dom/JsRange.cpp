@@ -1,5 +1,6 @@
 #include <string>
 
+#include "solar/dom/CustomElements.h"
 #include "solar/dom/NodeBindingsInternal.h"
 #include "solar/dom/Range.h"
 
@@ -409,11 +410,11 @@ void DefineRangeClasses(Context& ctx) {
   qe::DefineMethod(p, "selectNode", SelectNode, 1);
   qe::DefineMethod(p, "selectNodeContents", SelectNodeContents, 1);
   qe::DefineMethod(p, "compareBoundaryPoints", CompareBoundaryPoints, 2);
-  qe::DefineMethod(p, "deleteContents", DeleteContentsMethod, 0);
-  qe::DefineMethod(p, "extractContents", ExtractContentsMethod, 0);
-  qe::DefineMethod(p, "cloneContents", CloneContentsMethod, 0);
-  qe::DefineMethod(p, "insertNode", InsertNodeMethod, 1);
-  qe::DefineMethod(p, "surroundContents", SurroundContentsMethod, 1);
+  qe::DefineMethod(p, "deleteContents", Reactions<DeleteContentsMethod>, 0);
+  qe::DefineMethod(p, "extractContents", Reactions<ExtractContentsMethod>, 0);
+  qe::DefineMethod(p, "cloneContents", Reactions<CloneContentsMethod>, 0);
+  qe::DefineMethod(p, "insertNode", Reactions<InsertNodeMethod>, 1);
+  qe::DefineMethod(p, "surroundContents", Reactions<SurroundContentsMethod>, 1);
   qe::DefineMethod(p, "cloneRange", CloneRange, 0);
   qe::DefineMethod(p, "detach", Detach, 0);
   qe::DefineMethod(p, "isPointInRange", IsPointInRange, 2);

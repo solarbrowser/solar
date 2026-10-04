@@ -1,6 +1,10 @@
 #include <algorithm>
+#include <array>
 #include <string>
+#include <string_view>
+#include <utility>
 
+#include "solar/dom/CustomElements.h"
 #include "solar/dom/Mutation.h"
 #include "solar/dom/NodeBindingsInternal.h"
 #include "solar/html/HtmlBindings.h"
@@ -197,6 +201,124 @@ constexpr char kNone[] = "";
 constexpr char kNamed[] = "named";
 constexpr char kManual[] = "manual";
 
+// What HTMLElement reflects of its content attributes.
+dom::Element* ThisHtmlElement(Context& ctx, const Value& t) {
+  dom::Element* self = dom::ThisElement(ctx, t);
+  if (self && !self->IsHtml()) {
+    qe::ThrowTypeError(ctx, "Illegal invocation");
+    return nullptr;
+  }
+  return self;
+}
+
+template <const char* Attribute>
+Value GetPlain(Context& ctx, Value t, qe::Args, Value) {
+  dom::Element* self = ThisHtmlElement(ctx, t);
+  return self ? qe::FromWtf8(ctx, dom::GetAttribute(self, Attribute).value_or("")) : qe::Undefined();
+}
+
+template <const char* Attribute>
+Value SetPlain(Context& ctx, Value t, qe::Args args, Value) {
+  dom::Element* self = ThisHtmlElement(ctx, t);
+  if (!self || args.empty()) return qe::Undefined();
+  std::string text = qe::ToWtf8(ctx, args[0]);
+  if (qe::HasException(ctx)) return qe::Undefined();
+  dom::SetAttribute(ctx, self, Attribute, std::move(text));
+  return qe::Undefined();
+}
+
+template <const char* Attribute>
+Value GetFlag(Context& ctx, Value t, qe::Args, Value) {
+  dom::Element* self = ThisHtmlElement(ctx, t);
+  return self ? qe::FromBool(dom::GetAttribute(self, Attribute).has_value()) : qe::Undefined();
+}
+
+template <const char* Attribute>
+Value SetFlag(Context& ctx, Value t, qe::Args args, Value) {
+  dom::Element* self = ThisHtmlElement(ctx, t);
+  if (!self || args.empty()) return qe::Undefined();
+  if (args[0].to_boolean()) dom::SetAttribute(ctx, self, Attribute, "");
+  else dom::RemoveAttribute(self, Attribute);
+  return qe::Undefined();
+}
+
+// An enumerated attribute with two keywords, and what it is when it has neither.
+template <const char* Attribute, const char* First, const char* Second, const char* Third>
+Value GetKeyword(Context& ctx, Value t, qe::Args, Value) {
+  dom::Element* self = ThisHtmlElement(ctx, t);
+  if (!self) return qe::Undefined();
+  std::string value = dom::GetAttribute(self, Attribute).value_or("");
+  for (char& c : value) {
+    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + 0x20);
+  }
+  if (value == First || value == Second || (Third[0] && value == Third)) return qe::FromWtf8(ctx, value);
+  return qe::FromWtf8(ctx, "");
+}
+
+// translate: "yes" and "no" say it, and anything else leaves it to the parent, down from the default of yes.
+Value GetTranslate(Context& ctx, Value t, qe::Args, Value) {
+  dom::Element* self = ThisHtmlElement(ctx, t);
+  if (!self) return qe::Undefined();
+  for (dom::Node* node = self; node; node = node->parentNode) {
+    const dom::Element* element = dom::AsElement(node);
+    if (!element) continue;
+    std::string value = dom::GetAttribute(element, "translate").value_or("");
+    for (char& c : value) {
+      if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + 0x20);
+    }
+    if (value == "yes" || value == "") {
+      if (dom::GetAttribute(element, "translate")) return qe::FromBool(true);
+    } else if (value == "no") {
+      return qe::FromBool(false);
+    }
+  }
+  return qe::FromBool(true);
+}
+
+Value SetTranslate(Context& ctx, Value t, qe::Args args, Value) {
+  dom::Element* self = ThisHtmlElement(ctx, t);
+  if (!self || args.empty()) return qe::Undefined();
+  dom::SetAttribute(ctx, self, "translate", args[0].to_boolean() ? "yes" : "no");
+  return qe::Undefined();
+}
+
+// draggable and spellcheck: "true" and "false", and a default for what is neither.
+template <const char* Attribute, bool Default>
+Value GetBooleanKeyword(Context& ctx, Value t, qe::Args, Value) {
+  dom::Element* self = ThisHtmlElement(ctx, t);
+  if (!self) return qe::Undefined();
+  std::string value = dom::GetAttribute(self, Attribute).value_or("");
+  for (char& c : value) {
+    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + 0x20);
+  }
+  if (value == "true") return qe::FromBool(true);
+  if (value == "false") return qe::FromBool(false);
+  return qe::FromBool(Default);
+}
+
+template <const char* Attribute>
+Value SetBooleanKeyword(Context& ctx, Value t, qe::Args args, Value) {
+  dom::Element* self = ThisHtmlElement(ctx, t);
+  if (!self || args.empty()) return qe::Undefined();
+  dom::SetAttribute(ctx, self, Attribute, args[0].to_boolean() ? "true" : "false");
+  return qe::Undefined();
+}
+
+constexpr char kTitle[] = "title";
+constexpr char kLang[] = "lang";
+constexpr char kDir[] = "dir";
+constexpr char kHidden[] = "hidden";
+constexpr char kInert[] = "inert";
+constexpr char kAccessKey[] = "accesskey";
+constexpr char kAutocapitalize[] = "autocapitalize";
+constexpr char kDraggable[] = "draggable";
+constexpr char kSpellcheck[] = "spellcheck";
+constexpr char kEnterKeyHint[] = "enterkeyhint";
+constexpr char kInputMode[] = "inputmode";
+constexpr char kLtr[] = "ltr";
+constexpr char kRtl[] = "rtl";
+constexpr char kAuto[] = "auto";
+
 bool Flatten(Context& ctx, qe::Args args) {
   if (args.empty() || !qe::IsObject(args[0])) return false;
   Value flatten = qe::Get(ctx, args[0], "flatten");
@@ -257,6 +379,25 @@ Value AssignMethod(Context& ctx, Value t, qe::Args args, Value) {
   return qe::Undefined();
 }
 
+// [HTMLConstructor]: an element interface's constructor makes an element of a custom element that extends it, so each
+// has to know which interface it is the constructor of.
+constexpr size_t kInterfaceCount = std::size(kInterfaces);
+int g_constructorKeys[kInterfaceCount];
+
+template <size_t I>
+Value ConstructInterface(Context& ctx, Value, qe::Args, Value newTarget) {
+  Object* active = static_cast<Object*>(qe::GetRealmData(ctx, &g_constructorKeys[I]));
+  std::vector<std::string_view> names(kInterfaces[I].tags.begin(), kInterfaces[I].tags.end());
+  return dom::ConstructHtmlElement(ctx, newTarget, active, names);
+}
+
+template <size_t... Is>
+constexpr std::array<qe::NativeFn, sizeof...(Is)> MakeConstructors(std::index_sequence<Is...>) {
+  return {ConstructInterface<Is>...};
+}
+
+const std::array<qe::NativeFn, kInterfaceCount> kConstructors = MakeConstructors(std::make_index_sequence<kInterfaceCount>());
+
 }  // namespace
 
 void DefineHtmlElementInterfaces(Context& ctx) {
@@ -266,8 +407,23 @@ void DefineHtmlElementInterfaces(Context& ctx) {
   qe::DefineGlobal(ctx, "HTMLUnknownElement", unknown.constructor);
   dom::SetUnknownHtmlElementInterface(ctx, unknown.prototype);
 
-  for (const Interface& interface : kInterfaces) {
-    qe::ClassRef definition = qe::DefineClass(ctx, interface.name, IllegalConstructor, 0, htmlElement);
+  qe::DefineAccessor(htmlElement, "title", GetPlain<kTitle>, dom::Reactions<SetPlain<kTitle>>);
+  qe::DefineAccessor(htmlElement, "lang", GetPlain<kLang>, dom::Reactions<SetPlain<kLang>>);
+  qe::DefineAccessor(htmlElement, "dir", GetKeyword<kDir, kLtr, kRtl, kAuto>, dom::Reactions<SetPlain<kDir>>);
+  qe::DefineAccessor(htmlElement, "hidden", GetFlag<kHidden>, dom::Reactions<SetFlag<kHidden>>);
+  qe::DefineAccessor(htmlElement, "inert", GetFlag<kInert>, dom::Reactions<SetFlag<kInert>>);
+  qe::DefineAccessor(htmlElement, "accessKey", GetPlain<kAccessKey>, dom::Reactions<SetPlain<kAccessKey>>);
+  qe::DefineAccessor(htmlElement, "autocapitalize", GetPlain<kAutocapitalize>, dom::Reactions<SetPlain<kAutocapitalize>>);
+  qe::DefineAccessor(htmlElement, "enterKeyHint", GetPlain<kEnterKeyHint>, dom::Reactions<SetPlain<kEnterKeyHint>>);
+  qe::DefineAccessor(htmlElement, "inputMode", GetPlain<kInputMode>, dom::Reactions<SetPlain<kInputMode>>);
+  qe::DefineAccessor(htmlElement, "translate", GetTranslate, dom::Reactions<SetTranslate>);
+  qe::DefineAccessor(htmlElement, "draggable", GetBooleanKeyword<kDraggable, false>, dom::Reactions<SetBooleanKeyword<kDraggable>>);
+  qe::DefineAccessor(htmlElement, "spellcheck", GetBooleanKeyword<kSpellcheck, true>, dom::Reactions<SetBooleanKeyword<kSpellcheck>>);
+
+  for (size_t index = 0; index < kInterfaceCount; ++index) {
+    const Interface& interface = kInterfaces[index];
+    qe::ClassRef definition = qe::DefineClass(ctx, interface.name, kConstructors[index], 0, htmlElement);
+    qe::SetRealmData(ctx, &g_constructorKeys[index], definition.constructor);
     qe::DefineGlobal(ctx, interface.name, definition.constructor);
     for (const char* tag : interface.tags) dom::RegisterHtmlElementInterface(ctx, tag, definition.prototype);
     if (std::string_view(interface.name) == "HTMLTemplateElement") {

@@ -63,6 +63,12 @@ void SerializeOne(const Node* node, const Options& options, std::string& out) {
       const bool known = element->namespaceUri == dom::kHtmlNamespace || element->namespaceUri == dom::kMathMlNamespace || element->namespaceUri == dom::kSvgNamespace;
       const std::string tagName = known ? element->localName : element->QualifiedName();
       out += "<" + tagName;
+      // The is value of a customized built-in element, if it is not an attribute it already has.
+      if (element->isValue && !element->FindAttribute("", "is")) {
+        out += " is=\"";
+        Escape(*element->isValue, true, out);
+        out += "\"";
+      }
       for (const dom::Attr* attribute : element->attributes) {
         out += " " + AttributeName(attribute) + "=\"";
         Escape(attribute->value, true, out);

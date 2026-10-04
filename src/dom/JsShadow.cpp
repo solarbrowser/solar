@@ -1,5 +1,6 @@
 #include <string>
 
+#include "solar/dom/CustomElements.h"
 #include "solar/dom/NodeBindingsInternal.h"
 
 namespace solar::dom {
@@ -142,7 +143,7 @@ void DefineShadowClasses(Context& ctx) {
 
   Object* element = InterfacePrototype(ctx, Interface::Element);
   qe::DefineAccessor(element, "shadowRoot", GetShadowRoot, nullptr);
-  qe::DefineMethod(element, "attachShadow", AttachShadowMethod, 1);
+  qe::DefineMethod(element, "attachShadow", Reactions<AttachShadowMethod>, 1);
   qe::DefineAccessor(element, "assignedSlot", GetAssignedSlot, nullptr);
   qe::DefineAccessor(InterfacePrototype(ctx, Interface::Text), "assignedSlot", GetAssignedSlot, nullptr);
 }

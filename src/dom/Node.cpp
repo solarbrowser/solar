@@ -1,4 +1,5 @@
 #include "solar/dom/Node.h"
+#include "solar/dom/CustomElements.h"
 
 #include "solar/dom/Mutation.h"
 #include "solar/dom/Range.h"
@@ -60,6 +61,12 @@ void Element::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(shadowRoot);
   for (Node* node : assignedNodes) visitor.Mark(node);
   for (Node* node : manuallyAssignedNodes) visitor.Mark(node);
+  visitor.Mark(customDefinition);
+  for (const CustomReaction& reaction : reactions) {
+    visitor.Mark(reaction.definition);
+    visitor.Mark(reaction.callback);
+    for (const Quanta::Value& arg : reaction.args) visitor.Mark(arg);
+  }
 }
 
 // ---- Making nodes ----
@@ -119,6 +126,7 @@ Element* NewElement(Context& ctx, Document* document, std::string_view localName
   element->localName = localName;
   element->namespaceUri = namespaceUri;
   element->prefix = prefix;
+  if (namespaceUri == kHtmlNamespace && IsValidCustomElementName(localName)) element->customState = CustomState::Undefined;
   if (namespaceUri == kHtmlNamespace && localName == "template" && document) {
     DocumentFragment* contents = NewDocumentFragment(ctx, TemplateContentsOwner(ctx, document));
     contents->host = element;
@@ -400,6 +408,8 @@ std::optional<DomError> EnsurePreInsertionValidity(Node* node, Node* parent, Nod
 
 namespace {
 
+bool g_moving = false;
+
 // "remove" of the standard: the observers of a subtree are left with the node, and (unless suppressed) told.
 void RemoveImpl(Node* node, bool suppress) {
   Node* parent = node->parentNode;
@@ -412,7 +422,9 @@ void RemoveImpl(Node* node, bool suppress) {
   if (HasNodeIterators()) NodeIteratorsBeforeRemove(node);
   Element* wasAssignedTo = node->assignedSlot;
   Document* wasIn = node->Root()->IsDocument() ? static_cast<Document*>(node->Root()) : nullptr;
+  const bool wasConnected = HasCustomDefinitions() && ShadowIncludingRoot(parent)->IsDocument();
   Unlink(node);
+  if (wasConnected && !g_moving) CustomAfterRemove(node, true);
   if (wasIn) NoteWindowNames(node, wasIn);
   if (HasShadowTrees()) ShadowAfterRemove(node, parent, wasAssignedTo);
   if (observed && !suppress) QueueChildListRecord(parent, {}, {node}, oldPrevious, oldNext);
@@ -441,9 +453,14 @@ void InsertImpl(Node* node, Node* parent, Node* child, bool suppress) {
   for (Node* n : nodes) {
     // Adopting takes it out of where it was, which the observers there hear of.
     if (n->parentNode) RemoveImpl(n, false);
-    if (n->nodeDocument != document) SetDocumentOfTree(n, document);
+    if (n->nodeDocument != document) {
+      Document* oldDocument = n->nodeDocument;
+      SetDocumentOfTree(n, document);
+      CustomAfterAdopt(n, oldDocument);
+    }
     Link(n, parent, child);
     if (HasShadowTrees()) ShadowAfterInsert(n, parent);
+    if (!g_moving) CustomAfterInsert(n);
     if (document && n->Root() == document) NoteWindowNames(n, document);
   }
   if (!suppress && HasMutationObservers()) QueueChildListRecord(parent, nodes, {}, previous, child);
@@ -455,7 +472,11 @@ void RemoveUnchecked(Node* node) { RemoveImpl(node, false); }
 
 void Adopt(Node* node, Document* document) {
   RemoveImpl(node, false);
-  if (node->nodeDocument != document) SetDocumentOfTree(node, document);
+  if (node->nodeDocument != document) {
+    Document* oldDocument = node->nodeDocument;
+    SetDocumentOfTree(node, document);
+    CustomAfterAdopt(node, oldDocument);
+  }
 }
 
 void InsertUnchecked(Node* node, Node* parent, Node* child) { InsertImpl(node, parent, child, false); }
@@ -488,8 +509,12 @@ std::optional<DomError> MoveBefore(Node* node, Node* parent, Node* child) {
   }
   Node* reference = child == node ? node->nextSibling : child;
   if (!node->parentNode) return DomError{"HierarchyRequestError", "The node has no parent to be moved from."};
+  // What a move does not do is take the node out and put it in again, as far as custom elements can tell.
+  g_moving = true;
   RemoveImpl(node, false);
   InsertImpl(node, parent, reference, false);
+  g_moving = false;
+  CustomAfterMove(node);
   return std::nullopt;
 }
 
@@ -644,6 +669,7 @@ void SetAttrValue(Attr* attribute, std::string value) {
   attribute->value = std::move(value);
   NoteTreeChange();
   if (owner && HasShadowTrees()) ShadowAttributeChanged(owner, attribute->localName, attribute->namespaceUri, old, attribute->value);
+  if (owner) CustomAttributeChanged(owner, attribute->localName, attribute->namespaceUri, old, attribute->value);
   if (owner) NoteWindowAttribute(owner, attribute->localName, attribute->namespaceUri, old, attribute->value);
 }
 
@@ -656,6 +682,7 @@ void AppendAttr(Element* element, Attr* attribute) {
   NoteTreeChange();
   if (HasMutationObservers()) QueueAttributeRecord(element, attribute->localName, attribute->namespaceUri, std::nullopt);
   if (HasShadowTrees()) ShadowAttributeChanged(element, attribute->localName, attribute->namespaceUri, std::nullopt, attribute->value);
+  CustomAttributeChanged(element, attribute->localName, attribute->namespaceUri, std::nullopt, attribute->value);
   NoteWindowAttribute(element, attribute->localName, attribute->namespaceUri, std::nullopt, attribute->value);
 }
 
@@ -678,7 +705,7 @@ Node* CloneNode(Context& ctx, Node* node, bool deep) {
     }
     case NodeType::Element: {
       Element* original = static_cast<Element*>(node);
-      Element* clone = NewElement(ctx, document, original->localName, original->namespaceUri, original->prefix);
+      Element* clone = CreateElement(ctx, document, original->localName, original->namespaceUri, original->prefix, original->isValue, false);
       for (Attr* attribute : original->attributes) {
         Attr* attributeCopy = NewAttr(ctx, document, attribute->namespaceUri, attribute->prefix, attribute->localName, attribute->value);
         attributeCopy->ownerElement = clone;
@@ -967,6 +994,7 @@ std::optional<DomError> SetAttributeNode(Element* element, Attr* attribute, Attr
     NoteTreeChange();
     if (HasMutationObservers()) QueueAttributeRecord(element, attribute->localName, attribute->namespaceUri, old->value);
     if (HasShadowTrees()) ShadowAttributeChanged(element, attribute->localName, attribute->namespaceUri, old->value, attribute->value);
+    CustomAttributeChanged(element, attribute->localName, attribute->namespaceUri, old->value, attribute->value);
   } else {
     AppendAttr(element, attribute);
   }
@@ -981,6 +1009,7 @@ void RemoveAttributeNode(Element* element, Attr* attribute) {
   attribute->NoteWrite();
   NoteTreeChange();
   if (HasShadowTrees()) ShadowAttributeChanged(element, attribute->localName, attribute->namespaceUri, attribute->value, std::nullopt);
+  CustomAttributeChanged(element, attribute->localName, attribute->namespaceUri, attribute->value, std::nullopt);
   NoteWindowAttribute(element, attribute->localName, attribute->namespaceUri, attribute->value, std::nullopt);
 }
 

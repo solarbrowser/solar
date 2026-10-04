@@ -56,6 +56,19 @@ struct Registration {
 struct Node;
 struct Document;
 struct Element;
+struct CustomDefinition;
+
+// An element's custom element state (https://html.spec.whatwg.org/#custom-element-state): Uncustomized is the one of
+// every element that cannot be a custom one.
+enum class CustomState : uint8_t { Uncustomized, Undefined, Failed, Precustomized, Custom };
+
+// A reaction in an element's queue: calling one of the callbacks of its definition, or upgrading it.
+struct CustomReaction {
+  bool upgrade = false;
+  CustomDefinition* definition = nullptr;  // for an upgrade
+  Quanta::Value callback;
+  std::vector<Quanta::Value> args;
+};
 
 // An exception the standard names: a DOMException's name and the message that goes with it.
 struct DomError {
@@ -187,6 +200,12 @@ struct Element : Node {
   // A slot's: the slottables it has been given, and those a script asked it to take in (slot assignment "manual").
   std::vector<Node*> assignedNodes;
   std::vector<Node*> manuallyAssignedNodes;
+  // What makes it a custom element, if it is: its definition, the value of is that went with it, and the callbacks
+  // that are waiting to be called.
+  CustomState customState = CustomState::Uncustomized;
+  CustomDefinition* customDefinition = nullptr;
+  std::optional<std::string> isValue;
+  std::vector<CustomReaction> reactions;
 
   std::string QualifiedName() const { return prefix.empty() ? localName : prefix + ":" + localName; }
   // `name` is compared as the standard does for a name on an HTML element in an HTML document: after
@@ -264,6 +283,9 @@ void NoteTreeChange();
 Quanta::Object* HtmlElementPrototype(Quanta::Context& ctx, std::string_view localName);
 void RegisterHtmlElementInterface(Quanta::Context& ctx, std::string_view localName, Quanta::Object* prototype);
 void SetUnknownHtmlElementInterface(Quanta::Context& ctx, Quanta::Object* prototype);
+// HTMLUnknownElement's prototype, and whether `localName` is a name no built-in element has (and is no custom element's).
+Quanta::Object* UnknownHtmlElementPrototype(Quanta::Context& ctx);
+bool IsUnknownHtmlElementName(Quanta::Context& ctx, std::string_view localName);
 
 // ---- Shadow trees ----
 // "attach a shadow root" to `element`, which has to be one that can host one: DomError if it is not.

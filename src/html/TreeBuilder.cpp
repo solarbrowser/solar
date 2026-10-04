@@ -1,5 +1,7 @@
 #include "solar/html/TreeBuilder.h"
 
+#include "solar/dom/CustomElements.h"
+
 #include <algorithm>
 
 #include "solar/html/Tables.h"
@@ -316,15 +318,23 @@ TreeBuilder::Location TreeBuilder::AdjustedInsertionLocation(Node* overrideTarge
 Element* TreeBuilder::CreateElementForToken(const Token& token, std::string_view ns, Node* intendedParent) {
   dom::Document* document = intendedParent && intendedParent->IsDocument() ? static_cast<dom::Document*>(intendedParent) : intendedParent ? intendedParent->nodeDocument : document_;
   if (!document) document = document_;
-  Element* element = dom::NewElement(ctx_, document, token.name, ns);
+  std::optional<std::string> is;
+  if (const std::string* value = token.Attribute("is")) is = *value;
+  // A custom element is made by running its constructor, in the middle of parsing, unless the parser is for a fragment.
+  dom::CustomDefinition* definition = ns == dom::kHtmlNamespace ? dom::LookupDefinition(ctx_, document, ns, token.name, is) : nullptr;
+  const bool willExecuteScript = definition && !fragmentContext_;
+  std::optional<dom::ReactionsScope> reactions;
+  if (willExecuteScript) reactions.emplace(ctx_);
+  Element* element = dom::CreateElement(ctx_, document, token.name, ns, "", is, willExecuteScript);
+  if (scriptHandler_) retained_.Append(qe::FromObject(element));
   for (const TokenAttribute& attribute : token.attributes) {
     dom::Attr* node = attribute.localName.empty() ? dom::NewAttr(ctx_, document, "", "", attribute.name, attribute.value)
                                                   : dom::NewAttr(ctx_, document, attribute.namespaceUri, attribute.prefix, attribute.localName, attribute.value);
     node->ownerElement = element;
     element->attributes.push_back(node);
+    if (element->customState == dom::CustomState::Custom) dom::CustomAttributeChanged(element, node->localName, node->namespaceUri, std::nullopt, node->value);
   }
   element->NoteWrite();
-  if (scriptHandler_) retained_.Append(qe::FromObject(element));
   return element;
 }
 
@@ -332,6 +342,9 @@ void TreeBuilder::InsertElementAt(Element* element, Location location) {
   Node* parent = location.parent;
   if (element->parentNode || element->Contains(parent)) return;
   if (parent->IsDocument() && static_cast<dom::Document*>(parent)->DocumentElement()) return;
+  // The reactions the insertion queues (connectedCallback, upgrades) run as soon as it is done, except for a fragment.
+  std::optional<dom::ReactionsScope> reactions;
+  if (!fragmentContext_ && dom::HasCustomDefinitions()) reactions.emplace(ctx_);
   dom::InsertUnchecked(element, parent, location.reference);
 }
 

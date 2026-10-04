@@ -255,7 +255,7 @@ bool MatchesPseudo(PseudoClass pseudo, const Element* element, const MatchContex
              (element->IsHtml() && element->FindAttribute("", "contenteditable"));
     case PseudoClass::ReadOnly:
       return element->IsHtml() && !MatchesPseudo(PseudoClass::ReadWrite, element, context);
-    case PseudoClass::Defined: return element->localName.find('-') == std::string::npos || !element->IsHtml();
+    case PseudoClass::Defined: return element->customState == dom::CustomState::Uncustomized || element->customState == dom::CustomState::Custom;
     case PseudoClass::Open: return IsHtmlNamed(element, {"details", "dialog"}) && element->FindAttribute("", "open");
     case PseudoClass::Closed: return IsHtmlNamed(element, {"details", "dialog"}) && !element->FindAttribute("", "open");
     default:

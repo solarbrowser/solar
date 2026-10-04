@@ -1,5 +1,6 @@
 #include <string>
 
+#include "solar/dom/CustomElements.h"
 #include "solar/dom/NodeBindingsInternal.h"
 #include "solar/html/HtmlBindings.h"
 #include "solar/html/Parser.h"
@@ -394,14 +395,14 @@ template <typename Host>
 void Install(Host& host) {
   Context& ctx = host.GetContext();
   Object* element = dom::InterfacePrototype(ctx, dom::Interface::Element);
-  qe::DefineAccessor(element, "innerHTML", GetInnerHtml, SetInnerHtml);
-  qe::DefineAccessor(element, "outerHTML", GetOuterHtml, SetOuterHtml);
-  qe::DefineMethod(element, "insertAdjacentHTML", InsertAdjacentHtml, 2);
-  qe::DefineMethod(element, "setHTMLUnsafe", SetHtmlUnsafe, 1);
+  qe::DefineAccessor(element, "innerHTML", GetInnerHtml, dom::Reactions<SetInnerHtml>);
+  qe::DefineAccessor(element, "outerHTML", GetOuterHtml, dom::Reactions<SetOuterHtml>);
+  qe::DefineMethod(element, "insertAdjacentHTML", dom::Reactions<InsertAdjacentHtml>, 2);
+  qe::DefineMethod(element, "setHTMLUnsafe", dom::Reactions<SetHtmlUnsafe>, 1);
   qe::DefineMethod(element, "getHTML", GetHtml, 0);
   Object* shadowRoot = dom::InterfacePrototype(ctx, dom::Interface::ShadowRoot);
-  qe::DefineAccessor(shadowRoot, "innerHTML", GetInnerHtml, SetInnerHtml);
-  qe::DefineMethod(shadowRoot, "setHTMLUnsafe", SetHtmlUnsafe, 1);
+  qe::DefineAccessor(shadowRoot, "innerHTML", GetInnerHtml, dom::Reactions<SetInnerHtml>);
+  qe::DefineMethod(shadowRoot, "setHTMLUnsafe", dom::Reactions<SetHtmlUnsafe>, 1);
   qe::DefineMethod(shadowRoot, "getHTML", GetHtml, 0);
 
   DefineHtmlElementInterfaces(ctx);
@@ -520,7 +521,15 @@ const char* const kWindowScript = R"JS(
       set(value) {
         handler = typeof value === "function" ? value : null;
         if (!listener) {
-          listener = (event) => { if (handler) handler.call(globalThis, event); };
+          listener = (event) => {
+            if (!handler) return;
+            if (type === "error" && typeof ErrorEvent === "function" && event instanceof ErrorEvent) {
+              // window.onerror is called with the parts of the error, and cancels the report by returning true.
+              if (handler.call(globalThis, event.message, event.filename, event.lineno, event.colno, event.error) === true) event.preventDefault();
+            } else {
+              handler.call(globalThis, event);
+            }
+          };
           target.addEventListener(type, listener);
         }
       },

@@ -4,6 +4,7 @@
 #include <string>
 
 #include "solar/dom/Mutation.h"
+#include "solar/dom/CustomElements.h"
 #include "solar/dom/NodeBindingsInternal.h"
 #include "solar/dom/Range.h"
 #include "solar/dom/Traversal.h"
@@ -23,6 +24,7 @@ void Install(Host& host) {
   DefineElementClass(ctx);
   DefineDocumentClasses(ctx);
   DefineShadowClasses(ctx);
+  DefineCustomElementClasses(ctx);
   DefineMutationClasses(ctx);
   DefineRangeClasses(ctx);
   DefineSelectionClass(ctx);
@@ -33,6 +35,39 @@ void Install(Host& host) {
   for (const char* const* piece = web::kScriptUiEvents; *piece; ++piece) events += *piece;
   const auto eventsResult = host.Evaluate(events, "events.js");
   if (!eventsResult.ok) std::fprintf(stderr, "events.js: %s\n", eventsResult.error.c_str());
+
+  // customElements, and the functions of script that the custom element algorithms are written in terms of.
+  host.Evaluate(R"JS(
+    (function () {
+      const init = __solarCustomElementsInit;
+      const registry = __solarCustomElementsRegistry();
+      delete globalThis.__solarCustomElementsInit;
+      delete globalThis.__solarCustomElementsRegistry;
+      delete globalThis.__solarProcessCustomElements;
+      const construct = Reflect.construct;
+      init({
+        construct: (constructor) => construct(constructor, []),
+        isConstructor(value) {
+          try { new (new Proxy(value, { construct() { return {}; } }))(); return true; } catch (e) { return false; }
+        },
+        toStrings(value) {
+          if ((typeof value !== "object" && typeof value !== "function") || value === null) throw new TypeError("The provided value is not a sequence.");
+          const out = [];
+          for (const item of value) out.push(`${item}`);
+          return out;
+        },
+        report(exception) {
+          if (typeof globalThis.dispatchEvent === "function" && typeof ErrorEvent === "function") {
+            const message = exception !== null && typeof exception === "object" && "message" in exception ? String(exception.message) : String(exception);
+            const event = new ErrorEvent("error", { message, error: exception, cancelable: true });
+            if (!globalThis.dispatchEvent(event)) return;
+          }
+          console.error("Uncaught", exception);
+        },
+      });
+      Object.defineProperty(globalThis, "customElements", { get() { return registry; }, set: undefined, enumerable: true, configurable: true });
+    })();
+  )JS");
 
   // What Web IDL has and the embedding surface cannot say: the constants, which are on the interface
   // object and its prototype, and the static side of each interface inheriting its parent's.

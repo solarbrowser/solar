@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <string>
 
+#include "solar/dom/CustomElements.h"
 #include "solar/dom/NodeBindingsInternal.h"
 
 namespace solar::dom {
@@ -363,39 +364,39 @@ void DefineElementClass(Context& ctx) {
   qe::DefineAccessor(p, "prefix", GetPrefix, nullptr);
   qe::DefineAccessor(p, "localName", GetLocalName, nullptr);
   qe::DefineAccessor(p, "tagName", GetTagName, nullptr);
-  qe::DefineAccessor(p, "id", GetReflected<kId>, SetReflected<kId>);
-  qe::DefineAccessor(p, "className", GetReflected<kClass>, SetReflected<kClass>);
-  qe::DefineAccessor(p, "slot", GetReflected<kSlot>, SetReflected<kSlot>);
-  qe::DefineAccessor(p, "classList", GetClassList, SetClassList);
+  qe::DefineAccessor(p, "id", GetReflected<kId>, Reactions<SetReflected<kId>>);
+  qe::DefineAccessor(p, "className", GetReflected<kClass>, Reactions<SetReflected<kClass>>);
+  qe::DefineAccessor(p, "slot", GetReflected<kSlot>, Reactions<SetReflected<kSlot>>);
+  qe::DefineAccessor(p, "classList", GetClassList, Reactions<SetClassList>);
   qe::DefineAccessor(p, "attributes", GetAttributes, nullptr);
   qe::DefineMethod(p, "hasAttributes", HasAttributes, 0);
   qe::DefineMethod(p, "getAttributeNames", GetAttributeNames, 0);
   qe::DefineMethod(p, "getAttribute", GetAttributeMethod, 1);
   qe::DefineMethod(p, "getAttributeNS", GetAttributeNs, 2);
-  qe::DefineMethod(p, "setAttribute", SetAttributeMethod, 2);
-  qe::DefineMethod(p, "setAttributeNS", SetAttributeNs, 3);
-  qe::DefineMethod(p, "removeAttribute", RemoveAttributeMethod, 1);
-  qe::DefineMethod(p, "removeAttributeNS", RemoveAttributeNs, 2);
-  qe::DefineMethod(p, "toggleAttribute", ToggleAttribute, 1);
+  qe::DefineMethod(p, "setAttribute", Reactions<SetAttributeMethod>, 2);
+  qe::DefineMethod(p, "setAttributeNS", Reactions<SetAttributeNs>, 3);
+  qe::DefineMethod(p, "removeAttribute", Reactions<RemoveAttributeMethod>, 1);
+  qe::DefineMethod(p, "removeAttributeNS", Reactions<RemoveAttributeNs>, 2);
+  qe::DefineMethod(p, "toggleAttribute", Reactions<ToggleAttribute>, 1);
   qe::DefineMethod(p, "hasAttribute", HasAttributeMethod, 1);
   qe::DefineMethod(p, "hasAttributeNS", HasAttributeNs, 2);
   qe::DefineMethod(p, "getAttributeNode", GetAttributeNode, 1);
   qe::DefineMethod(p, "getAttributeNodeNS", GetAttributeNodeNs, 2);
-  qe::DefineMethod(p, "setAttributeNode", SetAttributeNodeMethod, 1);
-  qe::DefineMethod(p, "setAttributeNodeNS", SetAttributeNodeMethod, 1);
-  qe::DefineMethod(p, "removeAttributeNode", RemoveAttributeNodeMethod, 1);
+  qe::DefineMethod(p, "setAttributeNode", Reactions<SetAttributeNodeMethod>, 1);
+  qe::DefineMethod(p, "setAttributeNodeNS", Reactions<SetAttributeNodeMethod>, 1);
+  qe::DefineMethod(p, "removeAttributeNode", Reactions<RemoveAttributeNodeMethod>, 1);
   qe::DefineMethod(p, "getElementsByTagName", GetElementsByTagNameMethod, 1);
   qe::DefineMethod(p, "getElementsByTagNameNS", GetElementsByTagNameNsMethod, 2);
   qe::DefineMethod(p, "getElementsByClassName", GetElementsByClassNameMethod, 1);
-  qe::DefineMethod(p, "insertAdjacentElement", InsertAdjacentElement, 2);
-  qe::DefineMethod(p, "insertAdjacentText", InsertAdjacentText, 2);
+  qe::DefineMethod(p, "insertAdjacentElement", Reactions<InsertAdjacentElement>, 2);
+  qe::DefineMethod(p, "insertAdjacentText", Reactions<InsertAdjacentText>, 2);
   DefineParentNode(p);
   DefineChildNode(p);
   DefineNonDocumentTypeChildNode(p);
   qe::DefineGlobal(ctx, "Element", element.constructor);
 
   // The interface the standard gives HTML elements; the HTML specification adds its members.
-  qe::ClassRef html = qe::DefineClass(ctx, "HTMLElement", IllegalConstructor, 0, p);
+  qe::ClassRef html = qe::DefineClass(ctx, "HTMLElement", HtmlElementConstructor, 0, p);
   SetInterfacePrototype(ctx, Interface::HtmlElement, html.prototype);
   qe::DefineGlobal(ctx, "HTMLElement", html.constructor);
 }
