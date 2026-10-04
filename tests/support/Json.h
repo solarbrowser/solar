@@ -68,6 +68,12 @@ class JsonReader {
     } else if (text_.compare(pos_, 5, "false") == 0) {
       value.type = Json::Type::Bool;
       pos_ += 5;
+    } else if (c == '-' || (c >= '0' && c <= '9')) {
+      // A number: nothing here reads one, so it is skipped over and comes out as null.
+      while (pos_ < text_.size() && (text_[pos_] == '-' || text_[pos_] == '+' || text_[pos_] == '.' || text_[pos_] == 'e' || text_[pos_] == 'E' ||
+                                     (text_[pos_] >= '0' && text_[pos_] <= '9'))) {
+        ++pos_;
+      }
     } else {
       pos_ += 4;  // null
     }

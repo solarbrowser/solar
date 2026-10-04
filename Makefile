@@ -8,6 +8,9 @@ URL_SOURCES = $(wildcard src/url/*.cpp)
 URL_OBJECTS = $(URL_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
 NET_SOURCES = $(wildcard src/net/*.cpp)
 NET_OBJECTS = $(NET_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
+# The HTML parser: the tokenizer and the tree builder, which make a DOM tree out of markup.
+HTML_SOURCES = $(wildcard src/html/*.cpp)
+HTML_OBJECTS = $(HTML_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
 # The document tree: nodes are Quanta cells, and the HTML parser and (later) style and layout work on them.
 DOM_SOURCES = $(wildcard src/dom/*.cpp)
 DOM_OBJECTS = $(DOM_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
@@ -73,7 +76,7 @@ PSL_URL = https://publicsuffix.org/list/public_suffix_list.dat
 PSL_FILE = $(BUILD_DIR)/psl/public_suffix_list.dat
 
 .DEFAULT_GOAL := all
-.PHONY: all test test-gc asan-test idna-tables public-suffix-tables clean quanta
+.PHONY: all test test-gc asan-test idna-tables public-suffix-tables html-tables clean quanta
 
 all: solar
 
@@ -170,6 +173,10 @@ $(BUILD_DIR)/UrlRealmsTest: $(OBJ_DIR)/tests/UrlRealmsTest.o $(URL_OBJECTS) $(WE
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
 
+$(BUILD_DIR)/HtmlTokenizerTest: $(OBJ_DIR)/tests/HtmlTokenizerTest.o $(HTML_OBJECTS) $(URL_OBJECTS)
+	@echo "[LINK] $@"
+	@$(CXX) $(CXXFLAGS) -o $@ $^
+
 $(BUILD_DIR)/DomTest: $(OBJ_DIR)/tests/DomTest.o $(URL_OBJECTS) $(DOM_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
@@ -191,7 +198,7 @@ WPT_FETCH = $(wildcard tests/wpt/fetch/api/headers/*.any.js tests/wpt/fetch/api/
 WPT_STREAMS = $(wildcard tests/wpt/streams/*.any.js tests/wpt/streams/piping/*.any.js tests/wpt/streams/readable-byte-streams/*.any.js tests/wpt/streams/readable-streams/*.any.js tests/wpt/streams/transform-streams/*.any.js tests/wpt/streams/writable-streams/*.any.js)
 WPT_DOM = $(wildcard tests/dom/*.any.js tests/wpt/dom/abort/*.any.js tests/wpt/dom/events/*.any.js tests/wpt/webidl/*.any.js tests/wpt/encoding/*.any.js tests/wpt/encoding/streams/*.any.js tests/wpt/FileAPI/blob/*.any.js tests/wpt/FileAPI/file/*.any.js tests/wpt/xhr/formdata/*.any.js)
 
-PORTABLE_TESTS = UrlTest SearchParamsTest ValidationErrorTest NormalizerTest PublicSuffixTest CookiesTest HttpCacheTest FetchHeadersTest CorsTest Http1ParserTest ContentDecoderTest AddressRaceTest HstsTest
+PORTABLE_TESTS = HtmlTokenizerTest UrlTest SearchParamsTest ValidationErrorTest NormalizerTest PublicSuffixTest CookiesTest HttpCacheTest FetchHeadersTest CorsTest Http1ParserTest ContentDecoderTest AddressRaceTest HstsTest
 NET_TESTS = LoopTest ResolverTest NetTest HttpClientTest TlsTest Http2Test
 QUANTA_TESTS = UrlBindingsTest UrlRealmsTest FetchBindingsTest DomTest
 ifeq ($(PLATFORM),linux)
@@ -262,6 +269,21 @@ public-suffix-tables: $(BUILD_DIR)/GenPublicSuffix
 	@curl -sfL $(PSL_URL) -o $(PSL_FILE)
 	@$(BUILD_DIR)/GenPublicSuffix $(PSL_FILE) > src/url/PublicSuffixTables.cpp
 	@echo "[OK] src/url/PublicSuffixTables.cpp"
+
+ENTITIES_URL = https://html.spec.whatwg.org/entities.json
+ENTITIES_FILE = $(BUILD_DIR)/html/entities.json
+
+$(BUILD_DIR)/GenEntities: tools/GenEntities.cpp
+	@mkdir -p $(BUILD_DIR)
+	@echo "[BUILD] $<"
+	@$(CXX) -std=c++20 -Wall -Wextra -O2 -o $@ $<
+
+# The named character references. They change rarely; regenerate to take a newer list.
+html-tables: $(BUILD_DIR)/GenEntities
+	@mkdir -p $(dir $(ENTITIES_FILE))
+	@curl -sfL $(ENTITIES_URL) -o $(ENTITIES_FILE)
+	@$(BUILD_DIR)/GenEntities $(ENTITIES_FILE) > src/html/EntityTables.cpp
+	@echo "[OK] src/html/EntityTables.cpp"
 
 idna-tables: $(BUILD_DIR)/GenIdnaTables
 	@mkdir -p $(UCD_DIR)
