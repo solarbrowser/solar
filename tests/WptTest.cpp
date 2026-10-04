@@ -9,6 +9,8 @@
 
 #include "quanta/Embed.h"
 #include "solar/dom/NodeBindings.h"
+#include "solar/dom/NodeBindingsInternal.h"
+#include "solar/html/Parser.h"
 #include "solar/html/HtmlBindings.h"
 #include "solar/web/DomBindings.h"
 #include "solar/net/HttpClient.h"
@@ -126,9 +128,56 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
   skips += "];";
 
   std::printf("%s\n", name.c_str());
+  const bool isHtml = name.ends_with(".html");
+  solar::dom::Document* document = nullptr;
+  if (isHtml) {
+    // A page: it has a window and a document of its own, which its scripts run in.
+    document = solar::dom::NewDocument(runtime->GetContext(), true);
+    document->url = "http://web-platform.test:8000/" + std::filesystem::relative(path, "tests/wpt").string();
+    document->readyState = "loading";
+    solar::html::InstallWindow(*runtime, document);
+  }
   qe::Runtime::Result result = runtime->Evaluate(skips + resources + harness, "harness.js");
   if (result.ok && !prelude.empty()) result = runtime->Evaluate(prelude, "prelude.js");
-  if (result.ok) result = runtime->Evaluate(source, name);
+  if (result.ok && isHtml) {
+    bool scriptsOk = true;
+    const auto runScript = [&](solar::dom::Element* script) {
+      const solar::dom::Attr* type = script->FindAttribute("", "type");
+      if (type && !type->value.empty() && type->value != "text/javascript" && type->value != "application/javascript") return;
+      std::string code, filename = name;
+      if (const solar::dom::Attr* src = script->FindAttribute("", "src")) {
+        const std::string given = src->value;
+        // The harness is already in place; any other script is a file of the tests.
+        if (given.ends_with("testharness.js") || given.ends_with("testharnessreport.js")) return;
+        const std::string wanted = given.starts_with("/") ? "tests/wpt" + given : (std::filesystem::path(path).parent_path() / given).string();
+        if (!ReadFile(wanted, code)) {
+          std::printf("  FAIL cannot load script %s\n", given.c_str());
+          scriptsOk = false;
+          return;
+        }
+        filename = given;
+      } else {
+        code = script->DescendantText();
+      }
+      document->currentScript = script;
+      const qe::Runtime::Result scriptResult = runtime->Evaluate(code, filename);
+      document->currentScript = nullptr;
+      if (!scriptResult.ok) {
+        std::printf("  FAIL script error: %s\n", scriptResult.error.c_str());
+        scriptsOk = false;
+      }
+      runtime->PerformMicrotaskCheckpoint();
+    };
+    solar::html::ParseDocument(runtime->GetContext(), document, source, solar::html::ScriptingMode::Normal, nullptr, runScript);
+    document->readyState = "interactive";
+    result = runtime->Evaluate("document.dispatchEvent(new Event('DOMContentLoaded', { bubbles: true }))", "page");
+    document->readyState = "complete";
+    if (result.ok) result = runtime->Evaluate("window.dispatchEvent(new Event('load'))", "page");
+    if (result.ok && !scriptsOk) result.ok = false;
+    if (!result.ok && result.error.empty()) result.error = "a script of the page failed";
+  } else if (result.ok) {
+    result = runtime->Evaluate(source, name);
+  }
   if (!result.ok) {
     std::printf("  FAIL while loading: %s\n", result.error.c_str());
     return false;

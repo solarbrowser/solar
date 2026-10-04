@@ -278,8 +278,7 @@ Value CreateDocumentType(Context& ctx, Value t, qe::Args args, Value) {
   std::string publicId = qe::HasException(ctx) ? "" : qe::ToWtf8(ctx, args[1]);
   std::string systemId = qe::HasException(ctx) ? "" : qe::ToWtf8(ctx, args[2]);
   if (qe::HasException(ctx)) return qe::Undefined();
-  QualifiedParts parts;
-  if (auto error = ValidateAndExtract("", name, parts)) {
+  if (auto error = ValidateQualifiedName(name)) {
     Throw(ctx, *error);
     return qe::Undefined();
   }

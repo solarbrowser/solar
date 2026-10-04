@@ -2,8 +2,9 @@
 
 namespace solar::html {
 
-void ParseDocument(Quanta::Context& ctx, dom::Document* document, std::string_view markup, ScriptingMode scripting, std::vector<std::string>* errors) {
+void ParseDocument(Quanta::Context& ctx, dom::Document* document, std::string_view markup, ScriptingMode scripting, std::vector<std::string>* errors, ScriptHandler scriptHandler) {
   TreeBuilder builder(ctx, document, markup, scripting);
+  if (scriptHandler) builder.SetScriptHandler(std::move(scriptHandler));
   builder.Run();
   if (errors) *errors = builder.Errors();
 }

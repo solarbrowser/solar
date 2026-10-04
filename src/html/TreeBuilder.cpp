@@ -88,6 +88,8 @@ dom::Document::Mode ModeForDoctype(const Token& token) {
 TreeBuilder::TreeBuilder(Quanta::Context& ctx, dom::Document* document, std::string_view markup, ScriptingMode scripting)
     : ctx_(ctx), document_(document), tokenizer_(markup), scripting_(scripting) {}
 
+void TreeBuilder::SetScriptHandler(ScriptHandler handler) { scriptHandler_ = std::move(handler); }
+
 std::vector<std::string> TreeBuilder::Errors() const {
   std::vector<std::string> all = tokenizer_.errors();
   all.insert(all.end(), errors_.begin(), errors_.end());
@@ -322,6 +324,7 @@ Element* TreeBuilder::CreateElementForToken(const Token& token, std::string_view
     element->attributes.push_back(node);
   }
   element->NoteWrite();
+  if (scriptHandler_) retained_.Append(qe::FromObject(element));
   return element;
 }
 
@@ -1240,9 +1243,11 @@ void TreeBuilder::TextMode(Token& token) {
     return;
   }
   if (token.type == Token::Type::EndTag) {
-    // A script's end tag is where a script would run; this parser does not run any yet.
+    Element* current = CurrentNode();
     Pop();
     mode_ = originalMode_;
+    // A script's end tag is where the script runs, and the parser waits for it.
+    if (token.name == "script" && scriptHandler_ && IsHtmlElement(current, "script")) scriptHandler_(current);
   }
 }
 

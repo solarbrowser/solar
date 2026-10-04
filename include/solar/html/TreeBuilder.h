@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -16,6 +17,9 @@ namespace solar::html {
 // of fragment parsing, Inert (scripts are marked as already started) and Fragment.
 enum class ScriptingMode { Normal, Disabled, Inert, Fragment };
 
+// Called when a script element's end tag is seen: where a script would run.
+using ScriptHandler = std::function<void(dom::Element* script)>;
+
 class TreeBuilder {
  public:
   // Builds the tree of `markup` into `document`, which is taken to be empty.
@@ -23,6 +27,10 @@ class TreeBuilder {
 
   // Makes this a fragment parser for `context`, which `fragment` (made by the caller) receives the nodes of.
   void SetUpFragment(dom::Element* context, dom::DocumentFragment* fragment);
+
+  // Makes the parser stop at each script element for `handler`, which may run script. Nodes the parser
+  // holds only itself are then kept alive for the collector, which script lets run.
+  void SetScriptHandler(ScriptHandler handler);
 
   void Run();
 
@@ -170,6 +178,9 @@ class TreeBuilder {
   bool skipNextLineFeed_ = false;
   bool done_ = false;
   std::vector<std::string> pendingTableCharacters_;
+
+  ScriptHandler scriptHandler_;
+  Quanta::Embed::ValueList retained_;
 
   dom::Element* fragmentContext_ = nullptr;
   dom::DocumentFragment* rootInsertionTarget_ = nullptr;

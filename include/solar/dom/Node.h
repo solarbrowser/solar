@@ -162,6 +162,12 @@ struct Document : Node {
   Quanta::Object* implementation = nullptr;  // document.implementation, the same object each time
   // The inert document the contents of this one's template elements belong to.
   Document* templateContentsOwner = nullptr;
+  // document.readyState, which the page loader moves along; a document made by script is complete.
+  std::string readyState = "complete";
+  // The script element that is running, for document.currentScript.
+  Element* currentScript = nullptr;
+  // The window this document is the document of, which an event on the document goes on to; null for any other.
+  web::JsEventTarget* window = nullptr;
 
   Element* DocumentElement() const;
   DocumentType* Doctype() const;
@@ -242,6 +248,8 @@ struct QualifiedParts {
   std::string prefix;        // empty: none
   std::string localName;
 };
+// "validate" of the standard: whether `qualifiedName` is a QName (a prefix needs no namespace here).
+std::optional<DomError> ValidateQualifiedName(std::string_view qualifiedName);
 // "validate and extract" of the standard, for createElementNS, setAttributeNS and the like.
 std::optional<DomError> ValidateAndExtract(std::string_view namespaceUri, std::string_view qualifiedName, QualifiedParts& out);
 

@@ -27,6 +27,8 @@ void Document::Visit(Quanta::Visitor& visitor) {
   Node::Visit(visitor);
   visitor.Mark(implementation);
   visitor.Mark(templateContentsOwner);
+  visitor.Mark(currentScript);
+  visitor.Mark(window);
 }
 
 void DocumentFragment::Visit(Quanta::Visitor& visitor) {
@@ -68,7 +70,8 @@ T* Make(Context& ctx, Interface interface, NodeType type, Document* document) {
   node->nodeType = type;
   node->nodeDocument = document;
   // An event goes on from a node to the node it is in.
-  node->eventParent = [](web::JsEventTarget* target) -> web::JsEventTarget* { return static_cast<Node*>(target)->parentNode; };
+  node->eventParent = type == NodeType::Document ? [](web::JsEventTarget* target) -> web::JsEventTarget* { return static_cast<Document*>(target)->window; }
+                                                  : [](web::JsEventTarget* target) -> web::JsEventTarget* { return static_cast<Node*>(target)->parentNode; };
   node->initialize_prototype(InterfacePrototype(ctx, interface));
   return node;
 }
@@ -642,6 +645,14 @@ bool IsXmlName(std::string_view name) {
 }
 
 bool IsNcName(std::string_view name) { return IsXmlName(name) && name.find(':') == std::string_view::npos; }
+
+std::optional<DomError> ValidateQualifiedName(std::string_view qualifiedName) {
+  const DomError invalid{"InvalidCharacterError", "The string contains invalid characters"};
+  const size_t colon = qualifiedName.find(':');
+  if (colon == std::string_view::npos) return IsNcName(qualifiedName) ? std::nullopt : std::optional<DomError>(invalid);
+  if (!IsNcName(qualifiedName.substr(0, colon)) || !IsNcName(qualifiedName.substr(colon + 1))) return invalid;
+  return std::nullopt;
+}
 
 std::optional<DomError> ValidateAndExtract(std::string_view ns, std::string_view qualifiedName, QualifiedParts& out) {
   const DomError invalid{"InvalidCharacterError", "The string contains invalid characters"};

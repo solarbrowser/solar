@@ -125,15 +125,32 @@
 
   // `type` is a DOMException's name (or its legacy constant name, which the tests that use the two
   // spell as the code's name).
-  globalThis.assert_throws_dom = (type, func, description) => {
+  const legacyNames = {
+    INDEX_SIZE_ERR: 'IndexSizeError', HIERARCHY_REQUEST_ERR: 'HierarchyRequestError', WRONG_DOCUMENT_ERR: 'WrongDocumentError',
+    INVALID_CHARACTER_ERR: 'InvalidCharacterError', NO_MODIFICATION_ALLOWED_ERR: 'NoModificationAllowedError', NOT_FOUND_ERR: 'NotFoundError',
+    NOT_SUPPORTED_ERR: 'NotSupportedError', INUSE_ATTRIBUTE_ERR: 'InUseAttributeError', INVALID_STATE_ERR: 'InvalidStateError', SYNTAX_ERR: 'SyntaxError',
+    INVALID_MODIFICATION_ERR: 'InvalidModificationError', NAMESPACE_ERR: 'NamespaceError', INVALID_ACCESS_ERR: 'InvalidAccessError',
+    TYPE_MISMATCH_ERR: 'TypeMismatchError', SECURITY_ERR: 'SecurityError', NETWORK_ERR: 'NetworkError', ABORT_ERR: 'AbortError',
+    URL_MISMATCH_ERR: 'URLMismatchError', QUOTA_EXCEEDED_ERR: 'QuotaExceededError', TIMEOUT_ERR: 'TimeoutError', INVALID_NODE_TYPE_ERR: 'InvalidNodeTypeError',
+    DATA_CLONE_ERR: 'DataCloneError',
+  };
+  // `type` is a DOMException's name or its legacy constant's. The second argument may be the DOMException
+  // constructor of another realm, with the function after it.
+  globalThis.assert_throws_dom = (type, funcOrConstructor, descriptionOrFunc, maybeDescription) => {
+    let func = funcOrConstructor, description = descriptionOrFunc;
+    if (typeof descriptionOrFunc === 'function') {
+      func = descriptionOrFunc;
+      description = maybeDescription;
+    }
+    const name = legacyNames[type] || type;
     try {
       func();
     } catch (e) {
       if (!(e instanceof DOMException)) fail('threw ' + describe(e) + ' instead of a DOMException', description);
-      if (e.name !== type) fail('threw a DOMException named ' + e.name + ' instead of ' + type, description);
+      if (e.name !== name) fail('threw a DOMException named ' + e.name + ' instead of ' + name, description);
       return;
     }
-    fail('did not throw a DOMException named ' + type, description);
+    fail('did not throw a DOMException named ' + name, description);
   };
 
   // A skip is the start of a test's name, or, if it begins with "*", a part of it.
