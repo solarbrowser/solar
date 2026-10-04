@@ -2,6 +2,7 @@
 
 #include "solar/dom/Mutation.h"
 #include "solar/dom/Range.h"
+#include "solar/dom/Traversal.h"
 
 #include <algorithm>
 
@@ -368,6 +369,7 @@ void RemoveImpl(Node* node, bool suppress) {
   const bool observed = HasMutationObservers();
   if (observed) RegisterTransientObservers(node, parent);
   if (HasLiveRanges()) RangesBeforeRemove(node, parent, static_cast<uint32_t>(node->IndexInParent()));
+  if (HasNodeIterators()) NodeIteratorsBeforeRemove(node);
   Unlink(node);
   if (observed && !suppress) QueueChildListRecord(parent, {}, {node}, oldPrevious, oldNext);
 }

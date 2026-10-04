@@ -49,7 +49,7 @@ endif
 CXXFLAGS += $(OPENSSL_CFLAGS) $(COMPRESSION_CFLAGS) $(HTTP2_CFLAGS)
 
 WEB_SOURCES = $(wildcard src/web/*.cpp)
-WEB_OBJECTS = $(WEB_SOURCES:%.cpp=$(OBJ_DIR)/%.o) $(OBJ_DIR)/$(GEN_DIR)/StreamsScript.o
+WEB_OBJECTS = $(WEB_SOURCES:%.cpp=$(OBJ_DIR)/%.o) $(OBJ_DIR)/$(GEN_DIR)/StreamsScript.o $(OBJ_DIR)/$(GEN_DIR)/UiEventsScript.o
 
 # The scripts in src/web/js are compiled into the program as C++ sources made from them.
 GEN_DIR = build/gen
@@ -58,6 +58,12 @@ $(GEN_DIR)/StreamsScript.cpp: $(STREAMS_JS) $(BUILD_DIR)/EmbedScripts
 	@mkdir -p $(GEN_DIR)
 	@echo "[EMBED] $@"
 	@$(BUILD_DIR)/EmbedScripts Streams $(STREAMS_JS) > $@
+
+UI_EVENTS_JS = $(sort $(wildcard src/web/js/events-*.js))
+$(GEN_DIR)/UiEventsScript.cpp: $(UI_EVENTS_JS) $(BUILD_DIR)/EmbedScripts
+	@mkdir -p $(GEN_DIR)
+	@echo "[EMBED] $@"
+	@$(BUILD_DIR)/EmbedScripts UiEvents $(UI_EVENTS_JS) > $@
 
 $(BUILD_DIR)/EmbedScripts: tools/EmbedScripts.cpp
 	@mkdir -p $(BUILD_DIR)

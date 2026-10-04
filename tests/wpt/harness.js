@@ -158,6 +158,29 @@
     return skips.some((skip) => (skip.startsWith('*') ? String(name).includes(skip.slice(1)) : String(name).startsWith(skip)));
   }
 
+  globalThis.assert_readonly = (object, property, description) => {
+    const initial = object[property];
+    try {
+      try { object[property] = initial + 'a'; } catch (e) { /* a strict-mode write to a read only property throws */ }
+      if (!Object.is(object[property], initial)) fail('assert_readonly: property ' + String(property) + ' is not read only', description);
+    } finally {
+      try { object[property] = initial; } catch (e) { /* it is read only */ }
+    }
+  };
+
+  // assert_implements(condition, description) fails a test that needs what is not there; the optional one only
+  // leaves the test aside, as a precondition that did not hold.
+  globalThis.assert_implements = (condition, description) => {
+    if (!condition) fail('assert_implements: ' + (description || 'a feature is not implemented'), description);
+  };
+  globalThis.assert_implements_optional = (condition, description) => {
+    if (!condition) {
+      const error = new Error('precondition failed: ' + (description || ''));
+      error.__precondition = true;
+      throw error;
+    }
+  };
+
   // generate_tests(func, [[name, ...args], ...]): a test of each, which calls func with the args.
   globalThis.generate_tests = (func, args, properties) => {
     for (const row of args) {
@@ -202,7 +225,7 @@
     } finally {
       t.runCleanups();
     }
-    results.push(failure ? { name, ok: false, message: messageOf(failure) } : { name, ok: true });
+    results.push(failure && !failure.__precondition ? { name, ok: false, message: messageOf(failure) } : { name, ok: true });
   };
 
   // As in testharness, promise tests run one after another: each starts when the one before it is done.
@@ -220,7 +243,7 @@
         .catch((e) => { failure = failure || e; })
         .then(() => {
           t.runCleanups();
-          results.push(failure ? { name, ok: false, message: messageOf(failure) } : { name, ok: true });
+          results.push(failure && !failure.__precondition ? { name, ok: false, message: messageOf(failure) } : { name, ok: true });
         });
     });
     pending.push(promiseTests);
@@ -240,7 +263,7 @@
       if (finished) return;
       finished = true;
       t.runCleanups();
-      results.push(failure ? { name, ok: false, message: messageOf(failure) } : { name, ok: true });
+      results.push(failure && !failure.__precondition ? { name, ok: false, message: messageOf(failure) } : { name, ok: true });
       finish();
     };
     const t = makeTestObject((e) => end(e));

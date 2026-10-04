@@ -1,8 +1,13 @@
 #include "solar/dom/NodeBindings.h"
 
+#include <cstdio>
+#include <string>
+
 #include "solar/dom/Mutation.h"
 #include "solar/dom/NodeBindingsInternal.h"
 #include "solar/dom/Range.h"
+#include "solar/dom/Traversal.h"
+#include "solar/web/Scripts.h"
 
 namespace solar::dom {
 
@@ -20,6 +25,13 @@ void Install(Host& host) {
   DefineMutationClasses(ctx);
   DefineRangeClasses(ctx);
   DefineSelectionClass(ctx);
+  DefineTraversalClasses(ctx);
+
+  // The event interfaces written in script, and Document.createEvent, which needs the Document.
+  std::string events;
+  for (const char* const* piece = web::kScriptUiEvents; *piece; ++piece) events += *piece;
+  const auto eventsResult = host.Evaluate(events, "events.js");
+  if (!eventsResult.ok) std::fprintf(stderr, "events.js: %s\n", eventsResult.error.c_str());
 
   // What Web IDL has and the embedding surface cannot say: the constants, which are on the interface
   // object and its prototype, and the static side of each interface inheriting its parent's.
@@ -42,6 +54,12 @@ void Install(Host& host) {
       define(Range.prototype, { START_TO_START: 0, START_TO_END: 1, END_TO_END: 2, END_TO_START: 3 });
       Object.setPrototypeOf(Range, AbstractRange);
       Object.setPrototypeOf(StaticRange, AbstractRange);
+      const filterConstants = {
+        FILTER_ACCEPT: 1, FILTER_REJECT: 2, FILTER_SKIP: 3, SHOW_ALL: 0xFFFFFFFF, SHOW_ELEMENT: 0x1, SHOW_ATTRIBUTE: 0x2, SHOW_TEXT: 0x4,
+        SHOW_CDATA_SECTION: 0x8, SHOW_ENTITY_REFERENCE: 0x10, SHOW_ENTITY: 0x20, SHOW_PROCESSING_INSTRUCTION: 0x40, SHOW_COMMENT: 0x80,
+        SHOW_DOCUMENT: 0x100, SHOW_DOCUMENT_TYPE: 0x200, SHOW_DOCUMENT_FRAGMENT: 0x400, SHOW_NOTATION: 0x800,
+      };
+      define(NodeFilter, filterConstants);
       define(Node, nodeTypes);
       define(Node.prototype, nodeTypes);
       for (const [child, parent] of [[CharacterData, Node], [Text, CharacterData], [CDATASection, Text], [ProcessingInstruction, CharacterData],

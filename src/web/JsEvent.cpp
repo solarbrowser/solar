@@ -250,6 +250,14 @@ Value SetReturnValue(Context& ctx, Value t, qe::Args args, Value) {
 }
 
 // initEvent(type, bubbles, cancelable): the old way to fill an event in.
+// __solarEventUninitialized(event): what createEvent leaves an event as, until it is initialized.
+Value MakeUninitialized(Context&, Value, qe::Args args, Value) {
+  if (!args.empty()) {
+    if (JsEvent* event = DOMObject::Cast<JsEvent>(args[0])) event->initialized = false;
+  }
+  return qe::Undefined();
+}
+
 Value InitEvent(Context& ctx, Value t, qe::Args args, Value) {
   JsEvent* self = ThisEvent(ctx, t);
   if (!self) return qe::Undefined();
@@ -554,6 +562,8 @@ void DefineEventClasses(Context& ctx) {
   qe::DefineAccessor(custom.prototype, "detail", GetDetail, nullptr);
   qe::DefineMethod(custom.prototype, "initCustomEvent", InitCustomEvent, 1);
   qe::DefineGlobal(ctx, "CustomEvent", custom.constructor);
+
+  qe::DefineGlobalFunction(ctx, "__solarEventUninitialized", MakeUninitialized, 1);
 
   qe::ClassRef target = qe::DefineClass(ctx, "EventTarget", ConstructTarget, 0);
   qe::SetRealmData(ctx, &g_targetPrototypeKey, target.prototype);
