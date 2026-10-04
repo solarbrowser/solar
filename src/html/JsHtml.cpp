@@ -465,7 +465,7 @@ const char* const kWindowScript = R"JS(
       named.add(name);
       Object.defineProperty(globalThis, name, {
         get() { return lookup(name); },
-        set(value) { named.delete(name); delete globalThis[name]; Object.defineProperty(globalThis, name, { value, writable: true, enumerable: true, configurable: true }); },
+        set(value) { named.delete(name); Object.defineProperty(globalThis, name, { value, writable: true, enumerable: true, configurable: true }); },
         enumerable: false,
         configurable: true,
       });
