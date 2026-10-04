@@ -4,6 +4,7 @@
 
 namespace solar::dom {
 struct Document;
+struct Node;
 }
 
 namespace solar::html {
@@ -25,5 +26,8 @@ void InstallWindow(Quanta::Embed::Realm& realm, dom::Document* document = nullpt
 void DefineFrameNatives(Quanta::Context& ctx);
 void DefineIframeMembers(Quanta::Context& ctx, Quanta::Object* prototype);
 void DefineScriptMembers(Quanta::Context& ctx, Quanta::Object* prototype);
+// focus(), blur(), tabIndex and activeElement; and what the tree does when the focused node leaves it.
+void DefineFocusMembers(Quanta::Context& ctx);
+void FocusAfterRemove(dom::Node* node);
 
 }  // namespace solar::html

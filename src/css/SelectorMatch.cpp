@@ -154,6 +154,24 @@ bool IsTarget(const Element* element) {
   return id && id->value == decoded;
 }
 
+// :focus is the focused element and the hosts of the shadow trees it is in; :focus-within is also all that contain them.
+bool FocusPath(const Element* element, bool within) {
+  const dom::Document* document = element->nodeDocument;
+  if (!document || !document->focusedElement) return false;
+  const dom::Node* node = document->focusedElement;
+  if (node == element) return true;
+  for (;;) {
+    const dom::Node* root = node;
+    while (root->parentNode) {
+      root = root->parentNode;
+      if (within && root == element) return true;
+    }
+    if (!root->IsFragment() || !static_cast<const dom::DocumentFragment*>(root)->isShadowRoot) return false;
+    node = static_cast<const dom::ShadowRoot*>(root)->host;
+    if (node == element) return true;
+  }
+}
+
 bool IsRoot(const Element* element) { return element->parentNode && element->parentNode->IsDocument(); }
 
 bool IsEmpty(const Element* element) {
@@ -253,6 +271,9 @@ bool MatchesPseudo(PseudoClass pseudo, const Element* element, const MatchContex
     case PseudoClass::Root: return IsRoot(element);
     case PseudoClass::Empty: return IsEmpty(element);
     case PseudoClass::Target: return IsTarget(element);
+    case PseudoClass::Focus:
+    case PseudoClass::FocusVisible: return FocusPath(element, false);
+    case PseudoClass::FocusWithin: return FocusPath(element, true);
     case PseudoClass::FirstChild: return FirstOfKind(element, false, false);
     case PseudoClass::LastChild: return FirstOfKind(element, false, true);
     case PseudoClass::OnlyChild: return OnlyOfKind(element, false);

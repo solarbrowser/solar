@@ -241,6 +241,8 @@ struct Document : Node {
   std::string readyState = "complete";
   // The script element that is running, for document.currentScript.
   Element* currentScript = nullptr;
+  // The focused area of the document, if an element is: what document.activeElement is, once it is retargeted.
+  Element* focusedElement = nullptr;
   // The context the document was made in, which the algorithms that must queue a microtask need.
   Quanta::Context* context = nullptr;
   // document.getSelection(): the same object each time.

@@ -525,6 +525,7 @@ void Install(Host& host) {
 
   DefineHtmlElementInterfaces(ctx);
   DefineFrameNatives(ctx);
+  DefineFocusMembers(ctx);
   InstallFrameHooks();
   Object* document = dom::InterfacePrototype(ctx, dom::Interface::Document);
   qe::DefineAccessor(document, "head", GetHead, nullptr);
@@ -573,6 +574,10 @@ const char* const kWindowScript = R"JS(
   const childCount = __solarChildCount;
   const childWindow = __solarChildWindow;
   __solarRegisterFire((target, type) => target.dispatchEvent(new Event(type)));
+  __solarRegisterFocusFire((target, type, related, bubbles) => target.dispatchEvent(new FocusEvent(type, { bubbles, composed: true, relatedTarget: related, view: globalThis })));
+  delete globalThis.__solarRegisterFocusFire;
+  // window.focus() and blur(): the window has the focus already, and has no other window to give it to.
+  for (const name of ["focus", "blur"]) Object.defineProperty(globalThis, name, { value: function () {}, writable: true, enumerable: true, configurable: true });
   for (const name of ["__solarParent", "__solarFrameElement", "__solarChildCount", "__solarChildWindow", "__solarFrameTask", "__solarScriptTask", "__solarRegisterFire"]) delete globalThis[name];
   // window.postMessage: a message event, as a task, at this window. What sent it is not known to a window that is
   // only a function of its own, so the origin is its own and the source is not given.

@@ -38,6 +38,7 @@ void Document::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(implementation);
   visitor.Mark(templateContentsOwner);
   visitor.Mark(currentScript);
+  visitor.Mark(focusedElement);
   visitor.Mark(selection);
   visitor.Mark(window);
   visitor.Mark(globalObject);

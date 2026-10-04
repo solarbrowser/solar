@@ -264,6 +264,7 @@ void AfterInsert(dom::Node* node) {
 }
 
 void AfterRemove(dom::Node* node, bool) {
+  FocusAfterRemove(node);
   if (!node->IsElement()) return;
   for (dom::Element* iframe : IframesIn(node)) DiscardContext(iframe);
 }
