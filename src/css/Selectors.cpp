@@ -206,6 +206,11 @@ class Parser {
   bool IsNameToken(const Token& token) const { return token.type == Token::Type::Ident || token.IsDelim('*'); }
 
   // Whether a namespace separator comes next: a "|" that is not the start of "|=".
+  // The end of a function's arguments: its parenthesis, or the end of the input, which closes it.
+  bool CloseParen() {
+    if (Peek().type == Token::Type::EndOfFile) return true;
+    return Next().type == Token::Type::RightParen;
+  }
   bool SeparatorNext() const { return Peek().IsDelim('|') && !Peek(1).IsDelim('='); }
 
   std::optional<QualifiedName> TryParseQualifiedName(bool allowWildcardName) {
@@ -285,6 +290,8 @@ class Parser {
     simple.name = name->name;
     simple.namespaceName = name->namespaceName;
     SkipWhitespace();
+    // The end of the input closes what is open, as it does everywhere in CSS.
+    if (Peek().type == Token::Type::EndOfFile) return simple;
     if (Peek().type == Token::Type::RightBracket) {
       ++pos_;
       return simple;
@@ -319,6 +326,7 @@ class Parser {
       ++pos_;
       SkipWhitespace();
     }
+    if (Peek().type == Token::Type::EndOfFile) return simple;
     if (Next().type != Token::Type::RightBracket) throw ParseError();
     return simple;
   }
@@ -446,7 +454,7 @@ class Parser {
       simple.kind = name == "not" ? SimpleSelector::Kind::Not : name == "where" ? SimpleSelector::Kind::Where : SimpleSelector::Kind::Is;
       simple.list = std::make_shared<SelectorList>(ParseList(forgiving, false));
       SkipWhitespace();
-      if (Next().type != Token::Type::RightParen) throw ParseError();
+      if (!CloseParen()) throw ParseError();
       return simple;
     }
     if (name == "has") {
@@ -455,7 +463,7 @@ class Parser {
       if (list.empty()) throw ParseError();
       simple.list = std::make_shared<SelectorList>(std::move(list));
       SkipWhitespace();
-      if (Next().type != Token::Type::RightParen) throw ParseError();
+      if (!CloseParen()) throw ParseError();
       return simple;
     }
     if (name == "nth-child" || name == "nth-last-child" || name == "nth-of-type" || name == "nth-last-of-type") {
@@ -471,7 +479,7 @@ class Parser {
         if (simple.list->empty()) throw ParseError();
         SkipWhitespace();
       }
-      if (Next().type != Token::Type::RightParen) throw ParseError();
+      if (!CloseParen()) throw ParseError();
       return simple;
     }
     if (name == "lang") {
@@ -488,7 +496,7 @@ class Parser {
         }
         break;
       }
-      if (Next().type != Token::Type::RightParen) throw ParseError();
+      if (!CloseParen()) throw ParseError();
       return simple;
     }
     if (name == "dir") {
@@ -499,7 +507,7 @@ class Parser {
       simple.value = LowerAscii(direction.value);
       if (simple.value != "ltr" && simple.value != "rtl") throw ParseError();
       SkipWhitespace();
-      if (Next().type != Token::Type::RightParen) throw ParseError();
+      if (!CloseParen()) throw ParseError();
       return simple;
     }
     if (name == "host" || name == "host-context" || name == "state" || name == "current" || name == "past" || name == "future") {
@@ -516,7 +524,7 @@ class Parser {
     int depth = 1;
     while (depth > 0) {
       const Token& token = Next();
-      if (token.type == Token::Type::EndOfFile) throw ParseError();
+      if (token.type == Token::Type::EndOfFile) return;
       if (token.type == Token::Type::LeftParen || token.type == Token::Type::Function) ++depth;
       else if (token.type == Token::Type::RightParen) --depth;
     }

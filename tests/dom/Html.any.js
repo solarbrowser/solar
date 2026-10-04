@@ -72,7 +72,10 @@ test(() => {
   assert_equals(parsed.getElementsByTagName('title')[0].textContent, 'T');
   assert_equals(parsed.compatMode, 'CSS1Compat');
   assert_equals(new DOMParser().parseFromString('<p>x', 'text/html').compatMode, 'BackCompat');
-  assert_throws_dom('NotSupportedError', () => new DOMParser().parseFromString('<a/>', 'application/xml'));
+  const xml = new DOMParser().parseFromString('<a xmlns="urn:x"><b/></a>', 'application/xml');
+  assert_equals(xml.documentElement.namespaceURI, 'urn:x');
+  assert_equals(xml.contentType, 'application/xml');
+  assert_equals(new DOMParser().parseFromString('<a>', 'text/xml').documentElement.localName, 'parsererror');
   assert_throws_js(TypeError, () => new DOMParser().parseFromString('<a/>', 'text/plain'));
 }, 'DOMParser');
 

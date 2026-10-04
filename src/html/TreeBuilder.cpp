@@ -327,6 +327,11 @@ Element* TreeBuilder::CreateElementForToken(const Token& token, std::string_view
   if (willExecuteScript) reactions.emplace(ctx_);
   Element* element = dom::CreateElement(ctx_, document, token.name, ns, "", is, willExecuteScript);
   if (scriptHandler_) retained_.Append(qe::FromObject(element));
+  if (element->IsHtml("script")) {
+    element->scriptParserInserted = true;
+    // A script made by the fragment parser is never run.
+    element->scriptStarted = fragmentContext_ != nullptr;
+  }
   for (const TokenAttribute& attribute : token.attributes) {
     dom::Attr* node = attribute.localName.empty() ? dom::NewAttr(ctx_, document, "", "", attribute.name, attribute.value)
                                                   : dom::NewAttr(ctx_, document, attribute.namespaceUri, attribute.prefix, attribute.localName, attribute.value);
@@ -335,6 +340,9 @@ Element* TreeBuilder::CreateElementForToken(const Token& token, std::string_view
     if (element->customState == dom::CustomState::Custom) dom::CustomAttributeChanged(element, node->localName, node->namespaceUri, std::nullopt, node->value);
   }
   element->NoteWrite();
+  for (const dom::Attr* attribute : element->attributes) {
+    if (attribute->namespaceUri.empty()) dom::NotifyParsedAttribute(element, attribute->localName);
+  }
   return element;
 }
 

@@ -40,6 +40,8 @@ void Document::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(currentScript);
   visitor.Mark(selection);
   visitor.Mark(window);
+  visitor.Mark(globalObject);
+  visitor.Mark(frameElement);
 }
 
 void DocumentFragment::Visit(Quanta::Visitor& visitor) {
@@ -54,6 +56,8 @@ void Attr::Visit(Quanta::Visitor& visitor) {
 
 void Element::Visit(Quanta::Visitor& visitor) {
   Node::Visit(visitor);
+  visitor.Mark(contentDocument);
+  visitor.Mark(contentWindow);
   for (Attr* attribute : attributes) visitor.Mark(attribute);
   visitor.Mark(attributeMap);
   visitor.Mark(tokenList);
@@ -80,7 +84,7 @@ void NoteTreeChange() { ++g_treeVersion; }
 
 namespace {
 
-char g_prototypeKeys[11];
+char g_prototypeKeys[12];
 
 char* PrototypeKey(Interface interface) { return &g_prototypeKeys[static_cast<int>(interface)]; }
 
@@ -100,8 +104,9 @@ void SetInterfacePrototype(Context& ctx, Interface interface, Object* prototype)
 
 Object* InterfacePrototype(Context& ctx, Interface interface) { return static_cast<Object*>(qe::GetRealmData(ctx, PrototypeKey(interface))); }
 
-Document* NewDocument(Context& ctx, bool isHtml) {
-  Document* document = Make<Document>(ctx, Interface::Document, NodeType::Document, nullptr);
+Document* NewDocument(Context& ctx, bool isHtml, bool xmlInterface) {
+  Document* document = Make<Document>(ctx, xmlInterface && InterfacePrototype(ctx, Interface::XmlDocument) ? Interface::XmlDocument : Interface::Document, NodeType::Document, nullptr);
+  document->isXmlDocument = xmlInterface;
   document->context = &ctx;
   document->isHtml = isHtml;
   document->contentType = isHtml ? "text/html" : "application/xml";
@@ -409,6 +414,7 @@ std::optional<DomError> EnsurePreInsertionValidity(Node* node, Node* parent, Nod
 namespace {
 
 bool g_moving = false;
+TreeHooks g_hooks;
 
 // "remove" of the standard: the observers of a subtree are left with the node, and (unless suppressed) told.
 void RemoveImpl(Node* node, bool suppress) {
@@ -422,9 +428,12 @@ void RemoveImpl(Node* node, bool suppress) {
   if (HasNodeIterators()) NodeIteratorsBeforeRemove(node);
   Element* wasAssignedTo = node->assignedSlot;
   Document* wasIn = node->Root()->IsDocument() ? static_cast<Document*>(node->Root()) : nullptr;
-  const bool wasConnected = HasCustomDefinitions() && ShadowIncludingRoot(parent)->IsDocument();
+  const bool wasConnected = (HasCustomDefinitions() || g_hooks.afterRemove) && ShadowIncludingRoot(parent)->IsDocument();
   Unlink(node);
-  if (wasConnected && !g_moving) CustomAfterRemove(node, true);
+  if (wasConnected && !g_moving) {
+    CustomAfterRemove(node, true);
+    if (g_hooks.afterRemove) g_hooks.afterRemove(node, true);
+  }
   if (wasIn) NoteWindowNames(node, wasIn);
   if (HasShadowTrees()) ShadowAfterRemove(node, parent, wasAssignedTo);
   if (observed && !suppress) QueueChildListRecord(parent, {}, {node}, oldPrevious, oldNext);
@@ -460,13 +469,22 @@ void InsertImpl(Node* node, Node* parent, Node* child, bool suppress) {
     }
     Link(n, parent, child);
     if (HasShadowTrees()) ShadowAfterInsert(n, parent);
-    if (!g_moving) CustomAfterInsert(n);
+    if (!g_moving) {
+      CustomAfterInsert(n);
+      if (g_hooks.afterInsert) g_hooks.afterInsert(n);
+    }
     if (document && n->Root() == document) NoteWindowNames(n, document);
   }
   if (!suppress && HasMutationObservers()) QueueChildListRecord(parent, nodes, {}, previous, child);
 }
 
 }  // namespace
+
+void SetTreeHooks(const TreeHooks& hooks) { g_hooks = hooks; }
+
+void NotifyParsedAttribute(Element* element, const std::string& name) {
+  if (g_hooks.attributeChanged) g_hooks.attributeChanged(element, name);
+}
 
 void RemoveUnchecked(Node* node) { RemoveImpl(node, false); }
 
@@ -669,7 +687,10 @@ void SetAttrValue(Attr* attribute, std::string value) {
   attribute->value = std::move(value);
   NoteTreeChange();
   if (owner && HasShadowTrees()) ShadowAttributeChanged(owner, attribute->localName, attribute->namespaceUri, old, attribute->value);
-  if (owner) CustomAttributeChanged(owner, attribute->localName, attribute->namespaceUri, old, attribute->value);
+  if (owner) {
+    CustomAttributeChanged(owner, attribute->localName, attribute->namespaceUri, old, attribute->value);
+    if (g_hooks.attributeChanged) g_hooks.attributeChanged(owner, attribute->localName);
+  }
   if (owner) NoteWindowAttribute(owner, attribute->localName, attribute->namespaceUri, old, attribute->value);
 }
 
@@ -683,6 +704,7 @@ void AppendAttr(Element* element, Attr* attribute) {
   if (HasMutationObservers()) QueueAttributeRecord(element, attribute->localName, attribute->namespaceUri, std::nullopt);
   if (HasShadowTrees()) ShadowAttributeChanged(element, attribute->localName, attribute->namespaceUri, std::nullopt, attribute->value);
   CustomAttributeChanged(element, attribute->localName, attribute->namespaceUri, std::nullopt, attribute->value);
+  if (g_hooks.attributeChanged) g_hooks.attributeChanged(element, attribute->localName);
   NoteWindowAttribute(element, attribute->localName, attribute->namespaceUri, std::nullopt, attribute->value);
 }
 
@@ -694,7 +716,7 @@ Node* CloneNode(Context& ctx, Node* node, bool deep) {
   switch (node->nodeType) {
     case NodeType::Document: {
       Document* original = static_cast<Document*>(node);
-      Document* clone = NewDocument(ctx, original->isHtml);
+      Document* clone = NewDocument(ctx, original->isHtml, original->isXmlDocument);
       clone->url = original->url;
       clone->contentType = original->contentType;
       clone->characterSet = original->characterSet;
@@ -711,6 +733,7 @@ Node* CloneNode(Context& ctx, Node* node, bool deep) {
         attributeCopy->ownerElement = clone;
         clone->attributes.push_back(attributeCopy);
       }
+      clone->scriptStarted = original->scriptStarted;
       clone->NoteWrite();
       if (original->shadowRoot && original->shadowRoot->clonable) {
         ShadowRoot* shadow = nullptr;
@@ -995,6 +1018,7 @@ std::optional<DomError> SetAttributeNode(Element* element, Attr* attribute, Attr
     if (HasMutationObservers()) QueueAttributeRecord(element, attribute->localName, attribute->namespaceUri, old->value);
     if (HasShadowTrees()) ShadowAttributeChanged(element, attribute->localName, attribute->namespaceUri, old->value, attribute->value);
     CustomAttributeChanged(element, attribute->localName, attribute->namespaceUri, old->value, attribute->value);
+    if (g_hooks.attributeChanged) g_hooks.attributeChanged(element, attribute->localName);
   } else {
     AppendAttr(element, attribute);
   }
@@ -1010,6 +1034,7 @@ void RemoveAttributeNode(Element* element, Attr* attribute) {
   NoteTreeChange();
   if (HasShadowTrees()) ShadowAttributeChanged(element, attribute->localName, attribute->namespaceUri, attribute->value, std::nullopt);
   CustomAttributeChanged(element, attribute->localName, attribute->namespaceUri, attribute->value, std::nullopt);
+  if (g_hooks.attributeChanged) g_hooks.attributeChanged(element, attribute->localName);
   NoteWindowAttribute(element, attribute->localName, attribute->namespaceUri, attribute->value, std::nullopt);
 }
 

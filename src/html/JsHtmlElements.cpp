@@ -434,6 +434,8 @@ void DefineHtmlElementInterfaces(Context& ctx) {
       qe::DefineAccessor(definition.prototype, "shadowRootSerializable", GetBoolean<kSerializableAttribute>, SetBoolean<kSerializableAttribute>);
       qe::DefineAccessor(definition.prototype, "shadowRootSlotAssignment", GetEnumerated<kSlotAssignmentAttribute, kNamed, kManual, kNamed>, SetString<kSlotAssignmentAttribute>);
     }
+    if (std::string_view(interface.name) == "HTMLIFrameElement") DefineIframeMembers(ctx, definition.prototype);
+    if (std::string_view(interface.name) == "HTMLScriptElement") DefineScriptMembers(ctx, definition.prototype);
     if (std::string_view(interface.name) == "HTMLSlotElement") {
       qe::DefineAccessor(definition.prototype, "name", GetSlotName, SetSlotName);
       qe::DefineMethod(definition.prototype, "assignedNodes", AssignedNodes, 0);

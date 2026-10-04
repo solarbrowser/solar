@@ -137,8 +137,9 @@
   // `type` is a DOMException's name or its legacy constant's. The second argument may be the DOMException
   // constructor of another realm, with the function after it.
   globalThis.assert_throws_dom = (type, funcOrConstructor, descriptionOrFunc, maybeDescription) => {
-    let func = funcOrConstructor, description = descriptionOrFunc;
+    let func = funcOrConstructor, description = descriptionOrFunc, constructor = DOMException;
     if (typeof descriptionOrFunc === 'function') {
+      constructor = funcOrConstructor;
       func = descriptionOrFunc;
       description = maybeDescription;
     }
@@ -146,7 +147,7 @@
     try {
       func();
     } catch (e) {
-      if (!(e instanceof DOMException)) fail('threw ' + describe(e) + ' instead of a DOMException', description);
+      if (!(e instanceof constructor)) fail('threw ' + describe(e) + ' instead of a DOMException', description);
       if (e.name !== name) fail('threw a DOMException named ' + e.name + ' instead of ' + name, description);
       return;
     }
@@ -157,6 +158,10 @@
   function isSkipped(name) {
     return skips.some((skip) => (skip.startsWith('*') ? String(name).includes(skip.slice(1)) : String(name).startsWith(skip)));
   }
+
+  globalThis.assert_idl_attribute = (object, name, description) => {
+    if (!(name in object)) fail('assert_idl_attribute: ' + String(name) + ' is not an attribute', description);
+  };
 
   globalThis.assert_readonly = (object, property, description) => {
     const initial = object[property];
@@ -235,6 +240,9 @@
     results.push(failure && !failure.__precondition ? { name, ok: false, message: messageOf(failure) } : { name, ok: true });
   };
 
+  // The tests that were started and have not ended: when the run is over, they are the ones that timed out.
+  const unfinished = new Set();
+
   // As in testharness, promise tests run one after another: each starts when the one before it is done.
   let promiseTests = Promise.resolve();
   globalThis.promise_test = (func, name) => {
@@ -242,6 +250,8 @@
       skipped++;
       return;
     }
+    const entry = { name };
+    unfinished.add(entry);
     promiseTests = promiseTests.then(() => {
       let failure = null;
       const t = makeTestObject((e) => { failure = failure || e; });
@@ -250,6 +260,7 @@
         .catch((e) => { failure = failure || e; })
         .then(() => {
           t.runCleanups();
+          unfinished.delete(entry);
           results.push(failure && !failure.__precondition ? { name, ok: false, message: messageOf(failure) } : { name, ok: true });
         });
     });
@@ -265,10 +276,13 @@
     }
     let finished = false;
     let finish;
+    const entry = { name };
+    unfinished.add(entry);
     pending.push(new Promise((resolve) => { finish = resolve; }));
     const end = (failure) => {
       if (finished) return;
       finished = true;
+      unfinished.delete(entry);
       t.runCleanups();
       results.push(failure && !failure.__precondition ? { name, ok: false, message: messageOf(failure) } : { name, ok: true });
       finish();
@@ -298,6 +312,7 @@
   };
 
   globalThis.__wptFinish = () => {
+    for (const entry of unfinished) results.push({ name: entry.name, ok: false, message: 'the test never finished' });
     const failures = results.filter((r) => !r.ok);
     for (const r of failures.slice(0, 15)) console.log('  FAIL ' + r.name + ': ' + r.message);
     if (failures.length > 15) console.log('  ... and ' + (failures.length - 15) + ' more');

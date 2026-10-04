@@ -1,7 +1,10 @@
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -15,6 +18,7 @@
 #include "solar/css/CssBindings.h"
 #include "solar/dom/NodeBindings.h"
 #include "solar/dom/NodeBindingsInternal.h"
+#include "solar/html/Frames.h"
 #include "solar/html/Parser.h"
 #include "solar/html/HtmlBindings.h"
 #include "solar/web/DomBindings.h"
@@ -29,11 +33,11 @@ namespace {
 
 namespace qe = Quanta::Embed;
 
-// The runtime of the file being run, for the gc() that WPT's garbageCollect looks for.
-qe::Runtime* g_runtime = nullptr;
+// The isolate of the file being run, for the gc() that WPT's garbageCollect looks for.
+qe::Isolate* g_isolate = nullptr;
 
 Quanta::Value CollectGarbage(Quanta::Context&, Quanta::Value, qe::Args, Quanta::Value) {
-  if (g_runtime) g_runtime->CollectGarbage();
+  if (g_isolate) g_isolate->CollectGarbage();
   return qe::Undefined();
 }
 
@@ -82,6 +86,75 @@ std::vector<std::string> SkipsFor(const std::string& skipFile, const std::string
   return prefixes;
 }
 
+// A realm with every API of a window, and the host that fetch() in it needs. The host goes first, as it cancels what
+// is in flight through the realm.
+struct RealmBundle {
+  std::unique_ptr<qe::Realm> realm;
+  std::unique_ptr<solar::web::FetchHost> host;
+  ~RealmBundle() {
+    host.reset();
+    realm.reset();
+  }
+};
+
+// What pages and frames get from the test run: realms of one isolate, and the files of the tests as the web.
+class TestEnvironment : public solar::html::FrameEnvironment {
+ public:
+  TestEnvironment(qe::Isolate& isolate, solar::net::Loop& loop, solar::net::HttpClient& client, solar::web::JsEventLoop& events)
+      : isolate_(isolate), loop_(loop), client_(client), events_(events) {}
+
+  qe::Realm* CreateRealm() override {
+    auto bundle = std::make_unique<RealmBundle>();
+    bundle->realm = isolate_.CreateRealm();
+    qe::Realm& realm = *bundle->realm;
+    solar::html::PrepareRealm(realm);
+    // The realm is set up as itself, which it has to be when another realm is the one running.
+    solar::html::RunInRealm(realm, [&] {
+      solar::web::InstallUrlApis(realm);
+      solar::web::InstallDomApis(realm);
+      solar::dom::InstallNodeApis(realm);
+      solar::html::InstallHtmlApis(realm);
+      solar::css::InstallSelectorApis(realm);
+      solar::web::InstallFetchApis(realm);
+      solar::web::FetchHost::Config config;
+      config.loop = &loop_;
+      config.client = &client_;
+      config.pageUrl = *solar::url::Parse("http://web-platform.test:8000/fetch/api/");
+      config.afterScript = [this] { events_.AfterScript(); };
+      bundle->host = std::make_unique<solar::web::FetchHost>(realm.GetContext(), config);
+    });
+    bundles_.push_back(std::move(bundle));
+    return &realm;
+  }
+
+  std::optional<std::string> Load(const std::string& url) override {
+    const std::string origin = "http://web-platform.test:8000/";
+    if (!url.starts_with(origin)) return std::nullopt;
+    std::string path = url.substr(origin.size());
+    path = path.substr(0, path.find_first_of("?#"));
+    std::string contents;
+    if (!ReadFile("tests/wpt/" + path, contents)) return std::nullopt;
+    return contents;
+  }
+
+  bool SkipScript(const std::string& url) override {
+    // The harness is already in place; any other script is a file of the tests.
+    const std::string path = url.substr(0, url.find_first_of("?#"));
+    return path.ends_with("testharness.js") || path.ends_with("testharnessreport.js") || path.find("testdriver") != std::string::npos;
+  }
+
+  void RunJobs() override { isolate_.PerformMicrotaskCheckpoint(); }
+
+  void ScriptFailed(const std::string& message) override { std::printf("  FAIL script error: %s\n", message.c_str()); }
+
+ private:
+  qe::Isolate& isolate_;
+  solar::net::Loop& loop_;
+  solar::net::HttpClient& client_;
+  solar::web::JsEventLoop& events_;
+  std::vector<std::unique_ptr<RealmBundle>> bundles_;
+};
+
 bool RunFile(const std::string& path, const std::string& harness, const std::string& resources,
              const std::string& skipFile) {
   std::string source;
@@ -107,93 +180,57 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
     }
   }
 
-  // Declared in the order they must be destroyed in, last first: the host goes before the client it
-  // cancels through, and before the runtime whose realm it settles promises in.
-  auto runtime = qe::Runtime::Create();
-  g_runtime = runtime.get();
-  qe::DefineGlobalFunction(runtime->GetContext(), "gc", CollectGarbage, 0);
+  // Declared in the order they must be destroyed in, last first: the realms go before the event loop and the client
+  // they settle promises and cancel requests through, and before the isolate they live in.
+  auto isolate = qe::Isolate::Create();
+  g_isolate = isolate.get();
   auto loop = solar::net::Loop::Create();
   solar::net::HttpClient client(*loop);
-  solar::web::InstallUrlApis(*runtime);
-  solar::web::InstallDomApis(*runtime);
-  solar::dom::InstallNodeApis(*runtime);
-  solar::html::InstallHtmlApis(*runtime);
-  solar::css::InstallSelectorApis(*runtime);
-  solar::web::InstallFetchApis(*runtime);
-  solar::web::FetchHost::Config hostConfig;
-  hostConfig.loop = loop.get();
-  hostConfig.client = &client;
-  hostConfig.pageUrl = *solar::url::Parse("http://web-platform.test:8000/fetch/api/");
-  solar::web::JsEventLoop events(*loop, {[&] { runtime->PerformMicrotaskCheckpoint(); }, [&] { runtime->RunDueTimers(); },
-                                         [&] { return runtime->NextTimerDelayMs(); }});
-  hostConfig.afterScript = [&] { events.AfterScript(); };
-  solar::web::FetchHost host(runtime->GetContext(), hostConfig);
+  solar::web::JsEventLoop events(*loop, {[&] { isolate->PerformMicrotaskCheckpoint(); }, [&] { isolate->RunDueTimers(); },
+                                         [&] { return isolate->NextTimerDelayMs(); }});
+  TestEnvironment environment(*isolate, *loop, client, events);
+  solar::html::SetFrameEnvironment(&environment);
+  qe::Realm& realm = *environment.CreateRealm();
+  qe::DefineGlobalFunction(realm.GetContext(), "gc", CollectGarbage, 0);
 
   std::string skips = "globalThis.__skip = [";
   for (const std::string& prefix : SkipsFor(skipFile, name)) skips += JsString(prefix) + ",";
   skips += "];";
 
   std::printf("%s\n", name.c_str());
-  const bool isHtml = name.ends_with(".html");
+  const bool isHtml = name.ends_with(".html") || name.ends_with(".xhtml") || name.ends_with(".svg");
   solar::dom::Document* document = nullptr;
   if (isHtml) {
     // A page: it has a window and a document of its own, which its scripts run in.
-    document = solar::dom::NewDocument(runtime->GetContext(), true);
-    document->url = "http://web-platform.test:8000/" + std::filesystem::relative(path, "tests/wpt").string();
-    document->readyState = "loading";
-    solar::html::InstallWindow(*runtime, document);
+    solar::html::RunInRealm(realm, [&] {
+      document = solar::dom::NewDocument(realm.GetContext(), true);
+      document->url = "http://web-platform.test:8000/" + std::filesystem::relative(path, "tests/wpt").string();
+      solar::html::InstallWindow(realm, document);
+    });
   }
-  qe::Runtime::Result result = runtime->Evaluate(skips + resources + harness, "harness.js");
-  if (result.ok && !prelude.empty()) result = runtime->Evaluate(prelude, "prelude.js");
+  qe::EvaluateResult result = realm.Evaluate(skips + resources + harness, "harness.js");
+  if (result.ok && !prelude.empty()) result = realm.Evaluate(prelude, "prelude.js");
   if (result.ok && isHtml) {
-    bool scriptsOk = true;
-    const auto runScript = [&](solar::dom::Element* script) {
-      const solar::dom::Attr* type = script->FindAttribute("", "type");
-      if (type && !type->value.empty() && type->value != "text/javascript" && type->value != "application/javascript") return;
-      std::string code, filename = name;
-      if (const solar::dom::Attr* src = script->FindAttribute("", "src")) {
-        const std::string given = src->value;
-        // The harness is already in place; any other script is a file of the tests.
-        if (given.ends_with("testharness.js") || given.ends_with("testharnessreport.js") || given.find("testdriver") != std::string::npos) return;
-        const std::string wanted = given.starts_with("/") ? "tests/wpt" + given : (std::filesystem::path(path).parent_path() / given).string();
-        if (!ReadFile(wanted, code)) {
-          std::printf("  FAIL cannot load script %s\n", given.c_str());
-          scriptsOk = false;
-          return;
-        }
-        filename = given;
-      } else {
-        code = script->DescendantText();
-      }
-      document->currentScript = script;
-      const qe::Runtime::Result scriptResult = runtime->Evaluate(code, filename);
-      document->currentScript = nullptr;
-      if (!scriptResult.ok) {
-        std::printf("  FAIL script error: %s\n", scriptResult.error.c_str());
-        scriptsOk = false;
-      }
-      runtime->PerformMicrotaskCheckpoint();
-    };
-    solar::html::ParseDocument(runtime->GetContext(), document, source, solar::html::ScriptingMode::Normal, nullptr, runScript);
-    document->readyState = "interactive";
-    result = runtime->Evaluate("document.dispatchEvent(new Event('DOMContentLoaded', { bubbles: true }))", "page");
-    document->readyState = "complete";
-    if (result.ok) result = runtime->Evaluate("window.dispatchEvent(new Event('load'))", "page");
-    if (result.ok && !scriptsOk) result.ok = false;
-    if (!result.ok && result.error.empty()) result.error = "a script of the page failed";
+    const std::string address = "http://web-platform.test:8000/" + std::filesystem::relative(path, "tests/wpt").string();
+    if (!solar::html::LoadPage(realm, document, source, environment.ContentType(address))) {
+      result.ok = false;
+      result.error = "a script of the page failed";
+    }
   } else if (result.ok) {
-    result = runtime->Evaluate(source, name);
+    result = realm.Evaluate(source, name);
   }
   if (!result.ok) {
     std::printf("  FAIL while loading: %s\n", result.error.c_str());
+    solar::html::SetFrameEnvironment(nullptr);
     return false;
   }
-  runtime->PerformMicrotaskCheckpoint();
+  isolate->PerformMicrotaskCheckpoint();
   // Tests that wait for the network or for a timer: run both, up to a limit so that a test that never
   // ends does not hold the run.
   events.Run(std::chrono::seconds(10));
 
-  result = runtime->Evaluate("__wptFinish()", name);
+  result = realm.Evaluate("__wptFinish()", name);
+  solar::html::SetFrameEnvironment(nullptr);
   return result.ok;
 }
 
@@ -204,7 +241,9 @@ int main(int argc, char** argv) {
   std::setbuf(stdout, nullptr);
 #ifdef __linux__
   // A test that runs away should fail on its own, not take the machine's memory with it.
-  const rlimit limit = {4ull << 30, 4ull << 30};
+  const char* gigabytes = std::getenv("WPT_LIMIT_GB");
+  const unsigned long long bytes = (gigabytes ? std::strtoull(gigabytes, nullptr, 10) : 4ull) << 30;
+  const rlimit limit = {bytes, bytes};
   setrlimit(RLIMIT_AS, &limit);
 #endif
   if (argc < 2) {

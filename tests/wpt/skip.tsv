@@ -18,3 +18,4 @@ general.any.js	*with a transferred	needs structuredClone
 read-min.any.js	*with a transferred	needs structuredClone
 templated.any.js	*(empty) BYOB reader: canceling via the reader	the test expects an undefined value, the standard gives an empty view
 decode-attributes.any.js	*iso-8859-2	legacy encodings are not supported
+enqueue-with-detached-buffer.any.js	enqueue after detaching byobRequest.view.buffer should throw	needs ArrayBuffer transfer, which the engine does not have; the test never ends and leaves the process in a state later files fail in

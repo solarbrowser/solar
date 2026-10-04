@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cctype>
 
 #include "solar/css/Selectors.h"
 
@@ -132,6 +133,27 @@ bool MatchesSelectorListAt(const SelectorList& list, const Element* element, con
 
 // ---- Pseudo-classes ----
 
+// The element the address of the document points at: the one whose id is its fragment, which is percent-decoded.
+bool IsTarget(const Element* element) {
+  const dom::Document* document = element->nodeDocument;
+  if (!document || const_cast<dom::Element*>(element)->Root() != document) return false;
+  const size_t hash = document->url.find('#');
+  if (hash == std::string::npos) return false;
+  const std::string fragment = document->url.substr(hash + 1);
+  std::string decoded;
+  for (size_t i = 0; i < fragment.size(); ++i) {
+    if (fragment[i] == '%' && i + 2 < fragment.size() + 0 && std::isxdigit(static_cast<unsigned char>(fragment[i + 1])) && std::isxdigit(static_cast<unsigned char>(fragment[i + 2]))) {
+      decoded += static_cast<char>(std::stoi(fragment.substr(i + 1, 2), nullptr, 16));
+      i += 2;
+    } else {
+      decoded += fragment[i];
+    }
+  }
+  if (decoded.empty()) return false;
+  const dom::Attr* id = element->FindAttribute("", "id");
+  return id && id->value == decoded;
+}
+
 bool IsRoot(const Element* element) { return element->parentNode && element->parentNode->IsDocument(); }
 
 bool IsEmpty(const Element* element) {
@@ -230,6 +252,7 @@ bool MatchesPseudo(PseudoClass pseudo, const Element* element, const MatchContex
   switch (pseudo) {
     case PseudoClass::Root: return IsRoot(element);
     case PseudoClass::Empty: return IsEmpty(element);
+    case PseudoClass::Target: return IsTarget(element);
     case PseudoClass::FirstChild: return FirstOfKind(element, false, false);
     case PseudoClass::LastChild: return FirstOfKind(element, false, true);
     case PseudoClass::OnlyChild: return OnlyOfKind(element, false);

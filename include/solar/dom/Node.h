@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -206,6 +207,13 @@ struct Element : Node {
   CustomDefinition* customDefinition = nullptr;
   std::optional<std::string> isValue;
   std::vector<CustomReaction> reactions;
+  // An iframe's nested browsing context: the document in it, and the window (global object) of that document.
+  Document* contentDocument = nullptr;
+  Quanta::Object* contentWindow = nullptr;
+  uint64_t frameLoad = 0;  // which load of the frame is the one that counts
+  // A script element's "already started" and "parser document" flags.
+  bool scriptStarted = false;
+  bool scriptParserInserted = false;
 
   std::string QualifiedName() const { return prefix.empty() ? localName : prefix + ":" + localName; }
   // `name` is compared as the standard does for a name on an HTML element in an HTML document: after
@@ -225,6 +233,7 @@ struct Document : Node {
   enum class Mode { NoQuirks, Quirks, LimitedQuirks };
   Mode mode = Mode::NoQuirks;
   bool isHtml = false;  // an HTML document and not an XML one
+  bool isXmlDocument = false;  // one that implements XMLDocument
   Quanta::Object* implementation = nullptr;  // document.implementation, the same object each time
   // The inert document the contents of this one's template elements belong to.
   Document* templateContentsOwner = nullptr;
@@ -238,6 +247,17 @@ struct Document : Node {
   Quanta::Object* selection = nullptr;
   // The window this document is the document of, which an event on the document goes on to; null for any other.
   web::JsEventTarget* window = nullptr;
+  // The global object of that window, and the iframe this document is the content of, if it is.
+  Quanta::Object* globalObject = nullptr;
+  Quanta::Embed::Realm* realm = nullptr;  // the realm of the window, which scripts of the document run in
+  // A document the fragment parser makes for a window's elements: it has no window, but its elements are made as the
+  // window's are, which is as custom elements if they are defined.
+  bool customElementsEnabled = false;
+  Element* frameElement = nullptr;
+  // How many of the frames in it are still loading, and what to do when that has come to none after the
+  // document is done being parsed: the load event waits for them.
+  uint32_t pendingFrameLoads = 0;
+  std::function<void()> whenFramesLoaded;
 
   Element* DocumentElement() const;
   DocumentType* Doctype() const;
@@ -253,7 +273,7 @@ inline const CharacterData* AsCharacterData(const Node* node) { return node && n
 // ---- Making nodes ----
 
 // The interfaces a node can have, for the prototype the realm's bindings give each.
-enum class Interface { ShadowRoot, Document, Element, HtmlElement, Text, CdataSection, ProcessingInstruction, Comment, DocumentType, DocumentFragment, Attr };
+enum class Interface { ShadowRoot, Document, Element, HtmlElement, Text, CdataSection, ProcessingInstruction, Comment, DocumentType, DocumentFragment, Attr, XmlDocument };
 // What DefineClass made for `interface`; the DOM bindings record it, and a node made before they have
 // has none.
 void SetInterfacePrototype(Quanta::Context& ctx, Interface interface, Quanta::Object* prototype);
@@ -261,7 +281,18 @@ Quanta::Object* InterfacePrototype(Quanta::Context& ctx, Interface interface);
 
 // Nodes are made in the realm of `ctx`, with the prototype that realm's DOM bindings gave the kind
 // (none, if it has not any).
-Document* NewDocument(Quanta::Context& ctx, bool isHtml);
+// A document; with `xmlInterface` one that is an XMLDocument, which is what the ones made as XML are.
+Document* NewDocument(Quanta::Context& ctx, bool isHtml, bool xmlInterface = false);
+// What the HTML module wants to know of the nodes that go into and come out of a tree (the iframes, mostly).
+struct TreeHooks {
+  void (*afterInsert)(Node* node) = nullptr;
+  void (*afterRemove)(Node* node, bool parentWasConnected) = nullptr;
+  void (*attributeChanged)(Element* element, const std::string& name) = nullptr;
+};
+void SetTreeHooks(const TreeHooks& hooks);
+// Tells the hooks of an attribute an element was made with, as the parser makes them without going through the changes.
+void NotifyParsedAttribute(Element* element, const std::string& name);
+
 Element* NewElement(Quanta::Context& ctx, Document* document, std::string_view localName, std::string_view namespaceUri = kHtmlNamespace, std::string_view prefix = "");
 CharacterData* NewText(Quanta::Context& ctx, Document* document, std::string data);
 CharacterData* NewComment(Quanta::Context& ctx, Document* document, std::string data);

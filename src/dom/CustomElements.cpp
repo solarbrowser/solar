@@ -183,7 +183,7 @@ void ReportException(Context& ctx) {
 }
 
 CustomDefinition* LookupDefinition(Context& ctx, const Document* document, std::string_view ns, std::string_view localName, const std::optional<std::string>& is) {
-  if (!g_anyDefinition || ns != kHtmlNamespace || !document || !document->window) return nullptr;
+  if (!g_anyDefinition || ns != kHtmlNamespace || !document || (!document->window && !document->customElementsEnabled)) return nullptr;
   CeState* state = StateOf(ctx);
   if (!state) return nullptr;
   for (CustomDefinition* definition : state->definitions) {

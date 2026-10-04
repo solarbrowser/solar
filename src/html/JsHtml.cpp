@@ -3,8 +3,11 @@
 #include "solar/dom/CustomElements.h"
 #include "solar/dom/NodeBindingsInternal.h"
 #include "solar/html/HtmlBindings.h"
+#include "solar/dom/Range.h"
+#include "solar/html/Frames.h"
 #include "solar/html/Parser.h"
 #include "solar/html/Serializer.h"
+#include "solar/html/Xml.h"
 
 namespace solar::html {
 
@@ -18,6 +21,7 @@ using Quanta::Value;
 namespace {
 
 char g_domParserKey;
+char g_xmlSerializerKey;
 
 std::string Lower(std::string_view text) {
   std::string out(text);
@@ -60,9 +64,38 @@ dom::Node* FragmentTarget(dom::Node* node) {
   return node;
 }
 
+bool IsXmlNode(const dom::Node* node) {
+  const dom::Document* document = node->IsDocument() ? static_cast<const dom::Document*>(node) : node->nodeDocument;
+  return document && !document->isHtml;
+}
+
 Value GetInnerHtml(Context& ctx, Value t, qe::Args, Value) {
   dom::Node* self = dom::ThisNode(ctx, t);
-  return self ? qe::FromWtf8(ctx, SerializeChildren(FragmentTarget(self))) : qe::Undefined();
+  if (!self) return qe::Undefined();
+  if (IsXmlNode(self)) {
+    const std::optional<std::string> markup = SerializeXmlChildren(FragmentTarget(self), true);
+    if (!markup) {
+      dom::Throw(ctx, {"InvalidStateError", "The element could not be serialized as well-formed XML."});
+      return qe::Undefined();
+    }
+    return qe::FromWtf8(ctx, *markup);
+  }
+  return qe::FromWtf8(ctx, SerializeChildren(FragmentTarget(self)));
+}
+
+// The fragment of `markup` in the context, by the parser of the document's kind: nothing, with a SyntaxError raised,
+// if XML is not well-formed.
+dom::DocumentFragment* ParseFragmentFor(Context& ctx, dom::Element* context, const std::string& markup, bool unsafe = false) {
+  if (context && context->nodeDocument && !context->nodeDocument->isHtml) {
+    dom::DocumentFragment* fragment = dom::NewDocumentFragment(ctx, context->nodeDocument);
+    const XmlResult result = ParseXmlFragment(ctx, context, markup, fragment);
+    if (!result.ok) {
+      dom::Throw(ctx, {"SyntaxError", "The markup is not well-formed XML: " + result.error});
+      return nullptr;
+    }
+    return fragment;
+  }
+  return ParseFragment(ctx, context, markup, ScriptingMode::Inert, nullptr, unsafe);
 }
 
 Value SetInnerHtml(Context& ctx, Value t, qe::Args args, Value) {
@@ -70,7 +103,8 @@ Value SetInnerHtml(Context& ctx, Value t, qe::Args args, Value) {
   if (!self) return qe::Undefined();
   const std::optional<std::string> markup = ReadMarkup(ctx, args);
   if (!markup) return qe::Undefined();
-  dom::DocumentFragment* fragment = ParseFragment(ctx, FragmentContext(self), *markup);
+  dom::DocumentFragment* fragment = ParseFragmentFor(ctx, FragmentContext(self), *markup);
+  if (!fragment) return qe::Undefined();
   dom::ReplaceAll(FragmentTarget(self), fragment);
   return qe::Undefined();
 }
@@ -114,6 +148,32 @@ Value GetHtml(Context& ctx, Value t, qe::Args args, Value) {
   return qe::FromWtf8(ctx, SerializeChildrenWithShadowRoots(FragmentTarget(self), serializable, roots));
 }
 
+// Range.createContextualFragment(markup): the markup parsed as it would be in the element the range starts in, with
+// its scripts not yet started, so that they run when the fragment is put in a document.
+Value CreateContextualFragment(Context& ctx, Value t, qe::Args args, Value) {
+  dom::Range* range = Quanta::DOMObject::Cast<dom::Range>(t);
+  if (!range) {
+    qe::ThrowTypeError(ctx, "Illegal invocation");
+    return qe::Undefined();
+  }
+  if (Missing(ctx, args, 1, "Range", "createContextualFragment")) return qe::Undefined();
+  const std::string markup = qe::ToWtf8(ctx, args[0]);
+  if (qe::HasException(ctx)) return qe::Undefined();
+  dom::Node* node = range->startNode;
+  dom::Element* context = nullptr;
+  if (dom::Element* element = dom::AsElement(node)) context = element;
+  else if (node && !node->IsDocument() && !node->IsFragment()) context = dom::AsElement(node->parentNode);
+  if (!context || (context->IsHtml("html") && context->nodeDocument && context->nodeDocument->isHtml)) {
+    dom::Document* owner = node && node->IsDocument() ? static_cast<dom::Document*>(node) : node ? node->nodeDocument : nullptr;
+    context = dom::NewElement(ctx, owner, "body", dom::kHtmlNamespace);
+  }
+  dom::DocumentFragment* fragment = ParseFragment(ctx, context, markup, ScriptingMode::Fragment);
+  for (dom::Node* n = fragment->firstChild; n; n = n->NextInTree(fragment)) {
+    if (dom::Element* element = dom::AsElement(n); element && element->IsHtml("script")) element->scriptStarted = false;
+  }
+  return qe::FromObject(fragment);
+}
+
 Value ParseHtmlUnsafe(Context& ctx, Value, qe::Args args, Value) {
   if (Missing(ctx, args, 1, "Document", "parseHTMLUnsafe")) return qe::Undefined();
   const std::string markup = qe::IsNull(args[0]) ? std::string() : qe::ToWtf8(ctx, args[0]);
@@ -126,7 +186,16 @@ Value ParseHtmlUnsafe(Context& ctx, Value, qe::Args args, Value) {
 
 Value GetOuterHtml(Context& ctx, Value t, qe::Args, Value) {
   dom::Element* self = dom::ThisElement(ctx, t);
-  return self ? qe::FromWtf8(ctx, SerializeNode(self)) : qe::Undefined();
+  if (!self) return qe::Undefined();
+  if (IsXmlNode(self)) {
+    const std::optional<std::string> markup = SerializeXml(self, true);
+    if (!markup) {
+      dom::Throw(ctx, {"InvalidStateError", "The element could not be serialized as well-formed XML."});
+      return qe::Undefined();
+    }
+    return qe::FromWtf8(ctx, *markup);
+  }
+  return qe::FromWtf8(ctx, SerializeNode(self));
 }
 
 Value SetOuterHtml(Context& ctx, Value t, qe::Args args, Value) {
@@ -145,7 +214,8 @@ Value SetOuterHtml(Context& ctx, Value t, qe::Args args, Value) {
     // A fragment is no context: the body element stands for it.
     context = dom::NewElement(ctx, self->nodeDocument, "body", dom::kHtmlNamespace);
   }
-  dom::DocumentFragment* fragment = ParseFragment(ctx, context, *markup);
+  dom::DocumentFragment* fragment = ParseFragmentFor(ctx, context, *markup);
+  if (!fragment) return qe::Undefined();
   if (auto error = dom::ReplaceChild(parent, fragment, self)) dom::Throw(ctx, *error);
   return qe::Undefined();
 }
@@ -173,7 +243,8 @@ Value InsertAdjacentHtml(Context& ctx, Value t, qe::Args args, Value) {
   if (!context || (context->namespaceUri == dom::kHtmlNamespace && context->localName == "html" && context->nodeDocument && context->nodeDocument->isHtml)) {
     context = dom::NewElement(ctx, self->nodeDocument, "body", dom::kHtmlNamespace);
   }
-  dom::DocumentFragment* fragment = ParseFragment(ctx, context, markup);
+  dom::DocumentFragment* fragment = ParseFragmentFor(ctx, context, markup);
+  if (!fragment) return qe::Undefined();
   std::optional<dom::DomError> error;
   if (position == "beforebegin") error = dom::PreInsert(fragment, self->parentNode, self);
   else if (position == "afterbegin") error = dom::PreInsert(fragment, self, self->firstChild);
@@ -218,12 +289,59 @@ Value ParseFromString(Context& ctx, Value t, qe::Args args, Value) {
     return qe::FromObject(document);
   }
   if (type == "text/xml" || type == "application/xml" || type == "application/xhtml+xml" || type == "image/svg+xml") {
-    // Refused rather than parsed as HTML: there is no XML parser yet.
-    dom::Throw(ctx, {"NotSupportedError", "Parsing " + type + " is not supported yet"});
-    return qe::Undefined();
+    dom::Document* document = dom::NewDocument(ctx, false, true);
+    document->contentType = type;
+    if (dom::Document* current = dom::AssociatedDocument(ctx)) document->url = current->url;
+    const XmlResult result = ParseXmlDocument(ctx, document, markup);
+    if (!result.ok) {
+      // A document that says what was wrong with the markup, in the element the browsers make for it.
+      while (document->firstChild) dom::RemoveUnchecked(document->firstChild);
+      dom::Element* error = dom::NewElement(ctx, document, "parsererror", "http://www.mozilla.org/newlayout/xml/parsererror.xml");
+      dom::AppendChild(error, dom::NewText(ctx, document, result.error));
+      dom::AppendChild(document, error);
+    }
+    return qe::FromObject(document);
   }
   qe::ThrowTypeError(ctx, "Failed to execute 'parseFromString' on 'DOMParser': The provided value '" + type + "' is not a valid enum value of type SupportedType.");
   return qe::Undefined();
+}
+
+// ---- XMLSerializer ----
+
+struct JsXmlSerializer : DOMObject {
+  void Visit(Quanta::Visitor&) {}
+};
+
+Value ConstructXmlSerializer(Context& ctx, Value, qe::Args, Value newTarget) {
+  if (qe::IsUndefined(newTarget)) {
+    qe::ThrowTypeError(ctx, "Failed to construct 'XMLSerializer': Please use the 'new' operator, this DOM object constructor cannot be called as a function.");
+    return qe::Undefined();
+  }
+  Object* prototype = qe::PrototypeFromNewTarget(ctx, newTarget);
+  if (qe::HasException(ctx)) return qe::Undefined();
+  JsXmlSerializer* serializer = Heap::Allocate<JsXmlSerializer>();
+  serializer->initialize_prototype(prototype ? prototype : static_cast<Object*>(qe::GetRealmData(ctx, &g_xmlSerializerKey)));
+  return qe::FromObject(serializer);
+}
+
+Value SerializeToString(Context& ctx, Value t, qe::Args args, Value) {
+  if (!DOMObject::Cast<JsXmlSerializer>(t)) {
+    qe::ThrowTypeError(ctx, "Illegal invocation");
+    return qe::Undefined();
+  }
+  if (Missing(ctx, args, 1, "XMLSerializer", "serializeToString")) return qe::Undefined();
+  dom::Node* node = DOMObject::Cast<dom::Node>(args[0]);
+  if (!node) {
+    qe::ThrowTypeError(ctx, "Failed to execute 'serializeToString' on 'XMLSerializer': parameter 1 is not of type 'Node'.");
+    return qe::Undefined();
+  }
+  // An HTML document is serialized as the HTML syntax would not do: as XML, with the HTML namespace.
+  const std::optional<std::string> markup = SerializeXml(node, false);
+  if (!markup) {
+    dom::Throw(ctx, {"InvalidStateError", "The node could not be serialized."});
+    return qe::Undefined();
+  }
+  return qe::FromWtf8(ctx, *markup);
 }
 
 // ---- What the HTML Standard adds to Document ----
@@ -339,7 +457,7 @@ Value GetCurrentScript(Context& ctx, Value t, qe::Args, Value) {
 Value GetDefaultView(Context& ctx, Value t, qe::Args, Value) {
   dom::Document* self = dom::ThisDocument(ctx, t);
   if (!self) return qe::Undefined();
-  return self->window ? qe::FromObject(ctx.get_global_object()) : qe::Null();
+  return self->window && self->globalObject ? qe::FromObject(self->globalObject) : qe::Null();
 }
 
 // __solarDocument() and __solarSetWindow(target): what the window's script is made of.
@@ -406,6 +524,8 @@ void Install(Host& host) {
   qe::DefineMethod(shadowRoot, "getHTML", GetHtml, 0);
 
   DefineHtmlElementInterfaces(ctx);
+  DefineFrameNatives(ctx);
+  InstallFrameHooks();
   Object* document = dom::InterfacePrototype(ctx, dom::Interface::Document);
   qe::DefineAccessor(document, "head", GetHead, nullptr);
   qe::DefineAccessor(document, "body", GetBody, SetBody);
@@ -420,6 +540,13 @@ void Install(Host& host) {
   qe::DefineGlobalFunction(ctx, "__solarRegisterNamed", RegisterNamed, 1);
 
   qe::DefineStaticMethod(qe::Get(ctx, qe::FromObject(dom::InterfacePrototype(ctx, dom::Interface::Document)), "constructor").as_object(), "parseHTMLUnsafe", ParseHtmlUnsafe, 1);
+  Value rangePrototype = qe::Get(ctx, qe::Get(ctx, qe::FromObject(ctx.get_global_object()), "Range"), "prototype");
+  if (qe::IsObject(rangePrototype)) qe::DefineMethod(rangePrototype.as_object(), "createContextualFragment", dom::Reactions<CreateContextualFragment>, 1);
+
+  qe::ClassRef serializer = qe::DefineClass(ctx, "XMLSerializer", ConstructXmlSerializer, 0);
+  qe::SetRealmData(ctx, &g_xmlSerializerKey, serializer.prototype);
+  qe::DefineMethod(serializer.prototype, "serializeToString", SerializeToString, 1);
+  qe::DefineGlobal(ctx, "XMLSerializer", serializer.constructor);
 
   qe::ClassRef parser = qe::DefineClass(ctx, "DOMParser", ConstructDomParser, 0);
   qe::SetRealmData(ctx, &g_domParserKey, parser.prototype);
@@ -441,6 +568,18 @@ const char* const kWindowScript = R"JS(
   const setDocumentUrl = __solarSetDocumentUrl;
   const lookup = __solarNamedLookup;
   const registerNamed = __solarRegisterNamed;
+  const parentWindow = __solarParent;
+  const frameElement = __solarFrameElement;
+  const childCount = __solarChildCount;
+  const childWindow = __solarChildWindow;
+  __solarRegisterFire((target, type) => target.dispatchEvent(new Event(type)));
+  for (const name of ["__solarParent", "__solarFrameElement", "__solarChildCount", "__solarChildWindow", "__solarFrameTask", "__solarScriptTask", "__solarRegisterFire"]) delete globalThis[name];
+  // window.postMessage: a message event, as a task, at this window. What sent it is not known to a window that is
+  // only a function of its own, so the origin is its own and the source is not given.
+  Object.defineProperty(globalThis, "postMessage", { value: function postMessage(message, targetOrigin, transfer) {
+    if (arguments.length < 1) throw new TypeError("Failed to execute 'postMessage' on 'Window': 1 argument required, but only 0 present.");
+    setTimeout(() => { target.dispatchEvent(new MessageEvent("message", { data: message, origin: location.origin })); }, 0);
+  }, writable: true, enumerable: true, configurable: true });
   delete globalThis.__solarNamedLookup;
   delete globalThis.__solarRegisterNamed;
   delete globalThis.__solarSetWindow;
@@ -489,9 +628,15 @@ const char* const kWindowScript = R"JS(
   Object.defineProperty(globalThis, "location", { get() { return location; }, set(value) { fragmentOnly(String(value)); }, enumerable: true, configurable: false });
   Object.defineProperty(Document.prototype, "location", { get() { return this === getDocument() ? location : null; }, set(value) { if (this === getDocument()) fragmentOnly(String(value)); }, enumerable: true, configurable: true });
   Object.defineProperty(globalThis, "document", { get: getDocument, set: undefined, enumerable: true, configurable: true });
-  for (const name of ["window", "self", "top", "parent", "frames"]) {
+  for (const name of ["window", "self", "frames"]) {
     Object.defineProperty(globalThis, name, { value: globalThis, writable: true, enumerable: true, configurable: true });
   }
+  // The window this one is in, or itself for the top one; and the iframe it is the content of.
+  Object.defineProperty(globalThis, "parent", { get() { return parentWindow() ?? globalThis; }, set: undefined, enumerable: true, configurable: true });
+  Object.defineProperty(globalThis, "top", { get() { let w = globalThis; for (;;) { const p = w.parent; if (p === w) return w; w = p; } }, set: undefined, enumerable: true, configurable: true });
+  Object.defineProperty(globalThis, "frameElement", { get() { return frameElement(); }, set: undefined, enumerable: true, configurable: true });
+  Object.defineProperty(globalThis, "length", { get() { return childCount(); }, set: undefined, enumerable: true, configurable: true });
+  Object.defineProperty(globalThis, "opener", { value: null, writable: true, enumerable: true, configurable: true });
   Object.defineProperty(globalThis, "getSelection", { value: function getSelection() { return getDocument().getSelection(); }, writable: true, enumerable: true, configurable: true });
   // performance.now(), from the clock the page started on, and animation frames: there is no display to wait for,
   // so a frame is a 16 ms timer.
@@ -540,14 +685,87 @@ const char* const kWindowScript = R"JS(
 })();
 )JS";
 
+// The on<event> properties of elements and documents (GlobalEventHandlers): the handler is a listener that was added
+// when the property was first set, and returning false from it cancels the event.
+const char* const kEventHandlerScript = R"JS(
+(function () {
+  const types = ["abort", "auxclick", "beforeinput", "blur", "cancel", "canplay", "canplaythrough", "change", "click", "close", "contextmenu", "copy", "cut",
+    "dblclick", "drag", "dragend", "dragenter", "dragleave", "dragover", "dragstart", "drop", "durationchange", "emptied", "ended", "error", "focus", "formdata",
+    "input", "invalid", "keydown", "keypress", "keyup", "load", "loadeddata", "loadedmetadata", "loadstart", "mousedown", "mouseenter", "mouseleave", "mousemove",
+    "mouseout", "mouseover", "mouseup", "paste", "pause", "play", "playing", "progress", "ratechange", "reset", "resize", "scroll", "seeked", "seeking", "select",
+    "slotchange", "stalled", "submit", "suspend", "timeupdate", "toggle", "volumechange", "waiting", "wheel", "pointerdown", "pointerup", "pointermove",
+    "pointerover", "pointerout", "pointerenter", "pointerleave", "pointercancel", "gotpointercapture", "lostpointercapture", "touchstart", "touchend", "touchmove",
+    "touchcancel", "transitionend", "animationend", "animationstart", "animationiteration", "readystatechange", "fullscreenchange", "fullscreenerror",
+    "selectionchange", "visibilitychange", "securitypolicyviolation"];
+  // click(): what a click of the mouse does, which is the event, if the element is not disabled.
+  Object.defineProperty(HTMLElement.prototype, "click", { value: function click() {
+    if (this.hasAttribute("disabled") && /^(button|input|select|textarea|fieldset|optgroup|option)$/.test(this.localName)) return;
+    this.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true, view: globalThis, detail: 1 }));
+  }, writable: true, enumerable: true, configurable: true });
+  const handlers = new WeakMap();
+  const define = (prototype, type) => {
+    Object.defineProperty(prototype, "on" + type, {
+      get() { const entry = handlers.get(this); return entry && entry[type] ? entry[type].handler : null; },
+      set(value) {
+        let entry = handlers.get(this);
+        if (!entry) { entry = {}; handlers.set(this, entry); }
+        let record = entry[type];
+        if (!record) {
+          record = { handler: null };
+          record.listener = (event) => {
+            if (!record.handler) return;
+            const result = record.handler.call(this, event);
+            if (result === false) event.preventDefault();
+          };
+          entry[type] = record;
+          this.addEventListener(type, record.listener);
+        }
+        record.handler = typeof value === "function" || (typeof value === "object" && value !== null && typeof value.call === "function") ? value : null;
+      },
+      enumerable: true,
+      configurable: true,
+    });
+  };
+  for (const type of types) {
+    define(HTMLElement.prototype, type);
+    define(Document.prototype, type);
+  }
+  // The content attributes, onclick="..." and the like: a function made of the text, set as the property is. On body
+  // and frameset the handlers of the window events are the window's.
+  const windowTypes = new Set(["load", "error", "message", "hashchange", "popstate", "pageshow", "pagehide", "unload", "beforeunload", "resize", "scroll", "focus", "blur"]);
+  __solarRegisterContentHandler((element, name, value) => {
+    const type = name.slice(2);
+    if (!types.includes(type) && !windowTypes.has(type)) return;
+    const onWindow = (element instanceof HTMLBodyElement || element instanceof HTMLFrameSetElement) && windowTypes.has(type);
+    const target = onWindow ? globalThis : element;
+    if (value === null) { target[name] = null; return; }
+    let handler;
+    try { handler = new Function("event", value); } catch (e) { return; }
+    target[name] = handler;
+  });
+  delete globalThis.__solarRegisterContentHandler;
+})();
+)JS";
+
 }  // namespace
 
 void InstallHtmlApis(Quanta::Embed::Realm& realm) { Install(realm); }
 void InstallHtmlApis(Quanta::Embed::Runtime& runtime) { Install(runtime); }
 
-void InstallWindow(Quanta::Embed::Runtime& runtime, dom::Document* document) {
-  if (document) dom::SetAssociatedDocument(runtime.GetContext(), document);
-  runtime.Evaluate(kWindowScript, "window.js");
+template <typename Host>
+void InstallWindowOn(Host& host, dom::Document* document, Quanta::Embed::Realm* realm) {
+  Context& ctx = host.GetContext();
+  if (document) {
+    dom::SetAssociatedDocument(ctx, document);
+    document->globalObject = ctx.get_global_object();
+    document->realm = realm;
+    document->NoteWrite();
+  }
+  host.Evaluate(kWindowScript, "window.js");
+  host.Evaluate(kEventHandlerScript, "handlers.js");
 }
+
+void InstallWindow(Quanta::Embed::Runtime& runtime, dom::Document* document) { InstallWindowOn(runtime, document, nullptr); }
+void InstallWindow(Quanta::Embed::Realm& realm, dom::Document* document) { InstallWindowOn(realm, document, &realm); }
 
 }  // namespace solar::html

@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cstdio>
 #include <string>
 #include <unordered_map>
 
@@ -350,7 +351,7 @@ Value CreateDocument(Context& ctx, Value t, qe::Args args, Value) {
       return qe::Undefined();
     }
   }
-  Document* document = NewDocument(ctx, false);
+  Document* document = NewDocument(ctx, false, true);
   const std::string type = ns == std::string(kHtmlNamespace) ? "application/xhtml+xml" : ns == std::string(kSvgNamespace) ? "image/svg+xml" : "application/xml";
   document->contentType = type;
   if (doctype) AppendChild(document, doctype);
@@ -482,6 +483,9 @@ void DefineDocumentClasses(Context& ctx) {
 
   qe::ClassRef document = qe::DefineClass(ctx, "Document", ConstructDocument, 0, NodePrototype(ctx));
   SetInterfacePrototype(ctx, Interface::Document, document.prototype);
+  qe::ClassRef xmlDocument = qe::DefineClass(ctx, "XMLDocument", IllegalConstructor, 0, document.prototype);
+  SetInterfacePrototype(ctx, Interface::XmlDocument, xmlDocument.prototype);
+  qe::DefineGlobal(ctx, "XMLDocument", xmlDocument.constructor);
   Object* p = document.prototype;
   qe::DefineAccessor(p, "implementation", GetImplementationOf, nullptr);
   qe::DefineAccessor(p, "URL", GetUrl, nullptr);
