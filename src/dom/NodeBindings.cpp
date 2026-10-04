@@ -12,6 +12,7 @@ void Install(Host& host) {
   DefineNodeClass(ctx);
   DefineCollectionClasses(ctx);
   DefineCharacterDataClasses(ctx);
+  DefineAttributeClasses(ctx);
   DefineElementClass(ctx);
   DefineDocumentClasses(ctx);
 
@@ -47,6 +48,10 @@ void Install(Host& host) {
         Object.defineProperty(target, Symbol.iterator, { value: Array.prototype.values, writable: true, enumerable: false, configurable: true });
       };
       iterate(NodeList.prototype, ["entries", "keys", "values", "forEach"]);
+      const listValue = Object.getOwnPropertyDescriptor(DOMTokenList.prototype, "value").get;
+      Object.defineProperty(DOMTokenList.prototype, "toString", { value: function toString() { return listValue.call(this); }, writable: true, enumerable: true, configurable: true });
+      iterate(DOMTokenList.prototype, ["entries", "keys", "values", "forEach"]);
+      Object.defineProperty(NamedNodeMap.prototype, Symbol.iterator, { value: Array.prototype.values, writable: true, enumerable: false, configurable: true });
       Object.defineProperty(HTMLCollection.prototype, Symbol.iterator, { value: Array.prototype.values, writable: true, enumerable: false, configurable: true });
     })();
   )JS");

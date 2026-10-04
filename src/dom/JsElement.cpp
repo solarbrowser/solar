@@ -75,6 +75,36 @@ constexpr char kId[] = "id";
 constexpr char kClass[] = "class";
 constexpr char kSlot[] = "slot";
 
+Value GetAttributes(Context& ctx, Value t, qe::Args, Value) {
+  Element* self = ThisElement(ctx, t);
+  if (!self) return qe::Undefined();
+  if (!self->attributeMap) {
+    self->attributeMap = NewNamedNodeMap(ctx, self);
+    self->NoteWrite();
+  }
+  return qe::FromObject(self->attributeMap);
+}
+
+Value GetClassList(Context& ctx, Value t, qe::Args, Value) {
+  Element* self = ThisElement(ctx, t);
+  if (!self) return qe::Undefined();
+  if (!self->tokenList) {
+    self->tokenList = NewTokenList(ctx, self, "class");
+    self->NoteWrite();
+  }
+  return qe::FromObject(self->tokenList);
+}
+
+// [PutForwards=value]: assigning to classList assigns to its value.
+Value SetClassList(Context& ctx, Value t, qe::Args args, Value) {
+  Element* self = ThisElement(ctx, t);
+  if (!self || Missing(ctx, args, 1, "classList")) return qe::Undefined();
+  std::string text = qe::ToWtf8(ctx, args[0]);
+  if (qe::HasException(ctx)) return qe::Undefined();
+  if (auto error = SetAttribute(ctx, self, "class", std::move(text))) Throw(ctx, *error);
+  return qe::Undefined();
+}
+
 Value HasAttributes(Context& ctx, Value t, qe::Args, Value) {
   Element* self = ThisElement(ctx, t);
   return self ? qe::FromBool(!self->attributes.empty()) : qe::Undefined();
@@ -158,12 +188,7 @@ Value RemoveAttributeNs(Context& ctx, Value t, qe::Args args, Value) {
   const std::string local = qe::HasException(ctx) ? "" : qe::ToWtf8(ctx, args[1]);
   if (qe::HasException(ctx)) return qe::Undefined();
   Attr* attribute = self->FindAttribute(ns.value_or(""), local);
-  if (attribute) {
-    self->attributes.erase(std::find(self->attributes.begin(), self->attributes.end(), attribute));
-    attribute->ownerElement = nullptr;
-    attribute->NoteWrite();
-    NoteTreeChange();
-  }
+  if (attribute) RemoveAttributeNode(self, attribute);
   return qe::Undefined();
 }
 
@@ -227,7 +252,7 @@ Value GetAttributeNodeNs(Context& ctx, Value t, qe::Args args, Value) {
   return NodeValue(self->FindAttribute(ns.value_or(""), local));
 }
 
-Value SetAttributeNode(Context& ctx, Value t, qe::Args args, Value) {
+Value SetAttributeNodeMethod(Context& ctx, Value t, qe::Args args, Value) {
   Element* self = ThisElement(ctx, t);
   if (!self || Missing(ctx, args, 1, "setAttributeNode")) return qe::Undefined();
   Node* node = DOMObject::Cast<Node>(args[0]);
@@ -235,29 +260,15 @@ Value SetAttributeNode(Context& ctx, Value t, qe::Args args, Value) {
     qe::ThrowTypeError(ctx, "Failed to execute 'setAttributeNode' on 'Element': parameter 1 is not of type 'Attr'.");
     return qe::Undefined();
   }
-  Attr* attribute = static_cast<Attr*>(node);
-  if (attribute->ownerElement && attribute->ownerElement != self) {
-    Throw(ctx, {"InUseAttributeError", "The attribute is in use by another element"});
+  Attr* replaced = nullptr;
+  if (auto error = SetAttributeNode(self, static_cast<Attr*>(node), replaced)) {
+    Throw(ctx, *error);
     return qe::Undefined();
   }
-  Attr* old = self->FindAttribute(attribute->namespaceUri, attribute->localName);
-  if (old == attribute) return qe::FromObject(attribute);
-  if (old) {
-    *std::find(self->attributes.begin(), self->attributes.end(), old) = attribute;
-    old->ownerElement = nullptr;
-    old->NoteWrite();
-  } else {
-    self->attributes.push_back(attribute);
-  }
-  attribute->ownerElement = self;
-  attribute->nodeDocument = self->nodeDocument;
-  attribute->NoteWrite();
-  self->NoteWrite();
-  NoteTreeChange();
-  return NodeValue(old);
+  return NodeValue(replaced);
 }
 
-Value RemoveAttributeNode(Context& ctx, Value t, qe::Args args, Value) {
+Value RemoveAttributeNodeMethod(Context& ctx, Value t, qe::Args args, Value) {
   Element* self = ThisElement(ctx, t);
   if (!self || Missing(ctx, args, 1, "removeAttributeNode")) return qe::Undefined();
   Node* node = DOMObject::Cast<Node>(args[0]);
@@ -270,10 +281,7 @@ Value RemoveAttributeNode(Context& ctx, Value t, qe::Args args, Value) {
     Throw(ctx, {"NotFoundError", "The attribute is not an attribute of this element"});
     return qe::Undefined();
   }
-  self->attributes.erase(std::find(self->attributes.begin(), self->attributes.end(), attribute));
-  attribute->ownerElement = nullptr;
-  attribute->NoteWrite();
-  NoteTreeChange();
+  RemoveAttributeNode(self, attribute);
   return qe::FromObject(attribute);
 }
 
@@ -363,6 +371,8 @@ void DefineElementClass(Context& ctx) {
   qe::DefineAccessor(p, "id", GetReflected<kId>, SetReflected<kId>);
   qe::DefineAccessor(p, "className", GetReflected<kClass>, SetReflected<kClass>);
   qe::DefineAccessor(p, "slot", GetReflected<kSlot>, SetReflected<kSlot>);
+  qe::DefineAccessor(p, "classList", GetClassList, SetClassList);
+  qe::DefineAccessor(p, "attributes", GetAttributes, nullptr);
   qe::DefineMethod(p, "hasAttributes", HasAttributes, 0);
   qe::DefineMethod(p, "getAttributeNames", GetAttributeNames, 0);
   qe::DefineMethod(p, "getAttribute", GetAttributeMethod, 1);
@@ -376,9 +386,9 @@ void DefineElementClass(Context& ctx) {
   qe::DefineMethod(p, "hasAttributeNS", HasAttributeNs, 2);
   qe::DefineMethod(p, "getAttributeNode", GetAttributeNode, 1);
   qe::DefineMethod(p, "getAttributeNodeNS", GetAttributeNodeNs, 2);
-  qe::DefineMethod(p, "setAttributeNode", SetAttributeNode, 1);
-  qe::DefineMethod(p, "setAttributeNodeNS", SetAttributeNode, 1);
-  qe::DefineMethod(p, "removeAttributeNode", RemoveAttributeNode, 1);
+  qe::DefineMethod(p, "setAttributeNode", SetAttributeNodeMethod, 1);
+  qe::DefineMethod(p, "setAttributeNodeNS", SetAttributeNodeMethod, 1);
+  qe::DefineMethod(p, "removeAttributeNode", RemoveAttributeNodeMethod, 1);
   qe::DefineMethod(p, "getElementsByTagName", GetElementsByTagNameMethod, 1);
   qe::DefineMethod(p, "getElementsByTagNameNS", GetElementsByTagNameNsMethod, 2);
   qe::DefineMethod(p, "getElementsByClassName", GetElementsByClassNameMethod, 1);

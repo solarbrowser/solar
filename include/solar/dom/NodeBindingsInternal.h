@@ -83,6 +83,11 @@ Quanta::Value GetElementsByClassName(Quanta::Context& ctx, Node* root, std::stri
 Document* AssociatedDocument(Quanta::Context& ctx);
 void SetAssociatedDocument(Quanta::Context& ctx, Document* document);
 
+// element.attributes, and element.classList (or another token list over `attribute`).
+Quanta::Object* NewNamedNodeMap(Quanta::Context& ctx, Element* element);
+Quanta::Object* NewTokenList(Quanta::Context& ctx, Element* element, const char* attribute);
+void DefineAttributeClasses(Quanta::Context& ctx);
+
 // The interfaces, each defined once per realm.
 void DefineNodeClass(Quanta::Context& ctx);
 void DefineCharacterDataClasses(Quanta::Context& ctx);

@@ -650,6 +650,37 @@ std::optional<DomError> SetAttribute(Context& ctx, Element* element, std::string
   return std::nullopt;
 }
 
+std::optional<DomError> SetAttributeNode(Element* element, Attr* attribute, Attr*& replaced) {
+  replaced = nullptr;
+  if (attribute->ownerElement && attribute->ownerElement != element) return DomError{"InUseAttributeError", "The attribute is in use by another element"};
+  Attr* old = element->FindAttribute(attribute->namespaceUri, attribute->localName);
+  if (old == attribute) {
+    replaced = attribute;
+    return std::nullopt;
+  }
+  if (old) {
+    *std::find(element->attributes.begin(), element->attributes.end(), old) = attribute;
+    old->ownerElement = nullptr;
+    old->NoteWrite();
+  } else {
+    element->attributes.push_back(attribute);
+  }
+  attribute->ownerElement = element;
+  attribute->nodeDocument = element->nodeDocument;
+  attribute->NoteWrite();
+  element->NoteWrite();
+  NoteTreeChange();
+  replaced = old;
+  return std::nullopt;
+}
+
+void RemoveAttributeNode(Element* element, Attr* attribute) {
+  element->attributes.erase(std::find(element->attributes.begin(), element->attributes.end(), attribute));
+  attribute->ownerElement = nullptr;
+  attribute->NoteWrite();
+  NoteTreeChange();
+}
+
 bool RemoveAttribute(Element* element, std::string_view name) {
   Attr* attribute = element->FindAttribute(AttributeNameFor(element, name));
   if (!attribute) return false;

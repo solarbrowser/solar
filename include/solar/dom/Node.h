@@ -238,6 +238,12 @@ struct QualifiedParts {
 std::optional<DomError> ValidateAndExtract(std::string_view namespaceUri, std::string_view qualifiedName, QualifiedParts& out);
 
 // ---- Attributes ----
+// "set an attribute": puts `attribute` in the element's list, in the place of the one with its namespace
+// and local name if there is one, which is `replaced`. InUseAttributeError if another element has it.
+std::optional<DomError> SetAttributeNode(Element* element, Attr* attribute, Attr*& replaced);
+// "remove an attribute".
+void RemoveAttributeNode(Element* element, Attr* attribute);
+
 // setAttribute-style access on an element: the name is lowered on an HTML element in an HTML document.
 std::optional<std::string> GetAttribute(const Element* element, std::string_view name);
 // InvalidCharacterError if `name` is not an XML Name.
