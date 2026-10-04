@@ -17,6 +17,7 @@ using Quanta::Value;
 void JsEvent::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(target);
   visitor.Mark(currentTarget);
+  for (JsEventTarget* node : path) visitor.Mark(node);
 }
 
 void JsEventTarget::Visit(Quanta::Visitor& visitor) {
@@ -269,7 +270,9 @@ Value ComposedPath(Context& ctx, Value t, qe::Args, Value) {
   JsEvent* self = ThisEvent(ctx, t);
   if (!self) return qe::Undefined();
   Value path = qe::NewArray(ctx);
-  if (self->dispatching && self->currentTarget) qe::ArrayPush(ctx, path, qe::FromObject(self->currentTarget));
+  if (self->dispatching) {
+    for (JsEventTarget* node : self->path) qe::ArrayPush(ctx, path, qe::FromObject(node));
+  }
   return path;
 }
 
@@ -446,26 +449,47 @@ Value DispatchEvent(Context& ctx, Value thisValue, qe::Args args, Value) {
 
 }  // namespace
 
-// There is no tree yet, so an event goes to its target alone: capturing listeners first, then the rest.
+namespace {
+
+// "invoke": the listeners of one target on the path, the capturing ones or the others.
+void InvokeAll(Context& ctx, JsEventTarget* current, JsEvent* event, uint16_t phase, bool capturing) {
+  if (event->stopPropagation) return;
+  event->currentTarget = current;
+  event->phase = phase;
+  event->NoteWrite(qe::FromObject(current));
+  const std::vector<std::shared_ptr<Listener>> snapshot = current->listeners;
+  for (const std::shared_ptr<Listener>& listener : snapshot) {
+    if (event->stopImmediatePropagation) break;
+    if (listener->type != event->type || listener->capture != capturing) continue;
+    Invoke(ctx, current, event, listener);
+  }
+}
+
+}  // namespace
+
+// The event goes down the path to its target, capturing listeners only, and then back up it (if it
+// bubbles) to the listeners that do not capture. At the target both are run, the capturing ones first.
 bool DispatchOn(Context& ctx, JsEventTarget* target, JsEvent* event) {
   event->dispatching = true;
   event->target = target;
-  event->currentTarget = target;
-  event->phase = 2;
+  event->path.clear();
+  event->path.push_back(target);
+  for (JsEventTarget* parent = target->eventParent ? target->eventParent(target) : nullptr; parent; parent = parent->eventParent ? parent->eventParent(parent) : nullptr) {
+    event->path.push_back(parent);
+  }
   event->NoteWrite(qe::FromObject(target));
+  const std::vector<JsEventTarget*> path = event->path;
 
-  const std::vector<std::shared_ptr<Listener>> snapshot = target->listeners;
-  for (bool capturing : {true, false}) {
-    for (const std::shared_ptr<Listener>& listener : snapshot) {
-      if (event->stopImmediatePropagation) break;
-      if (listener->type != event->type || listener->capture != capturing) continue;
-      Invoke(ctx, target, event, listener);
-    }
+  for (size_t i = path.size(); i-- > 0;) InvokeAll(ctx, path[i], event, i == 0 ? 2 : 1, true);
+  for (size_t i = 0; i < path.size(); ++i) {
+    if (i != 0 && !event->bubbles) break;
+    InvokeAll(ctx, path[i], event, i == 0 ? 2 : 3, false);
   }
 
   event->dispatching = false;
   event->phase = 0;
   event->currentTarget = nullptr;
+  event->path.clear();
   event->stopPropagation = false;
   event->stopImmediatePropagation = false;
   return !event->defaultPrevented;

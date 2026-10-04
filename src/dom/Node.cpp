@@ -65,6 +65,8 @@ T* Make(Context& ctx, Interface interface, NodeType type, Document* document) {
   T* node = Heap::Allocate<T>();
   node->nodeType = type;
   node->nodeDocument = document;
+  // An event goes on from a node to the node it is in.
+  node->eventParent = [](web::JsEventTarget* target) -> web::JsEventTarget* { return static_cast<Node*>(target)->parentNode; };
   node->initialize_prototype(InterfacePrototype(ctx, interface));
   return node;
 }

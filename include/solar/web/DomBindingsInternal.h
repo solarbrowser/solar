@@ -37,6 +37,8 @@ struct JsEvent : Quanta::DOMObject {
   double timeStamp = 0;
   JsEventTarget* target = nullptr;
   JsEventTarget* currentTarget = nullptr;
+  // The event path while the event is dispatched: the target, then each parent of it in turn.
+  std::vector<JsEventTarget*> path;
 
   void Visit(Quanta::Visitor& visitor);
 };
@@ -64,6 +66,9 @@ struct Listener {
 };
 
 struct JsEventTarget : Quanta::DOMObject {
+  // "get the parent" of the standard: where an event goes after this target, or null. A type that sits in
+  // a tree sets it (a cell has no virtual functions to override); an event target with none is a path of one.
+  JsEventTarget* (*eventParent)(JsEventTarget*) = nullptr;
   std::vector<std::shared_ptr<Listener>> listeners;
   // The on<type> attributes' values, which are callables or null.
   std::map<std::string, Quanta::Value> eventHandlers;
