@@ -581,6 +581,24 @@ Value ReplaceChildrenMethod(Context& ctx, Value t, qe::Args args, Value) {
   return qe::Undefined();
 }
 
+Value MoveBeforeMethod(Context& ctx, Value t, qe::Args args, Value) {
+  Node* self = ThisNode(ctx, t);
+  if (!self) return qe::Undefined();
+  if (args.size() < 2) {
+    qe::ThrowTypeError(ctx, "Failed to execute 'moveBefore' on 'Node': 2 arguments required, but only " + std::to_string(args.size()) + " present.");
+    return qe::Undefined();
+  }
+  Node* node = NodeArgument(ctx, args, 0, "Failed to execute 'moveBefore' on 'Node'");
+  if (!node) return qe::Undefined();
+  Node* child = nullptr;
+  if (!qe::IsNull(args[1])) {
+    child = NodeArgument(ctx, args, 1, "Failed to execute 'moveBefore' on 'Node'");
+    if (!child) return qe::Undefined();
+  }
+  if (auto error = MoveBefore(node, self, child)) Throw(ctx, *error);
+  return qe::Undefined();
+}
+
 bool IsAmong(const Node* node, qe::Args args) {
   for (const Value& arg : args) {
     if (DOMObject::Cast<Node>(arg) == node) return true;
@@ -652,6 +670,7 @@ void DefineParentNode(Object* prototype) {
   qe::DefineMethod(prototype, "prepend", PrependMethod, 0);
   qe::DefineMethod(prototype, "append", AppendMethod, 0);
   qe::DefineMethod(prototype, "replaceChildren", ReplaceChildrenMethod, 0);
+  qe::DefineMethod(prototype, "moveBefore", MoveBeforeMethod, 2);
 }
 
 void DefineChildNode(Object* prototype) {

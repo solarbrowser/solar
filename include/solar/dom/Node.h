@@ -312,6 +312,8 @@ bool HasWindowNames();
 std::optional<DomError> EnsurePreInsertionValidity(Node* node, Node* parent, Node* child);
 // appendChild and insertBefore.
 std::optional<DomError> PreInsert(Node* node, Node* parent, Node* child);
+// "move a node" into `parent` before `child`: PreInsert for a node that is kept, and so one that already has a parent.
+std::optional<DomError> MoveBefore(Node* node, Node* parent, Node* child);
 std::optional<DomError> AppendChild(Node* parent, Node* node);
 // replaceChild.
 std::optional<DomError> ReplaceChild(Node* parent, Node* node, Node* child);

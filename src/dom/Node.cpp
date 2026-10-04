@@ -467,6 +467,32 @@ std::optional<DomError> PreInsert(Node* node, Node* parent, Node* child) {
   return std::nullopt;
 }
 
+std::optional<DomError> MoveBefore(Node* node, Node* parent, Node* child) {
+  // "move a node": what the node holds that a removal would lose (nothing a tree without a renderer has, so far)
+  // stays, and so does the order of what is told to ranges and iterators: the node goes first, then it is put back.
+  if (ShadowIncludingRoot(parent) != ShadowIncludingRoot(node)) return DomError{"HierarchyRequestError", "The new parent is not in the same tree as the node."};
+  if (IsShadowIncludingInclusiveAncestor(node, parent)) return DomError{"HierarchyRequestError", "The new child element contains the parent."};
+  if (child && child->parentNode != parent) return DomError{"NotFoundError", "The node before which the new node is to be inserted is not a child of this node."};
+  if (!node->IsElement() && !node->IsCharacterData()) return DomError{"HierarchyRequestError", "Only elements and character data can be moved."};
+  if (parent->IsDocument()) {
+    if (node->nodeType == NodeType::Text || node->nodeType == NodeType::CdataSection) return DomError{"HierarchyRequestError", "Nodes of type 'Text' may not be inserted inside nodes of type '#document'."};
+    if (node->IsElement()) {
+      bool hasElement = false;
+      for (Node* n = parent->firstChild; n; n = n->nextSibling) hasElement |= n->IsElement();
+      bool doctypeFollows = false;
+      for (Node* n = child; n; n = n->nextSibling) doctypeFollows |= n->nodeType == NodeType::DocumentType;
+      if (hasElement || doctypeFollows) return DomError{"HierarchyRequestError", "Only one element on document allowed."};
+    }
+  } else if (!parent->IsElement() && !parent->IsFragment()) {
+    return DomError{"HierarchyRequestError", "This node type does not support this method."};
+  }
+  Node* reference = child == node ? node->nextSibling : child;
+  if (!node->parentNode) return DomError{"HierarchyRequestError", "The node has no parent to be moved from."};
+  RemoveImpl(node, false);
+  InsertImpl(node, parent, reference, false);
+  return std::nullopt;
+}
+
 std::optional<DomError> AppendChild(Node* parent, Node* node) { return PreInsert(node, parent, nullptr); }
 
 std::optional<DomError> ReplaceChild(Node* parent, Node* node, Node* child) {

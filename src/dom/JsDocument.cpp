@@ -135,6 +135,13 @@ Value GetElementsByClassNameDocument(Context& ctx, Value t, qe::Args args, Value
   return qe::HasException(ctx) ? qe::Undefined() : GetElementsByClassName(ctx, self, classes);
 }
 
+Value GetElementsByNameDocument(Context& ctx, Value t, qe::Args args, Value) {
+  Document* self = ThisDocument(ctx, t);
+  if (!self || Missing(ctx, args, 1, "Document", "getElementsByName")) return qe::Undefined();
+  const std::string name = qe::ToWtf8(ctx, args[0]);
+  return qe::HasException(ctx) ? qe::Undefined() : GetElementsByName(ctx, self, name);
+}
+
 Value CreateElement(Context& ctx, Value t, qe::Args args, Value) {
   Document* self = ThisDocument(ctx, t);
   if (!self || Missing(ctx, args, 1, "Document", "createElement")) return qe::Undefined();
@@ -461,6 +468,7 @@ void DefineDocumentClasses(Context& ctx) {
   qe::DefineMethod(p, "getElementsByTagName", GetElementsByTagNameDocument, 1);
   qe::DefineMethod(p, "getElementsByTagNameNS", GetElementsByTagNameNsDocument, 2);
   qe::DefineMethod(p, "getElementsByClassName", GetElementsByClassNameDocument, 1);
+  qe::DefineMethod(p, "getElementsByName", GetElementsByNameDocument, 1);
   qe::DefineMethod(p, "createElement", CreateElement, 1);
   qe::DefineMethod(p, "createElementNS", CreateElementNs, 2);
   qe::DefineMethod(p, "createDocumentFragment", CreateDocumentFragment, 0);

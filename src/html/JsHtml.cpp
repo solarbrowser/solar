@@ -492,6 +492,21 @@ const char* const kWindowScript = R"JS(
     Object.defineProperty(globalThis, name, { value: globalThis, writable: true, enumerable: true, configurable: true });
   }
   Object.defineProperty(globalThis, "getSelection", { value: function getSelection() { return getDocument().getSelection(); }, writable: true, enumerable: true, configurable: true });
+  // performance.now(), from the clock the page started on, and animation frames: there is no display to wait for,
+  // so a frame is a 16 ms timer.
+  const timeOrigin = Date.now();
+  Object.defineProperty(globalThis, "performance", { value: { now() { return Date.now() - timeOrigin; }, timeOrigin, toJSON() { return { timeOrigin }; } }, writable: true, enumerable: true, configurable: true });
+  const frames = new Map();
+  let nextFrame = 1;
+  Object.defineProperty(globalThis, "requestAnimationFrame", { value: function requestAnimationFrame(callback) {
+    if (typeof callback !== "function") throw new TypeError("Failed to execute 'requestAnimationFrame' on 'Window': The callback provided as parameter 1 is not a function.");
+    const handle = nextFrame++;
+    frames.set(handle, setTimeout(() => { frames.delete(handle); callback(Date.now() - timeOrigin); }, 16));
+    return handle;
+  }, writable: true, enumerable: true, configurable: true });
+  Object.defineProperty(globalThis, "cancelAnimationFrame", { value: function cancelAnimationFrame(handle) {
+    if (frames.has(handle)) { clearTimeout(frames.get(handle)); frames.delete(handle); }
+  }, writable: true, enumerable: true, configurable: true });
   for (const name of ["addEventListener", "removeEventListener", "dispatchEvent"]) {
     const method = EventTarget.prototype[name];
     Object.defineProperty(globalThis, name, { value: function (...args) { return method.apply(target, args); }, writable: true, enumerable: true, configurable: true });
