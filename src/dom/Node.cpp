@@ -19,6 +19,13 @@ void Node::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(previousSibling);
   visitor.Mark(nextSibling);
   visitor.Mark(nodeDocument);
+  visitor.Mark(childNodesList);
+  visitor.Mark(childrenList);
+}
+
+void Document::Visit(Quanta::Visitor& visitor) {
+  Node::Visit(visitor);
+  visitor.Mark(implementation);
 }
 
 void DocumentFragment::Visit(Quanta::Visitor& visitor) {
@@ -34,13 +41,22 @@ void Attr::Visit(Quanta::Visitor& visitor) {
 void Element::Visit(Quanta::Visitor& visitor) {
   Node::Visit(visitor);
   for (Attr* attribute : attributes) visitor.Mark(attribute);
+  visitor.Mark(attributeMap);
+  visitor.Mark(tokenList);
 }
 
 // ---- Making nodes ----
 
 namespace {
+uint64_t g_treeVersion = 1;
+}
 
-char g_prototypeKeys[9];
+uint64_t TreeVersion() { return g_treeVersion; }
+void NoteTreeChange() { ++g_treeVersion; }
+
+namespace {
+
+char g_prototypeKeys[10];
 
 char* PrototypeKey(Interface interface) { return &g_prototypeKeys[static_cast<int>(interface)]; }
 
@@ -67,7 +83,7 @@ Document* NewDocument(Context& ctx, bool isHtml) {
 }
 
 Element* NewElement(Context& ctx, Document* document, std::string_view localName, std::string_view namespaceUri, std::string_view prefix) {
-  Element* element = Make<Element>(ctx, Interface::Element, NodeType::Element, document);
+  Element* element = Make<Element>(ctx, namespaceUri == kHtmlNamespace && InterfacePrototype(ctx, Interface::HtmlElement) ? Interface::HtmlElement : Interface::Element, NodeType::Element, document);
   element->localName = localName;
   element->namespaceUri = namespaceUri;
   element->prefix = prefix;
@@ -247,6 +263,7 @@ std::optional<DomError> Validate(Node* node, Node* parent, Node* child, bool rep
 }
 
 void Unlink(Node* node) {
+  NoteTreeChange();
   Node* parent = node->parentNode;
   if (node->previousSibling) {
     node->previousSibling->nextSibling = node->nextSibling;
@@ -268,6 +285,7 @@ void Unlink(Node* node) {
 }
 
 void Link(Node* node, Node* parent, Node* child) {
+  NoteTreeChange();
   node->parentNode = parent;
   node->previousSibling = child ? child->previousSibling : parent->lastChild;
   node->nextSibling = child;
@@ -583,18 +601,44 @@ std::optional<std::string> GetAttribute(const Element* element, std::string_view
   return attribute->value;
 }
 
-std::optional<DomError> SetAttribute(Context& ctx, Element* element, std::string_view name, std::string value) {
-  bool valid = false;
-  // The first code point has to be a name start, the rest name characters.
-  if (!name.empty()) {
-    size_t at = 0;
-    const uint32_t first = DecodeOne(name, at);
-    valid = IsNameStart(first);
-    while (valid && at < name.size()) valid = IsNameChar(DecodeOne(name, at));
+bool IsXmlName(std::string_view name) {
+  if (name.empty()) return false;
+  size_t at = 0;
+  if (!IsNameStart(DecodeOne(name, at))) return false;
+  while (at < name.size()) {
+    if (!IsNameChar(DecodeOne(name, at))) return false;
   }
-  if (!valid) return DomError{"InvalidCharacterError", "The string contains invalid characters"};
+  return true;
+}
+
+bool IsNcName(std::string_view name) { return IsXmlName(name) && name.find(':') == std::string_view::npos; }
+
+std::optional<DomError> ValidateAndExtract(std::string_view ns, std::string_view qualifiedName, QualifiedParts& out) {
+  const DomError invalid{"InvalidCharacterError", "The string contains invalid characters"};
+  const size_t colon = qualifiedName.find(':');
+  if (colon == std::string_view::npos) {
+    if (!IsNcName(qualifiedName)) return invalid;
+    out.prefix.clear();
+    out.localName = qualifiedName;
+  } else {
+    // A QName: an NCName, a colon and an NCName.
+    if (!IsNcName(qualifiedName.substr(0, colon)) || !IsNcName(qualifiedName.substr(colon + 1))) return invalid;
+    out.prefix = qualifiedName.substr(0, colon);
+    out.localName = qualifiedName.substr(colon + 1);
+  }
+  out.namespaceUri = ns;
+  if (!out.prefix.empty() && ns.empty()) return DomError{"NamespaceError", "A prefix needs a namespace"};
+  if (out.prefix == "xml" && ns != kXmlNamespace) return DomError{"NamespaceError", "The xml prefix needs the XML namespace"};
+  if ((qualifiedName == "xmlns" || out.prefix == "xmlns") && ns != kXmlnsNamespace) return DomError{"NamespaceError", "The xmlns name needs the XMLNS namespace"};
+  if (ns == kXmlnsNamespace && qualifiedName != "xmlns" && out.prefix != "xmlns") return DomError{"NamespaceError", "The XMLNS namespace is for xmlns names"};
+  return std::nullopt;
+}
+
+std::optional<DomError> SetAttribute(Context& ctx, Element* element, std::string_view name, std::string value) {
+  if (!IsXmlName(name)) return DomError{"InvalidCharacterError", "The string contains invalid characters"};
 
   const std::string lowered = AttributeNameFor(element, name);
+  NoteTreeChange();
   if (Attr* existing = element->FindAttribute(lowered)) {
     existing->value = std::move(value);
     return std::nullopt;
@@ -609,6 +653,7 @@ std::optional<DomError> SetAttribute(Context& ctx, Element* element, std::string
 bool RemoveAttribute(Element* element, std::string_view name) {
   Attr* attribute = element->FindAttribute(AttributeNameFor(element, name));
   if (!attribute) return false;
+  NoteTreeChange();
   element->attributes.erase(std::find(element->attributes.begin(), element->attributes.end(), attribute));
   attribute->ownerElement = nullptr;
   attribute->NoteWrite();

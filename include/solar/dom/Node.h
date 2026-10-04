@@ -60,6 +60,9 @@ struct Node : web::JsEventTarget {
   Node* nextSibling = nullptr;
   // The document the node belongs to; null only for a Document itself.
   Document* nodeDocument = nullptr;
+  // What script gets from childNodes and children, which is the same object each time.
+  Quanta::Object* childNodesList = nullptr;
+  Quanta::Object* childrenList = nullptr;
 
   void Visit(Quanta::Visitor& visitor);
 
@@ -132,6 +135,9 @@ struct Element : Node {
   std::string prefix;        // empty: none
   std::string localName;
   std::vector<Attr*> attributes;
+  // attributes and classList, which are the same object each time.
+  Quanta::Object* attributeMap = nullptr;
+  Quanta::Object* tokenList = nullptr;
 
   std::string QualifiedName() const { return prefix.empty() ? localName : prefix + ":" + localName; }
   // `name` is compared as the standard does for a name on an HTML element in an HTML document: after
@@ -151,10 +157,11 @@ struct Document : Node {
   enum class Mode { NoQuirks, Quirks, LimitedQuirks };
   Mode mode = Mode::NoQuirks;
   bool isHtml = false;  // an HTML document and not an XML one
+  Quanta::Object* implementation = nullptr;  // document.implementation, the same object each time
 
   Element* DocumentElement() const;
   DocumentType* Doctype() const;
-  void Visit(Quanta::Visitor& visitor) { Node::Visit(visitor); }
+  void Visit(Quanta::Visitor& visitor);
 };
 
 inline Element* AsElement(Node* node) { return node && node->IsElement() ? static_cast<Element*>(node) : nullptr; }
@@ -166,7 +173,7 @@ inline const CharacterData* AsCharacterData(const Node* node) { return node && n
 // ---- Making nodes ----
 
 // The interfaces a node can have, for the prototype the realm's bindings give each.
-enum class Interface { Document, Element, Text, CdataSection, ProcessingInstruction, Comment, DocumentType, DocumentFragment, Attr };
+enum class Interface { Document, Element, HtmlElement, Text, CdataSection, ProcessingInstruction, Comment, DocumentType, DocumentFragment, Attr };
 // What DefineClass made for `interface`; the DOM bindings record it, and a node made before they have
 // has none.
 void SetInterfacePrototype(Quanta::Context& ctx, Interface interface, Quanta::Object* prototype);
@@ -183,6 +190,11 @@ CharacterData* NewProcessingInstruction(Quanta::Context& ctx, Document* document
 DocumentType* NewDocumentType(Quanta::Context& ctx, Document* document, std::string name, std::string publicId, std::string systemId);
 DocumentFragment* NewDocumentFragment(Quanta::Context& ctx, Document* document);
 Attr* NewAttr(Quanta::Context& ctx, Document* document, std::string_view namespaceUri, std::string_view prefix, std::string_view localName, std::string value);
+
+// A number that changes whenever any tree does, which the live collections check to know whether what
+// they have found is still so.
+uint64_t TreeVersion();
+void NoteTreeChange();
 
 // ---- The tree ----
 // Each is the algorithm of that name in the standard. All but the last return the error the standard
@@ -212,6 +224,18 @@ bool IsEqualNode(const Node* a, const Node* b);
 // compareDocumentPosition's bit set.
 constexpr uint16_t kDisconnected = 1, kPreceding = 2, kFollowing = 4, kContains = 8, kContainedBy = 16, kImplementationSpecific = 32;
 uint16_t CompareDocumentPosition(Node* a, Node* b);
+
+// ---- Names ----
+// Whether `name` is an XML Name (the Name production), and an NCName (one without a colon).
+bool IsXmlName(std::string_view name);
+bool IsNcName(std::string_view name);
+struct QualifiedParts {
+  std::string namespaceUri;  // empty: none
+  std::string prefix;        // empty: none
+  std::string localName;
+};
+// "validate and extract" of the standard, for createElementNS, setAttributeNS and the like.
+std::optional<DomError> ValidateAndExtract(std::string_view namespaceUri, std::string_view qualifiedName, QualifiedParts& out);
 
 // ---- Attributes ----
 // setAttribute-style access on an element: the name is lowered on an HTML element in an HTML document.

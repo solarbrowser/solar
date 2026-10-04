@@ -123,6 +123,19 @@
     fail('did not throw ' + constructor.name, description);
   };
 
+  // `type` is a DOMException's name (or its legacy constant name, which the tests that use the two
+  // spell as the code's name).
+  globalThis.assert_throws_dom = (type, func, description) => {
+    try {
+      func();
+    } catch (e) {
+      if (!(e instanceof DOMException)) fail('threw ' + describe(e) + ' instead of a DOMException', description);
+      if (e.name !== type) fail('threw a DOMException named ' + e.name + ' instead of ' + type, description);
+      return;
+    }
+    fail('did not throw a DOMException named ' + type, description);
+  };
+
   // A skip is the start of a test's name, or, if it begins with "*", a part of it.
   function isSkipped(name) {
     return skips.some((skip) => (skip.startsWith('*') ? String(name).includes(skip.slice(1)) : String(name).startsWith(skip)));

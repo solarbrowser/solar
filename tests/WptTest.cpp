@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "quanta/Embed.h"
+#include "solar/dom/NodeBindings.h"
 #include "solar/web/DomBindings.h"
 #include "solar/net/HttpClient.h"
 #include "solar/url/Parser.h"
@@ -107,6 +108,7 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
   solar::net::HttpClient client(*loop);
   solar::web::InstallUrlApis(*runtime);
   solar::web::InstallDomApis(*runtime);
+  solar::dom::InstallNodeApis(*runtime);
   solar::web::InstallFetchApis(*runtime);
   solar::web::FetchHost::Config hostConfig;
   hostConfig.loop = loop.get();
