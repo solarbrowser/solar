@@ -1,4 +1,5 @@
 tests/wpt/custom-elements/CustomElementRegistry-getName.html
+tests/wpt/custom-elements/CustomElementRegistry.html
 tests/wpt/custom-elements/Document-createElement-customized-builtins.html
 tests/wpt/custom-elements/Document-createElement.html
 tests/wpt/custom-elements/Document-createElementNS-customized-builtins.html
