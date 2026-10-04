@@ -1,8 +1,11 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <map>
+#include <random>
 #include <string>
 
+#include "solar/web/BlobUrls.h"
 #include "solar/web/FetchBindingsInternal.h"
 #include "solar/web/UrlBindingsInternal.h"
 #include "solar/web/WebIdl.h"
@@ -319,7 +322,75 @@ JsFile* NewFile(Context& ctx, std::string bytes, std::string name, std::string t
   return file;
 }
 
+namespace {
+
+std::map<std::string, BlobUrlEntry>& BlobUrlStore() {
+  static std::map<std::string, BlobUrlEntry> store;
+  return store;
+}
+
+}  // namespace
+
+std::string RegisterBlobUrl(const std::string& origin, BlobUrlEntry entry) {
+  static std::random_device random;
+  static const char kHex[] = "0123456789abcdef";
+  std::string id;
+  for (int i = 0; i < 32; ++i) {
+    if (i == 8 || i == 12 || i == 16 || i == 20) id.push_back('-');
+    id.push_back(kHex[random() % 16]);
+  }
+  const std::string url = "blob:" + origin + "/" + id;
+  BlobUrlStore()[url] = std::move(entry);
+  return url;
+}
+
+std::optional<BlobUrlEntry> LookupBlobUrl(const std::string& url) {
+  const auto found = BlobUrlStore().find(url.substr(0, url.find('#')));
+  if (found == BlobUrlStore().end()) return std::nullopt;
+  return found->second;
+}
+
+void RevokeBlobUrl(const std::string& url) { BlobUrlStore().erase(url.substr(0, url.find('#'))); }
+
+namespace {
+
+// URL.createObjectURL(blob) and revokeObjectURL(url): the origin is the page's, and without a page, "null".
+Value CreateObjectUrl(Context& ctx, Value, qe::Args args, Value) {
+  JsBlob* blob = args.empty() ? nullptr : DOMObject::Cast<JsBlob>(args[0]);
+  if (!blob) {
+    qe::ThrowTypeError(ctx, "Failed to execute 'createObjectURL' on 'URL': Overload resolution failed.");
+    return qe::Undefined();
+  }
+  std::string origin = "null";
+  Value location = qe::Get(ctx, qe::FromObject(ctx.get_global_object()), "location");
+  if (qe::IsObject(location)) {
+    Value value = qe::Get(ctx, location, "origin");
+    if (!qe::HasException(ctx) && !qe::IsUndefined(value)) origin = qe::ToWtf8(ctx, value);
+    if (qe::HasException(ctx)) ctx.clear_exception();
+  }
+  return qe::FromWtf8(ctx, RegisterBlobUrl(origin, {blob->data, blob->type}));
+}
+
+Value RevokeObjectUrl(Context& ctx, Value, qe::Args args, Value) {
+  if (args.empty()) {
+    qe::ThrowTypeError(ctx, "Failed to execute 'revokeObjectURL' on 'URL': 1 argument required, but only 0 present.");
+    return qe::Undefined();
+  }
+  const std::string url = qe::ToWtf8(ctx, args[0]);
+  if (!qe::HasException(ctx)) RevokeBlobUrl(url);
+  return qe::Undefined();
+}
+
+}  // namespace
+
 void DefineBlobClasses(Context& ctx) {
+  {
+    Value url = qe::Get(ctx, qe::FromObject(ctx.get_global_object()), "URL");
+    if (qe::IsObject(url)) {
+      qe::DefineStaticMethod(url.as_object(), "createObjectURL", CreateObjectUrl, 1);
+      qe::DefineStaticMethod(url.as_object(), "revokeObjectURL", RevokeObjectUrl, 1);
+    }
+  }
   qe::ClassRef blob = qe::DefineClass(ctx, "Blob", ConstructBlob, 0);
   qe::SetRealmData(ctx, &g_blobPrototypeKey, blob.prototype);
   qe::DefineAccessor(blob.prototype, "size", GetSize, nullptr);

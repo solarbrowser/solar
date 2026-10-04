@@ -49,7 +49,7 @@ endif
 CXXFLAGS += $(OPENSSL_CFLAGS) $(COMPRESSION_CFLAGS) $(HTTP2_CFLAGS)
 
 WEB_SOURCES = $(wildcard src/web/*.cpp)
-WEB_OBJECTS = $(WEB_SOURCES:%.cpp=$(OBJ_DIR)/%.o) $(OBJ_DIR)/$(GEN_DIR)/StreamsScript.o $(OBJ_DIR)/$(GEN_DIR)/UiEventsScript.o
+WEB_OBJECTS = $(WEB_SOURCES:%.cpp=$(OBJ_DIR)/%.o) $(OBJ_DIR)/$(GEN_DIR)/StreamsScript.o $(OBJ_DIR)/$(GEN_DIR)/UiEventsScript.o $(OBJ_DIR)/$(GEN_DIR)/XhrScript.o
 
 # The scripts in src/web/js are compiled into the program as C++ sources made from them.
 GEN_DIR = build/gen
@@ -64,6 +64,12 @@ $(GEN_DIR)/UiEventsScript.cpp: $(UI_EVENTS_JS) $(BUILD_DIR)/EmbedScripts
 	@mkdir -p $(GEN_DIR)
 	@echo "[EMBED] $@"
 	@$(BUILD_DIR)/EmbedScripts UiEvents $(UI_EVENTS_JS) > $@
+
+XHR_JS = $(sort $(wildcard src/web/js/xhr-*.js))
+$(GEN_DIR)/XhrScript.cpp: $(XHR_JS) $(BUILD_DIR)/EmbedScripts
+	@mkdir -p $(GEN_DIR)
+	@echo "[EMBED] $@"
+	@$(BUILD_DIR)/EmbedScripts Xhr $(XHR_JS) > $@
 
 $(BUILD_DIR)/EmbedScripts: tools/EmbedScripts.cpp
 	@mkdir -p $(BUILD_DIR)
@@ -229,7 +235,8 @@ test: $(addprefix $(BUILD_DIR)/,$(TESTS)) $(if $(filter linux,$(PLATFORM)),$(BUI
 	@for t in $(TESTS); do $(BUILD_DIR)/$$t || exit 1; done
 ifeq ($(PLATFORM),linux)
 	@for t in $(NET_TESTS) FetchBindingsTest; do SOLAR_LOOP_BACKEND=readiness $(BUILD_DIR)/$$t || exit 1; done
-	@$(BUILD_DIR)/WptTest $(wildcard tests/wpt/url/*.any.js) $(WPT_DOM) $(WPT_FETCH) $(WPT_STREAMS) $(WPT_PAGES)
+	@$(BUILD_DIR)/WptTest $(wildcard tests/wpt/url/*.any.js) $(WPT_DOM) $(WPT_FETCH) $(WPT_STREAMS)
+	@python3 tools/wptrun.py --check tests/wpt/dom/passing.txt
 endif
 
 # The WPT tests and the fetch binding tests again with the collector run at every allocation. Quanta

@@ -46,7 +46,7 @@ std::string TagNameOf(const Element* element);
 // standard says they stay current with the tree. What they find is looked up again when the tree has
 // changed since the last time.
 struct JsCollection : Quanta::DOMObject {
-  enum class Kind { ChildNodes, Children, ByTagName, ByTagNameNS, ByClassName, ByName, WindowNamed, Special, Static };
+  enum class Kind { ChildNodes, Children, ByTagName, ByTagNameNS, ByClassName, ByName, WindowNamed, Special, DocumentNamed, Static };
   Kind kind = Kind::Static;
   bool isNodeList = false;  // NodeList and not HTMLCollection
   Node* root = nullptr;
@@ -83,6 +83,10 @@ Quanta::Value GetElementsByClassName(Quanta::Context& ctx, Node* root, std::stri
 Quanta::Value GetElementsByName(Quanta::Context& ctx, Node* root, std::string_view name);
 // document.forms, images, links, anchors, embeds, plugins, scripts, applets: a live HTMLCollection of the descendants
 // that are the kind `which` names.
+// The names a document answers to, and whether an element is one of those that answer to `name`.
+bool HasDocumentName(const Element* element, const std::string& name);
+void DocumentNamesOf(const Element* element, std::vector<std::string>& out);
+Quanta::Value NewDocumentNamedCollection(Quanta::Context& ctx, Node* root, std::string_view name);
 Quanta::Value GetSpecialCollection(Quanta::Context& ctx, Node* root, std::string_view which);
 
 // The Document that nodes made by script constructors (new Text, new DocumentFragment) belong to: the

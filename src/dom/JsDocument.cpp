@@ -409,6 +409,58 @@ Value GetImplementationOf(Context& ctx, Value t, qe::Args, Value) {
 
 Object* RealmHolder(Context& ctx) { return Holder(ctx); }
 
+// The names under which an element is on its document: the name of an embed, form, iframe, img or object, the id of
+// an object, and the id of an img that has a name as well.
+void DocumentNamesOf(const Element* element, std::vector<std::string>& out) {
+  if (!element->IsHtml()) return;
+  const std::string& tag = element->localName;
+  const Attr* name = element->FindAttribute("", "name");
+  const Attr* id = element->FindAttribute("", "id");
+  if ((tag == "embed" || tag == "form" || tag == "iframe" || tag == "img" || tag == "object") && name && !name->value.empty()) out.push_back(name->value);
+  if (tag == "object" && id && !id->value.empty()) out.push_back(id->value);
+  if (tag == "img" && id && !id->value.empty() && name && !name->value.empty()) out.push_back(id->value);
+}
+
+bool HasDocumentName(const Element* element, const std::string& name) {
+  std::vector<std::string> names;
+  DocumentNamesOf(element, names);
+  return std::find(names.begin(), names.end(), name) != names.end();
+}
+
+bool Document::NamedGetter(Context& ctx, Document& self, const std::string& name, Value& out) {
+  if (name.empty()) return false;
+  Element* first = nullptr;
+  size_t count = 0;
+  for (Node* node = self.NextInTree(&self); node; node = node->NextInTree(&self)) {
+    Element* element = AsElement(node);
+    if (element && HasDocumentName(element, name)) {
+      if (!first) first = element;
+      ++count;
+    }
+  }
+  if (count == 0) return false;
+  if (count == 1) {
+    // An iframe is the window of the document in it.
+    if (first->IsHtml("iframe")) out = first->contentWindow ? qe::FromObject(first->contentWindow) : qe::Null();
+    else out = qe::FromObject(first);
+    return true;
+  }
+  out = NewDocumentNamedCollection(ctx, &self, name);
+  return true;
+}
+
+std::vector<std::string> Document::NamedKeys(Context&, Document& self) {
+  std::vector<std::string> names;
+  for (Node* node = self.NextInTree(&self); node; node = node->NextInTree(&self)) {
+    if (Element* element = AsElement(node)) DocumentNamesOf(element, names);
+  }
+  std::vector<std::string> unique;
+  for (const std::string& name : names) {
+    if (std::find(unique.begin(), unique.end(), name) == unique.end()) unique.push_back(name);
+  }
+  return unique;
+}
+
 bool HasWindowName(const Element* element, const std::string& name) {
   if (const Attr* id = element->FindAttribute("", "id"); id && id->value == name) return true;
   if (element->IsHtml() && (element->localName == "embed" || element->localName == "form" || element->localName == "img" || element->localName == "object")) {

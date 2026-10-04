@@ -1,3 +1,4 @@
+#include <cstdio>
 #include <string>
 
 #include "solar/dom/CustomElements.h"
@@ -8,6 +9,7 @@
 #include "solar/html/Parser.h"
 #include "solar/html/Serializer.h"
 #include "solar/html/Xml.h"
+#include "solar/web/Scripts.h"
 
 namespace solar::html {
 
@@ -796,6 +798,10 @@ void InstallWindowOn(Host& host, dom::Document* document, Quanta::Embed::Realm* 
   }
   host.Evaluate(kWindowScript, "window.js");
   host.Evaluate(kEventHandlerScript, "handlers.js");
+  std::string xhr;
+  for (const char* const* piece = web::kScriptXhr; *piece; ++piece) xhr += *piece;
+  const auto xhrResult = host.Evaluate(xhr, "xhr.js");
+  if (!xhrResult.ok) std::fprintf(stderr, "xhr.js: %s\n", xhrResult.error.c_str());
 }
 
 void InstallWindow(Quanta::Embed::Runtime& runtime, dom::Document* document) { InstallWindowOn(runtime, document, nullptr); }

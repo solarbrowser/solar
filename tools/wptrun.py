@@ -2,6 +2,7 @@
 """Runs WPT pages in parallel and writes one line per page: path, exit code, passed/total, the first failure.
 
 usage: tools/wptrun.py OUTPUT DIR...   (runs every .html page below tests/wpt/DIR that is not a support file)
+       tools/wptrun.py --check LIST    (runs the pages the file lists, each in a process of its own, and fails if one fails)
 """
 import os
 import re
@@ -25,7 +26,20 @@ def run(path):
     return f"{path} :: rc={code} {s}" + (f" | {first[:200]}" if first else "")
 
 
+def check(listing):
+    pages = [l.strip() for l in open(listing) if l.strip()]
+    with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+        lines = list(pool.map(run, pages))
+    failed = [l for l in lines if not re.search(r"rc=0 (\d+)/\1 passed", l)]
+    for l in failed:
+        print(l)
+    print(f"wpt pages: {len(pages) - len(failed)} of {len(pages)} passed")
+    sys.exit(1 if failed else 0)
+
+
 def main():
+    if sys.argv[1] == "--check":
+        check(sys.argv[2])
     output, dirs = sys.argv[1], sys.argv[2:]
     pages = []
     for d in dirs:

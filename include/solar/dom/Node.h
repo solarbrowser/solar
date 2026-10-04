@@ -269,6 +269,12 @@ struct Document : Node {
   // The throw-on-dynamic-markup-insertion counter: above zero, document.open, write and close throw.
   uint32_t throwOnDynamicMarkup = 0;
 
+  // document[name]: the embeds, forms, iframes, images and objects the document has under that name.
+  static bool NamedGetter(Quanta::Context& ctx, Document& self, const std::string& name, Quanta::Value& out);
+  static std::vector<std::string> NamedKeys(Quanta::Context& ctx, Document& self);
+  static constexpr bool LegacyOverrideBuiltIns = true;
+  static constexpr bool LegacyUnenumerableNamedProperties = true;
+
   Element* DocumentElement() const;
   DocumentType* Doctype() const;
   void Visit(Quanta::Visitor& visitor);

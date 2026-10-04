@@ -10,6 +10,7 @@
 #include "solar/html/Reflect.h"
 #include "solar/html/TreeBuilder.h"
 #include "solar/html/Xml.h"
+#include "solar/web/BlobUrls.h"
 #include "solar/url/Parser.h"
 #include "solar/url/Serializer.h"
 
@@ -304,7 +305,7 @@ Value FrameTask(Context& ctx, Value, qe::Args args, Value) {
     return qe::Undefined();
   }
   dom::Document* parent = iframe->nodeDocument;
-  std::string markup;
+  std::string markup, blobType;
   std::string address = "about:blank";
   bool navigate = false;
   if (const dom::Attr* srcdoc = iframe->FindAttribute("", "srcdoc")) {
@@ -318,6 +319,11 @@ Value FrameTask(Context& ctx, Value, qe::Args args, Value) {
       navigate = true;
       if (resolved.starts_with("about:")) {
         markup = "";
+      } else if (resolved.starts_with("blob:")) {
+        if (auto blob = web::LookupBlobUrl(resolved)) {
+          markup = *blob->data;
+          blobType = blob->type;
+        }
       } else if (std::optional<std::string> loaded = g_environment->Load(resolved)) {
         markup = std::move(*loaded);
       }
@@ -334,7 +340,8 @@ Value FrameTask(Context& ctx, Value, qe::Args args, Value) {
     return qe::Undefined();
   }
   Adopt(iframe, *context);
-  LoadPage(*context->realm, context->document, markup, address.starts_with("about:") ? "text/html" : g_environment->ContentType(address));
+  LoadPage(*context->realm, context->document, markup,
+           address.starts_with("about:") ? "text/html" : address.starts_with("blob:") ? (blobType.empty() ? "text/html" : blobType) : g_environment->ContentType(address));
   return qe::Undefined();
 }
 
@@ -348,7 +355,11 @@ void RunInRealm(Quanta::Embed::Realm& realm, const std::function<void()>& work) 
 
 bool LoadPage(Quanta::Embed::Realm& realm, dom::Document* document, std::string_view markup, std::string_view contentType) {
   bool ok = true;
-  const std::string text(markup), type(contentType);
+  std::string type(contentType);
+  // The parameters of a Content-Type are not the type.
+  type = type.substr(0, type.find(';'));
+  while (!type.empty() && type.back() == ' ') type.pop_back();
+  const std::string text(markup);
   RunAs(realm, [&] { ok = LoadPageIn(realm, document, text, type); });
   return ok;
 }
@@ -528,6 +539,29 @@ Value FrameElement(Context& ctx, Value, qe::Args, Value) {
   return qe::FromObject(iframe);
 }
 
+// __solarLoadText(url): what the program's loader has at the address, as text, or nothing.
+Value LoadText(Context& ctx, Value, qe::Args args, Value) {
+  if (args.empty() || !g_environment) return qe::Undefined();
+  const std::string address = qe::ToWtf8(ctx, args[0]);
+  if (qe::HasException(ctx)) return qe::Undefined();
+  if (address.starts_with("blob:")) {
+    if (auto blob = web::LookupBlobUrl(address)) return qe::FromWtf8(ctx, *blob->data);
+    return qe::Undefined();
+  }
+  const std::optional<std::string> text = g_environment->Load(address);
+  return text ? qe::FromWtf8(ctx, *text) : qe::Undefined();
+}
+
+Value ContentTypeOf(Context& ctx, Value, qe::Args args, Value) {
+  if (args.empty() || !g_environment) return qe::FromUtf8(ctx, "text/plain");
+  const std::string address = qe::ToWtf8(ctx, args[0]);
+  if (qe::HasException(ctx)) return qe::Undefined();
+  if (address.starts_with("blob:")) {
+    if (auto blob = web::LookupBlobUrl(address)) return qe::FromWtf8(ctx, blob->type);
+  }
+  return qe::FromWtf8(ctx, g_environment->ContentType(address));
+}
+
 // __solarRegisterContentHandler(compile): the script's function that makes handlers of the on<event> attributes.
 Value RegisterContentHandler(Context& ctx, Value, qe::Args args, Value) {
   if (Object* holder = dom::RealmHolder(ctx); holder && !args.empty()) qe::Set(ctx, qe::FromObject(holder), "contentHandler", args[0]);
@@ -636,6 +670,8 @@ void DefineFrameNatives(Context& ctx) {
   qe::DefineGlobalFunction(ctx, "__solarFrameTask", FrameTask, 2);
   qe::DefineGlobalFunction(ctx, "__solarRegisterFire", RegisterFire, 1);
   qe::DefineGlobalFunction(ctx, "__solarScriptTask", ScriptTask, 1);
+  qe::DefineGlobalFunction(ctx, "__solarLoadText", LoadText, 1);
+  qe::DefineGlobalFunction(ctx, "__solarContentTypeOf", ContentTypeOf, 1);
   qe::DefineGlobalFunction(ctx, "__solarRegisterContentHandler", RegisterContentHandler, 1);
   // The task function is kept for QueueTask, which finds it on the holder.
   if (Object* holder = dom::RealmHolder(ctx)) {

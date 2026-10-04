@@ -2,14 +2,19 @@ tests/wpt/custom-elements/CustomElementRegistry-getName.html
 tests/wpt/custom-elements/CustomElementRegistry.html
 tests/wpt/custom-elements/Document-createElement-customized-builtins.html
 tests/wpt/custom-elements/Document-createElement-svg.svg
+tests/wpt/custom-elements/Document-createElement.html
 tests/wpt/custom-elements/Document-createElementNS-customized-builtins.html
 tests/wpt/custom-elements/Document-createElementNS-prefix-timing.html
 tests/wpt/custom-elements/Document-createElementNS.html
+tests/wpt/custom-elements/adopted-callback.html
 tests/wpt/custom-elements/attribute-changed-callback.html
 tests/wpt/custom-elements/builtin-coverage.html
+tests/wpt/custom-elements/connected-callbacks-html-fragment-parsing.html
 tests/wpt/custom-elements/connected-callbacks-template.html
+tests/wpt/custom-elements/connected-callbacks.html
 tests/wpt/custom-elements/custom-element-reaction-queue.html
 tests/wpt/custom-elements/customized-built-in-constructor-exceptions.html
+tests/wpt/custom-elements/disconnected-callbacks.html
 tests/wpt/custom-elements/form-associated/ElementInternals-reportValidity-bubble-notref.html
 tests/wpt/custom-elements/form-associated/ElementInternals-reportValidity-delegatesFocus-notref.html
 tests/wpt/custom-elements/historical.html
@@ -21,6 +26,7 @@ tests/wpt/custom-elements/parser/parser-constructs-custom-elements.html
 tests/wpt/custom-elements/parser/parser-fallsback-to-unknown-element.html
 tests/wpt/custom-elements/parser/parser-sets-attributes-and-children.html
 tests/wpt/custom-elements/parser/parser-uses-constructed-element.html
+tests/wpt/custom-elements/parser/parser-uses-registry-of-owner-document.html
 tests/wpt/custom-elements/parser/serializing-html-fragments-customized-builtins.html
 tests/wpt/custom-elements/prevent-extensions-crash.html
 tests/wpt/custom-elements/pseudo-class-defined-print.html
@@ -40,6 +46,7 @@ tests/wpt/custom-elements/reactions/with-exceptions.html
 tests/wpt/custom-elements/registries/define.html
 tests/wpt/custom-elements/shadow-descendant-lifecycle-order.html
 tests/wpt/custom-elements/state/state-css-selector-nth-of.html
+tests/wpt/custom-elements/upgrading.html
 tests/wpt/custom-elements/upgrading/Node-cloneNode-customized-builtins.html
 tests/wpt/custom-elements/upgrading/Node-cloneNode.html
 tests/wpt/custom-elements/upgrading/upgrading-enqueue-reactions.html
@@ -389,7 +396,13 @@ tests/wpt/html/dom/documents/dom-tree-accessors/document.title-06.html
 tests/wpt/html/dom/documents/dom-tree-accessors/document.title-07.html
 tests/wpt/html/dom/documents/dom-tree-accessors/document.title-08.html
 tests/wpt/html/dom/documents/dom-tree-accessors/nameditem-03.html
+tests/wpt/html/dom/documents/dom-tree-accessors/nameditem-08.html
+tests/wpt/html/dom/documents/dom-tree-accessors/nameditem-adoption.html
 tests/wpt/html/dom/documents/dom-tree-accessors/nameditem-empty-name-dynamic-crash.html
+tests/wpt/html/dom/documents/dom-tree-accessors/nameditem-img-name-added-cached-list.html
+tests/wpt/html/dom/documents/dom-tree-accessors/nameditem-img-name-added.html
+tests/wpt/html/dom/documents/dom-tree-accessors/nameditem-img-name-removed.html
+tests/wpt/html/dom/documents/dom-tree-accessors/nameditem-names.html
 tests/wpt/html/webappapis/dynamic-markup-insertion/closing-the-input-stream/document.close-01.xhtml
 tests/wpt/html/webappapis/dynamic-markup-insertion/document-write/001.html
 tests/wpt/html/webappapis/dynamic-markup-insertion/document-write/002.html
@@ -474,7 +487,6 @@ tests/wpt/html/webappapis/dynamic-markup-insertion/html-unsafe-methods/setHTMLUn
 tests/wpt/html/webappapis/dynamic-markup-insertion/html-unsafe-methods/setHTMLUnsafe-xml.html
 tests/wpt/html/webappapis/dynamic-markup-insertion/html-unsafe-methods/setHTMLUnsafe.html
 tests/wpt/html/webappapis/dynamic-markup-insertion/opening-the-input-stream/002.html
-tests/wpt/html/webappapis/dynamic-markup-insertion/opening-the-input-stream/004.html
 tests/wpt/html/webappapis/dynamic-markup-insertion/opening-the-input-stream/006.html
 tests/wpt/html/webappapis/dynamic-markup-insertion/opening-the-input-stream/011.html
 tests/wpt/html/webappapis/dynamic-markup-insertion/opening-the-input-stream/012.html
