@@ -219,11 +219,6 @@ Value GetOwnerDocument(Context& ctx, Value t, qe::Args, Value) {
   return self->IsDocument() ? qe::Null() : NodeValue(self->nodeDocument);
 }
 
-Value GetRootNode(Context& ctx, Value t, qe::Args, Value) {
-  Node* self = ThisNode(ctx, t);
-  return self ? qe::FromObject(self->Root()) : qe::Undefined();
-}
-
 Value GetParentNode(Context& ctx, Value t, qe::Args, Value) {
   Node* self = ThisNode(ctx, t);
   return self ? NodeValue(self->parentNode) : qe::Undefined();

@@ -26,6 +26,7 @@ void Node::Visit(Quanta::Visitor& visitor) {
 void Document::Visit(Quanta::Visitor& visitor) {
   Node::Visit(visitor);
   visitor.Mark(implementation);
+  visitor.Mark(templateContentsOwner);
 }
 
 void DocumentFragment::Visit(Quanta::Visitor& visitor) {
@@ -43,6 +44,7 @@ void Element::Visit(Quanta::Visitor& visitor) {
   for (Attr* attribute : attributes) visitor.Mark(attribute);
   visitor.Mark(attributeMap);
   visitor.Mark(tokenList);
+  visitor.Mark(templateContents);
 }
 
 // ---- Making nodes ----

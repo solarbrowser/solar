@@ -85,7 +85,7 @@ quanta:
 
 $(QUANTA_LIBS): | quanta
 
-solar: $(OBJ_DIR)/src/main.o $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
+solar: $(OBJ_DIR)/src/main.o $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
 
@@ -177,6 +177,10 @@ $(BUILD_DIR)/HtmlTokenizerTest: $(OBJ_DIR)/tests/HtmlTokenizerTest.o $(HTML_OBJE
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^
 
+$(BUILD_DIR)/HtmlTreeTest: $(OBJ_DIR)/tests/HtmlTreeTest.o $(HTML_OBJECTS) $(DOM_OBJECTS) $(URL_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
+	@echo "[LINK] $@"
+	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
+
 $(BUILD_DIR)/DomTest: $(OBJ_DIR)/tests/DomTest.o $(URL_OBJECTS) $(DOM_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
@@ -200,7 +204,7 @@ WPT_DOM = $(wildcard tests/dom/*.any.js tests/wpt/dom/abort/*.any.js tests/wpt/d
 
 PORTABLE_TESTS = HtmlTokenizerTest UrlTest SearchParamsTest ValidationErrorTest NormalizerTest PublicSuffixTest CookiesTest HttpCacheTest FetchHeadersTest CorsTest Http1ParserTest ContentDecoderTest AddressRaceTest HstsTest
 NET_TESTS = LoopTest ResolverTest NetTest HttpClientTest TlsTest Http2Test
-QUANTA_TESTS = UrlBindingsTest UrlRealmsTest FetchBindingsTest DomTest
+QUANTA_TESTS = UrlBindingsTest UrlRealmsTest FetchBindingsTest DomTest HtmlTreeTest
 ifeq ($(PLATFORM),linux)
 TESTS = $(PORTABLE_TESTS) $(NET_TESTS) $(QUANTA_TESTS)
 else

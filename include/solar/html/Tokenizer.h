@@ -15,6 +15,11 @@ namespace solar::html {
 struct TokenAttribute {
   std::string name;
   std::string value;
+  // Set by the tree builder when it makes the attribute a namespaced one ("xlink:href"): what it is on the
+  // element. Empty `localName` is an attribute of no namespace.
+  std::string namespaceUri;
+  std::string prefix;
+  std::string localName;
 };
 
 struct Token {

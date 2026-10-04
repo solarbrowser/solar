@@ -138,6 +138,8 @@ struct Element : Node {
   // attributes and classList, which are the same object each time.
   Quanta::Object* attributeMap = nullptr;
   Quanta::Object* tokenList = nullptr;
+  // A template element's contents, which are not its children.
+  DocumentFragment* templateContents = nullptr;
 
   std::string QualifiedName() const { return prefix.empty() ? localName : prefix + ":" + localName; }
   // `name` is compared as the standard does for a name on an HTML element in an HTML document: after
@@ -158,6 +160,8 @@ struct Document : Node {
   Mode mode = Mode::NoQuirks;
   bool isHtml = false;  // an HTML document and not an XML one
   Quanta::Object* implementation = nullptr;  // document.implementation, the same object each time
+  // The inert document the contents of this one's template elements belong to.
+  Document* templateContentsOwner = nullptr;
 
   Element* DocumentElement() const;
   DocumentType* Doctype() const;
