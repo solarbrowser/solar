@@ -15,8 +15,8 @@ namespace {
 char g_characterDataKey;
 
 // ---- UTF-16 offsets ----
-// The standard counts and cuts character data in UTF-16 code units; the data is kept as UTF-8. A lone
-// surrogate cannot be kept (the engine's strings do not give one back), so it comes out as U+FFFD.
+// The standard counts and cuts character data in UTF-16 code units; the data is kept as WTF-8. A lone
+// surrogate is kept as the three bytes its code point has (WTF-8), as the engine keeps it.
 
 std::u16string ToUtf16(std::string_view text) {
   std::u16string out;
@@ -65,8 +65,6 @@ std::string FromUtf16(std::u16string_view text) {
     if (unit >= 0xD800 && unit <= 0xDBFF && i + 1 < text.size() && text[i + 1] >= 0xDC00 && text[i + 1] <= 0xDFFF) {
       append(0x10000 + ((unit - 0xD800) << 10) + (text[i + 1] - 0xDC00));
       ++i;
-    } else if (unit >= 0xD800 && unit <= 0xDFFF) {
-      append(0xFFFD);
     } else {
       append(unit);
     }
@@ -101,7 +99,7 @@ bool ReplaceData(Context& ctx, CharacterData* node, uint32_t offset, uint32_t co
 
 Value GetData(Context& ctx, Value t, qe::Args, Value) {
   CharacterData* self = ThisCharacterData(ctx, t);
-  return self ? qe::FromUtf8(ctx, self->data) : qe::Undefined();
+  return self ? qe::FromWtf8(ctx, self->data) : qe::Undefined();
 }
 
 Value SetData(Context& ctx, Value t, qe::Args args, Value) {
@@ -109,7 +107,7 @@ Value SetData(Context& ctx, Value t, qe::Args args, Value) {
   if (!self) return qe::Undefined();
   std::string text;
   if (!args.empty() && !qe::IsNull(args[0])) {
-    text = qe::ToUsvUtf8(ctx, args[0]);
+    text = qe::ToWtf8(ctx, args[0]);
     if (qe::HasException(ctx)) return qe::Undefined();
   }
   self->data = std::move(text);
@@ -132,13 +130,13 @@ Value SubstringData(Context& ctx, Value t, qe::Args args, Value) {
     Throw(ctx, {"IndexSizeError", "The offset " + std::to_string(offset) + " is larger than the node's length (" + std::to_string(units.size()) + ")."});
     return qe::Undefined();
   }
-  return qe::FromUtf8(ctx, FromUtf16(std::u16string_view(units).substr(offset, count)));
+  return qe::FromWtf8(ctx, FromUtf16(std::u16string_view(units).substr(offset, count)));
 }
 
 Value AppendData(Context& ctx, Value t, qe::Args args, Value) {
   CharacterData* self = ThisCharacterData(ctx, t);
   if (!self || Missing(ctx, args, 1, "CharacterData", "appendData")) return qe::Undefined();
-  const std::string text = qe::ToUsvUtf8(ctx, args[0]);
+  const std::string text = qe::ToWtf8(ctx, args[0]);
   if (qe::HasException(ctx)) return qe::Undefined();
   self->data += text;
   return qe::Undefined();
@@ -148,7 +146,7 @@ Value InsertData(Context& ctx, Value t, qe::Args args, Value) {
   CharacterData* self = ThisCharacterData(ctx, t);
   if (!self || Missing(ctx, args, 2, "CharacterData", "insertData")) return qe::Undefined();
   const uint32_t offset = qe::ToUint32(ctx, args[0]);
-  const std::string text = qe::ToUsvUtf8(ctx, args[1]);
+  const std::string text = qe::ToWtf8(ctx, args[1]);
   if (qe::HasException(ctx)) return qe::Undefined();
   ReplaceData(ctx, self, offset, 0, text);
   return qe::Undefined();
@@ -169,7 +167,7 @@ Value ReplaceDataMethod(Context& ctx, Value t, qe::Args args, Value) {
   if (!self || Missing(ctx, args, 3, "CharacterData", "replaceData")) return qe::Undefined();
   const uint32_t offset = qe::ToUint32(ctx, args[0]);
   const uint32_t count = qe::ToUint32(ctx, args[1]);
-  const std::string text = qe::ToUsvUtf8(ctx, args[2]);
+  const std::string text = qe::ToWtf8(ctx, args[2]);
   if (qe::HasException(ctx)) return qe::Undefined();
   ReplaceData(ctx, self, offset, count, text);
   return qe::Undefined();
@@ -187,7 +185,7 @@ Value Construct(Context& ctx, Value, qe::Args args, Value newTarget) {
   if (qe::HasException(ctx)) return qe::Undefined();
   std::string data;
   if (!args.empty() && !qe::IsUndefined(args[0])) {
-    data = qe::ToUsvUtf8(ctx, args[0]);
+    data = qe::ToWtf8(ctx, args[0]);
     if (qe::HasException(ctx)) return qe::Undefined();
   }
   CharacterData* node = Make(ctx, AssociatedDocument(ctx), std::move(data));
@@ -231,7 +229,7 @@ Value GetWholeText(Context& ctx, Value t, qe::Args, Value) {
   while (first->previousSibling && first->previousSibling->IsText()) first = first->previousSibling;
   std::string text;
   for (Node* node = first; node && node->IsText(); node = node->nextSibling) text += static_cast<CharacterData*>(node)->data;
-  return qe::FromUtf8(ctx, text);
+  return qe::FromWtf8(ctx, text);
 }
 
 Value GetTarget(Context& ctx, Value t, qe::Args, Value) {
@@ -240,7 +238,7 @@ Value GetTarget(Context& ctx, Value t, qe::Args, Value) {
     if (self) qe::ThrowTypeError(ctx, "Illegal invocation");
     return qe::Undefined();
   }
-  return qe::FromUtf8(ctx, self->target);
+  return qe::FromWtf8(ctx, self->target);
 }
 
 // ---- DocumentType, DocumentFragment, Attr ----
@@ -256,15 +254,15 @@ DocumentType* ThisDoctype(Context& ctx, const Value& t) {
 
 Value GetDoctypeName(Context& ctx, Value t, qe::Args, Value) {
   DocumentType* self = ThisDoctype(ctx, t);
-  return self ? qe::FromUtf8(ctx, self->name) : qe::Undefined();
+  return self ? qe::FromWtf8(ctx, self->name) : qe::Undefined();
 }
 Value GetPublicId(Context& ctx, Value t, qe::Args, Value) {
   DocumentType* self = ThisDoctype(ctx, t);
-  return self ? qe::FromUtf8(ctx, self->publicId) : qe::Undefined();
+  return self ? qe::FromWtf8(ctx, self->publicId) : qe::Undefined();
 }
 Value GetSystemId(Context& ctx, Value t, qe::Args, Value) {
   DocumentType* self = ThisDoctype(ctx, t);
-  return self ? qe::FromUtf8(ctx, self->systemId) : qe::Undefined();
+  return self ? qe::FromWtf8(ctx, self->systemId) : qe::Undefined();
 }
 
 Value ConstructFragment(Context& ctx, Value, qe::Args, Value newTarget) {
@@ -288,7 +286,7 @@ Attr* ThisAttr(Context& ctx, const Value& t) {
   return static_cast<Attr*>(node);
 }
 
-Value NullableUtf8(Context& ctx, const std::string& text) { return text.empty() ? qe::Null() : qe::FromUtf8(ctx, text); }
+Value NullableUtf8(Context& ctx, const std::string& text) { return text.empty() ? qe::Null() : qe::FromWtf8(ctx, text); }
 
 Value GetAttrNamespace(Context& ctx, Value t, qe::Args, Value) {
   Attr* self = ThisAttr(ctx, t);
@@ -300,20 +298,20 @@ Value GetAttrPrefix(Context& ctx, Value t, qe::Args, Value) {
 }
 Value GetAttrLocalName(Context& ctx, Value t, qe::Args, Value) {
   Attr* self = ThisAttr(ctx, t);
-  return self ? qe::FromUtf8(ctx, self->localName) : qe::Undefined();
+  return self ? qe::FromWtf8(ctx, self->localName) : qe::Undefined();
 }
 Value GetAttrName(Context& ctx, Value t, qe::Args, Value) {
   Attr* self = ThisAttr(ctx, t);
-  return self ? qe::FromUtf8(ctx, self->QualifiedName()) : qe::Undefined();
+  return self ? qe::FromWtf8(ctx, self->QualifiedName()) : qe::Undefined();
 }
 Value GetAttrValue(Context& ctx, Value t, qe::Args, Value) {
   Attr* self = ThisAttr(ctx, t);
-  return self ? qe::FromUtf8(ctx, self->value) : qe::Undefined();
+  return self ? qe::FromWtf8(ctx, self->value) : qe::Undefined();
 }
 Value SetAttrValue(Context& ctx, Value t, qe::Args args, Value) {
   Attr* self = ThisAttr(ctx, t);
   if (!self || Missing(ctx, args, 1, "Attr", "value")) return qe::Undefined();
-  std::string text = qe::ToUsvUtf8(ctx, args[0]);
+  std::string text = qe::ToWtf8(ctx, args[0]);
   if (qe::HasException(ctx)) return qe::Undefined();
   self->value = std::move(text);
   NoteTreeChange();

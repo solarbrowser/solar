@@ -59,22 +59,22 @@ Value ConstructDocument(Context& ctx, Value, qe::Args, Value newTarget) {
 
 Value GetUrl(Context& ctx, Value t, qe::Args, Value) {
   Document* self = ThisDocument(ctx, t);
-  return self ? qe::FromUtf8(ctx, self->url) : qe::Undefined();
+  return self ? qe::FromWtf8(ctx, self->url) : qe::Undefined();
 }
 
 Value GetCompatMode(Context& ctx, Value t, qe::Args, Value) {
   Document* self = ThisDocument(ctx, t);
-  return self ? qe::FromUtf8(ctx, self->mode == Document::Mode::Quirks ? "BackCompat" : "CSS1Compat") : qe::Undefined();
+  return self ? qe::FromWtf8(ctx, self->mode == Document::Mode::Quirks ? "BackCompat" : "CSS1Compat") : qe::Undefined();
 }
 
 Value GetCharacterSet(Context& ctx, Value t, qe::Args, Value) {
   Document* self = ThisDocument(ctx, t);
-  return self ? qe::FromUtf8(ctx, self->characterSet) : qe::Undefined();
+  return self ? qe::FromWtf8(ctx, self->characterSet) : qe::Undefined();
 }
 
 Value GetContentType(Context& ctx, Value t, qe::Args, Value) {
   Document* self = ThisDocument(ctx, t);
-  return self ? qe::FromUtf8(ctx, self->contentType) : qe::Undefined();
+  return self ? qe::FromWtf8(ctx, self->contentType) : qe::Undefined();
 }
 
 Value GetDoctype(Context& ctx, Value t, qe::Args, Value) {
@@ -90,7 +90,7 @@ Value GetDocumentElement(Context& ctx, Value t, qe::Args, Value) {
 Value GetElementsByTagNameDocument(Context& ctx, Value t, qe::Args args, Value) {
   Document* self = ThisDocument(ctx, t);
   if (!self || Missing(ctx, args, 1, "Document", "getElementsByTagName")) return qe::Undefined();
-  const std::string name = qe::ToUsvUtf8(ctx, args[0]);
+  const std::string name = qe::ToWtf8(ctx, args[0]);
   return qe::HasException(ctx) ? qe::Undefined() : GetElementsByTagName(ctx, self, name);
 }
 
@@ -98,21 +98,21 @@ Value GetElementsByTagNameNsDocument(Context& ctx, Value t, qe::Args args, Value
   Document* self = ThisDocument(ctx, t);
   if (!self || Missing(ctx, args, 2, "Document", "getElementsByTagNameNS")) return qe::Undefined();
   const std::optional<std::string> ns = NullableString(ctx, args[0]);
-  const std::string local = qe::HasException(ctx) ? "" : qe::ToUsvUtf8(ctx, args[1]);
+  const std::string local = qe::HasException(ctx) ? "" : qe::ToWtf8(ctx, args[1]);
   return qe::HasException(ctx) ? qe::Undefined() : GetElementsByTagNameNS(ctx, self, ns.value_or(""), local);
 }
 
 Value GetElementsByClassNameDocument(Context& ctx, Value t, qe::Args args, Value) {
   Document* self = ThisDocument(ctx, t);
   if (!self || Missing(ctx, args, 1, "Document", "getElementsByClassName")) return qe::Undefined();
-  const std::string classes = qe::ToUsvUtf8(ctx, args[0]);
+  const std::string classes = qe::ToWtf8(ctx, args[0]);
   return qe::HasException(ctx) ? qe::Undefined() : GetElementsByClassName(ctx, self, classes);
 }
 
 Value CreateElement(Context& ctx, Value t, qe::Args args, Value) {
   Document* self = ThisDocument(ctx, t);
   if (!self || Missing(ctx, args, 1, "Document", "createElement")) return qe::Undefined();
-  std::string name = qe::ToUsvUtf8(ctx, args[0]);
+  std::string name = qe::ToWtf8(ctx, args[0]);
   if (qe::HasException(ctx)) return qe::Undefined();
   if (!IsXmlName(name)) {
     Throw(ctx, {"InvalidCharacterError", "The tag name provided ('" + name + "') is not a valid name."});
@@ -128,7 +128,7 @@ Value CreateElementNs(Context& ctx, Value t, qe::Args args, Value) {
   Document* self = ThisDocument(ctx, t);
   if (!self || Missing(ctx, args, 2, "Document", "createElementNS")) return qe::Undefined();
   const std::optional<std::string> ns = NullableString(ctx, args[0]);
-  const std::string qualified = qe::HasException(ctx) ? "" : qe::ToUsvUtf8(ctx, args[1]);
+  const std::string qualified = qe::HasException(ctx) ? "" : qe::ToWtf8(ctx, args[1]);
   if (qe::HasException(ctx)) return qe::Undefined();
   QualifiedParts parts;
   if (auto error = ValidateAndExtract(ns.value_or(""), qualified, parts)) {
@@ -146,21 +146,21 @@ Value CreateDocumentFragment(Context& ctx, Value t, qe::Args, Value) {
 Value CreateTextNode(Context& ctx, Value t, qe::Args args, Value) {
   Document* self = ThisDocument(ctx, t);
   if (!self || Missing(ctx, args, 1, "Document", "createTextNode")) return qe::Undefined();
-  std::string data = qe::ToUsvUtf8(ctx, args[0]);
+  std::string data = qe::ToWtf8(ctx, args[0]);
   return qe::HasException(ctx) ? qe::Undefined() : qe::FromObject(NewText(ctx, self, std::move(data)));
 }
 
 Value CreateComment(Context& ctx, Value t, qe::Args args, Value) {
   Document* self = ThisDocument(ctx, t);
   if (!self || Missing(ctx, args, 1, "Document", "createComment")) return qe::Undefined();
-  std::string data = qe::ToUsvUtf8(ctx, args[0]);
+  std::string data = qe::ToWtf8(ctx, args[0]);
   return qe::HasException(ctx) ? qe::Undefined() : qe::FromObject(NewComment(ctx, self, std::move(data)));
 }
 
 Value CreateCdataSection(Context& ctx, Value t, qe::Args args, Value) {
   Document* self = ThisDocument(ctx, t);
   if (!self || Missing(ctx, args, 1, "Document", "createCDATASection")) return qe::Undefined();
-  std::string data = qe::ToUsvUtf8(ctx, args[0]);
+  std::string data = qe::ToWtf8(ctx, args[0]);
   if (qe::HasException(ctx)) return qe::Undefined();
   if (self->isHtml) {
     Throw(ctx, {"NotSupportedError", "This operation is not supported for HTML documents"});
@@ -176,8 +176,8 @@ Value CreateCdataSection(Context& ctx, Value t, qe::Args args, Value) {
 Value CreateProcessingInstruction(Context& ctx, Value t, qe::Args args, Value) {
   Document* self = ThisDocument(ctx, t);
   if (!self || Missing(ctx, args, 2, "Document", "createProcessingInstruction")) return qe::Undefined();
-  std::string target = qe::ToUsvUtf8(ctx, args[0]);
-  std::string data = qe::HasException(ctx) ? "" : qe::ToUsvUtf8(ctx, args[1]);
+  std::string target = qe::ToWtf8(ctx, args[0]);
+  std::string data = qe::HasException(ctx) ? "" : qe::ToWtf8(ctx, args[1]);
   if (qe::HasException(ctx)) return qe::Undefined();
   if (!IsXmlName(target) || data.find("?>") != std::string::npos) {
     Throw(ctx, {"InvalidCharacterError", "String contains an invalid character"});
@@ -189,7 +189,7 @@ Value CreateProcessingInstruction(Context& ctx, Value t, qe::Args args, Value) {
 Value CreateAttribute(Context& ctx, Value t, qe::Args args, Value) {
   Document* self = ThisDocument(ctx, t);
   if (!self || Missing(ctx, args, 1, "Document", "createAttribute")) return qe::Undefined();
-  std::string name = qe::ToUsvUtf8(ctx, args[0]);
+  std::string name = qe::ToWtf8(ctx, args[0]);
   if (qe::HasException(ctx)) return qe::Undefined();
   if (!IsXmlName(name)) {
     Throw(ctx, {"InvalidCharacterError", "String contains an invalid character"});
@@ -203,7 +203,7 @@ Value CreateAttributeNs(Context& ctx, Value t, qe::Args args, Value) {
   Document* self = ThisDocument(ctx, t);
   if (!self || Missing(ctx, args, 2, "Document", "createAttributeNS")) return qe::Undefined();
   const std::optional<std::string> ns = NullableString(ctx, args[0]);
-  const std::string qualified = qe::HasException(ctx) ? "" : qe::ToUsvUtf8(ctx, args[1]);
+  const std::string qualified = qe::HasException(ctx) ? "" : qe::ToWtf8(ctx, args[1]);
   if (qe::HasException(ctx)) return qe::Undefined();
   QualifiedParts parts;
   if (auto error = ValidateAndExtract(ns.value_or(""), qualified, parts)) {
@@ -253,7 +253,7 @@ Element* FindById(Node* root, const std::string& id) {
 Value GetElementById(Context& ctx, Value t, qe::Args args, Value) {
   Node* self = ThisNode(ctx, t);
   if (!self || Missing(ctx, args, 1, "Document", "getElementById")) return qe::Undefined();
-  const std::string id = qe::ToUsvUtf8(ctx, args[0]);
+  const std::string id = qe::ToWtf8(ctx, args[0]);
   if (qe::HasException(ctx)) return qe::Undefined();
   return id.empty() ? qe::Null() : NodeValue(FindById(self, id));
 }
@@ -274,9 +274,9 @@ JsImplementation* ThisImplementation(Context& ctx, const Value& t) {
 Value CreateDocumentType(Context& ctx, Value t, qe::Args args, Value) {
   JsImplementation* self = ThisImplementation(ctx, t);
   if (!self || Missing(ctx, args, 3, "DOMImplementation", "createDocumentType")) return qe::Undefined();
-  std::string name = qe::ToUsvUtf8(ctx, args[0]);
-  std::string publicId = qe::HasException(ctx) ? "" : qe::ToUsvUtf8(ctx, args[1]);
-  std::string systemId = qe::HasException(ctx) ? "" : qe::ToUsvUtf8(ctx, args[2]);
+  std::string name = qe::ToWtf8(ctx, args[0]);
+  std::string publicId = qe::HasException(ctx) ? "" : qe::ToWtf8(ctx, args[1]);
+  std::string systemId = qe::HasException(ctx) ? "" : qe::ToWtf8(ctx, args[2]);
   if (qe::HasException(ctx)) return qe::Undefined();
   QualifiedParts parts;
   if (auto error = ValidateAndExtract("", name, parts)) {
@@ -290,7 +290,7 @@ Value CreateDocument(Context& ctx, Value t, qe::Args args, Value) {
   JsImplementation* self = ThisImplementation(ctx, t);
   if (!self || Missing(ctx, args, 2, "DOMImplementation", "createDocument")) return qe::Undefined();
   const std::optional<std::string> ns = NullableString(ctx, args[0]);
-  const std::string qualified = qe::HasException(ctx) ? "" : (qe::IsNull(args[1]) ? "" : qe::ToUsvUtf8(ctx, args[1]));
+  const std::string qualified = qe::HasException(ctx) ? "" : (qe::IsNull(args[1]) ? "" : qe::ToWtf8(ctx, args[1]));
   if (qe::HasException(ctx)) return qe::Undefined();
   Node* doctype = nullptr;
   if (args.size() > 2 && !qe::IsNull(args[2]) && !qe::IsUndefined(args[2])) {
@@ -320,7 +320,7 @@ Value CreateHtmlDocument(Context& ctx, Value t, qe::Args args, Value) {
   if (!self) return qe::Undefined();
   std::optional<std::string> title;
   if (!args.empty() && !qe::IsUndefined(args[0])) {
-    title = qe::ToUsvUtf8(ctx, args[0]);
+    title = qe::ToWtf8(ctx, args[0]);
     if (qe::HasException(ctx)) return qe::Undefined();
   }
   Document* document = NewDocument(ctx, true);

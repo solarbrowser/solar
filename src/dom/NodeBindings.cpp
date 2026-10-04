@@ -38,6 +38,16 @@ void Install(Host& host) {
                                      [HTMLElement, Element], [Document, Node]]) {
         Object.setPrototypeOf(child, parent);
       }
+      // What Web IDL gives an interface with an indexed getter that is iterable: the iteration methods
+      // of arrays, which work on anything that has a length and indexed elements.
+      const iterate = (target, names) => {
+        for (const name of names) {
+          Object.defineProperty(target, name, { value: Array.prototype[name], writable: true, enumerable: true, configurable: true });
+        }
+        Object.defineProperty(target, Symbol.iterator, { value: Array.prototype.values, writable: true, enumerable: false, configurable: true });
+      };
+      iterate(NodeList.prototype, ["entries", "keys", "values", "forEach"]);
+      Object.defineProperty(HTMLCollection.prototype, Symbol.iterator, { value: Array.prototype.values, writable: true, enumerable: false, configurable: true });
     })();
   )JS");
 }

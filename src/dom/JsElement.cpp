@@ -25,7 +25,7 @@ Value IllegalConstructor(Context& ctx, Value, qe::Args, Value) {
   return qe::Undefined();
 }
 
-Value NullableUtf8(Context& ctx, const std::string& text) { return text.empty() ? qe::Null() : qe::FromUtf8(ctx, text); }
+Value NullableUtf8(Context& ctx, const std::string& text) { return text.empty() ? qe::Null() : qe::FromWtf8(ctx, text); }
 
 std::string Lower(std::string_view text) {
   std::string out(text);
@@ -45,11 +45,11 @@ Value GetPrefix(Context& ctx, Value t, qe::Args, Value) {
 }
 Value GetLocalName(Context& ctx, Value t, qe::Args, Value) {
   Element* self = ThisElement(ctx, t);
-  return self ? qe::FromUtf8(ctx, self->localName) : qe::Undefined();
+  return self ? qe::FromWtf8(ctx, self->localName) : qe::Undefined();
 }
 Value GetTagName(Context& ctx, Value t, qe::Args, Value) {
   Element* self = ThisElement(ctx, t);
-  return self ? qe::FromUtf8(ctx, TagNameOf(self)) : qe::Undefined();
+  return self ? qe::FromWtf8(ctx, TagNameOf(self)) : qe::Undefined();
 }
 
 // The attributes that reflect: id, class and slot are strings in no namespace.
@@ -58,14 +58,14 @@ Value GetReflected(Context& ctx, Value t, qe::Args, Value) {
   Element* self = ThisElement(ctx, t);
   if (!self) return qe::Undefined();
   const Attr* attribute = self->FindAttribute("", Name);
-  return qe::FromUtf8(ctx, attribute ? attribute->value : "");
+  return qe::FromWtf8(ctx, attribute ? attribute->value : "");
 }
 
 template <const char* Name>
 Value SetReflected(Context& ctx, Value t, qe::Args args, Value) {
   Element* self = ThisElement(ctx, t);
   if (!self || Missing(ctx, args, 1, Name)) return qe::Undefined();
-  std::string text = qe::ToUsvUtf8(ctx, args[0]);
+  std::string text = qe::ToWtf8(ctx, args[0]);
   if (qe::HasException(ctx)) return qe::Undefined();
   if (auto error = SetAttribute(ctx, self, Name, std::move(text))) Throw(ctx, *error);
   return qe::Undefined();
@@ -84,34 +84,34 @@ Value GetAttributeNames(Context& ctx, Value t, qe::Args, Value) {
   Element* self = ThisElement(ctx, t);
   if (!self) return qe::Undefined();
   Value array = qe::NewArray(ctx);
-  for (const Attr* attribute : self->attributes) qe::ArrayPush(ctx, array, qe::FromUtf8(ctx, attribute->QualifiedName()));
+  for (const Attr* attribute : self->attributes) qe::ArrayPush(ctx, array, qe::FromWtf8(ctx, attribute->QualifiedName()));
   return array;
 }
 
 Value GetAttributeMethod(Context& ctx, Value t, qe::Args args, Value) {
   Element* self = ThisElement(ctx, t);
   if (!self || Missing(ctx, args, 1, "getAttribute")) return qe::Undefined();
-  const std::string name = qe::ToUsvUtf8(ctx, args[0]);
+  const std::string name = qe::ToWtf8(ctx, args[0]);
   if (qe::HasException(ctx)) return qe::Undefined();
   const std::optional<std::string> value = GetAttribute(self, name);
-  return value ? qe::FromUtf8(ctx, *value) : qe::Null();
+  return value ? qe::FromWtf8(ctx, *value) : qe::Null();
 }
 
 Value GetAttributeNs(Context& ctx, Value t, qe::Args args, Value) {
   Element* self = ThisElement(ctx, t);
   if (!self || Missing(ctx, args, 2, "getAttributeNS")) return qe::Undefined();
   const std::optional<std::string> ns = NullableString(ctx, args[0]);
-  const std::string local = qe::ToUsvUtf8(ctx, args[1]);
+  const std::string local = qe::ToWtf8(ctx, args[1]);
   if (qe::HasException(ctx)) return qe::Undefined();
   const Attr* attribute = self->FindAttribute(ns.value_or(""), local);
-  return attribute ? qe::FromUtf8(ctx, attribute->value) : qe::Null();
+  return attribute ? qe::FromWtf8(ctx, attribute->value) : qe::Null();
 }
 
 Value SetAttributeMethod(Context& ctx, Value t, qe::Args args, Value) {
   Element* self = ThisElement(ctx, t);
   if (!self || Missing(ctx, args, 2, "setAttribute")) return qe::Undefined();
-  const std::string name = qe::ToUsvUtf8(ctx, args[0]);
-  std::string value = qe::HasException(ctx) ? "" : qe::ToUsvUtf8(ctx, args[1]);
+  const std::string name = qe::ToWtf8(ctx, args[0]);
+  std::string value = qe::HasException(ctx) ? "" : qe::ToWtf8(ctx, args[1]);
   if (qe::HasException(ctx)) return qe::Undefined();
   if (auto error = SetAttribute(ctx, self, name, std::move(value))) Throw(ctx, *error);
   return qe::Undefined();
@@ -121,8 +121,8 @@ Value SetAttributeNs(Context& ctx, Value t, qe::Args args, Value) {
   Element* self = ThisElement(ctx, t);
   if (!self || Missing(ctx, args, 3, "setAttributeNS")) return qe::Undefined();
   const std::optional<std::string> ns = NullableString(ctx, args[0]);
-  const std::string qualified = qe::HasException(ctx) ? "" : qe::ToUsvUtf8(ctx, args[1]);
-  std::string value = qe::HasException(ctx) ? "" : qe::ToUsvUtf8(ctx, args[2]);
+  const std::string qualified = qe::HasException(ctx) ? "" : qe::ToWtf8(ctx, args[1]);
+  std::string value = qe::HasException(ctx) ? "" : qe::ToWtf8(ctx, args[2]);
   if (qe::HasException(ctx)) return qe::Undefined();
   QualifiedParts parts;
   if (auto error = ValidateAndExtract(ns.value_or(""), qualified, parts)) {
@@ -146,7 +146,7 @@ Value SetAttributeNs(Context& ctx, Value t, qe::Args args, Value) {
 Value RemoveAttributeMethod(Context& ctx, Value t, qe::Args args, Value) {
   Element* self = ThisElement(ctx, t);
   if (!self || Missing(ctx, args, 1, "removeAttribute")) return qe::Undefined();
-  const std::string name = qe::ToUsvUtf8(ctx, args[0]);
+  const std::string name = qe::ToWtf8(ctx, args[0]);
   if (!qe::HasException(ctx)) RemoveAttribute(self, name);
   return qe::Undefined();
 }
@@ -155,7 +155,7 @@ Value RemoveAttributeNs(Context& ctx, Value t, qe::Args args, Value) {
   Element* self = ThisElement(ctx, t);
   if (!self || Missing(ctx, args, 2, "removeAttributeNS")) return qe::Undefined();
   const std::optional<std::string> ns = NullableString(ctx, args[0]);
-  const std::string local = qe::HasException(ctx) ? "" : qe::ToUsvUtf8(ctx, args[1]);
+  const std::string local = qe::HasException(ctx) ? "" : qe::ToWtf8(ctx, args[1]);
   if (qe::HasException(ctx)) return qe::Undefined();
   Attr* attribute = self->FindAttribute(ns.value_or(""), local);
   if (attribute) {
@@ -170,7 +170,7 @@ Value RemoveAttributeNs(Context& ctx, Value t, qe::Args args, Value) {
 Value ToggleAttribute(Context& ctx, Value t, qe::Args args, Value) {
   Element* self = ThisElement(ctx, t);
   if (!self || Missing(ctx, args, 1, "toggleAttribute")) return qe::Undefined();
-  const std::string name = qe::ToUsvUtf8(ctx, args[0]);
+  const std::string name = qe::ToWtf8(ctx, args[0]);
   if (qe::HasException(ctx)) return qe::Undefined();
   const bool hasForce = args.size() > 1 && !qe::IsUndefined(args[1]);
   const bool force = hasForce && args[1].to_boolean();
@@ -195,7 +195,7 @@ Value ToggleAttribute(Context& ctx, Value t, qe::Args args, Value) {
 Value HasAttributeMethod(Context& ctx, Value t, qe::Args args, Value) {
   Element* self = ThisElement(ctx, t);
   if (!self || Missing(ctx, args, 1, "hasAttribute")) return qe::Undefined();
-  const std::string name = qe::ToUsvUtf8(ctx, args[0]);
+  const std::string name = qe::ToWtf8(ctx, args[0]);
   if (qe::HasException(ctx)) return qe::Undefined();
   return qe::FromBool(GetAttribute(self, name).has_value());
 }
@@ -204,7 +204,7 @@ Value HasAttributeNs(Context& ctx, Value t, qe::Args args, Value) {
   Element* self = ThisElement(ctx, t);
   if (!self || Missing(ctx, args, 2, "hasAttributeNS")) return qe::Undefined();
   const std::optional<std::string> ns = NullableString(ctx, args[0]);
-  const std::string local = qe::HasException(ctx) ? "" : qe::ToUsvUtf8(ctx, args[1]);
+  const std::string local = qe::HasException(ctx) ? "" : qe::ToWtf8(ctx, args[1]);
   if (qe::HasException(ctx)) return qe::Undefined();
   return qe::FromBool(self->FindAttribute(ns.value_or(""), local) != nullptr);
 }
@@ -212,7 +212,7 @@ Value HasAttributeNs(Context& ctx, Value t, qe::Args args, Value) {
 Value GetAttributeNode(Context& ctx, Value t, qe::Args args, Value) {
   Element* self = ThisElement(ctx, t);
   if (!self || Missing(ctx, args, 1, "getAttributeNode")) return qe::Undefined();
-  std::string name = qe::ToUsvUtf8(ctx, args[0]);
+  std::string name = qe::ToWtf8(ctx, args[0]);
   if (qe::HasException(ctx)) return qe::Undefined();
   if (self->IsHtml() && self->nodeDocument && self->nodeDocument->isHtml) name = Lower(name);
   return NodeValue(self->FindAttribute(name));
@@ -222,7 +222,7 @@ Value GetAttributeNodeNs(Context& ctx, Value t, qe::Args args, Value) {
   Element* self = ThisElement(ctx, t);
   if (!self || Missing(ctx, args, 2, "getAttributeNodeNS")) return qe::Undefined();
   const std::optional<std::string> ns = NullableString(ctx, args[0]);
-  const std::string local = qe::HasException(ctx) ? "" : qe::ToUsvUtf8(ctx, args[1]);
+  const std::string local = qe::HasException(ctx) ? "" : qe::ToWtf8(ctx, args[1]);
   if (qe::HasException(ctx)) return qe::Undefined();
   return NodeValue(self->FindAttribute(ns.value_or(""), local));
 }
@@ -280,7 +280,7 @@ Value RemoveAttributeNode(Context& ctx, Value t, qe::Args args, Value) {
 Value GetElementsByTagNameMethod(Context& ctx, Value t, qe::Args args, Value) {
   Element* self = ThisElement(ctx, t);
   if (!self || Missing(ctx, args, 1, "getElementsByTagName")) return qe::Undefined();
-  const std::string name = qe::ToUsvUtf8(ctx, args[0]);
+  const std::string name = qe::ToWtf8(ctx, args[0]);
   return qe::HasException(ctx) ? qe::Undefined() : GetElementsByTagName(ctx, self, name);
 }
 
@@ -288,14 +288,14 @@ Value GetElementsByTagNameNsMethod(Context& ctx, Value t, qe::Args args, Value) 
   Element* self = ThisElement(ctx, t);
   if (!self || Missing(ctx, args, 2, "getElementsByTagNameNS")) return qe::Undefined();
   const std::optional<std::string> ns = NullableString(ctx, args[0]);
-  const std::string local = qe::HasException(ctx) ? "" : qe::ToUsvUtf8(ctx, args[1]);
+  const std::string local = qe::HasException(ctx) ? "" : qe::ToWtf8(ctx, args[1]);
   return qe::HasException(ctx) ? qe::Undefined() : GetElementsByTagNameNS(ctx, self, ns.value_or(""), local);
 }
 
 Value GetElementsByClassNameMethod(Context& ctx, Value t, qe::Args args, Value) {
   Element* self = ThisElement(ctx, t);
   if (!self || Missing(ctx, args, 1, "getElementsByClassName")) return qe::Undefined();
-  const std::string classes = qe::ToUsvUtf8(ctx, args[0]);
+  const std::string classes = qe::ToWtf8(ctx, args[0]);
   return qe::HasException(ctx) ? qe::Undefined() : GetElementsByClassName(ctx, self, classes);
 }
 
@@ -328,7 +328,7 @@ bool Adjacent(Context& ctx, Element* self, const std::string& where, Node* node,
 Value InsertAdjacentElement(Context& ctx, Value t, qe::Args args, Value) {
   Element* self = ThisElement(ctx, t);
   if (!self || Missing(ctx, args, 2, "insertAdjacentElement")) return qe::Undefined();
-  const std::string where = qe::ToUsvUtf8(ctx, args[0]);
+  const std::string where = qe::ToWtf8(ctx, args[0]);
   if (qe::HasException(ctx)) return qe::Undefined();
   Node* node = DOMObject::Cast<Node>(args[1]);
   if (!node || !node->IsElement()) {
@@ -342,8 +342,8 @@ Value InsertAdjacentElement(Context& ctx, Value t, qe::Args args, Value) {
 Value InsertAdjacentText(Context& ctx, Value t, qe::Args args, Value) {
   Element* self = ThisElement(ctx, t);
   if (!self || Missing(ctx, args, 2, "insertAdjacentText")) return qe::Undefined();
-  const std::string where = qe::ToUsvUtf8(ctx, args[0]);
-  const std::string data = qe::HasException(ctx) ? "" : qe::ToUsvUtf8(ctx, args[1]);
+  const std::string where = qe::ToWtf8(ctx, args[0]);
+  const std::string data = qe::HasException(ctx) ? "" : qe::ToWtf8(ctx, args[1]);
   if (qe::HasException(ctx)) return qe::Undefined();
   Value result;
   Adjacent(ctx, self, where, NewText(ctx, self->nodeDocument, data), result);

@@ -1,5 +1,5 @@
 CXX = clang++
-CXXFLAGS = -std=c++20 -Wall -Wextra -O2 -pthread -Iinclude -Itests -isystem third_party/quanta/include -MMD -MP
+CXXFLAGS = -std=c++20 -Wall -Wextra -O2 -pthread -Iinclude -Itests -isystem third_party/quanta/include -MD -MP
 
 BUILD_DIR = build
 OBJ_DIR = $(BUILD_DIR)/obj

@@ -56,6 +56,14 @@ struct JsCollection : Quanta::DOMObject {
   uint64_t version = 0;
 
   const std::vector<Node*>& Items();
+
+  // list[0] and, for an HTMLCollection, collection["id"], which the engine asks for by these names.
+  static bool IndexedGetter(Quanta::Context& ctx, JsCollection& self, uint32_t index, Quanta::Value& out);
+  static uint32_t IndexedLength(Quanta::Context& ctx, JsCollection& self);
+  static bool NamedGetter(Quanta::Context& ctx, JsCollection& self, const std::string& name, Quanta::Value& out);
+  static std::vector<std::string> NamedKeys(Quanta::Context& ctx, JsCollection& self);
+  static constexpr bool LegacyUnenumerableNamedProperties = true;
+
   void Visit(Quanta::Visitor& visitor) {
     visitor.Mark(root);
     for (Node* item : items) visitor.Mark(item);

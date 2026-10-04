@@ -89,7 +89,7 @@ struct Node : web::JsEventTarget {
 };
 
 // A node whose content is a string: Text, CDATASection, Comment and ProcessingInstruction.
-// The data is UTF-8 here; the standard's offsets and lengths count UTF-16 code units, which the
+// The data is WTF-8 here (UTF-8, with a lone surrogate as the three bytes its code point has); the standard's offsets and lengths count UTF-16 code units, which the
 // operations on it convert.
 struct CharacterData : Node {
   using Parent = Node;

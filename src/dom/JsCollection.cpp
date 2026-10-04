@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <string>
 
 #include "solar/dom/NodeBindingsInternal.h"
@@ -101,6 +102,56 @@ const std::vector<Node*>& JsCollection::Items() {
   return items;
 }
 
+namespace {
+
+// The first element a name is the id of, or, for one in the HTML namespace, the name attribute of.
+Element* FindNamed(const std::vector<Node*>& items, const std::string& name) {
+  if (name.empty()) return nullptr;
+  for (Node* node : items) {
+    Element* element = AsElement(node);
+    if (!element) continue;
+    const Attr* id = element->FindAttribute("", "id");
+    if (id && id->value == name) return element;
+    const Attr* nameAttribute = element->FindAttribute("", "name");
+    if (element->IsHtml() && nameAttribute && nameAttribute->value == name) return element;
+  }
+  return nullptr;
+}
+
+}  // namespace
+
+bool JsCollection::IndexedGetter(Context&, JsCollection& self, uint32_t index, Value& out) {
+  const std::vector<Node*>& items = self.Items();
+  if (index >= items.size()) return false;
+  out = qe::FromObject(items[index]);
+  return true;
+}
+
+uint32_t JsCollection::IndexedLength(Context&, JsCollection& self) { return static_cast<uint32_t>(self.Items().size()); }
+
+bool JsCollection::NamedGetter(Context&, JsCollection& self, const std::string& name, Value& out) {
+  if (self.isNodeList) return false;
+  Element* element = FindNamed(self.Items(), name);
+  if (!element) return false;
+  out = qe::FromObject(element);
+  return true;
+}
+
+std::vector<std::string> JsCollection::NamedKeys(Context&, JsCollection& self) {
+  std::vector<std::string> names;
+  if (self.isNodeList) return names;
+  const auto add = [&names](const std::string& name) {
+    if (!name.empty() && std::find(names.begin(), names.end(), name) == names.end()) names.push_back(name);
+  };
+  for (Node* node : self.Items()) {
+    Element* element = AsElement(node);
+    if (!element) continue;
+    if (const Attr* id = element->FindAttribute("", "id")) add(id->value);
+    if (const Attr* name = element->FindAttribute("", "name"); name && element->IsHtml()) add(name->value);
+  }
+  return names;
+}
+
 JsCollection* NewCollection(Context& ctx, JsCollection::Kind kind, Node* root, bool isNodeList) {
   JsCollection* collection = Heap::Allocate<JsCollection>();
   collection->kind = kind;
@@ -174,17 +225,10 @@ Value NamedItem(Context& ctx, Value t, qe::Args args, Value) {
     qe::ThrowTypeError(ctx, "Failed to execute 'namedItem': 1 argument required, but only 0 present.");
     return qe::Undefined();
   }
-  const std::string name = qe::ToUsvUtf8(ctx, args[0]);
-  if (qe::HasException(ctx) || name.empty()) return qe::Null();
-  for (Node* node : self->Items()) {
-    Element* element = AsElement(node);
-    if (!element) continue;
-    const Attr* id = element->FindAttribute("", "id");
-    if (id && id->value == name) return qe::FromObject(element);
-    const Attr* nameAttribute = element->FindAttribute("", "name");
-    if (element->IsHtml() && nameAttribute && nameAttribute->value == name) return qe::FromObject(element);
-  }
-  return qe::Null();
+  const std::string name = qe::ToWtf8(ctx, args[0]);
+  if (qe::HasException(ctx)) return qe::Null();
+  Element* element = FindNamed(self->Items(), name);
+  return element ? qe::FromObject(element) : qe::Null();
 }
 
 }  // namespace

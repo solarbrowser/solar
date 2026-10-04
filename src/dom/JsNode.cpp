@@ -67,12 +67,12 @@ Node* NodeArgument(Context& ctx, qe::Args args, size_t index, const char* what) 
 
 std::optional<std::string> NullableString(Context& ctx, const Value& value) {
   if (qe::IsNull(value) || qe::IsUndefined(value)) return std::nullopt;
-  return qe::ToUsvUtf8(ctx, value);
+  return qe::ToWtf8(ctx, value);
 }
 
 namespace {
 
-Value StringValue(Context& ctx, const std::optional<std::string>& text) { return text ? qe::FromUtf8(ctx, *text) : qe::Null(); }
+Value StringValue(Context& ctx, const std::optional<std::string>& text) { return text ? qe::FromWtf8(ctx, *text) : qe::Null(); }
 
 bool Missing(Context& ctx, qe::Args args, size_t count, const char* interface, const char* member) {
   if (args.size() >= count) return false;
@@ -100,7 +100,7 @@ Node* ConvertNodesIntoNode(Context& ctx, qe::Args args, Document* document) {
     if (Node* node = DOMObject::Cast<Node>(arg)) {
       nodes.Append(qe::FromObject(node));
     } else {
-      std::string text = qe::ToUsvUtf8(ctx, arg);
+      std::string text = qe::ToWtf8(ctx, arg);
       if (qe::HasException(ctx)) return nullptr;
       nodes.Append(qe::FromObject(NewText(ctx, document, std::move(text))));
     }
@@ -198,14 +198,14 @@ std::string NodeNameOf(const Node* node) {
 
 Value GetNodeName(Context& ctx, Value t, qe::Args, Value) {
   Node* self = ThisNode(ctx, t);
-  return self ? qe::FromUtf8(ctx, NodeNameOf(self)) : qe::Undefined();
+  return self ? qe::FromWtf8(ctx, NodeNameOf(self)) : qe::Undefined();
 }
 
 Value GetBaseUri(Context& ctx, Value t, qe::Args, Value) {
   Node* self = ThisNode(ctx, t);
   if (!self) return qe::Undefined();
   Document* document = DocumentFor(self);
-  return qe::FromUtf8(ctx, document ? document->url : "about:blank");
+  return qe::FromWtf8(ctx, document ? document->url : "about:blank");
 }
 
 Value GetIsConnected(Context& ctx, Value t, qe::Args, Value) {
@@ -276,8 +276,8 @@ void SetData(CharacterData* node, std::string data) { node->data = std::move(dat
 Value GetNodeValue(Context& ctx, Value t, qe::Args, Value) {
   Node* self = ThisNode(ctx, t);
   if (!self) return qe::Undefined();
-  if (self->nodeType == NodeType::Attribute) return qe::FromUtf8(ctx, static_cast<Attr*>(self)->value);
-  if (self->IsCharacterData()) return qe::FromUtf8(ctx, static_cast<CharacterData*>(self)->data);
+  if (self->nodeType == NodeType::Attribute) return qe::FromWtf8(ctx, static_cast<Attr*>(self)->value);
+  if (self->IsCharacterData()) return qe::FromWtf8(ctx, static_cast<CharacterData*>(self)->data);
   return qe::Null();
 }
 
@@ -286,7 +286,7 @@ Value SetNodeValue(Context& ctx, Value t, qe::Args args, Value) {
   if (!self) return qe::Undefined();
   std::string text;
   if (!args.empty() && !qe::IsNull(args[0])) {
-    text = qe::ToUsvUtf8(ctx, args[0]);
+    text = qe::ToWtf8(ctx, args[0]);
     if (qe::HasException(ctx)) return qe::Undefined();
   }
   if (self->nodeType == NodeType::Attribute) {
@@ -307,11 +307,11 @@ Value GetTextContent(Context& ctx, Value t, qe::Args, Value) {
       return qe::Null();
     case NodeType::DocumentFragment:
     case NodeType::Element:
-      return qe::FromUtf8(ctx, self->DescendantText());
+      return qe::FromWtf8(ctx, self->DescendantText());
     case NodeType::Attribute:
-      return qe::FromUtf8(ctx, static_cast<Attr*>(self)->value);
+      return qe::FromWtf8(ctx, static_cast<Attr*>(self)->value);
     default:
-      return qe::FromUtf8(ctx, static_cast<CharacterData*>(self)->data);
+      return qe::FromWtf8(ctx, static_cast<CharacterData*>(self)->data);
   }
 }
 
@@ -320,7 +320,7 @@ Value SetTextContentValue(Context& ctx, Value t, qe::Args args, Value) {
   if (!self) return qe::Undefined();
   std::string text;
   if (!args.empty() && !qe::IsNull(args[0])) {
-    text = qe::ToUsvUtf8(ctx, args[0]);
+    text = qe::ToWtf8(ctx, args[0]);
     if (qe::HasException(ctx)) return qe::Undefined();
   }
   switch (self->nodeType) {

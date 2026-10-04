@@ -310,3 +310,55 @@ test(() => {
   assert_throws_js(TypeError, () => Node.prototype.appendChild.call({}, el));
   assert_throws_js(TypeError, () => new Node());
 }, 'node values and constants');
+
+test(() => {
+  const parent = document.createElement('div');
+  const a = document.createElement('a');
+  const b = document.createElement('b');
+  b.id = 'bee';
+  b.setAttribute('name', 'buzz');
+  parent.append(a, 'text', b);
+  const nodes = parent.childNodes;
+  assert_equals(nodes[0], a);
+  assert_equals(nodes[1].data, 'text');
+  assert_equals(nodes[3], undefined);
+  assert_equals(nodes.length, 3);
+  assert_array_equals([...nodes].map((n) => n.nodeName), ['A', '#text', 'B']);
+  assert_array_equals(Object.keys(nodes), ['0', '1', '2']);
+  const seen = [];
+  nodes.forEach((node, index, list) => { seen.push(index); assert_equals(list, nodes); });
+  assert_array_equals(seen, [0, 1, 2]);
+  assert_equals(NodeList.prototype[Symbol.iterator], NodeList.prototype.values);
+  assert_throws_js(TypeError, () => { 'use strict'; nodes[0] = a; });
+
+  const elements = parent.children;
+  assert_equals(elements[1], b);
+  assert_equals(elements['bee'], b);
+  assert_equals(elements['buzz'], b);
+  assert_equals(elements['nothing'], undefined);
+  assert_array_equals(Object.keys(elements), ['0', '1']);
+  assert_array_equals(Object.getOwnPropertyNames(elements), ['0', '1', 'bee', 'buzz']);
+  assert_true('bee' in elements);
+  assert_array_equals([...elements], [a, b]);
+  parent.append(document.createElement('c'));
+  assert_equals(elements.length, 3, 'live');
+  assert_equals(elements[2].localName, 'c');
+}, 'indexed and named access on the collections');
+
+test(() => {
+  const text = document.createTextNode('a\uD800b');
+  assert_equals(text.data, 'a\uD800b', 'a lone surrogate is kept');
+  assert_equals(text.length, 3);
+  const other = document.createTextNode('\uDC00');
+  other.insertData(0, '\uD800');
+  assert_equals(other.data, '𐀀');
+  assert_equals(other.length, 2);
+  const split = document.createTextNode('😀');
+  const parent = document.createElement('p');
+  parent.append(split);
+  const tail = split.splitText(1);
+  assert_equals(split.data, '\uD83D');
+  assert_equals(tail.data, '\uDE00');
+  assert_equals(parent.textContent, '😀', 'rejoined in the string');
+  assert_equals(split.substringData(0, 1), '\uD83D');
+}, 'character data keeps lone surrogates');
