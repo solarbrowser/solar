@@ -193,6 +193,8 @@ CharacterData* NewCdataSection(Quanta::Context& ctx, Document* document, std::st
 CharacterData* NewProcessingInstruction(Quanta::Context& ctx, Document* document, std::string target, std::string data);
 DocumentType* NewDocumentType(Quanta::Context& ctx, Document* document, std::string name, std::string publicId, std::string systemId);
 DocumentFragment* NewDocumentFragment(Quanta::Context& ctx, Document* document);
+// The inert document that the contents of the template elements of `document` belong to.
+Document* TemplateContentsOwner(Quanta::Context& ctx, Document* document);
 Attr* NewAttr(Quanta::Context& ctx, Document* document, std::string_view namespaceUri, std::string_view prefix, std::string_view localName, std::string value);
 
 // A number that changes whenever any tree does, which the live collections check to know whether what
@@ -219,6 +221,8 @@ void RemoveUnchecked(Node* node);
 // "adopt": moves `node` and what is under it into `document`, taking it out of its parent.
 void Adopt(Node* node, Document* document);
 
+// "replace all": makes `node` (null for none; a fragment's children) the only child of `parent`.
+void ReplaceAll(Node* parent, Node* node);
 // textContent set on a node that can have children: replaces them with one Text node, or none for "".
 void SetTextContent(Quanta::Context& ctx, Node* node, std::string text);
 // cloneNode.

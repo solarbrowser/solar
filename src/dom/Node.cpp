@@ -86,11 +86,27 @@ Document* NewDocument(Context& ctx, bool isHtml) {
   return document;
 }
 
+Document* TemplateContentsOwner(Context& ctx, Document* document) {
+  if (!document->templateContentsOwner) {
+    document->templateContentsOwner = NewDocument(ctx, document->isHtml);
+    document->NoteWrite();
+    // It is its own owner, so that a template inside a template's contents has contents of the same kind.
+    document->templateContentsOwner->templateContentsOwner = document->templateContentsOwner;
+  }
+  return document->templateContentsOwner;
+}
+
 Element* NewElement(Context& ctx, Document* document, std::string_view localName, std::string_view namespaceUri, std::string_view prefix) {
   Element* element = Make<Element>(ctx, namespaceUri == kHtmlNamespace && InterfacePrototype(ctx, Interface::HtmlElement) ? Interface::HtmlElement : Interface::Element, NodeType::Element, document);
   element->localName = localName;
   element->namespaceUri = namespaceUri;
   element->prefix = prefix;
+  if (namespaceUri == kHtmlNamespace && localName == "template" && document) {
+    DocumentFragment* contents = NewDocumentFragment(ctx, TemplateContentsOwner(ctx, document));
+    contents->host = element;
+    element->templateContents = contents;
+    element->NoteWrite();
+  }
   return element;
 }
 
@@ -378,6 +394,11 @@ std::optional<DomError> RemoveChild(Node* parent, Node* child) {
   return std::nullopt;
 }
 
+void ReplaceAll(Node* parent, Node* node) {
+  while (parent->firstChild) Unlink(parent->firstChild);
+  if (node) InsertUnchecked(node, parent, nullptr);
+}
+
 void SetTextContent(Context& ctx, Node* node, std::string text) {
   while (node->firstChild) Unlink(node->firstChild);
   if (!text.empty()) InsertUnchecked(NewText(ctx, DocumentOf(node), std::move(text)), node, nullptr);
@@ -409,6 +430,11 @@ Node* CloneNode(Context& ctx, Node* node, bool deep) {
         clone->attributes.push_back(attributeCopy);
       }
       clone->NoteWrite();
+      if (deep && original->templateContents && clone->templateContents) {
+        for (Node* child = original->templateContents->firstChild; child; child = child->nextSibling) {
+          InsertUnchecked(CloneNode(ctx, child, true), clone->templateContents, nullptr);
+        }
+      }
       copy = clone;
       break;
     }

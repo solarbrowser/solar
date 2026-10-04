@@ -120,7 +120,6 @@ class TreeBuilder {
   Location AppropriatePlace(dom::Node* overrideTarget = nullptr) const;
   Location AdjustedInsertionLocation(dom::Node* overrideTarget = nullptr) const;
   dom::Element* CreateElementForToken(const Token& token, std::string_view ns, dom::Node* intendedParent);
-  dom::Document* TemplateContentsOwner(dom::Document* document);
   void InsertElementAt(dom::Element* element, Location location);
   dom::Element* InsertForeignElement(const Token& token, std::string_view ns, bool onlyAddToStack);
   dom::Element* InsertHtmlElement(const Token& token) { return InsertForeignElement(token, dom::kHtmlNamespace, false); }

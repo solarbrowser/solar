@@ -311,16 +311,6 @@ TreeBuilder::Location TreeBuilder::AdjustedInsertionLocation(Node* overrideTarge
   return location;
 }
 
-dom::Document* TreeBuilder::TemplateContentsOwner(dom::Document* document) {
-  if (!document->templateContentsOwner) {
-    document->templateContentsOwner = dom::NewDocument(ctx_, document->isHtml);
-    document->NoteWrite();
-    // It is its own owner, so that a template inside a template's contents has contents of the same kind.
-    document->templateContentsOwner->templateContentsOwner = document->templateContentsOwner;
-  }
-  return document->templateContentsOwner;
-}
-
 Element* TreeBuilder::CreateElementForToken(const Token& token, std::string_view ns, Node* intendedParent) {
   dom::Document* document = intendedParent && intendedParent->IsDocument() ? static_cast<dom::Document*>(intendedParent) : intendedParent ? intendedParent->nodeDocument : document_;
   if (!document) document = document_;
@@ -332,12 +322,6 @@ Element* TreeBuilder::CreateElementForToken(const Token& token, std::string_view
     element->attributes.push_back(node);
   }
   element->NoteWrite();
-  if (ns == kHtml && token.name == "template") {
-    dom::DocumentFragment* contents = dom::NewDocumentFragment(ctx_, TemplateContentsOwner(document));
-    contents->host = element;
-    element->templateContents = contents;
-    element->NoteWrite();
-  }
   return element;
 }
 
