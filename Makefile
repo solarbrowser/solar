@@ -8,6 +8,9 @@ URL_SOURCES = $(wildcard src/url/*.cpp)
 URL_OBJECTS = $(URL_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
 NET_SOURCES = $(wildcard src/net/*.cpp)
 NET_OBJECTS = $(NET_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
+# CSS: the tokenizer and, built on it, selectors (and later style sheets).
+CSS_SOURCES = $(wildcard src/css/*.cpp)
+CSS_OBJECTS = $(CSS_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
 # The HTML parser: the tokenizer and the tree builder, which make a DOM tree out of markup.
 HTML_SOURCES = $(wildcard src/html/*.cpp)
 HTML_OBJECTS = $(HTML_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
@@ -85,7 +88,7 @@ quanta:
 
 $(QUANTA_LIBS): | quanta
 
-solar: $(OBJ_DIR)/src/main.o $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
+solar: $(OBJ_DIR)/src/main.o $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
 
@@ -186,7 +189,7 @@ $(BUILD_DIR)/DomTest: $(OBJ_DIR)/tests/DomTest.o $(URL_OBJECTS) $(DOM_OBJECTS) $
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
 
-$(BUILD_DIR)/WptTest: $(OBJ_DIR)/tests/WptTest.o $(URL_OBJECTS) $(DOM_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
+$(BUILD_DIR)/WptTest: $(OBJ_DIR)/tests/WptTest.o $(URL_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
 

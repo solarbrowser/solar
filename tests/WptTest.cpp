@@ -7,7 +7,12 @@
 #include <thread>
 #include <vector>
 
+#ifdef __linux__
+#include <sys/resource.h>
+#endif
+
 #include "quanta/Embed.h"
+#include "solar/css/CssBindings.h"
 #include "solar/dom/NodeBindings.h"
 #include "solar/dom/NodeBindingsInternal.h"
 #include "solar/html/Parser.h"
@@ -113,6 +118,7 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
   solar::web::InstallDomApis(*runtime);
   solar::dom::InstallNodeApis(*runtime);
   solar::html::InstallHtmlApis(*runtime);
+  solar::css::InstallSelectorApis(*runtime);
   solar::web::InstallFetchApis(*runtime);
   solar::web::FetchHost::Config hostConfig;
   hostConfig.loop = loop.get();
@@ -196,6 +202,11 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
 int main(int argc, char** argv) {
   // Unbuffered, so that the last line before a crash is the file that crashed.
   std::setbuf(stdout, nullptr);
+#ifdef __linux__
+  // A test that runs away should fail on its own, not take the machine's memory with it.
+  const rlimit limit = {4ull << 30, 4ull << 30};
+  setrlimit(RLIMIT_AS, &limit);
+#endif
   if (argc < 2) {
     std::fprintf(stderr, "usage: %s <test.any.js>...\n", argv[0]);
     return 2;
