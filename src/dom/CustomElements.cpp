@@ -236,7 +236,9 @@ void Upgrade(Context& ctx, Element* element, CustomDefinition* definition) {
   } else {
     element->customState = CustomState::Precustomized;
     Value constructor = definition->constructor;
+    ++element->nodeDocument->throwOnDynamicMarkup;
     Value result = qe::Call(ctx, state->construct, qe::Undefined(), qe::Args(&constructor, 1));
+    --element->nodeDocument->throwOnDynamicMarkup;
     if (!qe::HasException(ctx)) {
       if (DOMObject::Cast<Node>(result) != element) qe::ThrowTypeError(ctx, "The custom element constructor did not produce the element being upgraded.");
       else succeeded = true;
@@ -275,7 +277,9 @@ Element* CreateElement(Context& ctx, Document* document, std::string_view localN
     }
     CeState* state = StateOf(ctx);
     Value constructor = definition->constructor;
+    ++document->throwOnDynamicMarkup;
     Value constructed = qe::Call(ctx, state->construct, qe::Undefined(), qe::Args(&constructor, 1));
+    --document->throwOnDynamicMarkup;
     Element* result = nullptr;
     if (!qe::HasException(ctx)) {
       Node* node = DOMObject::Cast<Node>(constructed);

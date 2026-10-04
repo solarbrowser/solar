@@ -92,22 +92,36 @@ void ForEachCodePoint(const std::string& text, Fn&& fn) {
 
 }  // namespace
 
-Tokenizer::Tokenizer(std::string_view markup) {
+std::u32string Tokenizer::Normalize(std::string_view markup) {
   const std::u32string decoded = DecodeUtf8(markup);
-  input_.reserve(decoded.size());
+  std::u32string out;
+  out.reserve(decoded.size());
   // Newlines: CR LF and a lone CR are both a LF.
   for (size_t i = 0; i < decoded.size(); ++i) {
     if (decoded[i] == '\r') {
-      input_.push_back('\n');
+      out.push_back('\n');
       if (i + 1 < decoded.size() && decoded[i + 1] == '\n') ++i;
     } else {
-      input_.push_back(decoded[i]);
+      out.push_back(decoded[i]);
     }
   }
+  return out;
+}
+
+Tokenizer::Tokenizer(std::string_view markup) : input_(Normalize(markup)) {}
+
+void Tokenizer::Append(std::string_view markup) { input_ += Normalize(markup); }
+
+void Tokenizer::InsertAtPosition(std::string_view markup) {
+  const std::u32string text = Normalize(markup);
+  const size_t at = std::min(std::max(insertAt_, pos_), input_.size());
+  input_.insert(at, text);
+  insertAt_ = at + text.size();
 }
 
 char32_t Tokenizer::Consume() {
-  if (pos_ >= input_.size()) {
+  if (pos_ >= Available()) {
+    if (Restricted()) starved_ = true;
     ++pos_;
     return kEof;
   }
@@ -128,6 +142,43 @@ bool Tokenizer::NextIs(std::string_view text, bool ignoreCase) {
 }
 
 Token Tokenizer::Next() {
+  if (Restricted() && queue_.empty() && !finished_) {
+    // Whatever a step changes is put back if the input ran out in it, to be done again with more.
+    struct Saved {
+      size_t pos, reported, errors;
+      State state, returnState;
+      Token current;
+      TokenAttribute attribute;
+      bool attributeActive, attributeDropped;
+      std::string temporary, lastStartTag;
+      bool cdataAllowed;
+      uint32_t referenceCode;
+    } saved{pos_, reported_, errors_.size(), state_, returnState_, current_, attribute_, attributeActive_, attributeDropped_, temporary_, lastStartTag_, cdataAllowed_, referenceCode_};
+    starved_ = false;
+    while (queue_.empty() && !finished_ && !starved_) Step();
+    if (starved_) {
+      queue_.clear();
+      finished_ = false;
+      pos_ = saved.pos;
+      reported_ = saved.reported;
+      errors_.resize(saved.errors);
+      state_ = saved.state;
+      returnState_ = saved.returnState;
+      current_ = std::move(saved.current);
+      attribute_ = std::move(saved.attribute);
+      attributeActive_ = saved.attributeActive;
+      attributeDropped_ = saved.attributeDropped;
+      temporary_ = std::move(saved.temporary);
+      lastStartTag_ = std::move(saved.lastStartTag);
+      cdataAllowed_ = saved.cdataAllowed;
+      referenceCode_ = saved.referenceCode;
+      starved_ = false;
+      Token more;
+      more.type = Token::Type::NeedMoreInput;
+      return more;
+    }
+    starved_ = false;
+  }
   while (queue_.empty() && !finished_) Step();
   if (queue_.empty()) {
     Token eof;

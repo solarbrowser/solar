@@ -28,6 +28,8 @@ void DefineIframeMembers(Quanta::Context& ctx, Quanta::Object* prototype);
 void DefineScriptMembers(Quanta::Context& ctx, Quanta::Object* prototype);
 // focus(), blur(), tabIndex and activeElement; and what the tree does when the focused node leaves it.
 void DefineFocusMembers(Quanta::Context& ctx);
+// document.open(), write(), writeln() and close().
+void DefineDocumentWriting(Quanta::Context& ctx);
 void FocusAfterRemove(dom::Node* node);
 
 }  // namespace solar::html

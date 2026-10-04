@@ -39,6 +39,7 @@ void Document::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(templateContentsOwner);
   visitor.Mark(currentScript);
   visitor.Mark(focusedElement);
+  for (Quanta::Object* collection : specialCollections) visitor.Mark(collection);
   visitor.Mark(selection);
   visitor.Mark(window);
   visitor.Mark(globalObject);

@@ -105,10 +105,32 @@ void TreeBuilder::Run() {
     const Element* adjusted = AdjustedCurrentNode();
     tokenizer_.SetCdataAllowed(adjusted && adjusted->namespaceUri != kHtml);
     Token token = tokenizer_.Next();
+    if (token.type == Token::Type::NeedMoreInput) return;
     const bool end = token.type == Token::Type::EndOfFile;
     Process(token);
     if (end) done_ = true;
   }
+}
+
+// What a script document.writes is parsed at once, as far as it goes, with the rest of the input waiting behind it.
+void TreeBuilder::RunToInsertionPoint() {
+  const size_t outerLimit = tokenizer_.limit();
+  const size_t sizeBefore = tokenizer_.InputSize();
+  tokenizer_.SetLimit(tokenizer_.insertAt());
+  const bool wasDone = done_;
+  while (!done_) {
+    const Element* adjusted = AdjustedCurrentNode();
+    tokenizer_.SetCdataAllowed(adjusted && adjusted->namespaceUri != kHtml);
+    Token token = tokenizer_.Next();
+    if (token.type == Token::Type::NeedMoreInput) break;
+    const bool end = token.type == Token::Type::EndOfFile;
+    Process(token);
+    if (end) done_ = true;
+  }
+  (void)wasDone;
+  // Anything a script in the text wrote has moved what lay beyond it.
+  const size_t grown = tokenizer_.InputSize() - sizeBefore;
+  tokenizer_.SetLimit(outerLimit == Tokenizer::kNoLimit ? outerLimit : outerLimit + grown);
 }
 
 void TreeBuilder::Process(Token& token) {
@@ -323,6 +345,12 @@ Element* TreeBuilder::CreateElementForToken(const Token& token, std::string_view
   // A custom element is made by running its constructor, in the middle of parsing, unless the parser is for a fragment.
   dom::CustomDefinition* definition = ns == dom::kHtmlNamespace ? dom::LookupDefinition(ctx_, document, ns, token.name, is) : nullptr;
   const bool willExecuteScript = definition && !fragmentContext_;
+  // While the element is made and the reactions it queues are run, document.open and its kind throw.
+  struct MarkupGuard {
+    dom::Document* document;
+    ~MarkupGuard() { if (document) --document->throwOnDynamicMarkup; }
+  } guard{willExecuteScript ? document : nullptr};
+  if (willExecuteScript) ++document->throwOnDynamicMarkup;
   std::optional<dom::ReactionsScope> reactions;
   if (willExecuteScript) reactions.emplace(ctx_);
   Element* element = dom::CreateElement(ctx_, document, token.name, ns, "", is, willExecuteScript);
@@ -1294,7 +1322,21 @@ void TreeBuilder::TextMode(Token& token) {
     Pop();
     mode_ = originalMode_;
     // A script's end tag is where the script runs, and the parser waits for it.
-    if (token.name == "script" && scriptHandler_ && IsHtmlElement(current, "script")) scriptHandler_(current);
+    if (token.name == "script" && scriptHandler_ && IsHtmlElement(current, "script")) {
+      // While the script runs, what it document.writes goes in the input where the parser is.
+      const size_t savedInsertAt = tokenizer_.insertAt();
+      const size_t sizeBefore = tokenizer_.InputSize();
+      tokenizer_.BeginInsertion();
+      auto previous = std::move(document_->parserInsert);
+      document_->parserInsert = [this](const std::string& markup) {
+        tokenizer_.InsertAtPosition(markup);
+        RunToInsertionPoint();
+      };
+      scriptHandler_(current);
+      document_->parserInsert = std::move(previous);
+      // The insertion point of a script this one interrupted is where it was, moved by what this one put in.
+      tokenizer_.SetInsertAt(savedInsertAt + (tokenizer_.InputSize() - sizeBefore));
+    }
   }
 }
 

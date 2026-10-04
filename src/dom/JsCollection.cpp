@@ -103,6 +103,21 @@ const std::vector<Node*>& JsCollection::Items() {
         if (attribute && attribute->value == name) items.push_back(element);
       }
       break;
+    case Kind::Special:
+      for (Node* node = root->NextInTree(root); node; node = node->NextInTree(root)) {
+        Element* element = AsElement(node);
+        if (!element || !element->IsHtml()) continue;
+        const std::string& tag = element->localName;
+        bool matches = false;
+        if (name == "forms") matches = tag == "form";
+        else if (name == "images") matches = tag == "img";
+        else if (name == "links") matches = (tag == "a" || tag == "area") && element->FindAttribute("", "href");
+        else if (name == "anchors") matches = tag == "a" && element->FindAttribute("", "name");
+        else if (name == "embeds") matches = tag == "embed";
+        else if (name == "scripts") matches = tag == "script";
+        if (matches) items.push_back(element);
+      }
+      break;
     case Kind::WindowNamed:
       for (Node* node = root->NextInTree(root); node; node = node->NextInTree(root)) {
         Element* element = AsElement(node);
@@ -184,6 +199,12 @@ JsCollection* NewStaticNodeList(Context& ctx, std::vector<Node*> nodes) {
 Value NewWindowNamedCollection(Context& ctx, Node* root, std::string_view name) {
   JsCollection* collection = NewCollection(ctx, JsCollection::Kind::WindowNamed, root, false);
   collection->name = name;
+  return qe::FromObject(collection);
+}
+
+Value GetSpecialCollection(Context& ctx, Node* root, std::string_view which) {
+  JsCollection* collection = NewCollection(ctx, JsCollection::Kind::Special, root, false);
+  collection->name = which;
   return qe::FromObject(collection);
 }
 

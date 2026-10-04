@@ -46,7 +46,7 @@ std::string TagNameOf(const Element* element);
 // standard says they stay current with the tree. What they find is looked up again when the tree has
 // changed since the last time.
 struct JsCollection : Quanta::DOMObject {
-  enum class Kind { ChildNodes, Children, ByTagName, ByTagNameNS, ByClassName, ByName, WindowNamed, Static };
+  enum class Kind { ChildNodes, Children, ByTagName, ByTagNameNS, ByClassName, ByName, WindowNamed, Special, Static };
   Kind kind = Kind::Static;
   bool isNodeList = false;  // NodeList and not HTMLCollection
   Node* root = nullptr;
@@ -81,6 +81,9 @@ Quanta::Value NewWindowNamedCollection(Quanta::Context& ctx, Node* root, std::st
 Quanta::Value GetElementsByClassName(Quanta::Context& ctx, Node* root, std::string_view classes);
 // document.getElementsByName: a live NodeList of the elements whose name attribute is `name`.
 Quanta::Value GetElementsByName(Quanta::Context& ctx, Node* root, std::string_view name);
+// document.forms, images, links, anchors, embeds, plugins, scripts, applets: a live HTMLCollection of the descendants
+// that are the kind `which` names.
+Quanta::Value GetSpecialCollection(Quanta::Context& ctx, Node* root, std::string_view which);
 
 // The Document that nodes made by script constructors (new Text, new DocumentFragment) belong to: the
 // realm's window document, which the browser sets, or an empty HTML document made on first use.

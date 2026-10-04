@@ -306,6 +306,26 @@ Value ParseFromString(Context& ctx, Value t, qe::Args args, Value) {
   return qe::Undefined();
 }
 
+// document.forms and the like: the same collection each time, as the standard has it.
+template <const char* Which, int Index>
+Value GetDocumentCollection(Context& ctx, Value t, qe::Args, Value) {
+  dom::Document* self = dom::ThisDocument(ctx, t);
+  if (!self) return qe::Undefined();
+  if (!self->specialCollections[Index]) {
+    Value collection = dom::GetSpecialCollection(ctx, self, Which);
+    self->specialCollections[Index] = collection.as_object();
+    self->NoteWrite();
+  }
+  return qe::FromObject(self->specialCollections[Index]);
+}
+
+constexpr char kForms[] = "forms";
+constexpr char kImages[] = "images";
+constexpr char kLinks[] = "links";
+constexpr char kAnchors[] = "anchors";
+constexpr char kEmbeds[] = "embeds";
+constexpr char kScripts[] = "scripts";
+
 // ---- XMLSerializer ----
 
 struct JsXmlSerializer : DOMObject {
@@ -526,12 +546,20 @@ void Install(Host& host) {
   DefineHtmlElementInterfaces(ctx);
   DefineFrameNatives(ctx);
   DefineFocusMembers(ctx);
+  DefineDocumentWriting(ctx);
   InstallFrameHooks();
   Object* document = dom::InterfacePrototype(ctx, dom::Interface::Document);
   qe::DefineAccessor(document, "head", GetHead, nullptr);
   qe::DefineAccessor(document, "body", GetBody, SetBody);
   qe::DefineAccessor(document, "title", GetTitle, SetTitle);
   qe::DefineAccessor(document, "readyState", GetReadyState, nullptr);
+  qe::DefineAccessor(document, "forms", GetDocumentCollection<kForms, 0>, nullptr);
+  qe::DefineAccessor(document, "images", GetDocumentCollection<kImages, 1>, nullptr);
+  qe::DefineAccessor(document, "links", GetDocumentCollection<kLinks, 2>, nullptr);
+  qe::DefineAccessor(document, "anchors", GetDocumentCollection<kAnchors, 3>, nullptr);
+  qe::DefineAccessor(document, "embeds", GetDocumentCollection<kEmbeds, 4>, nullptr);
+  qe::DefineAccessor(document, "plugins", GetDocumentCollection<kEmbeds, 4>, nullptr);
+  qe::DefineAccessor(document, "scripts", GetDocumentCollection<kScripts, 5>, nullptr);
   qe::DefineAccessor(document, "currentScript", GetCurrentScript, nullptr);
   qe::DefineAccessor(document, "defaultView", GetDefaultView, nullptr);
   qe::DefineGlobalFunction(ctx, "__solarDocument", GlobalDocument, 0);

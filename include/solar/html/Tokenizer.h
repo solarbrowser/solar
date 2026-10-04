@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <deque>
 #include <optional>
@@ -23,7 +24,8 @@ struct TokenAttribute {
 };
 
 struct Token {
-  enum class Type { Doctype, StartTag, EndTag, Comment, ProcessingInstruction, Character, EndOfFile };
+  // NeedMoreInput is only given by a tokenizer that is fed in pieces: the input so far ends in the middle of a token.
+  enum class Type { Doctype, StartTag, EndTag, Comment, ProcessingInstruction, Character, EndOfFile, NeedMoreInput };
   Type type = Type::EndOfFile;
   // A tag's name, or a processing instruction's target; a DOCTYPE's name is `doctypeName`, which can be missing as well as empty.
   std::string name;
@@ -145,6 +147,27 @@ class Tokenizer {
   // The next token. After the end of the input it is EndOfFile again and again.
   Token Next();
 
+  // Feeding in pieces, as document.write does: the tokenizer then gives NeedMoreInput where the input stops in the
+  // middle of a token, and picks up there when more has been appended. CloseInput() is the end of the input.
+  void SetStreaming(bool streaming) {
+    streaming_ = streaming;
+    closed_ = !streaming;
+  }
+  void Append(std::string_view markup);
+  void CloseInput() { closed_ = true; }
+  // Text put at the position the tokenizer is at, which is what a script's document.write does while the parser runs.
+  // Each insertion goes after the one before it; BeginInsertion puts the point back at the tokenizer's position.
+  void BeginInsertion() { insertAt_ = pos_; }
+  size_t insertAt() const { return insertAt_; }
+  void SetInsertAt(size_t at) { insertAt_ = at; }
+  size_t InputSize() const { return input_.size(); }
+  // The input is taken to end at `limit` (to be given more of what lies past it later): a token that would need
+  // more is NeedMoreInput. kNoLimit takes the input as it is.
+  static constexpr size_t kNoLimit = static_cast<size_t>(-1);
+  void SetLimit(size_t limit) { limit_ = limit; }
+  size_t limit() const { return limit_; }
+  void InsertAtPosition(std::string_view markup);
+
   void SetState(State state) { state_ = state; }
   State state() const { return state_; }
   // The name of the last start tag emitted, which decides whether an end tag in text is the one that ends it.
@@ -162,7 +185,14 @@ class Tokenizer {
 
   char32_t Consume();
   void Reconsume() { --pos_; }
-  char32_t Peek(size_t ahead = 0) const { return pos_ + ahead < input_.size() ? input_[pos_ + ahead] : kEof; }
+  bool Restricted() const { return (streaming_ && !closed_) || limit_ != kNoLimit; }
+  size_t Available() const { return std::min(input_.size(), limit_); }
+  char32_t Peek(size_t ahead = 0) const {
+    if (pos_ + ahead < Available()) return input_[pos_ + ahead];
+    if (Restricted()) starved_ = true;
+    return kEof;
+  }
+  static std::u32string Normalize(std::string_view markup);
   bool NextIs(std::string_view text, bool ignoreCase);
   void Error(const char* code) { errors_.push_back(code); }
 
@@ -210,6 +240,11 @@ class Tokenizer {
   bool cdataAllowed_ = false;
   uint32_t referenceCode_ = 0;
   bool finished_ = false;
+  size_t insertAt_ = 0;
+  size_t limit_ = kNoLimit;
+  bool streaming_ = false;
+  bool closed_ = true;
+  mutable bool starved_ = false;  // a step wanted input that has not come yet
 };
 
 }  // namespace solar::html

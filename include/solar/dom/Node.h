@@ -243,6 +243,8 @@ struct Document : Node {
   Element* currentScript = nullptr;
   // The focused area of the document, if an element is: what document.activeElement is, once it is retargeted.
   Element* focusedElement = nullptr;
+  // document.forms, images, links, anchors, embeds and scripts: each the same object every time.
+  Quanta::Object* specialCollections[6] = {};
   // The context the document was made in, which the algorithms that must queue a microtask need.
   Quanta::Context* context = nullptr;
   // document.getSelection(): the same object each time.
@@ -260,6 +262,12 @@ struct Document : Node {
   // document is done being parsed: the load event waits for them.
   uint32_t pendingFrameLoads = 0;
   std::function<void()> whenFramesLoaded;
+  // document.write while a script the parser runs is running: puts the markup in the parser's input.
+  std::function<void(const std::string&)> parserInsert;
+  // The parser document.open() made, which document.write feeds and document.close() ends.
+  std::shared_ptr<void> scriptParser;
+  // The throw-on-dynamic-markup-insertion counter: above zero, document.open, write and close throw.
+  uint32_t throwOnDynamicMarkup = 0;
 
   Element* DocumentElement() const;
   DocumentType* Doctype() const;

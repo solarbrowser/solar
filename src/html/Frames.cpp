@@ -8,6 +8,7 @@
 #include "solar/html/HtmlBindings.h"
 #include "solar/html/Parser.h"
 #include "solar/html/Reflect.h"
+#include "solar/html/TreeBuilder.h"
 #include "solar/html/Xml.h"
 #include "solar/url/Parser.h"
 #include "solar/url/Serializer.h"
@@ -97,6 +98,7 @@ void QueueTask(Context& ctx, const char* function, std::vector<Value> arguments)
 // ---- Loading a page ----
 
 bool LoadPageIn(Quanta::Embed::Realm& realm, dom::Document* document, const std::string& markup, const std::string& contentType);
+void CompleteLoad(Quanta::Embed::Realm& realm, dom::Document* document, bool notifyFrame);
 
 bool RunScript(Quanta::Embed::Realm& realm, dom::Document* document, dom::Element* script) {
   const dom::Attr* type = script->FindAttribute("", "type");
@@ -353,6 +355,22 @@ bool LoadPage(Quanta::Embed::Realm& realm, dom::Document* document, std::string_
 
 namespace {
 
+// The end of parsing: the document is interactive, DOMContentLoaded, and load once the frames in it have loaded.
+void CompleteLoad(Quanta::Embed::Realm& realm, dom::Document* document, bool notifyFrame) {
+  document->readyState = "interactive";
+  realm.Evaluate("document.dispatchEvent(new Event('DOMContentLoaded', { bubbles: true }))", "page");
+  const auto finish = [&realm, document, notifyFrame] {
+    document->readyState = "complete";
+    realm.Evaluate("window.dispatchEvent(new Event('load'))", "page");
+    // The load of a frame is done when its page's is.
+    if (notifyFrame) {
+      if (dom::Element* iframe = document->frameElement; iframe && iframe->contentDocument == document) FrameFinished(iframe, true);
+    }
+  };
+  if (document->pendingFrameLoads == 0) finish();
+  else document->whenFramesLoaded = finish;
+}
+
 bool LoadPageIn(Quanta::Embed::Realm& realm, dom::Document* document, const std::string& markup, const std::string& contentType) {
   Context& ctx = realm.GetContext();
   document->readyState = "loading";
@@ -375,16 +393,7 @@ bool LoadPageIn(Quanta::Embed::Realm& realm, dom::Document* document, const std:
       dom::AppendChild(document, error);
     }
   }
-  document->readyState = "interactive";
-  realm.Evaluate("document.dispatchEvent(new Event('DOMContentLoaded', { bubbles: true }))", "page");
-  const auto finish = [&realm, document] {
-    document->readyState = "complete";
-    realm.Evaluate("window.dispatchEvent(new Event('load'))", "page");
-    // The load of a frame is done when its page's is.
-    if (dom::Element* iframe = document->frameElement; iframe && iframe->contentDocument == document) FrameFinished(iframe, true);
-  };
-  if (document->pendingFrameLoads == 0) finish();
-  else document->whenFramesLoaded = finish;
+  CompleteLoad(realm, document, true);
   return ok;
 }
 
@@ -397,6 +406,96 @@ void InstallFrameHooks() {
   hooks.attributeChanged = AttributeChanged;
   dom::SetTreeHooks(hooks);
 }
+
+// ---- document.open, write and close ----
+
+namespace {
+
+struct ScriptParser {
+  std::unique_ptr<TreeBuilder> builder;
+};
+
+// "document open": the document is emptied and a parser is made for what is written to it, which has no end until
+// close().
+void OpenDocument(dom::Document* document) {
+  document->scriptParser.reset();
+  while (document->firstChild) dom::RemoveUnchecked(document->firstChild);
+  document->readyState = "loading";
+  auto parser = std::make_shared<ScriptParser>();
+  parser->builder = std::make_unique<TreeBuilder>(*document->context, document, "", ScriptingMode::Normal);
+  parser->builder->SetStreaming();
+  if (document->realm) {
+    Quanta::Embed::Realm* realm = document->realm;
+    parser->builder->SetScriptHandler([realm, document](dom::Element* script) {
+      script->scriptStarted = true;
+      RunScript(*realm, document, script);
+    });
+  }
+  parser->builder->Run();
+  document->scriptParser = parser;
+}
+
+dom::Document* DocumentForMarkup(Context& ctx, const Value& t, const char* member) {
+  dom::Document* self = dom::ThisDocument(ctx, t);
+  if (!self) return nullptr;
+  if (!self->isHtml) {
+    dom::Throw(ctx, {"InvalidStateError", std::string("Failed to execute '") + member + "' on 'Document': This method is not supported for XML documents."});
+    return nullptr;
+  }
+  if (self->throwOnDynamicMarkup > 0) {
+    dom::Throw(ctx, {"InvalidStateError", std::string("Failed to execute '") + member + "' on 'Document': Custom element constructors and reactions cannot call it."});
+    return nullptr;
+  }
+  return self;
+}
+
+Value DocumentOpen(Context& ctx, Value t, qe::Args args, Value) {
+  dom::Document* self = DocumentForMarkup(ctx, t, "open");
+  if (!self) return qe::Undefined();
+  // open(url, name, features) is window.open.
+  if (args.size() >= 3) return qe::Null();
+  // A script the parser is running does not get to start over.
+  if (self->parserInsert) return qe::FromObject(self);
+  OpenDocument(self);
+  return qe::FromObject(self);
+}
+
+Value Write(Context& ctx, Value t, qe::Args args, bool newline, const char* member) {
+  dom::Document* self = DocumentForMarkup(ctx, t, member);
+  if (!self) return qe::Undefined();
+  std::string text;
+  for (const Value& arg : args) {
+    text += qe::ToWtf8(ctx, arg);
+    if (qe::HasException(ctx)) return qe::Undefined();
+  }
+  if (newline) text += "\n";
+  if (self->parserInsert) {
+    self->parserInsert(text);
+    return qe::Undefined();
+  }
+  if (!self->scriptParser) OpenDocument(self);
+  ScriptParser* parser = static_cast<ScriptParser*>(self->scriptParser.get());
+  parser->builder->Append(text);
+  parser->builder->Run();
+  return qe::Undefined();
+}
+
+Value DocumentWrite(Context& ctx, Value t, qe::Args args, Value) { return Write(ctx, t, args, false, "write"); }
+Value DocumentWriteln(Context& ctx, Value t, qe::Args args, Value) { return Write(ctx, t, args, true, "writeln"); }
+
+Value DocumentClose(Context& ctx, Value t, qe::Args, Value) {
+  dom::Document* self = DocumentForMarkup(ctx, t, "close");
+  if (!self || !self->scriptParser) return qe::Undefined();
+  std::shared_ptr<void> keep = self->scriptParser;
+  ScriptParser* parser = static_cast<ScriptParser*>(keep.get());
+  parser->builder->Close();
+  parser->builder->Run();
+  self->scriptParser.reset();
+  if (self->realm) CompleteLoad(*self->realm, self, false);
+  return qe::Undefined();
+}
+
+}  // namespace
 
 // ---- What window gets of its frames ----
 
@@ -520,6 +619,14 @@ constexpr char kReferrerPolicy[] = "referrerpolicy";
 constexpr char kAllowFullscreen[] = "allowfullscreen";
 
 }  // namespace
+
+void DefineDocumentWriting(Context& ctx) {
+  Object* document = dom::InterfacePrototype(ctx, dom::Interface::Document);
+  qe::DefineMethod(document, "open", dom::Reactions<DocumentOpen>, 0);
+  qe::DefineMethod(document, "write", dom::Reactions<DocumentWrite>, 1);
+  qe::DefineMethod(document, "writeln", dom::Reactions<DocumentWriteln>, 1);
+  qe::DefineMethod(document, "close", dom::Reactions<DocumentClose>, 0);
+}
 
 void DefineFrameNatives(Context& ctx) {
   qe::DefineGlobalFunction(ctx, "__solarParent", ParentWindow, 0);

@@ -36,7 +36,15 @@ class TreeBuilder {
   // setHTMLUnsafe does, and not an ordinary template as innerHTML does.
   void SetAllowDeclarativeShadowRoots(bool allow) { allowDeclarativeShadowRoots_ = allow; }
 
+  // Runs on what has been given so far, or all of it. A streaming builder stops where the input does and goes on
+  // when Append has given more; Close is the end.
   void Run();
+  void SetStreaming() { tokenizer_.SetStreaming(true); }
+  void Append(std::string_view markup) { tokenizer_.Append(markup); }
+  void Close() { tokenizer_.CloseInput(); }
+  bool Done() const { return done_; }
+  // Runs the tokens of what a script has just written, which end where the written text does.
+  void RunToInsertionPoint();
 
   // The parse errors, by name, in the tokenizer's and then the tree builder's order of finding them.
   std::vector<std::string> Errors() const;
