@@ -351,11 +351,8 @@ void TreeBuilder::AddMissingAttributes(Element* element, const Token& token) {
     if (attribute.localName.empty() && element->FindAttribute("", attribute.name)) continue;
     dom::Attr* node = attribute.localName.empty() ? dom::NewAttr(ctx_, element->nodeDocument, "", "", attribute.name, attribute.value)
                                                   : dom::NewAttr(ctx_, element->nodeDocument, attribute.namespaceUri, attribute.prefix, attribute.localName, attribute.value);
-    node->ownerElement = element;
-    element->attributes.push_back(node);
-    element->NoteWrite();
+    dom::AppendAttr(element, node);
   }
-  dom::NoteTreeChange();
 }
 
 void TreeBuilder::InsertCharacter(const std::string& utf8) {
@@ -363,7 +360,7 @@ void TreeBuilder::InsertCharacter(const std::string& utf8) {
   if (location.parent->IsDocument()) return;
   Node* previous = location.reference ? location.reference->previousSibling : location.parent->lastChild;
   if (previous && previous->nodeType == dom::NodeType::Text) {
-    static_cast<dom::CharacterData*>(previous)->data += utf8;
+    dom::AppendCharacterData(static_cast<dom::CharacterData*>(previous), utf8);
     return;
   }
   dom::Document* document = location.parent->nodeDocument ? location.parent->nodeDocument : document_;

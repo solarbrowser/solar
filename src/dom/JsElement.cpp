@@ -160,16 +160,11 @@ Value SetAttributeNs(Context& ctx, Value t, qe::Args args, Value) {
     return qe::Undefined();
   }
   if (Attr* existing = self->FindAttribute(parts.namespaceUri, parts.localName)) {
-    existing->value = std::move(value);
     existing->prefix = parts.prefix;
-    NoteTreeChange();
+    SetAttrValue(existing, std::move(value));
     return qe::Undefined();
   }
-  Attr* attribute = NewAttr(ctx, self->nodeDocument, parts.namespaceUri, parts.prefix, parts.localName, std::move(value));
-  attribute->ownerElement = self;
-  self->attributes.push_back(attribute);
-  self->NoteWrite();
-  NoteTreeChange();
+  AppendAttr(self, NewAttr(ctx, self->nodeDocument, parts.namespaceUri, parts.prefix, parts.localName, std::move(value)));
   return qe::Undefined();
 }
 

@@ -1,5 +1,7 @@
 #include "solar/dom/Node.h"
 
+#include "solar/dom/Mutation.h"
+
 #include <algorithm>
 
 namespace solar::dom {
@@ -21,6 +23,9 @@ void Node::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(nodeDocument);
   visitor.Mark(childNodesList);
   visitor.Mark(childrenList);
+  if (registrations) {
+    for (const Registration& registration : *registrations) visitor.Mark(registration.observer);
+  }
 }
 
 void Document::Visit(Quanta::Visitor& visitor) {
@@ -101,6 +106,9 @@ Document* TemplateContentsOwner(Context& ctx, Document* document) {
 
 Element* NewElement(Context& ctx, Document* document, std::string_view localName, std::string_view namespaceUri, std::string_view prefix) {
   Element* element = Make<Element>(ctx, namespaceUri == kHtmlNamespace && InterfacePrototype(ctx, Interface::HtmlElement) ? Interface::HtmlElement : Interface::Element, NodeType::Element, document);
+  if (namespaceUri == kHtmlNamespace) {
+    if (Object* prototype = HtmlElementPrototype(ctx, localName)) element->initialize_prototype(prototype);
+  }
   element->localName = localName;
   element->namespaceUri = namespaceUri;
   element->prefix = prefix;
@@ -347,35 +355,63 @@ void SetDocumentOfTree(Node* node, Document* document) {
 
 std::optional<DomError> EnsurePreInsertionValidity(Node* node, Node* parent, Node* child) { return Validate(node, parent, child, false); }
 
-void RemoveUnchecked(Node* node) {
-  if (node->parentNode) Unlink(node);
+namespace {
+
+// "remove" of the standard: the observers of a subtree are left with the node, and (unless suppressed) told.
+void RemoveImpl(Node* node, bool suppress) {
+  Node* parent = node->parentNode;
+  if (!parent) return;
+  Node* oldPrevious = node->previousSibling;
+  Node* oldNext = node->nextSibling;
+  const bool observed = HasMutationObservers();
+  if (observed) RegisterTransientObservers(node, parent);
+  Unlink(node);
+  if (observed && !suppress) QueueChildListRecord(parent, {}, {node}, oldPrevious, oldNext);
 }
 
+std::vector<Node*> NodesOf(Node* node) {
+  std::vector<Node*> nodes;
+  if (node->IsFragment()) {
+    for (Node* n = node->firstChild; n; n = n->nextSibling) nodes.push_back(n);
+  } else {
+    nodes.push_back(node);
+  }
+  return nodes;
+}
+
+// "insert" of the standard.
+void InsertImpl(Node* node, Node* parent, Node* child, bool suppress) {
+  Document* document = DocumentOf(parent);
+  const std::vector<Node*> nodes = NodesOf(node);
+  if (nodes.empty()) return;
+  Node* previous = child ? child->previousSibling : parent->lastChild;
+  if (node->IsFragment()) {
+    for (Node* n : nodes) RemoveImpl(n, true);
+  }
+  for (Node* n : nodes) {
+    // Adopting takes it out of where it was, which the observers there hear of.
+    if (n->parentNode) RemoveImpl(n, false);
+    if (n->nodeDocument != document) SetDocumentOfTree(n, document);
+    Link(n, parent, child);
+  }
+  if (!suppress && HasMutationObservers()) QueueChildListRecord(parent, nodes, {}, previous, child);
+}
+
+}  // namespace
+
+void RemoveUnchecked(Node* node) { RemoveImpl(node, false); }
+
 void Adopt(Node* node, Document* document) {
-  if (node->parentNode) Unlink(node);
+  RemoveImpl(node, false);
   if (node->nodeDocument != document) SetDocumentOfTree(node, document);
 }
 
-void InsertUnchecked(Node* node, Node* parent, Node* child) {
-  Document* document = DocumentOf(parent);
-  if (node->IsFragment()) {
-    std::vector<Node*> children;
-    for (Node* n = node->firstChild; n; n = n->nextSibling) children.push_back(n);
-    for (Node* n : children) Unlink(n);
-    for (Node* n : children) {
-      Adopt(n, document);
-      Link(n, parent, child);
-    }
-    return;
-  }
-  Adopt(node, document);
-  Link(node, parent, child);
-}
+void InsertUnchecked(Node* node, Node* parent, Node* child) { InsertImpl(node, parent, child, false); }
 
 std::optional<DomError> PreInsert(Node* node, Node* parent, Node* child) {
   if (auto error = EnsurePreInsertionValidity(node, parent, child)) return error;
   Node* reference = child == node ? node->nextSibling : child;
-  InsertUnchecked(node, parent, reference);
+  InsertImpl(node, parent, reference, false);
   return std::nullopt;
 }
 
@@ -386,25 +422,61 @@ std::optional<DomError> ReplaceChild(Node* parent, Node* node, Node* child) {
   if (auto error = Validate(node, parent, child, true)) return error;
   Node* reference = child->nextSibling;
   if (reference == node) reference = node->nextSibling;
-  if (child->parentNode) Unlink(child);
-  InsertUnchecked(node, parent, reference);
+  Node* previous = child->previousSibling;
+  std::vector<Node*> removed;
+  if (child->parentNode) {
+    removed.push_back(child);
+    RemoveImpl(child, true);
+  }
+  const std::vector<Node*> added = NodesOf(node);
+  InsertImpl(node, parent, reference, true);
+  if (HasMutationObservers()) QueueChildListRecord(parent, added, removed, previous, reference);
   return std::nullopt;
 }
 
 std::optional<DomError> RemoveChild(Node* parent, Node* child) {
   if (child->parentNode != parent) return DomError{"NotFoundError", "The node to be removed is not a child of this node"};
-  Unlink(child);
+  RemoveImpl(child, false);
   return std::nullopt;
 }
 
 void ReplaceAll(Node* parent, Node* node) {
-  while (parent->firstChild) Unlink(parent->firstChild);
-  if (node) InsertUnchecked(node, parent, nullptr);
+  std::vector<Node*> removed;
+  for (Node* child = parent->firstChild; child; child = child->nextSibling) removed.push_back(child);
+  const std::vector<Node*> added = node ? NodesOf(node) : std::vector<Node*>();
+  for (Node* child : removed) RemoveImpl(child, true);
+  if (node) InsertImpl(node, parent, nullptr, true);
+  if (HasMutationObservers() && (!added.empty() || !removed.empty())) QueueChildListRecord(parent, added, removed, nullptr, nullptr);
 }
 
 void SetTextContent(Context& ctx, Node* node, std::string text) {
-  while (node->firstChild) Unlink(node->firstChild);
-  if (!text.empty()) InsertUnchecked(NewText(ctx, DocumentOf(node), std::move(text)), node, nullptr);
+  ReplaceAll(node, text.empty() ? nullptr : NewText(ctx, DocumentOf(node), std::move(text)));
+}
+
+void SetCharacterData(CharacterData* node, std::string data) {
+  if (HasMutationObservers()) QueueCharacterDataRecord(node, node->data);
+  node->data = std::move(data);
+}
+
+void AppendCharacterData(CharacterData* node, std::string_view data) {
+  if (HasMutationObservers()) QueueCharacterDataRecord(node, node->data);
+  node->data += data;
+}
+
+void SetAttrValue(Attr* attribute, std::string value) {
+  if (attribute->ownerElement && HasMutationObservers()) QueueAttributeRecord(attribute->ownerElement, attribute->localName, attribute->namespaceUri, attribute->value);
+  attribute->value = std::move(value);
+  NoteTreeChange();
+}
+
+void AppendAttr(Element* element, Attr* attribute) {
+  attribute->ownerElement = element;
+  attribute->nodeDocument = element->nodeDocument;
+  element->attributes.push_back(attribute);
+  element->NoteWrite();
+  attribute->NoteWrite();
+  NoteTreeChange();
+  if (HasMutationObservers()) QueueAttributeRecord(element, attribute->localName, attribute->namespaceUri, std::nullopt);
 }
 
 // ---- Clone, equality, position ----
@@ -679,15 +751,11 @@ std::optional<DomError> SetAttribute(Context& ctx, Element* element, std::string
   if (!IsXmlName(name)) return DomError{"InvalidCharacterError", "The string contains invalid characters"};
 
   const std::string lowered = AttributeNameFor(element, name);
-  NoteTreeChange();
   if (Attr* existing = element->FindAttribute(lowered)) {
-    existing->value = std::move(value);
+    SetAttrValue(existing, std::move(value));
     return std::nullopt;
   }
-  Attr* attribute = NewAttr(ctx, element->nodeDocument, "", "", lowered, std::move(value));
-  attribute->ownerElement = element;
-  element->attributes.push_back(attribute);
-  element->NoteWrite();
+  AppendAttr(element, NewAttr(ctx, element->nodeDocument, "", "", lowered, std::move(value)));
   return std::nullopt;
 }
 
@@ -700,22 +768,25 @@ std::optional<DomError> SetAttributeNode(Element* element, Attr* attribute, Attr
     return std::nullopt;
   }
   if (old) {
+    if (HasMutationObservers()) QueueAttributeRecord(element, old->localName, old->namespaceUri, old->value);
     *std::find(element->attributes.begin(), element->attributes.end(), old) = attribute;
     old->ownerElement = nullptr;
     old->NoteWrite();
+    attribute->ownerElement = element;
+    attribute->nodeDocument = element->nodeDocument;
+    attribute->NoteWrite();
+    element->NoteWrite();
+    NoteTreeChange();
+    if (HasMutationObservers()) QueueAttributeRecord(element, attribute->localName, attribute->namespaceUri, old->value);
   } else {
-    element->attributes.push_back(attribute);
+    AppendAttr(element, attribute);
   }
-  attribute->ownerElement = element;
-  attribute->nodeDocument = element->nodeDocument;
-  attribute->NoteWrite();
-  element->NoteWrite();
-  NoteTreeChange();
   replaced = old;
   return std::nullopt;
 }
 
 void RemoveAttributeNode(Element* element, Attr* attribute) {
+  if (HasMutationObservers()) QueueAttributeRecord(element, attribute->localName, attribute->namespaceUri, attribute->value);
   element->attributes.erase(std::find(element->attributes.begin(), element->attributes.end(), attribute));
   attribute->ownerElement = nullptr;
   attribute->NoteWrite();
@@ -725,10 +796,7 @@ void RemoveAttributeNode(Element* element, Attr* attribute) {
 bool RemoveAttribute(Element* element, std::string_view name) {
   Attr* attribute = element->FindAttribute(AttributeNameFor(element, name));
   if (!attribute) return false;
-  NoteTreeChange();
-  element->attributes.erase(std::find(element->attributes.begin(), element->attributes.end(), attribute));
-  attribute->ownerElement = nullptr;
-  attribute->NoteWrite();
+  RemoveAttributeNode(element, attribute);
   return true;
 }
 

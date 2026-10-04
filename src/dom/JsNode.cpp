@@ -266,7 +266,7 @@ Value GetNextSibling(Context& ctx, Value t, qe::Args, Value) {
 }
 
 // replaceData on a character data node, as nodeValue and textContent set it.
-void SetData(CharacterData* node, std::string data) { node->data = std::move(data); }
+void SetData(CharacterData* node, std::string data) { SetCharacterData(node, std::move(data)); }
 
 Value GetNodeValue(Context& ctx, Value t, qe::Args, Value) {
   Node* self = ThisNode(ctx, t);
@@ -285,8 +285,7 @@ Value SetNodeValue(Context& ctx, Value t, qe::Args args, Value) {
     if (qe::HasException(ctx)) return qe::Undefined();
   }
   if (self->nodeType == NodeType::Attribute) {
-    static_cast<Attr*>(self)->value = std::move(text);
-    NoteTreeChange();
+    SetAttrValue(static_cast<Attr*>(self), std::move(text));
   } else if (self->IsCharacterData()) {
     SetData(static_cast<CharacterData*>(self), std::move(text));
   }
@@ -324,8 +323,7 @@ Value SetTextContentValue(Context& ctx, Value t, qe::Args args, Value) {
       SetTextContent(ctx, self, std::move(text));
       break;
     case NodeType::Attribute:
-      static_cast<Attr*>(self)->value = std::move(text);
-      NoteTreeChange();
+      SetAttrValue(static_cast<Attr*>(self), std::move(text));
       break;
     case NodeType::Document:
     case NodeType::DocumentType:
@@ -348,7 +346,7 @@ void Normalize(Node* node) {
         RemoveUnchecked(text);
       } else {
         while (next && next->nodeType == NodeType::Text) {
-          text->data += static_cast<CharacterData*>(next)->data;
+          AppendCharacterData(text, static_cast<CharacterData*>(next)->data);
           Node* after = next->nextSibling;
           RemoveUnchecked(next);
           next = after;

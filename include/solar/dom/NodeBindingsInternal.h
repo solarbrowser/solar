@@ -88,6 +88,9 @@ Quanta::Object* NewNamedNodeMap(Quanta::Context& ctx, Element* element);
 Quanta::Object* NewTokenList(Quanta::Context& ctx, Element* element, const char* attribute);
 void DefineAttributeClasses(Quanta::Context& ctx);
 
+// The object, out of the page's reach, that keeps a realm's own things where the collector sees them.
+Quanta::Object* RealmHolder(Quanta::Context& ctx);
+
 // The interfaces, each defined once per realm.
 void DefineNodeClass(Quanta::Context& ctx);
 void DefineCharacterDataClasses(Quanta::Context& ctx);

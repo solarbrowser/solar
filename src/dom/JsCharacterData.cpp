@@ -93,7 +93,7 @@ bool ReplaceData(Context& ctx, CharacterData* node, uint32_t offset, uint32_t co
   }
   if (count > units.size() - offset) count = static_cast<uint32_t>(units.size() - offset);
   units.replace(offset, count, ToUtf16(replacement));
-  node->data = FromUtf16(units);
+  SetCharacterData(node, FromUtf16(units));
   return true;
 }
 
@@ -110,7 +110,7 @@ Value SetData(Context& ctx, Value t, qe::Args args, Value) {
     text = qe::ToWtf8(ctx, args[0]);
     if (qe::HasException(ctx)) return qe::Undefined();
   }
-  self->data = std::move(text);
+  SetCharacterData(self, std::move(text));
   return qe::Undefined();
 }
 
@@ -138,7 +138,7 @@ Value AppendData(Context& ctx, Value t, qe::Args args, Value) {
   if (!self || Missing(ctx, args, 1, "CharacterData", "appendData")) return qe::Undefined();
   const std::string text = qe::ToWtf8(ctx, args[0]);
   if (qe::HasException(ctx)) return qe::Undefined();
-  self->data += text;
+  AppendCharacterData(self, text);
   return qe::Undefined();
 }
 
@@ -313,8 +313,7 @@ Value SetAttrValue(Context& ctx, Value t, qe::Args args, Value) {
   if (!self || Missing(ctx, args, 1, "Attr", "value")) return qe::Undefined();
   std::string text = qe::ToWtf8(ctx, args[0]);
   if (qe::HasException(ctx)) return qe::Undefined();
-  self->value = std::move(text);
-  NoteTreeChange();
+  SetAttrValue(self, std::move(text));
   return qe::Undefined();
 }
 Value GetOwnerElement(Context& ctx, Value t, qe::Args, Value) {

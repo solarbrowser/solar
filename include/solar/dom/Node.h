@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -30,6 +31,26 @@ enum class NodeType : uint16_t {
   Document = 9,
   DocumentType = 10,
   DocumentFragment = 11,
+};
+
+// What a MutationObserver was asked to watch for, and a registration of one on a node.
+struct MutationOptions {
+  bool childList = false;
+  bool attributes = false;
+  bool characterData = false;
+  bool subtree = false;
+  bool attributeOldValue = false;
+  bool characterDataOldValue = false;
+  bool hasAttributeFilter = false;
+  std::vector<std::string> attributeFilter;
+};
+
+struct Registration {
+  Quanta::Object* observer = nullptr;
+  MutationOptions options;
+  bool transient = false;  // left on a removed node, for the observers of the subtree it came from
+  uint64_t id = 0;
+  uint64_t source = 0;     // the registration a transient one stands for
 };
 
 struct Node;
@@ -63,6 +84,8 @@ struct Node : web::JsEventTarget {
   // What script gets from childNodes and children, which is the same object each time.
   Quanta::Object* childNodesList = nullptr;
   Quanta::Object* childrenList = nullptr;
+  // The mutation observers that watch this node; none for nearly every node.
+  std::unique_ptr<std::vector<Registration>> registrations;
 
   void Visit(Quanta::Visitor& visitor);
 
@@ -208,6 +231,12 @@ Attr* NewAttr(Quanta::Context& ctx, Document* document, std::string_view namespa
 uint64_t TreeVersion();
 void NoteTreeChange();
 
+// The prototype of the interface an HTML element of this name has: HTMLDivElement for "div", HTMLUnknownElement
+// for a name the standard does not know, HTMLElement for a custom element's. The HTML bindings register them.
+Quanta::Object* HtmlElementPrototype(Quanta::Context& ctx, std::string_view localName);
+void RegisterHtmlElementInterface(Quanta::Context& ctx, std::string_view localName, Quanta::Object* prototype);
+void SetUnknownHtmlElementInterface(Quanta::Context& ctx, Quanta::Object* prototype);
+
 // ---- The tree ----
 // Each is the algorithm of that name in the standard. All but the last return the error the standard
 // raises, if it does; none has changed the tree when it does.
@@ -229,6 +258,13 @@ void Adopt(Node* node, Document* document);
 
 // "replace all": makes `node` (null for none; a fragment's children) the only child of `parent`.
 void ReplaceAll(Node* parent, Node* node);
+// "replace data" with the whole of it, and the setting of an attribute's value and its appending to an element:
+// the changes the observers hear of. Native code that changes these goes through them.
+void SetCharacterData(CharacterData* node, std::string data);
+// The same for adding to the end of it, without copying what is there when nothing is watching.
+void AppendCharacterData(CharacterData* node, std::string_view data);
+void SetAttrValue(Attr* attribute, std::string value);
+void AppendAttr(Element* element, Attr* attribute);
 // textContent set on a node that can have children: replaces them with one Text node, or none for "".
 void SetTextContent(Quanta::Context& ctx, Node* node, std::string text);
 // cloneNode.

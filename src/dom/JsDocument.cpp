@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <string>
+#include <unordered_map>
 
 #include "solar/dom/NodeBindingsInternal.h"
 
@@ -24,6 +26,39 @@ Value HolderConstructor(Context& ctx, Value, qe::Args, Value) {
 }
 
 Object* Holder(Context& ctx) { return static_cast<Object*>(qe::GetRealmData(ctx, &g_holderKey)); }
+
+// The interfaces of HTML elements by name, kept on the holder where the collector sees them.
+char g_htmlTableKey;
+
+struct HtmlTable : DOMObject {
+  std::unordered_map<std::string, Object*> byTag;
+  Object* unknown = nullptr;
+  void Visit(Quanta::Visitor& visitor) {
+    for (auto& entry : byTag) visitor.Mark(entry.second);
+    visitor.Mark(unknown);
+  }
+};
+
+HtmlTable* TableOf(Context& ctx, bool create) {
+  if (auto* table = static_cast<HtmlTable*>(qe::GetRealmData(ctx, &g_htmlTableKey))) return table;
+  Object* holder = Holder(ctx);
+  if (!create || !holder) return nullptr;
+  HtmlTable* table = Heap::Allocate<HtmlTable>();
+  table->initialize_prototype(nullptr);
+  qe::Set(ctx, qe::FromObject(holder), "htmlTable", qe::FromObject(table));
+  qe::SetRealmData(ctx, &g_htmlTableKey, table);
+  return table;
+}
+
+// A valid custom element name: a lower case letter, a hyphen, no upper case, and not one of the few the standard reserves.
+bool IsCustomElementName(std::string_view name) {
+  if (name.empty() || name[0] < 'a' || name[0] > 'z' || name.find('-') == std::string_view::npos) return false;
+  for (char c : name) {
+    if (c >= 'A' && c <= 'Z') return false;
+  }
+  static const std::string_view kReserved[] = {"annotation-xml", "color-profile", "font-face", "font-face-src", "font-face-uri", "font-face-format", "font-face-name", "missing-glyph"};
+  return std::find(std::begin(kReserved), std::end(kReserved), name) == std::end(kReserved);
+}
 
 bool Missing(Context& ctx, qe::Args args, size_t count, const char* interface, const char* member) {
   if (args.size() >= count) return false;
@@ -354,6 +389,25 @@ Value GetImplementationOf(Context& ctx, Value t, qe::Args, Value) {
 }
 
 }  // namespace
+
+Object* RealmHolder(Context& ctx) { return Holder(ctx); }
+
+Object* HtmlElementPrototype(Context& ctx, std::string_view localName) {
+  HtmlTable* table = TableOf(ctx, false);
+  if (!table) return nullptr;
+  const auto found = table->byTag.find(std::string(localName));
+  if (found != table->byTag.end()) return found->second;
+  if (IsCustomElementName(localName)) return nullptr;  // HTMLElement itself
+  return table->unknown;
+}
+
+void RegisterHtmlElementInterface(Context& ctx, std::string_view localName, Object* prototype) {
+  if (HtmlTable* table = TableOf(ctx, true)) table->byTag[std::string(localName)] = prototype;
+}
+
+void SetUnknownHtmlElementInterface(Context& ctx, Object* prototype) {
+  if (HtmlTable* table = TableOf(ctx, true)) table->unknown = prototype;
+}
 
 Document* AssociatedDocument(Context& ctx) {
   Object* holder = Holder(ctx);

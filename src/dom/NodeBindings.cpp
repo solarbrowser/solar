@@ -1,5 +1,6 @@
 #include "solar/dom/NodeBindings.h"
 
+#include "solar/dom/Mutation.h"
 #include "solar/dom/NodeBindingsInternal.h"
 
 namespace solar::dom {
@@ -15,11 +16,13 @@ void Install(Host& host) {
   DefineAttributeClasses(ctx);
   DefineElementClass(ctx);
   DefineDocumentClasses(ctx);
+  DefineMutationClasses(ctx);
 
   // What Web IDL has and the embedding surface cannot say: the constants, which are on the interface
   // object and its prototype, and the static side of each interface inheriting its parent's.
   host.Evaluate(R"JS(
     (function () {
+      delete globalThis.__solarNotifyObservers;
       const define = (target, constants) => {
         for (const [name, value] of Object.entries(constants)) {
           Object.defineProperty(target, name, { value, writable: false, enumerable: true, configurable: false });

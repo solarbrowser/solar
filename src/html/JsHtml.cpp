@@ -301,6 +301,7 @@ void Install(Host& host) {
   qe::DefineAccessor(element, "outerHTML", GetOuterHtml, SetOuterHtml);
   qe::DefineMethod(element, "insertAdjacentHTML", InsertAdjacentHtml, 2);
 
+  DefineHtmlElementInterfaces(ctx);
   Object* document = dom::InterfacePrototype(ctx, dom::Interface::Document);
   qe::DefineAccessor(document, "head", GetHead, nullptr);
   qe::DefineAccessor(document, "body", GetBody, SetBody);
