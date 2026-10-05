@@ -6,6 +6,7 @@
 #include "solar/html/HtmlBindings.h"
 #include "solar/dom/Range.h"
 #include "solar/html/Frames.h"
+#include "solar/html/Modules.h"
 #include "solar/html/Parser.h"
 #include "solar/html/Serializer.h"
 #include "solar/html/Xml.h"
@@ -794,6 +795,7 @@ void InstallWindowOn(Host& host, dom::Document* document, Quanta::Embed::Realm* 
     dom::SetAssociatedDocument(ctx, document);
     document->globalObject = ctx.get_global_object();
     document->realm = realm;
+    if (realm) RegisterRealmDocument(realm, document);
     document->NoteWrite();
   }
   host.Evaluate(kWindowScript, "window.js");

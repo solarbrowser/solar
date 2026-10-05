@@ -7,6 +7,7 @@
 #include "solar/dom/NodeBindingsInternal.h"
 #include "solar/html/HtmlBindings.h"
 #include "solar/html/Parser.h"
+#include "solar/html/Modules.h"
 #include "solar/html/Reflect.h"
 #include "solar/html/TreeBuilder.h"
 #include "solar/html/Xml.h"
@@ -46,6 +47,16 @@ std::string Resolve(const std::string& relative, const std::string& base) {
 }
 
 }  // namespace
+
+std::string DocumentBaseUrl(const dom::Document* document) { return BaseOf(document); }
+
+std::optional<std::string> LoadResource(const std::string& url) {
+  if (url.starts_with("blob:")) {
+    if (auto blob = web::LookupBlobUrl(url)) return *blob->data;
+    return std::nullopt;
+  }
+  return g_environment ? g_environment->Load(url) : std::nullopt;
+}
 
 namespace reflect {
 std::string ResolveAgainst(const dom::Element* element, const std::string& value) {
@@ -101,9 +112,62 @@ void QueueTask(Context& ctx, const char* function, std::vector<Value> arguments)
 bool LoadPageIn(Quanta::Embed::Realm& realm, dom::Document* document, const std::string& markup, const std::string& contentType);
 void CompleteLoad(Quanta::Embed::Realm& realm, dom::Document* document, bool notifyFrame);
 
-bool RunScript(Quanta::Embed::Realm& realm, dom::Document* document, dom::Element* script) {
+std::string LowerType(const dom::Element* script) {
   const dom::Attr* type = script->FindAttribute("", "type");
-  if (type && !type->value.empty() && type->value != "text/javascript" && type->value != "application/javascript") return true;
+  std::string value = type ? type->value : "";
+  for (char& c : value) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return value;
+}
+
+// A module script: an inline one is the module of the document at an address of its own, one with a source is fetched
+// with the modules it imports. What stopped it, if anything, is told as a script that failed.
+bool StartModuleScript(Quanta::Embed::Realm& realm, dom::Document* document, dom::Element* script) {
+  Context& ctx = realm.GetContext();
+  Value promise;
+  if (const dom::Attr* source = script->FindAttribute("", "src")) {
+    const std::string address = Resolve(source->value, BaseOf(document));
+    if (g_environment && g_environment->SkipScript(address)) return true;
+    promise = realm.ImportModule(address, "", "");
+  } else {
+    promise = realm.EvaluateModule(script->DescendantText(), InlineModuleUrl(document));
+  }
+  if (qe::HasException(ctx)) {
+    const qe::ErrorInfo info = qe::InspectError(ctx, ctx.get_exception());
+    ctx.clear_exception();
+    if (g_environment) g_environment->ScriptFailed(info.name + ": " + info.message);
+    return false;
+  }
+  if (g_environment) g_environment->RunJobs();
+  const qe::ObjectInfo state = qe::Inspect(ctx, promise);
+  const bool external = script->FindAttribute("", "src") != nullptr;
+  if (state.is_object && state.kind == qe::ObjectKind::Promise && state.promise_state == qe::PromiseState::Rejected) {
+    if (external) FireEvent(ctx, script, "error");
+    const qe::ErrorInfo info = qe::InspectError(ctx, state.promise_result);
+    std::string where = info.filename.empty() ? "" : " (" + VisibleModuleUrl(info.filename) + (info.line ? ":" + std::to_string(info.line) : "") + ")";
+    if (g_environment) g_environment->ScriptFailed((info.name.empty() ? "Error" : info.name) + ": " + info.message + where);
+    return false;
+  }
+  if (external) FireEvent(ctx, script, "load");
+  return true;
+}
+
+bool RunScript(Quanta::Embed::Realm& realm, dom::Document* document, dom::Element* script) {
+  const std::string kind = LowerType(script);
+  // An import map is read, not run.
+  if (kind == "importmap") {
+    std::string error;
+    if (!RegisterImportMap(realm, document, script->DescendantText(), error)) {
+      if (g_environment) g_environment->ScriptFailed("import map: " + error);
+      return false;
+    }
+    return true;
+  }
+  if (kind == "module") return StartModuleScript(realm, document, script);
+  // A script for browsers without modules is not for this one.
+  if (script->FindAttribute("", "nomodule")) return true;
+  // Anything else that has a type is data, which the page reads itself.
+  const dom::Attr* type = script->FindAttribute("", "type");
+  if (type && !type->value.empty() && kind != "text/javascript" && kind != "application/javascript") return true;
   std::string code, filename = document->url;
   if (const dom::Attr* source = script->FindAttribute("", "src")) {
     const std::string address = Resolve(source->value, BaseOf(document));
@@ -111,6 +175,7 @@ bool RunScript(Quanta::Embed::Realm& realm, dom::Document* document, dom::Elemen
     std::optional<std::string> loaded = g_environment ? g_environment->Load(address) : std::nullopt;
     if (!loaded) {
       if (g_environment) g_environment->ScriptFailed("cannot load script " + source->value);
+      FireEvent(realm.GetContext(), script, "error");
       return false;
     }
     code = std::move(*loaded);
@@ -127,11 +192,11 @@ bool RunScript(Quanta::Embed::Realm& realm, dom::Document* document, dom::Elemen
   const qe::EvaluateResult result = realm.Evaluate(code, filename);
   document->currentScript = previous;
   if (g_environment) g_environment->RunJobs();
-  if (!result.ok) {
-    if (g_environment) g_environment->ScriptFailed(result.error);
-    return false;
-  }
-  return true;
+  const bool failed = !result.ok;
+  if (failed && g_environment) g_environment->ScriptFailed(result.error);
+  // A script with a source tells its element that it is done.
+  if (script->FindAttribute("", "src")) FireEvent(realm.GetContext(), script, "load");
+  return !failed;
 }
 
 // A frame's page has finished loading, or has given up: the iframe fires load, and what waited for it goes on.
@@ -243,7 +308,8 @@ void PrepareScript(dom::Element* script) {
   const bool hasSource = script->FindAttribute("", "src") != nullptr;
   if (!hasSource && script->DescendantText().empty()) return;
   script->scriptStarted = true;
-  if (hasSource) {
+  // A module script, and one with a source, wait for a task of their own.
+  if (hasSource || LowerType(script) == "module") {
     QueueTask(*document->context, "scriptTask", {qe::FromObject(script)});
   } else {
     RunScript(*document->realm, document, script);
@@ -386,8 +452,16 @@ bool LoadPageIn(Quanta::Embed::Realm& realm, dom::Document* document, const std:
   Context& ctx = realm.GetContext();
   document->readyState = "loading";
   bool ok = true;
+  // Module scripts the parser meets wait until it is done, in order, unless they are async.
+  std::vector<dom::Element*> deferred;
+  Quanta::Embed::ValueList keep;
   const auto run = [&](dom::Element* script) {
     script->scriptStarted = true;
+    if (LowerType(script) == "module" && !script->FindAttribute("", "async")) {
+      deferred.push_back(script);
+      keep.Append(qe::FromObject(script));
+      return;
+    }
     if (!RunScript(realm, document, script)) ok = false;
   };
   if (contentType == "text/html") {
@@ -403,6 +477,9 @@ bool LoadPageIn(Quanta::Embed::Realm& realm, dom::Document* document, const std:
       dom::AppendChild(error, dom::NewText(ctx, document, result.error));
       dom::AppendChild(document, error);
     }
+  }
+  for (dom::Element* script : deferred) {
+    if (!RunScript(realm, document, script)) ok = false;
   }
   CompleteLoad(realm, document, true);
   return ok;

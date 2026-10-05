@@ -19,6 +19,7 @@
 #include "solar/dom/NodeBindings.h"
 #include "solar/dom/NodeBindingsInternal.h"
 #include "solar/html/Frames.h"
+#include "solar/html/Modules.h"
 #include "solar/html/Parser.h"
 #include "solar/html/HtmlBindings.h"
 #include "solar/web/DomBindings.h"
@@ -93,6 +94,7 @@ struct RealmBundle {
   std::unique_ptr<solar::web::FetchHost> host;
   ~RealmBundle() {
     host.reset();
+    solar::html::ForgetRealm(realm.get());
     realm.reset();
   }
 };
@@ -184,6 +186,7 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
   // they settle promises and cancel requests through, and before the isolate they live in.
   auto isolate = qe::Isolate::Create();
   g_isolate = isolate.get();
+  isolate->SetModuleHooks(solar::html::MakeModuleHooks());
   auto loop = solar::net::Loop::Create();
   solar::net::HttpClient client(*loop);
   solar::web::JsEventLoop events(*loop, {[&] { isolate->PerformMicrotaskCheckpoint(); }, [&] { isolate->RunDueTimers(); },

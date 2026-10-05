@@ -56,6 +56,11 @@ void RunInRealm(Quanta::Embed::Realm& realm, const std::function<void()>& work);
 // fires DOMContentLoaded and, once the frames in it have loaded, load. Returns whether every script ran.
 bool LoadPage(Quanta::Embed::Realm& realm, dom::Document* document, std::string_view markup, std::string_view contentType = "text/html");
 
+// The address that relative ones in a document are resolved against, and the loader's answer for an address (a blob:
+// URL's bytes included).
+std::string DocumentBaseUrl(const dom::Document* document);
+std::optional<std::string> LoadResource(const std::string& url);
+
 // Makes the tree hooks that give iframe elements their contexts. Called by the HTML bindings.
 void InstallFrameHooks();
 

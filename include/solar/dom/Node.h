@@ -266,6 +266,8 @@ struct Document : Node {
   std::function<void(const std::string&)> parserInsert;
   // The parser document.open() made, which document.write feeds and document.close() ends.
   std::shared_ptr<void> scriptParser;
+  // The import map of the page, which a <script type=importmap> adds to.
+  std::shared_ptr<void> importMap;
   // The throw-on-dynamic-markup-insertion counter: above zero, document.open, write and close throw.
   uint32_t throwOnDynamicMarkup = 0;
 
