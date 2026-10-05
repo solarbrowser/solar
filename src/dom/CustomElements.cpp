@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "solar/dom/NodeBindingsInternal.h"
+#include "solar/web/ErrorReporting.h"
 
 namespace solar::dom {
 
@@ -168,19 +169,7 @@ Element* NewUndefinedElement(Context& ctx, Document* document, std::string_view 
 
 bool HasCustomDefinitions() { return g_anyDefinition; }
 
-void ReportException(Context& ctx) {
-  if (!qe::HasException(ctx)) return;
-  const Value exception = ctx.get_exception();
-  ctx.clear_exception();
-  CeState* state = StateOf(ctx);
-  if (state && qe::IsCallable(state->report)) {
-    Value argument = exception;
-    qe::Call(ctx, state->report, qe::Undefined(), qe::Args(&argument, 1));
-    if (qe::HasException(ctx)) ctx.clear_exception();
-  } else {
-    std::fprintf(stderr, "Uncaught %s\n", exception.to_string().c_str());
-  }
-}
+void ReportException(Context& ctx) { web::ReportException(ctx); }
 
 CustomDefinition* LookupDefinition(Context& ctx, const Document* document, std::string_view ns, std::string_view localName, const std::optional<std::string>& is) {
   if (!g_anyDefinition || ns != kHtmlNamespace || !document || (!document->window && !document->customElementsEnabled)) return nullptr;

@@ -3,6 +3,7 @@
 #include <string>
 
 #include "solar/web/DomBindingsInternal.h"
+#include "solar/web/ErrorReporting.h"
 #include "solar/web/UrlBindingsInternal.h"
 
 namespace solar::web {
@@ -488,12 +489,8 @@ void Invoke(Context& ctx, JsEventTarget* target, JsEvent* event, const std::shar
   }
   event->inPassiveListener = false;
 
-  if (qe::HasException(ctx)) {
-    // The standard has the exception reported to the global object, where there is no handler
-    // yet to hear it; it must not reach the code that dispatched the event.
-    std::fprintf(stderr, "Uncaught (in event listener) %s\n", ctx.get_exception().to_string().c_str());
-    ctx.clear_exception();
-  }
+  // The standard has the exception reported to the global object; it must not reach the code that dispatched the event.
+  if (qe::HasException(ctx)) ReportException(ctx);
 }
 
 Value DispatchEvent(Context& ctx, Value thisValue, qe::Args args, Value) {

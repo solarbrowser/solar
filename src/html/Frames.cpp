@@ -7,6 +7,7 @@
 #include "solar/dom/NodeBindingsInternal.h"
 #include "solar/html/HtmlBindings.h"
 #include "solar/html/Parser.h"
+#include "solar/html/Errors.h"
 #include "solar/html/Modules.h"
 #include "solar/html/Reflect.h"
 #include "solar/html/TreeBuilder.h"
@@ -124,6 +125,7 @@ std::string LowerType(const dom::Element* script) {
 bool StartModuleScript(Quanta::Embed::Realm& realm, dom::Document* document, dom::Element* script) {
   Context& ctx = realm.GetContext();
   Value promise;
+  ModulePromiseScope held(ctx);
   if (const dom::Attr* source = script->FindAttribute("", "src")) {
     const std::string address = Resolve(source->value, BaseOf(document));
     if (g_environment && g_environment->SkipScript(address)) return true;
@@ -132,20 +134,34 @@ bool StartModuleScript(Quanta::Embed::Realm& realm, dom::Document* document, dom
     promise = realm.EvaluateModule(script->DescendantText(), InlineModuleUrl(document));
   }
   if (qe::HasException(ctx)) {
-    const qe::ErrorInfo info = qe::InspectError(ctx, ctx.get_exception());
+    const Value exception = ctx.get_exception();
+    const qe::ErrorInfo info = qe::InspectError(ctx, exception);
     ctx.clear_exception();
-    if (g_environment) g_environment->ScriptFailed(info.name + ": " + info.message);
-    return false;
+    const bool handled = ReportError(ctx, exception, info);
+    if (!handled && g_environment) g_environment->ScriptFailed(info.name + ": " + info.message);
+    return handled;
   }
+  // What stops a module is reported as an error of the window, and not as a promise nobody handled.
+  {
+    Value then = qe::Get(ctx, promise, "then");
+    Value noop = qe::NewFunction(ctx, "", 1, [](Context&, Value, qe::Args, Value) { return qe::Undefined(); });
+    Value arguments[] = {qe::Undefined(), noop};
+    if (qe::IsCallable(then)) qe::Call(ctx, then, promise, qe::Args(arguments, 2));
+    if (qe::HasException(ctx)) ctx.clear_exception();
+  }
+  held.Finish(promise);
   if (g_environment) g_environment->RunJobs();
   const qe::ObjectInfo state = qe::Inspect(ctx, promise);
   const bool external = script->FindAttribute("", "src") != nullptr;
   if (state.is_object && state.kind == qe::ObjectKind::Promise && state.promise_state == qe::PromiseState::Rejected) {
     if (external) FireEvent(ctx, script, "error");
     const qe::ErrorInfo info = qe::InspectError(ctx, state.promise_result);
-    std::string where = info.filename.empty() ? "" : " (" + VisibleModuleUrl(info.filename) + (info.line ? ":" + std::to_string(info.line) : "") + ")";
-    if (g_environment) g_environment->ScriptFailed((info.name.empty() ? "Error" : info.name) + ": " + info.message + where);
-    return false;
+    const bool handled = ReportError(ctx, state.promise_result, info);
+    if (!handled && g_environment) {
+      const std::string where = info.filename.empty() ? "" : " (" + VisibleModuleUrl(info.filename) + (info.line ? ":" + std::to_string(info.line) : "") + ")";
+      g_environment->ScriptFailed((info.name.empty() ? "Error" : info.name) + ": " + info.message + where);
+    }
+    return handled;
   }
   if (external) FireEvent(ctx, script, "load");
   return true;
@@ -192,8 +208,19 @@ bool RunScript(Quanta::Embed::Realm& realm, dom::Document* document, dom::Elemen
   const qe::EvaluateResult result = realm.Evaluate(code, filename);
   document->currentScript = previous;
   if (g_environment) g_environment->RunJobs();
-  const bool failed = !result.ok;
-  if (failed && g_environment) g_environment->ScriptFailed(result.error);
+  bool failed = !result.ok;
+  if (failed) {
+    // The exception is reported to the window, which a page may be handling; only one nobody handles fails the page.
+    qe::ErrorInfo info = qe::InspectError(realm.GetContext(), result.exception);
+    if (info.filename.empty()) info.filename = result.filename;
+    if (info.line == 0) {
+      info.line = result.line;
+      info.column = result.column;
+    }
+    const bool handled = ReportError(realm.GetContext(), result.exception, info);
+    if (handled) failed = false;
+    else if (g_environment) g_environment->ScriptFailed(result.error);
+  }
   // A script with a source tells its element that it is done.
   if (script->FindAttribute("", "src")) FireEvent(realm.GetContext(), script, "load");
   return !failed;

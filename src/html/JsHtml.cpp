@@ -5,6 +5,7 @@
 #include "solar/dom/NodeBindingsInternal.h"
 #include "solar/html/HtmlBindings.h"
 #include "solar/dom/Range.h"
+#include "solar/html/Errors.h"
 #include "solar/html/Frames.h"
 #include "solar/html/Modules.h"
 #include "solar/html/Parser.h"
@@ -549,6 +550,7 @@ void Install(Host& host) {
   DefineHtmlElementInterfaces(ctx);
   DefineFrameNatives(ctx);
   DefineFocusMembers(ctx);
+  DefineErrorNatives(ctx);
   DefineDocumentWriting(ctx);
   InstallFrameHooks();
   Object* document = dom::InterfacePrototype(ctx, dom::Interface::Document);
@@ -605,6 +607,27 @@ const char* const kWindowScript = R"JS(
   const childCount = __solarChildCount;
   const childWindow = __solarChildWindow;
   __solarRegisterFire((target, type) => target.dispatchEvent(new Event(type)));
+  // The error event of the window for an exception nothing caught, and the rejection events for a promise. An error
+  // in a handler of the error event is not reported again, as that would never end.
+  let reporting = false;
+  __solarRegisterReporters(
+    (error, message, filename, lineno, colno) => {
+      if (reporting) return false;
+      reporting = true;
+      try {
+        const event = new ErrorEvent("error", { message, filename, lineno, colno, error, cancelable: true });
+        target.dispatchEvent(event);
+        return event.defaultPrevented;
+      } finally {
+        reporting = false;
+      }
+    },
+    (promise, reason, handled) => {
+      const event = new PromiseRejectionEvent(handled ? "rejectionhandled" : "unhandledrejection", { promise, reason, cancelable: !handled });
+      target.dispatchEvent(event);
+      return event.defaultPrevented;
+    });
+  delete globalThis.__solarRegisterReporters;
   __solarRegisterFocusFire((target, type, related, bubbles) => target.dispatchEvent(new FocusEvent(type, { bubbles, composed: true, relatedTarget: related, view: globalThis })));
   delete globalThis.__solarRegisterFocusFire;
   // window.focus() and blur(): the window has the focus already, and has no other window to give it to.

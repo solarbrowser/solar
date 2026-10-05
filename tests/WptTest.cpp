@@ -18,6 +18,7 @@
 #include "solar/css/CssBindings.h"
 #include "solar/dom/NodeBindings.h"
 #include "solar/dom/NodeBindingsInternal.h"
+#include "solar/html/Errors.h"
 #include "solar/html/Frames.h"
 #include "solar/html/Modules.h"
 #include "solar/html/Parser.h"
@@ -187,6 +188,10 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
   auto isolate = qe::Isolate::Create();
   g_isolate = isolate.get();
   isolate->SetModuleHooks(solar::html::MakeModuleHooks());
+  isolate->SetUncaughtExceptionHandler(solar::html::MakeUncaughtExceptionHandler());
+  isolate->SetPromiseRejectionHandler(solar::html::MakeRejectionHandler());
+  // Where an error came from, down to the line and column of each call in its stack.
+  isolate->SetSourcePositionTracking(true);
   auto loop = solar::net::Loop::Create();
   solar::net::HttpClient client(*loop);
   solar::web::JsEventLoop events(*loop, {[&] { isolate->PerformMicrotaskCheckpoint(); }, [&] { isolate->RunDueTimers(); },

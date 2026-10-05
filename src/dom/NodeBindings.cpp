@@ -56,14 +56,7 @@ void Install(Host& host) {
           for (const item of value) out.push(`${item}`);
           return out;
         },
-        report(exception) {
-          if (typeof globalThis.dispatchEvent === "function" && typeof ErrorEvent === "function") {
-            const message = exception !== null && typeof exception === "object" && "message" in exception ? String(exception.message) : String(exception);
-            const event = new ErrorEvent("error", { message, error: exception, cancelable: true });
-            if (!globalThis.dispatchEvent(event)) return;
-          }
-          console.error("Uncaught", exception);
-        },
+        report() {},
       });
       Object.defineProperty(globalThis, "customElements", { get() { return registry; }, set: undefined, enumerable: true, configurable: true });
     })();
