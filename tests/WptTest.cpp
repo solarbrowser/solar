@@ -110,7 +110,6 @@ class TestEnvironment : public solar::html::FrameEnvironment {
     auto bundle = std::make_unique<RealmBundle>();
     bundle->realm = isolate_.CreateRealm();
     qe::Realm& realm = *bundle->realm;
-    solar::html::PrepareRealm(realm);
     // The realm is set up as itself, which it has to be when another realm is the one running.
     solar::html::RunInRealm(realm, [&] {
       solar::web::InstallUrlApis(realm);

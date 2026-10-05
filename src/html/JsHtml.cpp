@@ -507,9 +507,13 @@ Value NamedLookup(Context& ctx, Value, qe::Args args, Value) {
   return dom::NewWindowNamedCollection(ctx, document, name);
 }
 
-// __solarRegisterNamed(update): the window script's function that follows the names.
-Value RegisterNamed(Context& ctx, Value, qe::Args args, Value) {
-  if (Object* holder = dom::RealmHolder(ctx); holder && !args.empty()) qe::Set(ctx, qe::FromObject(holder), "windowNamedUpdate", args[0]);
+// __solarSetHelper(name, fn): a function of the window's script that the program calls into, kept by name on the
+// realm's holder (windowNamedUpdate, fireEvent, fireFocus, reportError, reportRejection, contentHandler).
+Value SetHelper(Context& ctx, Value, qe::Args args, Value) {
+  if (Object* holder = dom::RealmHolder(ctx); holder && args.size() >= 2) {
+    const std::string name = qe::ToWtf8(ctx, args[0]);
+    if (!qe::HasException(ctx)) qe::Set(ctx, qe::FromObject(holder), name, args[1]);
+  }
   return qe::Undefined();
 }
 
@@ -571,7 +575,7 @@ void Install(Host& host) {
   qe::DefineGlobalFunction(ctx, "__solarSetWindow", SetWindowTarget, 1);
   qe::DefineGlobalFunction(ctx, "__solarSetDocumentUrl", SetDocumentUrl, 1);
   qe::DefineGlobalFunction(ctx, "__solarNamedLookup", NamedLookup, 1);
-  qe::DefineGlobalFunction(ctx, "__solarRegisterNamed", RegisterNamed, 1);
+  qe::DefineGlobalFunction(ctx, "__solarSetHelper", SetHelper, 2);
 
   qe::DefineStaticMethod(qe::Get(ctx, qe::FromObject(dom::InterfacePrototype(ctx, dom::Interface::Document)), "constructor").as_object(), "parseHTMLUnsafe", ParseHtmlUnsafe, 1);
   Value rangePrototype = qe::Get(ctx, qe::Get(ctx, qe::FromObject(ctx.get_global_object()), "Range"), "prototype");
@@ -601,16 +605,16 @@ const char* const kWindowScript = R"JS(
   const getDocument = __solarDocument;
   const setDocumentUrl = __solarSetDocumentUrl;
   const lookup = __solarNamedLookup;
-  const registerNamed = __solarRegisterNamed;
+  const setHelper = __solarSetHelper;
   const parentWindow = __solarParent;
   const frameElement = __solarFrameElement;
   const childCount = __solarChildCount;
   const childWindow = __solarChildWindow;
-  __solarRegisterFire((target, type) => target.dispatchEvent(new Event(type)));
+  setHelper("fireEvent", (target, type) => target.dispatchEvent(new Event(type)));
   // The error event of the window for an exception nothing caught, and the rejection events for a promise. An error
   // in a handler of the error event is not reported again, as that would never end.
   let reporting = false;
-  __solarRegisterReporters(
+  setHelper("reportError",
     (error, message, filename, lineno, colno) => {
       if (reporting) return false;
       reporting = true;
@@ -621,18 +625,17 @@ const char* const kWindowScript = R"JS(
       } finally {
         reporting = false;
       }
-    },
+    });
+  setHelper("reportRejection",
     (promise, reason, handled) => {
       const event = new PromiseRejectionEvent(handled ? "rejectionhandled" : "unhandledrejection", { promise, reason, cancelable: !handled });
       target.dispatchEvent(event);
       return event.defaultPrevented;
     });
-  delete globalThis.__solarRegisterReporters;
-  __solarRegisterFocusFire((target, type, related, bubbles) => target.dispatchEvent(new FocusEvent(type, { bubbles, composed: true, relatedTarget: related, view: globalThis })));
-  delete globalThis.__solarRegisterFocusFire;
+  setHelper("fireFocus", (target, type, related, bubbles) => target.dispatchEvent(new FocusEvent(type, { bubbles, composed: true, relatedTarget: related, view: globalThis })));
   // window.focus() and blur(): the window has the focus already, and has no other window to give it to.
   for (const name of ["focus", "blur"]) Object.defineProperty(globalThis, name, { value: function () {}, writable: true, enumerable: true, configurable: true });
-  for (const name of ["__solarParent", "__solarFrameElement", "__solarChildCount", "__solarChildWindow", "__solarFrameTask", "__solarScriptTask", "__solarRegisterFire"]) delete globalThis[name];
+  for (const name of ["__solarParent", "__solarFrameElement", "__solarChildCount", "__solarChildWindow"]) delete globalThis[name];
   // window.postMessage: a message event, as a task, at this window. What sent it is not known to a window that is
   // only a function of its own, so the origin is its own and the source is not given.
   Object.defineProperty(globalThis, "postMessage", { value: function postMessage(message, targetOrigin, transfer) {
@@ -640,7 +643,6 @@ const char* const kWindowScript = R"JS(
     setTimeout(() => { target.dispatchEvent(new MessageEvent("message", { data: message, origin: location.origin })); }, 0);
   }, writable: true, enumerable: true, configurable: true });
   delete globalThis.__solarNamedLookup;
-  delete globalThis.__solarRegisterNamed;
   delete globalThis.__solarSetWindow;
   delete globalThis.__solarDocument;
   delete globalThis.__solarSetDocumentUrl;
@@ -657,7 +659,7 @@ const char* const kWindowScript = R"JS(
   // unless the page has made one of its own.
   const named = new Set();
   const hasOwn = Object.prototype.hasOwnProperty;
-  registerNamed((name) => {
+  setHelper("windowNamedUpdate", (name) => {
     const present = lookup(name) !== undefined;
     if (present && !named.has(name)) {
       if (hasOwn.call(globalThis, name)) return;
@@ -717,9 +719,12 @@ const char* const kWindowScript = R"JS(
     Object.defineProperty(globalThis, name, { value: function (...args) { return method.apply(target, args); }, writable: true, enumerable: true, configurable: true });
   }
   // onload and the like: the handler is a listener on the window.
+  const windowHandlerResets = [];
+  setHelper("eraseWindowHandlers", () => { for (const reset of windowHandlerResets) reset(); });
   for (const type of ["load", "error", "message", "hashchange", "popstate", "pageshow", "pagehide", "unload", "beforeunload", "resize", "scroll", "focus", "blur"]) {
     let handler = null;
     let listener = null;
+    windowHandlerResets.push(() => { handler = null; listener = null; });
     Object.defineProperty(globalThis, "on" + type, {
       get() { return handler; },
       set(value) {
@@ -761,7 +766,8 @@ const char* const kEventHandlerScript = R"JS(
     if (this.hasAttribute("disabled") && /^(button|input|select|textarea|fieldset|optgroup|option)$/.test(this.localName)) return;
     this.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true, view: globalThis, detail: 1 }));
   }, writable: true, enumerable: true, configurable: true });
-  const handlers = new WeakMap();
+  let handlers = new WeakMap();
+  __solarSetHelper("eraseElementHandlers", () => { handlers = new WeakMap(); });
   const define = (prototype, type) => {
     Object.defineProperty(prototype, "on" + type, {
       get() { const entry = handlers.get(this); return entry && entry[type] ? entry[type].handler : null; },
@@ -792,7 +798,7 @@ const char* const kEventHandlerScript = R"JS(
   // The content attributes, onclick="..." and the like: a function made of the text, set as the property is. On body
   // and frameset the handlers of the window events are the window's.
   const windowTypes = new Set(["load", "error", "message", "hashchange", "popstate", "pageshow", "pagehide", "unload", "beforeunload", "resize", "scroll", "focus", "blur"]);
-  __solarRegisterContentHandler((element, name, value) => {
+  __solarSetHelper("contentHandler", (element, name, value) => {
     const type = name.slice(2);
     if (!types.includes(type) && !windowTypes.has(type)) return;
     const onWindow = (element instanceof HTMLBodyElement || element instanceof HTMLFrameSetElement) && windowTypes.has(type);
@@ -802,7 +808,7 @@ const char* const kEventHandlerScript = R"JS(
     try { handler = new Function("event", value); } catch (e) { return; }
     target[name] = handler;
   });
-  delete globalThis.__solarRegisterContentHandler;
+  delete globalThis.__solarSetHelper;
 })();
 )JS";
 

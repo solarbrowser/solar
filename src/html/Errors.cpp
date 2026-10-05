@@ -27,15 +27,6 @@ Value HolderFunction(Context& ctx, const char* name) {
   return holder ? qe::Get(ctx, qe::FromObject(holder), name) : qe::Undefined();
 }
 
-// __solarRegisterReporters(reportError, reportRejection): the window script's functions that make and dispatch the events.
-Value RegisterReporters(Context& ctx, Value, qe::Args args, Value) {
-  Object* holder = dom::RealmHolder(ctx);
-  if (!holder || args.size() < 2) return qe::Undefined();
-  qe::Set(ctx, qe::FromObject(holder), "reportError", args[0]);
-  qe::Set(ctx, qe::FromObject(holder), "reportRejection", args[1]);
-  return qe::Undefined();
-}
-
 }  // namespace
 
 bool ReportError(Context& ctx, const Value& exception, const qe::ErrorInfo& info) {
@@ -90,8 +81,7 @@ qe::PromiseRejectionHandler MakeRejectionHandler() {
   };
 }
 
-void DefineErrorNatives(Context& ctx) {
-  qe::DefineGlobalFunction(ctx, "__solarRegisterReporters", RegisterReporters, 2);
+void DefineErrorNatives(Context&) {
   // What an exception no script caught is given to: a window's error event, if the realm is a window.
   web::SetExceptionReporter([](Context& c, const Value& exception) {
     const qe::ErrorInfo info = qe::InspectError(c, exception);

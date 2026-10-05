@@ -257,12 +257,6 @@ Value HasFocus(Context& ctx, Value t, qe::Args, Value) {
   return self ? qe::FromBool(self->window != nullptr) : qe::Undefined();
 }
 
-// __solarRegisterFocusFire(fire): the window script's function that makes and dispatches the event.
-Value RegisterFocusFire(Context& ctx, Value, qe::Args args, Value) {
-  if (Object* holder = dom::RealmHolder(ctx); holder && !args.empty()) qe::Set(ctx, qe::FromObject(holder), "fireFocus", args[0]);
-  return qe::Undefined();
-}
-
 }  // namespace
 
 // The focus fixup: an element that leaves the document is not the focused one any more, and nothing is told.
@@ -276,7 +270,6 @@ void FocusAfterRemove(dom::Node* node) {
 }
 
 void DefineFocusMembers(Context& ctx) {
-  qe::DefineGlobalFunction(ctx, "__solarRegisterFocusFire", RegisterFocusFire, 1);
   Object* html = dom::InterfacePrototype(ctx, dom::Interface::HtmlElement);
   qe::DefineMethod(html, "focus", Focus, 0);
   qe::DefineMethod(html, "blur", Blur, 0);

@@ -67,21 +67,6 @@ std::string ResolveAgainst(const dom::Element* element, const std::string& value
 
 namespace {
 
-// ---- Running host code as a realm ----
-
-std::vector<const std::function<void()>*>& Pending() {
-  static std::vector<const std::function<void()>*> pending;
-  return pending;
-}
-
-Value RunHost(Context&, Value, qe::Args, Value) {
-  if (Pending().empty()) return qe::Undefined();
-  const std::function<void()>* work = Pending().back();
-  Pending().pop_back();
-  (*work)();
-  return qe::Undefined();
-}
-
 // ---- Firing events and tasks, in script ----
 
 // What the window script hands over: (target, type) => target.dispatchEvent(new Event(type)).
@@ -95,17 +80,11 @@ void FireEvent(Context& ctx, dom::Node* target, const char* type) {
   if (qe::HasException(ctx)) ctx.clear_exception();
 }
 
-// A task: the function run by a timer of no delay, with these arguments.
-void QueueTask(Context& ctx, const char* function, std::vector<Value> arguments) {
-  Object* holder = dom::RealmHolder(ctx);
-  if (!holder) return;
-  Value task = qe::Get(ctx, qe::FromObject(holder), function);
-  Value setTimeout = qe::Get(ctx, qe::FromObject(ctx.get_global_object()), "setTimeout");
-  if (!qe::IsCallable(task) || !qe::IsCallable(setTimeout)) return;
-  std::vector<Value> all = {task, qe::FromUint32(0)};
-  for (const Value& argument : arguments) all.push_back(argument);
-  qe::Call(ctx, setTimeout, qe::Undefined(), qe::Args(all.data(), all.size()));
-  if (qe::HasException(ctx)) ctx.clear_exception();
+// A task of the realm the document is in, which keeps `element` alive until it has run.
+void QueueTask(dom::Document* document, const char* label, dom::Element* element, std::function<void()> work) {
+  if (!document || !document->realm || !document->context) return;
+  auto keep = std::make_shared<qe::Persistent>(*document->context, qe::FromObject(element));
+  document->realm->EnqueueTask(label, [keep, work = std::move(work)] { work(); });
 }
 
 // ---- Loading a page ----
@@ -231,14 +210,7 @@ void FrameFinished(dom::Element* iframe, bool fire) {
 
 // ---- Nested browsing contexts ----
 
-void RunAs(Quanta::Embed::Realm& realm, const std::function<void()>& work) {
-  Pending().push_back(&work);
-  const qe::EvaluateResult result = realm.Evaluate("__solarRunHost()", "host");
-  if (!Pending().empty() && Pending().back() == &work) {
-    std::fprintf(stderr, "RunAs: the host work was not run: %s\n", result.error.c_str());
-    Pending().pop_back();
-  }
-}
+void RunAs(Quanta::Embed::Realm& realm, const std::function<void()>& work) { realm.Run(work); }
 
 struct FrameContext {
   Quanta::Embed::Realm* realm = nullptr;
@@ -268,12 +240,14 @@ void Adopt(dom::Element* iframe, const FrameContext& context) {
   iframe->NoteWrite();
 }
 
+void RunFrameLoad(dom::Element* iframe, uint64_t load);
+
 void StartLoad(dom::Element* iframe) {
   dom::Document* parent = iframe->nodeDocument;
   if (!parent || !parent->context) return;
   ++iframe->frameLoad;
   ++parent->pendingFrameLoads;
-  QueueTask(*parent->context, "frameTask", {qe::FromObject(iframe), qe::FromUint32(static_cast<uint32_t>(iframe->frameLoad))});
+  QueueTask(parent, "iframe load", iframe, [iframe, load = iframe->frameLoad] { RunFrameLoad(iframe, load); });
 }
 
 // "create a new nested browsing context", and start what the iframe's attributes say to load in it.
@@ -327,18 +301,12 @@ void PrepareScript(dom::Element* script) {
   script->scriptStarted = true;
   // A module script, and one with a source, wait for a task of their own.
   if (hasSource || LowerType(script) == "module") {
-    QueueTask(*document->context, "scriptTask", {qe::FromObject(script)});
+    QueueTask(document, "script", script, [script] {
+      if (script->nodeDocument && script->nodeDocument->realm) RunScript(*script->nodeDocument->realm, script->nodeDocument, script);
+    });
   } else {
     RunScript(*document->realm, document, script);
   }
-}
-
-// The task of a script with a source: __solarScriptTask(script).
-Value ScriptTask(Context&, Value, qe::Args args, Value) {
-  dom::Element* script = args.empty() ? nullptr : Quanta::DOMObject::Cast<dom::Element>(args[0]);
-  if (!script || !script->nodeDocument || !script->nodeDocument->realm) return qe::Undefined();
-  RunScript(*script->nodeDocument->realm, script->nodeDocument, script);
-  return qe::Undefined();
 }
 
 void AfterInsert(dom::Node* node) {
@@ -377,15 +345,13 @@ void AttributeChanged(dom::Element* element, const std::string& name) {
   StartLoad(element);
 }
 
-// The task that loads what the iframe asks for: __solarFrameTask(iframe, load).
-Value FrameTask(Context& ctx, Value, qe::Args args, Value) {
-  dom::Element* iframe = args.empty() ? nullptr : Quanta::DOMObject::Cast<dom::Element>(args[0]);
-  if (!iframe || !g_environment) return qe::Undefined();
-  const uint64_t load = args.size() > 1 ? qe::ToUint32(ctx, args[1]) : 0;
+// The task that loads what the iframe asks for.
+void RunFrameLoad(dom::Element* iframe, uint64_t load) {
+  if (!iframe || !g_environment) return;
   if (load != iframe->frameLoad || !iframe->contentDocument) {
     // Not the load that counts any more: the count it was in goes down all the same.
     FrameFinished(iframe, false);
-    return qe::Undefined();
+    return;
   }
   dom::Document* parent = iframe->nodeDocument;
   std::string markup, blobType;
@@ -415,24 +381,21 @@ Value FrameTask(Context& ctx, Value, qe::Args args, Value) {
   if (!navigate) {
     // About:blank, which is already there.
     FrameFinished(iframe, true);
-    return qe::Undefined();
+    return;
   }
   std::optional<FrameContext> context = MakeContext(iframe, address);
   if (!context) {
     FrameFinished(iframe, true);
-    return qe::Undefined();
+    return;
   }
   Adopt(iframe, *context);
   LoadPage(*context->realm, context->document, markup,
            address.starts_with("about:") ? "text/html" : address.starts_with("blob:") ? (blobType.empty() ? "text/html" : blobType) : g_environment->ContentType(address));
-  return qe::Undefined();
 }
 
 }  // namespace
 
 void SetFrameEnvironment(FrameEnvironment* environment) { g_environment = environment; }
-
-void PrepareRealm(Quanta::Embed::Realm& realm) { qe::DefineGlobalFunction(realm.GetContext(), "__solarRunHost", RunHost, 0); }
 
 void RunInRealm(Quanta::Embed::Realm& realm, const std::function<void()>& work) { RunAs(realm, work); }
 
@@ -524,6 +487,30 @@ struct ScriptParser {
 // close().
 void OpenDocument(dom::Document* document) {
   document->scriptParser.reset();
+  // The listeners and handlers of the document, of what is in it and of its window are erased.
+  for (dom::Node* node = document; node; node = node->NextInTree(document)) {
+    node->listeners.clear();
+    node->eventHandlers.clear();
+    if (dom::Element* element = dom::AsElement(node); element && element->shadowRoot) {
+      for (dom::Node* inner = element->shadowRoot; inner; inner = inner->NextInTree(element->shadowRoot)) {
+        inner->listeners.clear();
+        inner->eventHandlers.clear();
+      }
+    }
+  }
+  if (document->window) {
+    document->window->listeners.clear();
+    document->window->eventHandlers.clear();
+  }
+  if (document->context) {
+    Context& ctx = *document->context;
+    for (const char* helper : {"eraseWindowHandlers", "eraseElementHandlers"}) {
+      Object* holder = dom::RealmHolder(ctx);
+      Value erase = holder ? qe::Get(ctx, qe::FromObject(holder), helper) : qe::Undefined();
+      if (qe::IsCallable(erase)) qe::Call(ctx, erase, qe::Undefined());
+      if (qe::HasException(ctx)) ctx.clear_exception();
+    }
+  }
   while (document->firstChild) dom::RemoveUnchecked(document->firstChild);
   document->readyState = "loading";
   auto parser = std::make_shared<ScriptParser>();
@@ -656,18 +643,6 @@ Value ContentTypeOf(Context& ctx, Value, qe::Args args, Value) {
   return qe::FromWtf8(ctx, g_environment->ContentType(address));
 }
 
-// __solarRegisterContentHandler(compile): the script's function that makes handlers of the on<event> attributes.
-Value RegisterContentHandler(Context& ctx, Value, qe::Args args, Value) {
-  if (Object* holder = dom::RealmHolder(ctx); holder && !args.empty()) qe::Set(ctx, qe::FromObject(holder), "contentHandler", args[0]);
-  return qe::Undefined();
-}
-
-// __solarRegisterFire(fire): the window script's (target, type) => event function.
-Value RegisterFire(Context& ctx, Value, qe::Args args, Value) {
-  if (Object* holder = dom::RealmHolder(ctx); holder && !args.empty()) qe::Set(ctx, qe::FromObject(holder), "fireEvent", args[0]);
-  return qe::Undefined();
-}
-
 Value ChildCount(Context& ctx, Value, qe::Args, Value) { return qe::FromUint32(static_cast<uint32_t>(ChildWindows(DocumentOfRealm(ctx)).size())); }
 
 Value ChildWindow(Context& ctx, Value, qe::Args args, Value) {
@@ -761,17 +736,8 @@ void DefineFrameNatives(Context& ctx) {
   qe::DefineGlobalFunction(ctx, "__solarFrameElement", FrameElement, 0);
   qe::DefineGlobalFunction(ctx, "__solarChildCount", ChildCount, 0);
   qe::DefineGlobalFunction(ctx, "__solarChildWindow", ChildWindow, 1);
-  qe::DefineGlobalFunction(ctx, "__solarFrameTask", FrameTask, 2);
-  qe::DefineGlobalFunction(ctx, "__solarRegisterFire", RegisterFire, 1);
-  qe::DefineGlobalFunction(ctx, "__solarScriptTask", ScriptTask, 1);
   qe::DefineGlobalFunction(ctx, "__solarLoadText", LoadText, 1);
   qe::DefineGlobalFunction(ctx, "__solarContentTypeOf", ContentTypeOf, 1);
-  qe::DefineGlobalFunction(ctx, "__solarRegisterContentHandler", RegisterContentHandler, 1);
-  // The task function is kept for QueueTask, which finds it on the holder.
-  if (Object* holder = dom::RealmHolder(ctx)) {
-    qe::Set(ctx, qe::FromObject(holder), "frameTask", qe::Get(ctx, qe::FromObject(ctx.get_global_object()), "__solarFrameTask"));
-    qe::Set(ctx, qe::FromObject(holder), "scriptTask", qe::Get(ctx, qe::FromObject(ctx.get_global_object()), "__solarScriptTask"));
-  }
 }
 
 // HTMLScriptElement: the attributes, and text, which is the content.

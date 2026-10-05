@@ -47,9 +47,7 @@ class FrameEnvironment {
 void SetFrameEnvironment(FrameEnvironment* environment);
 
 // Host code that makes or touches the things of a realm has to run as that realm, or the prototypes and holders it
-// finds are those of the realm that happens to be running. RunInRealm runs `work` that way; a new realm needs
-// PrepareRealm first, which gives it what that takes.
-void PrepareRealm(Quanta::Embed::Realm& realm);
+// finds are those of the realm that happens to be running. RunInRealm runs `work` that way.
 void RunInRealm(Quanta::Embed::Realm& realm, const std::function<void()>& work);
 
 // Parses `markup` into `document`, a document made in `realm` that has had InstallWindow, runs its scripts, and

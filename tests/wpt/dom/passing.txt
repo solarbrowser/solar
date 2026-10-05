@@ -519,6 +519,7 @@ tests/wpt/html/webappapis/dynamic-markup-insertion/opening-the-input-stream/012.
 tests/wpt/html/webappapis/dynamic-markup-insertion/opening-the-input-stream/013.html
 tests/wpt/html/webappapis/dynamic-markup-insertion/opening-the-input-stream/014.html
 tests/wpt/html/webappapis/dynamic-markup-insertion/opening-the-input-stream/015-1.html
+tests/wpt/html/webappapis/dynamic-markup-insertion/opening-the-input-stream/015.html
 tests/wpt/html/webappapis/dynamic-markup-insertion/opening-the-input-stream/016-1.html
 tests/wpt/html/webappapis/dynamic-markup-insertion/opening-the-input-stream/016.html
 tests/wpt/html/webappapis/dynamic-markup-insertion/opening-the-input-stream/document.open-01.xhtml
