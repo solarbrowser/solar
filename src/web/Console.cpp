@@ -360,9 +360,9 @@ class Inspector {
 // ---- The console ----
 
 struct StdSink : ConsoleSink {
-  void Message(ConsoleLevel level, const std::string& text) override {
-    FILE* out = level == ConsoleLevel::Warn || level == ConsoleLevel::Error || level == ConsoleLevel::Trace ? stderr : stdout;
-    std::fputs(text.c_str(), out);
+  void Message(Context&, const ConsoleMessage& message) override {
+    FILE* out = message.level == ConsoleLevel::Warn || message.level == ConsoleLevel::Error ? stderr : stdout;
+    std::fputs(message.text.c_str(), out);
     std::fputc('\n', out);
   }
 };
@@ -436,7 +436,15 @@ std::string FormatArguments(Context& ctx, ConsoleState& state, qe::Args args) {
   return out;
 }
 
-void Print(ConsoleState& state, ConsoleLevel level, std::string text) {
+ConsoleLevel LevelOf(const std::string& method) {
+  if (method == "error" || method == "assert") return ConsoleLevel::Error;
+  if (method == "warn") return ConsoleLevel::Warn;
+  if (method == "debug") return ConsoleLevel::Debug;
+  return ConsoleLevel::Info;
+}
+
+// "Printer": one message, in the group it is in.
+void Print(ConsoleState& state, Context& ctx, const std::string& method, std::string text, qe::Args args, std::optional<ConsoleLevel> level = std::nullopt) {
   if (!state.groups.empty()) {
     const std::string indent(state.groups.size() * 2, ' ');
     std::string indented = indent;
@@ -446,13 +454,18 @@ void Print(ConsoleState& state, ConsoleLevel level, std::string text) {
     }
     text = std::move(indented);
   }
-  state.sink->Message(level, text);
+  ConsoleMessage message;
+  message.method = method;
+  message.level = level ? *level : LevelOf(method);
+  message.text = std::move(text);
+  message.args = args;
+  state.sink->Message(ctx, message);
 }
 
 // "Logger": nothing for no arguments, and the formatted text for the rest.
-void Logger(ConsoleState& state, Context& ctx, ConsoleLevel level, qe::Args args) {
+void Logger(ConsoleState& state, Context& ctx, const std::string& method, qe::Args args) {
   if (args.empty()) return;
-  Print(state, level, FormatArguments(ctx, state, args));
+  Print(state, ctx, method, FormatArguments(ctx, state, args), args);
 }
 
 std::string Centered(const std::string& text, size_t width) {
@@ -555,7 +568,7 @@ bool Table(ConsoleState& state, Context& ctx, qe::Args args) {
   std::string out = rule("┌", "┬", "┐") + "\n" + line(header) + "\n" + rule("├", "┼", "┤") + "\n";
   for (const auto& row : table) out += line(row) + "\n";
   out += rule("└", "┴", "┘");
-  Print(state, ConsoleLevel::Log, out);
+  Print(state, ctx, "table", out, args);
   return true;
 }
 
@@ -595,18 +608,13 @@ void Install(Host& host, ConsoleSink* sink) {
   state->parseFloatFunction = std::make_shared<qe::Persistent>(ctx, qe::Get(ctx, global, "parseFloat"));
   Value console = qe::NewObject(ctx);
 
-  const auto logAt = [state](ConsoleLevel level) {
-    return [state, level](Context& c, Value, qe::Args args, Value) {
-      Logger(*state, c, level, args);
+  const auto logAs = [state](const char* method) {
+    return [state, method](Context& c, Value, qe::Args args, Value) {
+      Logger(*state, c, method, args);
       return qe::Undefined();
     };
   };
-  Define(ctx, console, "log", 0, logAt(ConsoleLevel::Log));
-  Define(ctx, console, "info", 0, logAt(ConsoleLevel::Info));
-  Define(ctx, console, "debug", 0, logAt(ConsoleLevel::Debug));
-  Define(ctx, console, "warn", 0, logAt(ConsoleLevel::Warn));
-  Define(ctx, console, "error", 0, logAt(ConsoleLevel::Error));
-  Define(ctx, console, "dirxml", 0, logAt(ConsoleLevel::Log));
+  for (const char* method : {"log", "info", "debug", "warn", "error", "dirxml"}) Define(ctx, console, method, 0, logAs(method));
   Define(ctx, console, "assert", 0, [state](Context& c, Value, qe::Args args, Value) {
     if (!args.empty() && args[0].to_boolean()) return qe::Undefined();
     std::vector<Value> data;
@@ -618,7 +626,7 @@ void Install(Host& host, ConsoleSink* sink) {
     } else {
       data.insert(data.begin(), qe::FromUtf8(c, "Assertion failed"));
     }
-    Logger(*state, c, ConsoleLevel::Error, qe::Args(data.data(), data.size()));
+    Logger(*state, c, "assert", qe::Args(data.data(), data.size()));
     return qe::Undefined();
   });
   Define(ctx, console, "clear", 0, [state](Context&, Value, qe::Args, Value) {
@@ -633,11 +641,12 @@ void Install(Host& host, ConsoleSink* sink) {
       if (d.is_null()) depth = -1;
       else if (d.is_number()) depth = std::isinf(d.as_number()) ? -1 : static_cast<int>(d.as_number());
     }
-    Print(*state, ConsoleLevel::Log, InspectValue(c, args.empty() ? qe::Undefined() : args[0], depth));
+    Value item = args.empty() ? qe::Undefined() : args[0];
+    Print(*state, c, "dir", InspectValue(c, item, depth), qe::Args(&item, 1));
     return qe::Undefined();
   });
   Define(ctx, console, "table", 0, [state](Context& c, Value, qe::Args args, Value) {
-    if (!Table(*state, c, args)) Logger(*state, c, ConsoleLevel::Log, args);
+    if (!Table(*state, c, args)) Logger(*state, c, "log", args);
     return qe::Undefined();
   });
   Define(ctx, console, "trace", 0, [state](Context& c, Value, qe::Args args, Value) {
@@ -650,30 +659,39 @@ void Install(Host& host, ConsoleSink* sink) {
     for (const qe::StackFrame& frame : info.frames) {
       text += "\n    at " + (frame.function.empty() ? std::string("<anonymous>") : frame.function) + " (" + frame.filename + ":" + std::to_string(frame.line) + ":" + std::to_string(frame.column) + ")";
     }
-    Print(*state, ConsoleLevel::Trace, text);
+    Print(*state, c, "trace", text, args, ConsoleLevel::Info);
     return qe::Undefined();
   });
   Define(ctx, console, "count", 0, [state](Context& c, Value, qe::Args args, Value) {
     const std::string label = Label(c, args);
-    Print(*state, ConsoleLevel::Log, label + ": " + std::to_string(++state->counts[label]));
+    if (qe::HasException(c)) return qe::Undefined();
+    const std::string text = label + ": " + std::to_string(++state->counts[label]);
+    Value line = qe::FromWtf8(c, text);
+    Print(*state, c, "count", text, qe::Args(&line, 1));
     return qe::Undefined();
   });
   Define(ctx, console, "countReset", 0, [state](Context& c, Value, qe::Args args, Value) {
     const std::string label = Label(c, args);
-    if (!state->counts.count(label)) Print(*state, ConsoleLevel::Warn, "Count for '" + label + "' does not exist");
-    else state->counts[label] = 0;
+    if (qe::HasException(c)) return qe::Undefined();
+    if (!state->counts.count(label)) {
+      const std::string text = "Count for '" + label + "' does not exist";
+      Value line = qe::FromWtf8(c, text);
+      Print(*state, c, "countReset", text, qe::Args(&line, 1), ConsoleLevel::Warn);
+    } else {
+      state->counts[label] = 0;
+    }
     return qe::Undefined();
   });
-  const auto group = [state](Context& c, qe::Args args) {
-    if (!args.empty()) Logger(*state, c, ConsoleLevel::Log, args);
+  const auto group = [state](Context& c, const char* method, qe::Args args) {
+    if (!args.empty()) Logger(*state, c, method, args);
     state->groups.push_back(args.empty() ? "console.group" : qe::ToWtf8(c, args[0]));
   };
   Define(ctx, console, "group", 0, [group](Context& c, Value, qe::Args args, Value) {
-    group(c, args);
+    group(c, "group", args);
     return qe::Undefined();
   });
   Define(ctx, console, "groupCollapsed", 0, [group](Context& c, Value, qe::Args args, Value) {
-    group(c, args);
+    group(c, "groupCollapsed", args);
     return qe::Undefined();
   });
   Define(ctx, console, "groupEnd", 0, [state](Context&, Value, qe::Args, Value) {
@@ -682,33 +700,40 @@ void Install(Host& host, ConsoleSink* sink) {
   });
   Define(ctx, console, "time", 0, [state](Context& c, Value, qe::Args args, Value) {
     const std::string label = Label(c, args);
-    if (state->timers.count(label)) Print(*state, ConsoleLevel::Warn, "Timer '" + label + "' already exists");
+    if (qe::HasException(c)) return qe::Undefined();
+    if (state->timers.count(label)) {
+      const std::string text = "Timer '" + label + "' already exists";
+      Value line = qe::FromWtf8(c, text);
+      Print(*state, c, "time", text, qe::Args(&line, 1), ConsoleLevel::Warn);
+    }
     else state->timers[label] = std::chrono::steady_clock::now();
     return qe::Undefined();
   });
-  Define(ctx, console, "timeLog", 0, [state](Context& c, Value, qe::Args args, Value) {
-    const std::string label = Label(c, args);
-    const auto found = state->timers.find(label);
-    if (found == state->timers.end()) {
-      Print(*state, ConsoleLevel::Warn, "Timer '" + label + "' does not exist");
+  const auto timer = [state](bool end) {
+    return [state, end](Context& c, Value, qe::Args args, Value) {
+      const char* method = end ? "timeEnd" : "timeLog";
+      const std::string label = Label(c, args);
+      if (qe::HasException(c)) return qe::Undefined();
+      const auto found = state->timers.find(label);
+      if (found == state->timers.end()) {
+        const std::string text = "Timer '" + label + "' does not exist";
+        Value line = qe::FromWtf8(c, text);
+        Print(*state, c, method, text, qe::Args(&line, 1), ConsoleLevel::Warn);
+        return qe::Undefined();
+      }
+      std::string text = label + ": " + Elapsed(found->second);
+      std::vector<Value> data = {qe::FromWtf8(c, text)};
+      if (!end && args.size() > 1) {
+        text += " " + FormatArguments(c, *state, args.subspan(1));
+        for (size_t i = 1; i < args.size(); ++i) data.push_back(args[i]);
+      }
+      if (end) state->timers.erase(found);
+      Print(*state, c, method, text, qe::Args(data.data(), data.size()));
       return qe::Undefined();
-    }
-    std::string text = label + ": " + Elapsed(found->second);
-    if (args.size() > 1) text += " " + FormatArguments(c, *state, args.subspan(1));
-    Print(*state, ConsoleLevel::Log, text);
-    return qe::Undefined();
-  });
-  Define(ctx, console, "timeEnd", 0, [state](Context& c, Value, qe::Args args, Value) {
-    const std::string label = Label(c, args);
-    const auto found = state->timers.find(label);
-    if (found == state->timers.end()) {
-      Print(*state, ConsoleLevel::Warn, "Timer '" + label + "' does not exist");
-      return qe::Undefined();
-    }
-    Print(*state, ConsoleLevel::Log, label + ": " + Elapsed(found->second));
-    state->timers.erase(found);
-    return qe::Undefined();
-  });
+    };
+  };
+  Define(ctx, console, "timeLog", 0, timer(false));
+  Define(ctx, console, "timeEnd", 0, timer(true));
 
   qe::Set(ctx, qe::FromObject(ctx.get_global_object()), "console", console);
   // console is not enumerable on the global, and is a namespace object that says so.

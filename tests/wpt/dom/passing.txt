@@ -1,3 +1,9 @@
+tests/wpt/console/console-count-logging.html
+tests/wpt/console/console-countReset-logging.html
+tests/wpt/console/console-number-format-specifiers-symbol.html
+tests/wpt/console/console-string-format-specifier-symbol-manual.html
+tests/wpt/console/console-timing-logging.html
+tests/wpt/console/console-timing-missing-label-warnings.tentative.html
 tests/wpt/custom-elements/CustomElementRegistry-getName.html
 tests/wpt/custom-elements/CustomElementRegistry.html
 tests/wpt/custom-elements/Document-createElement-customized-builtins.html

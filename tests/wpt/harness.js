@@ -175,8 +175,22 @@
 
   // testdriver is what drives the browser from a test (clicks, keys, the accessibility tree), which there is
   // nothing to do here: its operations fail, and a test that needs one is a failure.
+  // The BiDi log entries of the console are all there is of it that can be had here: the console tells of each message.
+  const consoleListeners = new Set();
+  globalThis.__solarConsoleEntry = (entry) => {
+    entry.timestamp = Date.now();
+    for (const listener of [...consoleListeners]) listener(entry);
+  };
+  const bidi = {
+    log: {
+      entry_added: {
+        subscribe: async () => async () => {},
+        on: (callback) => { consoleListeners.add(callback); return () => consoleListeners.delete(callback); },
+      },
+    },
+  };
   globalThis.test_driver = new Proxy({}, {
-    get: (target, name) => (typeof name === 'string' ? () => Promise.reject(new Error('test_driver.' + name + ' is not available')) : undefined),
+    get: (target, name) => (name === 'bidi' ? bidi : typeof name === 'string' ? () => Promise.reject(new Error('test_driver.' + name + ' is not available')) : undefined),
   });
   globalThis.test_driver_internal = globalThis.test_driver;
 

@@ -89,6 +89,34 @@ std::vector<std::string> SkipsFor(const std::string& skipFile, const std::string
   return prefixes;
 }
 
+// The console of a test: what it prints goes where it always does, and a test that listens for log entries (the way
+// WebDriver BiDi has them) is told of each, by the harness's __solarConsoleEntry.
+class HarnessConsole : public solar::web::ConsoleSink {
+ public:
+  void Message(Quanta::Context& ctx, const solar::web::ConsoleMessage& message) override {
+    solar::web::DefaultConsoleSink()->Message(ctx, message);
+    Quanta::Value hook = qe::Get(ctx, qe::FromObject(ctx.get_global_object()), "__solarConsoleEntry");
+    if (!qe::IsCallable(hook)) return;
+    Quanta::Value entry = qe::NewObject(ctx);
+    qe::Set(ctx, entry, "type", qe::FromUtf8(ctx, "console"));
+    qe::Set(ctx, entry, "method", qe::FromUtf8(ctx, message.method));
+    const char* level = message.level == solar::web::ConsoleLevel::Error ? "error" : message.level == solar::web::ConsoleLevel::Warn ? "warn" : message.level == solar::web::ConsoleLevel::Debug ? "debug" : "info";
+    qe::Set(ctx, entry, "level", qe::FromUtf8(ctx, level));
+    qe::Set(ctx, entry, "text", qe::FromWtf8(ctx, message.text));
+    Quanta::Value args = qe::NewArray(ctx, {});
+    for (const Quanta::Value& arg : message.args) {
+      Quanta::Value item = qe::NewObject(ctx);
+      const char* type = arg.is_string() ? "string" : arg.is_number() ? "number" : arg.is_boolean() ? "boolean" : arg.is_undefined() ? "undefined" : arg.is_null() ? "null" : arg.is_symbol() ? "symbol" : arg.is_bigint() ? "bigint" : "object";
+      qe::Set(ctx, item, "type", qe::FromUtf8(ctx, type));
+      if (arg.is_string()) qe::Set(ctx, item, "value", arg);
+      qe::ArrayPush(ctx, args, item);
+    }
+    qe::Set(ctx, entry, "args", args);
+    qe::Call(ctx, hook, qe::Undefined(), qe::Args(&entry, 1));
+    if (qe::HasException(ctx)) ctx.clear_exception();
+  }
+};
+
 // A realm with every API of a window, and the host that fetch() in it needs. The host goes first, as it cancels what
 // is in flight through the realm.
 struct RealmBundle {
@@ -117,7 +145,8 @@ class TestEnvironment : public solar::html::FrameEnvironment {
     // The realm is set up as itself, which it has to be when another realm is the one running.
     solar::html::RunInRealm(realm, [&] {
       solar::web::InstallUrlApis(realm);
-      solar::web::InstallConsoleApi(realm);
+      static HarnessConsole console;
+      solar::web::InstallConsoleApi(realm, &console);
       solar::web::InstallDomApis(realm);
       solar::dom::InstallNodeApis(realm);
       solar::html::InstallHtmlApis(realm);

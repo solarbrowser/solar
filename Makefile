@@ -235,7 +235,7 @@ test: $(addprefix $(BUILD_DIR)/,$(TESTS)) $(if $(filter linux,$(PLATFORM)),$(BUI
 	@for t in $(TESTS); do $(BUILD_DIR)/$$t || exit 1; done
 ifeq ($(PLATFORM),linux)
 	@for t in $(NET_TESTS) FetchBindingsTest; do SOLAR_LOOP_BACKEND=readiness $(BUILD_DIR)/$$t || exit 1; done
-	@$(BUILD_DIR)/WptTest $(wildcard tests/wpt/url/*.any.js) $(WPT_DOM) $(WPT_FETCH) $(WPT_STREAMS)
+	@$(BUILD_DIR)/WptTest $(wildcard tests/wpt/url/*.any.js) $(filter-out %/idlharness.any.js,$(wildcard tests/wpt/console/*.any.js)) $(WPT_DOM) $(WPT_FETCH) $(WPT_STREAMS)
 	@python3 tools/wptrun.py --check tests/wpt/dom/passing.txt
 endif
 

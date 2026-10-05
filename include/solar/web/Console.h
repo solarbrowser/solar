@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <optional>
+#include <span>
 #include <string>
 
 #include "quanta/Embed.h"
@@ -11,14 +12,24 @@
 // them; where the text goes is the program's: a ConsoleSink.
 namespace solar::web {
 
-enum class ConsoleLevel { Log, Info, Debug, Warn, Error, Trace };
+// How serious a message is, which a developer console shows as its colour and its filter.
+enum class ConsoleLevel { Info, Debug, Warn, Error };
 
-// Where console output goes. `text` is one message, already formatted, with the indentation of the groups it is in;
-// it may be several lines.
+// One call of Printer: the standard's log level (`method`: "log", "assert", "count", "timeEnd", "group" and the rest,
+// named as the function that made it), how serious that is, the text it comes to, with the indentation of the groups
+// it is in and possibly on several lines, and the values it was given, which are good for the call only.
+struct ConsoleMessage {
+  std::string method;
+  ConsoleLevel level = ConsoleLevel::Info;
+  std::string text;
+  std::span<const Quanta::Value> args;
+};
+
+// Where console output goes.
 class ConsoleSink {
  public:
   virtual ~ConsoleSink() = default;
-  virtual void Message(ConsoleLevel level, const std::string& text) = 0;
+  virtual void Message(Quanta::Context& ctx, const ConsoleMessage& message) = 0;
   virtual void Clear() {}
 };
 
