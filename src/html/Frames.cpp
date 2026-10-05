@@ -125,7 +125,6 @@ std::string LowerType(const dom::Element* script) {
 bool StartModuleScript(Quanta::Embed::Realm& realm, dom::Document* document, dom::Element* script) {
   Context& ctx = realm.GetContext();
   Value promise;
-  ModulePromiseScope held(ctx);
   if (const dom::Attr* source = script->FindAttribute("", "src")) {
     const std::string address = Resolve(source->value, BaseOf(document));
     if (g_environment && g_environment->SkipScript(address)) return true;
@@ -141,15 +140,6 @@ bool StartModuleScript(Quanta::Embed::Realm& realm, dom::Document* document, dom
     if (!handled && g_environment) g_environment->ScriptFailed(info.name + ": " + info.message);
     return handled;
   }
-  // What stops a module is reported as an error of the window, and not as a promise nobody handled.
-  {
-    Value then = qe::Get(ctx, promise, "then");
-    Value noop = qe::NewFunction(ctx, "", 1, [](Context&, Value, qe::Args, Value) { return qe::Undefined(); });
-    Value arguments[] = {qe::Undefined(), noop};
-    if (qe::IsCallable(then)) qe::Call(ctx, then, promise, qe::Args(arguments, 2));
-    if (qe::HasException(ctx)) ctx.clear_exception();
-  }
-  held.Finish(promise);
   if (g_environment) g_environment->RunJobs();
   const qe::ObjectInfo state = qe::Inspect(ctx, promise);
   const bool external = script->FindAttribute("", "src") != nullptr;
