@@ -1,7 +1,13 @@
 tests/wpt/console/console-count-logging.html
 tests/wpt/console/console-countReset-logging.html
+tests/wpt/console/console-is-a-namespace.any.js
+tests/wpt/console/console-label-conversion.any.js
+tests/wpt/console/console-log-large-array.any.js
+tests/wpt/console/console-log-symbol.any.js
+tests/wpt/console/console-namespace-object-class-string.any.js
 tests/wpt/console/console-number-format-specifiers-symbol.html
 tests/wpt/console/console-string-format-specifier-symbol-manual.html
+tests/wpt/console/console-tests-historical.any.js
 tests/wpt/console/console-timing-logging.html
 tests/wpt/console/console-timing-missing-label-warnings.tentative.html
 tests/wpt/custom-elements/CustomElementRegistry-getName.html
