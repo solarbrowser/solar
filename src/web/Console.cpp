@@ -369,13 +369,15 @@ struct StdSink : ConsoleSink {
 
 struct ConsoleState {
   ConsoleSink* sink = nullptr;
+  // %String%, %parseInt% and %parseFloat%, as they were when the console was made, which Formatter calls.
+  std::shared_ptr<qe::Persistent> stringFunction, parseIntFunction, parseFloatFunction;
   std::vector<std::string> groups;  // the labels of the groups that are open, only their depth matters
   std::map<std::string, uint64_t> counts;
   std::map<std::string, std::chrono::steady_clock::time_point> timers;
 };
 
 // "Formatter": the format specifiers of the first argument, then what is left, each as its own kind of text.
-std::string FormatArguments(Context& ctx, qe::Args args) {
+std::string FormatArguments(Context& ctx, ConsoleState& state, qe::Args args) {
   std::string out;
   size_t next = 0;
   if (!args.empty() && args[0].is_string()) {
@@ -392,48 +394,35 @@ std::string FormatArguments(Context& ctx, qe::Args args) {
         ++i;
         continue;
       }
-      if (std::string("sdifjoOc").find(specifier) == std::string::npos || next >= args.size()) {
+      if (std::string("sdifoOc").find(specifier) == std::string::npos || next >= args.size()) {
         out += format[i];
         continue;
       }
       const Value& arg = args[next++];
       ++i;
+      // The conversions are those of the standard: String(x), parseInt(x, 10), parseFloat(x).
+      const auto call = [&](const std::shared_ptr<qe::Persistent>& function, Value argument, bool withRadix) {
+        Value arguments[] = {argument, Value(10)};
+        Value result = qe::Call(ctx, function->Get(), qe::Undefined(), qe::Args(arguments, withRadix ? 2 : 1));
+        if (qe::HasException(ctx)) {
+          ctx.clear_exception();
+          return Value(std::nan(""));
+        }
+        return result;
+      };
       switch (specifier) {
-        case 's':
-          if (qe::IsObject(arg) && !qe::IsCallable(arg)) out += InspectValue(ctx, arg, 0);
-          else if (qe::IsCallable(arg)) out += InspectValue(ctx, arg, 0);
-          else out += Inspector::PrimitiveText(ctx, arg, false);
+        case 's': {
+          Value converted = call(state.stringFunction, arg, false);
+          out += converted.is_string() ? qe::ToWtf8(ctx, converted) : InspectValue(ctx, arg, 0);
           break;
+        }
         case 'd':
         case 'i':
-        case 'f': {
-          if (arg.is_bigint()) {
-            out += qe::ToWtf8(ctx, arg) + "n";
-            break;
-          }
-          if (arg.is_symbol() || qe::IsObject(arg)) {
-            out += "NaN";
-            break;
-          }
-          double number = arg.to_number();
-          if (qe::HasException(ctx)) ctx.clear_exception();
-          if (specifier == 'i') number = std::trunc(number);
-          out += Inspector::PrimitiveText(ctx, Value(number), false);
+          out += arg.is_symbol() ? "NaN" : Inspector::PrimitiveText(ctx, call(state.parseIntFunction, arg, true), false);
           break;
-        }
-        case 'j': {
-          Value json = qe::Get(ctx, qe::FromObject(ctx.get_global_object()), "JSON");
-          Value stringify = qe::IsObject(json) ? qe::Get(ctx, json, "stringify") : qe::Undefined();
-          Value argument = arg;
-          Value text = qe::IsCallable(stringify) ? qe::Call(ctx, stringify, json, qe::Args(&argument, 1)) : qe::Undefined();
-          if (qe::HasException(ctx)) {
-            ctx.clear_exception();
-            out += "[Circular]";
-          } else {
-            out += text.is_string() ? qe::ToWtf8(ctx, text) : "undefined";
-          }
+        case 'f':
+          out += arg.is_symbol() ? "NaN" : Inspector::PrimitiveText(ctx, call(state.parseFloatFunction, arg, false), false);
           break;
-        }
         case 'o': out += InspectValue(ctx, arg, 4); break;
         case 'O': out += InspectValue(ctx, arg, 2); break;
         default: break;  // %c: the CSS is not for a text console
@@ -463,7 +452,7 @@ void Print(ConsoleState& state, ConsoleLevel level, std::string text) {
 // "Logger": nothing for no arguments, and the formatted text for the rest.
 void Logger(ConsoleState& state, Context& ctx, ConsoleLevel level, qe::Args args) {
   if (args.empty()) return;
-  Print(state, level, FormatArguments(ctx, args));
+  Print(state, level, FormatArguments(ctx, state, args));
 }
 
 std::string Centered(const std::string& text, size_t width) {
@@ -600,6 +589,10 @@ void Install(Host& host, ConsoleSink* sink) {
   Context& ctx = host.GetContext();
   auto state = std::make_shared<ConsoleState>();
   state->sink = sink ? sink : DefaultConsoleSink();
+  const Value global = qe::FromObject(ctx.get_global_object());
+  state->stringFunction = std::make_shared<qe::Persistent>(ctx, qe::Get(ctx, global, "String"));
+  state->parseIntFunction = std::make_shared<qe::Persistent>(ctx, qe::Get(ctx, global, "parseInt"));
+  state->parseFloatFunction = std::make_shared<qe::Persistent>(ctx, qe::Get(ctx, global, "parseFloat"));
   Value console = qe::NewObject(ctx);
 
   const auto logAt = [state](ConsoleLevel level) {
@@ -634,22 +627,21 @@ void Install(Host& host, ConsoleSink* sink) {
     return qe::Undefined();
   });
   Define(ctx, console, "dir", 0, [state](Context& c, Value, qe::Args args, Value) {
-    if (args.empty()) return qe::Undefined();
     int depth = 2;
     if (args.size() > 1 && qe::IsObject(args[1])) {
       Value d = qe::Get(c, args[1], "depth");
       if (d.is_null()) depth = -1;
       else if (d.is_number()) depth = std::isinf(d.as_number()) ? -1 : static_cast<int>(d.as_number());
     }
-    Print(*state, ConsoleLevel::Log, InspectValue(c, args[0], depth));
+    Print(*state, ConsoleLevel::Log, InspectValue(c, args.empty() ? qe::Undefined() : args[0], depth));
     return qe::Undefined();
   });
-  Define(ctx, console, "table", 1, [state](Context& c, Value, qe::Args args, Value) {
+  Define(ctx, console, "table", 0, [state](Context& c, Value, qe::Args args, Value) {
     if (!Table(*state, c, args)) Logger(*state, c, ConsoleLevel::Log, args);
     return qe::Undefined();
   });
   Define(ctx, console, "trace", 0, [state](Context& c, Value, qe::Args args, Value) {
-    const std::string message = args.empty() ? "" : FormatArguments(c, args);
+    const std::string message = args.empty() ? "" : FormatArguments(c, *state, args);
     // The stack is that of an error made here.
     Value errorConstructor = qe::Get(c, qe::FromObject(c.get_global_object()), "Error");
     Value error = qe::Construct(c, errorConstructor);
@@ -702,7 +694,7 @@ void Install(Host& host, ConsoleSink* sink) {
       return qe::Undefined();
     }
     std::string text = label + ": " + Elapsed(found->second);
-    if (args.size() > 1) text += " " + FormatArguments(c, args.subspan(1));
+    if (args.size() > 1) text += " " + FormatArguments(c, *state, args.subspan(1));
     Print(*state, ConsoleLevel::Log, text);
     return qe::Undefined();
   });
@@ -726,11 +718,12 @@ void Install(Host& host, ConsoleSink* sink) {
   tag.has_writable = true;
   tag.has_enumerable = tag.has_configurable = true;
   tag.configurable = true;
-  qe::Descriptor global;
-  global.has_enumerable = true;
-  global.enumerable = false;
-  qe::DefineProperty(ctx, qe::FromObject(ctx.get_global_object()), "console", global);
-  host.Evaluate("Object.defineProperty(console, Symbol.toStringTag, { value: 'console', configurable: true });", "console.js");
+  qe::Descriptor hidden;
+  hidden.has_enumerable = true;
+  hidden.enumerable = false;
+  qe::DefineProperty(ctx, qe::FromObject(ctx.get_global_object()), "console", hidden);
+  // Its prototype is an empty object, which has Object.prototype, as the standard has it for compatibility.
+  host.Evaluate("Object.setPrototypeOf(console, Object.create(Object.prototype)); Object.defineProperty(console, Symbol.toStringTag, { value: 'console', configurable: true });", "console.js");
 }
 
 }  // namespace
