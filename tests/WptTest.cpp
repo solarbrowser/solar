@@ -23,6 +23,7 @@
 #include "solar/html/Modules.h"
 #include "solar/html/Parser.h"
 #include "solar/html/HtmlBindings.h"
+#include "solar/web/Console.h"
 #include "solar/web/DomBindings.h"
 #include "solar/net/HttpClient.h"
 #include "solar/url/Parser.h"
@@ -108,11 +109,15 @@ class TestEnvironment : public solar::html::FrameEnvironment {
 
   qe::Realm* CreateRealm() override {
     auto bundle = std::make_unique<RealmBundle>();
-    bundle->realm = isolate_.CreateRealm();
+    // The console is Solar's own, which prints what is in an object and not "[object Object]".
+    qe::Isolate::RealmOptions options;
+    options.installConsole = false;
+    bundle->realm = isolate_.CreateRealm(options);
     qe::Realm& realm = *bundle->realm;
     // The realm is set up as itself, which it has to be when another realm is the one running.
     solar::html::RunInRealm(realm, [&] {
       solar::web::InstallUrlApis(realm);
+      solar::web::InstallConsoleApi(realm);
       solar::web::InstallDomApis(realm);
       solar::dom::InstallNodeApis(realm);
       solar::html::InstallHtmlApis(realm);
