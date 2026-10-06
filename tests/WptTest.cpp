@@ -24,6 +24,7 @@
 #include "solar/html/Parser.h"
 #include "solar/html/HtmlBindings.h"
 #include "solar/web/Console.h"
+#include "solar/web/Messaging.h"
 #include "solar/web/DomBindings.h"
 #include "solar/net/HttpClient.h"
 #include "solar/url/Parser.h"
@@ -221,6 +222,7 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
   auto isolate = qe::Isolate::Create();
   g_isolate = isolate.get();
   isolate->SetModuleHooks(solar::html::MakeModuleHooks());
+  isolate->SetSerializationHooks(solar::web::MakeSerializationHooks());
   isolate->SetUncaughtExceptionHandler(solar::html::MakeUncaughtExceptionHandler());
   isolate->SetPromiseRejectionHandler(solar::html::MakeRejectionHandler());
   // Where an error came from, down to the line and column of each call in its stack.
@@ -239,9 +241,11 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
   skips += "];";
 
   std::printf("%s\n", name.c_str());
-  const bool isHtml = name.ends_with(".html") || name.ends_with(".xhtml") || name.ends_with(".svg");
+  const bool isHtml = name.ends_with(".html") || name.ends_with(".xhtml") || name.ends_with(".svg") || name.ends_with(".htm");
+  // A .window.js is a script of a page, which has a window and a document as any page does.
+  const bool isWindowScript = name.ends_with(".window.js");
   solar::dom::Document* document = nullptr;
-  if (isHtml) {
+  if (isHtml || isWindowScript) {
     // A page: it has a window and a document of its own, which its scripts run in.
     solar::html::RunInRealm(realm, [&] {
       document = solar::dom::NewDocument(realm.GetContext(), true);
@@ -251,7 +255,11 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
   }
   qe::EvaluateResult result = realm.Evaluate(skips + resources + harness, "harness.js");
   if (result.ok && !prelude.empty()) result = realm.Evaluate(prelude, "prelude.js");
-  if (result.ok && isHtml) {
+  if (result.ok && isWindowScript) {
+    const std::string address = "http://web-platform.test:8000/" + std::filesystem::relative(path, "tests/wpt").string();
+    if (!solar::html::LoadPage(realm, document, "<!DOCTYPE html><html><head></head><body></body></html>", "text/html")) result.ok = false;
+    if (result.ok) result = realm.Evaluate(source, name);
+  } else if (result.ok && isHtml) {
     const std::string address = "http://web-platform.test:8000/" + std::filesystem::relative(path, "tests/wpt").string();
     if (!solar::html::LoadPage(realm, document, source, environment.ContentType(address))) {
       result.ok = false;

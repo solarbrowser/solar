@@ -335,6 +335,14 @@
   };
 })();
 
+// GLOBAL, which tells a test what kind of global it is running in: a window when there is a document, otherwise not.
+if (typeof self === "undefined") globalThis.self = globalThis;
+globalThis.GLOBAL = {
+  isWindow: () => typeof window !== "undefined" && typeof document !== "undefined",
+  isWorker: () => false,
+  isShadowRealm: () => false,
+};
+
 // A page has a window.location of its own; a script run without a page is given the address WPT serves tests from.
 if (typeof location === "undefined") {
   globalThis.location = { href: "http://web-platform.test:8000/", protocol: "http:", host: "web-platform.test:8000", hostname: "web-platform.test", port: "8000", pathname: "/", search: "", hash: "", origin: "http://web-platform.test:8000" };

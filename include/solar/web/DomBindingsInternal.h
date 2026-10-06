@@ -132,6 +132,8 @@ Quanta::Object* EventTargetPrototype(Quanta::Context& ctx);
 void DefineDomExceptionClass(Quanta::Context& ctx);
 void DefineEventClasses(Quanta::Context& ctx);
 void DefineAbortClasses(Quanta::Context& ctx);
+// MessageChannel and MessagePort.
+void DefineMessagingClasses(Quanta::Context& ctx);
 
 // A DOMException in the realm of `ctx`. Name decides the code, as the legacy table has it.
 Quanta::Value NewDomException(Quanta::Context& ctx, const std::string& message, const std::string& name);

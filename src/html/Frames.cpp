@@ -13,6 +13,10 @@
 #include "solar/html/TreeBuilder.h"
 #include "solar/html/Xml.h"
 #include "solar/web/BlobUrls.h"
+#include "solar/web/DomBindingsInternal.h"
+#include "solar/web/ErrorReporting.h"
+#include "solar/web/Messaging.h"
+#include "solar/url/Origin.h"
 #include "solar/url/Parser.h"
 #include "solar/url/Serializer.h"
 
@@ -309,18 +313,34 @@ void PrepareScript(dom::Element* script) {
   }
 }
 
+// window[0], window[1]: the windows of the frames are properties of the window that has them, which the window's script
+// puts and takes away as the frames come and go.
+void SyncFrames(dom::Document* document) {
+  if (!document || !document->context) return;
+  Context& ctx = *document->context;
+  Object* holder = dom::RealmHolder(ctx);
+  Value sync = holder ? qe::Get(ctx, qe::FromObject(holder), "syncFrames") : qe::Undefined();
+  if (qe::IsCallable(sync)) qe::Call(ctx, sync, qe::Undefined());
+  if (qe::HasException(ctx)) ctx.clear_exception();
+}
+
 void AfterInsert(dom::Node* node) {
   if (!node->IsElement() && !node->IsFragment()) return;
   dom::Node* root = dom::ShadowIncludingRoot(node);
   if (!root || !root->IsDocument()) return;
-  for (dom::Element* iframe : IframesIn(node)) CreateContext(iframe);
+  const std::vector<dom::Element*> inserted = IframesIn(node);
+  for (dom::Element* iframe : inserted) CreateContext(iframe);
+  if (!inserted.empty()) SyncFrames(static_cast<dom::Document*>(root));
   for (dom::Element* script : HtmlElementsIn(node, "script")) PrepareScript(script);
 }
 
 void AfterRemove(dom::Node* node, bool) {
   FocusAfterRemove(node);
   if (!node->IsElement()) return;
-  for (dom::Element* iframe : IframesIn(node)) DiscardContext(iframe);
+  dom::Document* document = node->nodeDocument;
+  const std::vector<dom::Element*> removed = IframesIn(node);
+  for (dom::Element* iframe : removed) DiscardContext(iframe);
+  if (!removed.empty()) SyncFrames(document);
 }
 
 // An on<event> content attribute is a handler, which the window script compiles: (element, name, value or null).
@@ -731,7 +751,118 @@ void DefineDocumentWriting(Context& ctx) {
   qe::DefineMethod(document, "close", dom::Reactions<DocumentClose>, 0);
 }
 
+// ---- window.postMessage ----
+
+namespace {
+
+// The origin of a document, as it is serialized: that of the address it is made of, which for about:blank and
+// about:srcdoc is the page it is in.
+std::string OriginOf(const dom::Document* document) {
+  const std::optional<url::Url> address = url::Parse(DocumentBaseUrl(document));
+  return address ? url::SerializeOrigin(*address) : "null";
+}
+
+// postMessage(message, targetOrigin, transfer) and postMessage(message, { targetOrigin, transfer }): `ctx` is the
+// context of whoever calls, which is the window the message comes from.
+Value PostMessage(Context& ctx, Value, qe::Args args, Value) {
+  if (args.empty()) {
+    qe::ThrowTypeError(ctx, "Failed to execute 'postMessage' on 'Window': 1 argument required, but only 0 present.");
+    return qe::Undefined();
+  }
+  dom::Document* target = dom::AssociatedDocument(ctx);  // of the realm the function is of: the window it was called on
+  qe::Realm* callerRealm = qe::Realm::FromContext(ctx);
+  dom::Document* caller = nullptr;
+  if (callerRealm) callerRealm->Run([&] { caller = dom::AssociatedDocument(callerRealm->GetContext()); });
+  std::string targetOrigin = "/";
+  qe::SerializeOptions options;
+  qe::ValueList keep;
+  const auto readList = [&](Value list) {
+    if (qe::IsUndefined(list)) return true;
+    if (!qe::IsObject(list)) {
+      qe::ThrowTypeError(ctx, "Failed to execute 'postMessage' on 'Window': The provided value cannot be converted to a sequence.");
+      return false;
+    }
+    Value array = qe::Call(ctx, qe::Get(ctx, qe::Get(ctx, qe::FromObject(ctx.get_global_object()), "Array"), "from"), qe::Undefined(), qe::Args(&list, 1));
+    if (qe::HasException(ctx)) return false;
+    const uint32_t length = qe::ToUint32(ctx, qe::Get(ctx, array, "length"));
+    for (uint32_t i = 0; i < length; ++i) {
+      Value item = qe::GetIndex(ctx, array, i);
+      if (qe::HasException(ctx)) return false;
+      keep.Append(item);
+      options.transfer.push_back(item);
+    }
+    return true;
+  };
+  if (args.size() > 1 && qe::IsObject(args[1])) {
+    // The overload with options.
+    Value origin = qe::Get(ctx, args[1], "targetOrigin");
+    if (qe::HasException(ctx)) return qe::Undefined();
+    if (!qe::IsUndefined(origin)) targetOrigin = qe::ToWtf8(ctx, origin);
+    if (qe::HasException(ctx)) return qe::Undefined();
+    if (!readList(qe::Get(ctx, args[1], "transfer")) || qe::HasException(ctx)) return qe::Undefined();
+  } else if (args.size() > 1 && !qe::IsUndefined(args[1])) {
+    targetOrigin = qe::ToWtf8(ctx, args[1]);
+    if (qe::HasException(ctx)) return qe::Undefined();
+    if (args.size() > 2 && !readList(args[2])) return qe::Undefined();
+  } else if (args.size() > 2 && !readList(args[2])) {
+    return qe::Undefined();
+  }
+  // "*" is anyone, "/" is the origin of the sender, and anything else is an address whose origin is meant.
+  std::optional<std::string> wanted;
+  if (targetOrigin == "/") {
+    wanted = caller ? OriginOf(caller) : std::string("null");
+  } else if (targetOrigin != "*") {
+    const std::optional<url::Url> parsed = url::Parse(targetOrigin);
+    if (!parsed) {
+      dom::Throw(ctx, {"SyntaxError", "Failed to execute 'postMessage' on 'Window': Invalid target origin '" + targetOrigin + "' in a call to 'postMessage'."});
+      return qe::Undefined();
+    }
+    wanted = url::SerializeOrigin(*parsed);
+  }
+  auto data = std::make_shared<qe::SerializedData>();
+  if (!qe::Serialize(ctx, args[0], options, *data)) return qe::Undefined();
+  if (!target || !target->realm || !target->context) return qe::Undefined();
+  // A message for another origin than the one asked for goes nowhere, and nobody is told.
+  if (wanted && *wanted != OriginOf(target)) return qe::Undefined();
+  const std::string origin = caller ? OriginOf(caller) : "null";
+  std::shared_ptr<qe::Persistent> source;
+  if (callerRealm) source = std::make_shared<qe::Persistent>(callerRealm->GetContext(), qe::FromObject(callerRealm->GetContext().get_global_object()));
+  qe::Realm* realm = target->realm;
+  realm->EnqueueTask("postMessage", [realm, target, data, origin, source] {
+    Context& tctx = realm->GetContext();
+    if (!target->window) return;
+    Value message = qe::Deserialize(tctx, *data);
+    qe::ValueList ports = web::PortsOf(tctx, *data);
+    const bool failed = qe::HasException(tctx);
+    if (failed) tctx.clear_exception();
+    Value init = qe::NewObject(tctx);
+    if (!failed) {
+      qe::Set(tctx, init, "data", message);
+      qe::Set(tctx, init, "origin", qe::FromWtf8(tctx, origin));
+      if (source) qe::Set(tctx, init, "source", source->Get());
+      Value portArray = qe::NewArray(tctx, {});
+      for (size_t i = 0; i < ports.size(); ++i) qe::ArrayPush(tctx, portArray, ports[i]);
+      qe::Set(tctx, init, "ports", portArray);
+    }
+    Value arguments[] = {qe::FromUtf8(tctx, failed ? "messageerror" : "message"), init};
+    Value event = qe::Construct(tctx, qe::Get(tctx, qe::FromObject(tctx.get_global_object()), "MessageEvent"), qe::Args(arguments, 2));
+    if (qe::HasException(tctx)) {
+      tctx.clear_exception();
+      return;
+    }
+    if (web::JsEvent* jsEvent = Quanta::DOMObject::Cast<web::JsEvent>(event)) {
+      jsEvent->isTrusted = true;
+      web::DispatchOn(tctx, target->window, jsEvent);
+      if (qe::HasException(tctx)) web::ReportException(tctx);
+    }
+  });
+  return qe::Undefined();
+}
+
+}  // namespace
+
 void DefineFrameNatives(Context& ctx) {
+  qe::DefineGlobalFunction(ctx, "postMessage", PostMessage, 1);
   qe::DefineGlobalFunction(ctx, "__solarParent", ParentWindow, 0);
   qe::DefineGlobalFunction(ctx, "__solarFrameElement", FrameElement, 0);
   qe::DefineGlobalFunction(ctx, "__solarChildCount", ChildCount, 0);

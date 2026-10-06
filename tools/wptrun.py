@@ -46,7 +46,7 @@ def main():
         for root, _, files in os.walk(f"tests/wpt/{d}"):
             for f in files:
                 p = os.path.join(root, f)
-                if (f.endswith((".html", ".xhtml", ".svg")) or (f.endswith(".any.js") and "/console/" in p and f != "idlharness.any.js")) and not SKIP.search(p):
+                if (f.endswith((".html", ".htm", ".xhtml", ".svg")) or ((f.endswith(".any.js") or f.endswith(".window.js")) and f != "idlharness.any.js" and any(x in p for x in ("/console/", "/webmessaging/", "/structured-clone/", "/safe-passing-of-structured-data/")))) and not SKIP.search(p):
                     pages.append(p)
     pages.sort()
     with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:

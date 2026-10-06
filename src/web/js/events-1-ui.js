@@ -218,7 +218,7 @@ defineProperty(global.WheelEvent.prototype, 'DOM_DELTA_PAGE', { value: 2, enumer
 defineInterface('HashChangeEvent', Event, [member('newURL', emptyString, toDomString), member('oldURL', emptyString, toDomString)],
   ['initHashChangeEvent', [null, null, null, member('oldURL', emptyString, toDomString), member('newURL', emptyString, toDomString)]]);
 defineInterface('MessageEvent', Event, [
-  member('data', nullTarget, toAny), member('lastEventId', emptyString, toDomString), member('origin', emptyString, toDomString), member('ports', () => [], toSequence),
+  member('data', nullTarget, toAny), member('lastEventId', emptyString, toDomString), member('origin', emptyString, toDomString), member('ports', () => Object.freeze([]), (v) => Object.freeze(toSequence(v))),
   member('source', nullTarget, (v) => (v === undefined ? null : v)),
 ], ['initMessageEvent', [null, null, null, member('data', nullTarget, toAny), member('origin', emptyString, toDomString), member('lastEventId', emptyString, toDomString),
   member('source', nullTarget, (v) => (v === undefined ? null : v)), member('ports', () => [], toSequence)]]);

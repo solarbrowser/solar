@@ -12,6 +12,7 @@ void Install(Host& host) {
   DefineDomExceptionClass(ctx);
   DefineEventClasses(ctx);
   DefineAbortClasses(ctx);
+  DefineMessagingClasses(ctx);
 
   // What Web IDL has and the embedding surface cannot say: the constants, which are on the
   // interface object and its prototype, and the static side of AbortSignal inheriting EventTarget's.

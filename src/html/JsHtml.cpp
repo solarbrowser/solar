@@ -636,12 +636,6 @@ const char* const kWindowScript = R"JS(
   // window.focus() and blur(): the window has the focus already, and has no other window to give it to.
   for (const name of ["focus", "blur"]) Object.defineProperty(globalThis, name, { value: function () {}, writable: true, enumerable: true, configurable: true });
   for (const name of ["__solarParent", "__solarFrameElement", "__solarChildCount", "__solarChildWindow"]) delete globalThis[name];
-  // window.postMessage: a message event, as a task, at this window. What sent it is not known to a window that is
-  // only a function of its own, so the origin is its own and the source is not given.
-  Object.defineProperty(globalThis, "postMessage", { value: function postMessage(message, targetOrigin, transfer) {
-    if (arguments.length < 1) throw new TypeError("Failed to execute 'postMessage' on 'Window': 1 argument required, but only 0 present.");
-    setTimeout(() => { target.dispatchEvent(new MessageEvent("message", { data: message, origin: location.origin })); }, 0);
-  }, writable: true, enumerable: true, configurable: true });
   delete globalThis.__solarNamedLookup;
   delete globalThis.__solarSetWindow;
   delete globalThis.__solarDocument;
@@ -697,6 +691,14 @@ const char* const kWindowScript = R"JS(
   Object.defineProperty(globalThis, "top", { get() { let w = globalThis; for (;;) { const p = w.parent; if (p === w) return w; w = p; } }, set: undefined, enumerable: true, configurable: true });
   Object.defineProperty(globalThis, "frameElement", { get() { return frameElement(); }, set: undefined, enumerable: true, configurable: true });
   Object.defineProperty(globalThis, "length", { get() { return childCount(); }, set: undefined, enumerable: true, configurable: true });
+  // window[0] and the like, kept to the frames that are there.
+  let indexedFrames = 0;
+  setHelper("syncFrames", () => {
+    const count = childCount();
+    for (let i = count; i < indexedFrames; ++i) delete globalThis[i];
+    for (let i = indexedFrames; i < count; ++i) Object.defineProperty(globalThis, i, { get() { return childWindow(i); }, set: undefined, enumerable: true, configurable: true });
+    indexedFrames = count;
+  });
   Object.defineProperty(globalThis, "opener", { value: null, writable: true, enumerable: true, configurable: true });
   Object.defineProperty(globalThis, "getSelection", { value: function getSelection() { return getDocument().getSelection(); }, writable: true, enumerable: true, configurable: true });
   // performance.now(), from the clock the page started on, and animation frames: there is no display to wait for,
