@@ -1,0 +1,23 @@
+<!doctype html>
+<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'nonce-abc'">
+<title>CSP script-src with a nonce</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<body>
+<script>window.plain = true;</script>
+<script nonce="abc">window.nonced = true;</script>
+<script nonce="abc">
+test(() => {
+  assert_equals(window.plain, undefined, "no nonce: refused");
+  assert_true(window.nonced, "nonce matches: runs");
+}, "inline scripts need the nonce");
+</script>
+<script nonce="abc">
+test(() => {
+  const frame = document.createElement("iframe");
+  document.body.appendChild(frame);
+  const before = frame.contentWindow;
+  frame.src = "/solar/empty.html";
+  assert_equals(frame.contentWindow, before);
+}, "contentWindow keeps its identity when the frame navigates");
+</script>

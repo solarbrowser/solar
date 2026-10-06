@@ -7,6 +7,7 @@
 #include "solar/dom/NodeBindingsInternal.h"
 #include "solar/html/HtmlBindings.h"
 #include "solar/html/Parser.h"
+#include "solar/html/Csp.h"
 #include "solar/html/Errors.h"
 #include "solar/html/Modules.h"
 #include "solar/html/Reflect.h"
@@ -39,6 +40,7 @@ bool IsIframe(const dom::Node* node) {
 // The address that relative ones in a document are made absolute against: its own, or for a document with none of
 // its own (about:srcdoc), the one of the page it is in.
 std::string BaseOf(const dom::Document* document) {
+  if (!document->inheritedBase.empty() && document->url.starts_with("about:")) return document->inheritedBase;
   if (document->url.starts_with("about:") && document->frameElement && document->frameElement->nodeDocument && document->frameElement->nodeDocument != document) {
     return BaseOf(document->frameElement->nodeDocument);
   }
@@ -103,6 +105,15 @@ std::string LowerType(const dom::Element* script) {
   return value;
 }
 
+// Whether the document's policy lets this script run. An external one that is refused fires error at its element.
+bool ScriptAllowed(Context& ctx, dom::Document* document, dom::Element* script, const std::string* address) {
+  const dom::Attr* nonce = script->FindAttribute("", "nonce");
+  const std::string value = nonce ? nonce->value : "";
+  const bool allowed = address ? csp::AllowsScriptUrl(document, *address, value) : csp::AllowsInlineScript(document, value);
+  if (!allowed && address) FireEvent(ctx, script, "error");
+  return allowed;
+}
+
 // A module script: an inline one is the module of the document at an address of its own, one with a source is fetched
 // with the modules it imports. What stopped it, if anything, is told as a script that failed.
 bool StartModuleScript(Quanta::Embed::Realm& realm, dom::Document* document, dom::Element* script) {
@@ -111,8 +122,10 @@ bool StartModuleScript(Quanta::Embed::Realm& realm, dom::Document* document, dom
   if (const dom::Attr* source = script->FindAttribute("", "src")) {
     const std::string address = Resolve(source->value, BaseOf(document));
     if (g_environment && g_environment->SkipScript(address)) return true;
+    if (!ScriptAllowed(ctx, document, script, &address)) return true;
     promise = realm.ImportModule(address, "", "");
   } else {
+    if (!ScriptAllowed(ctx, document, script, nullptr)) return true;
     promise = realm.EvaluateModule(script->DescendantText(), InlineModuleUrl(document));
   }
   if (qe::HasException(ctx)) {
@@ -161,6 +174,7 @@ bool RunScript(Quanta::Embed::Realm& realm, dom::Document* document, dom::Elemen
   if (const dom::Attr* source = script->FindAttribute("", "src")) {
     const std::string address = Resolve(source->value, BaseOf(document));
     if (g_environment && g_environment->SkipScript(address)) return true;
+    if (!ScriptAllowed(realm.GetContext(), document, script, &address)) return true;
     std::optional<std::string> loaded = g_environment ? g_environment->Load(address) : std::nullopt;
     if (!loaded) {
       if (g_environment) g_environment->ScriptFailed("cannot load script " + source->value);
@@ -170,6 +184,7 @@ bool RunScript(Quanta::Embed::Realm& realm, dom::Document* document, dom::Elemen
     code = std::move(*loaded);
     filename = address;
   } else {
+    if (!ScriptAllowed(realm.GetContext(), document, script, nullptr)) return true;
     code = script->DescendantText();
   }
   // A script in a shadow tree is not the document's current script.
@@ -178,7 +193,9 @@ bool RunScript(Quanta::Embed::Realm& realm, dom::Document* document, dom::Elemen
   // While it runs, the current script is it, or none if it is in a shadow tree; and then what it was.
   dom::Element* previous = document->currentScript;
   document->currentScript = inDocument ? script : nullptr;
-  const qe::EvaluateResult result = realm.Evaluate(code, filename);
+  // A script that is loaded from an address can be compiled once and run in every realm that has it.
+  std::shared_ptr<qe::Script> compiled = script->FindAttribute("", "src") && g_environment ? g_environment->CompileScript(filename, code) : nullptr;
+  const qe::EvaluateResult result = compiled ? realm.EvaluateScript(*compiled) : realm.Evaluate(code, filename);
   document->currentScript = previous;
   if (g_environment) g_environment->RunJobs();
   bool failed = !result.ok;
@@ -222,7 +239,7 @@ struct FrameContext {
 };
 
 // A realm with a window and an (empty, so far) document for the iframe.
-std::optional<FrameContext> MakeContext(dom::Element* iframe, const std::string& url) {
+std::optional<FrameContext> MakeContext(dom::Element* iframe, const std::string& url, Quanta::Object* reuseProxy = nullptr) {
   if (!g_environment) return std::nullopt;
   Quanta::Embed::Realm* realm = g_environment->CreateRealm();
   if (!realm) return std::nullopt;
@@ -232,7 +249,7 @@ std::optional<FrameContext> MakeContext(dom::Element* iframe, const std::string&
     document = dom::NewDocument(ctx, true);
     document->url = url;
     document->frameElement = iframe;
-    InstallWindow(*realm, document);
+    InstallWindow(*realm, document, reuseProxy);
   });
   if (!document) return std::nullopt;
   return FrameContext{realm, document};
@@ -240,7 +257,7 @@ std::optional<FrameContext> MakeContext(dom::Element* iframe, const std::string&
 
 void Adopt(dom::Element* iframe, const FrameContext& context) {
   iframe->contentDocument = context.document;
-  iframe->contentWindow = context.realm->GetContext().get_global_object();
+  iframe->contentWindow = context.document->globalObject;
   iframe->NoteWrite();
 }
 
@@ -271,6 +288,7 @@ void CreateContext(dom::Element* iframe) {
 
 void DiscardContext(dom::Element* iframe) {
   if (!iframe->contentDocument) return;
+  if (iframe->contentDocument->url.starts_with("about:")) iframe->contentDocument->inheritedBase = BaseOf(iframe->contentDocument);
   iframe->contentDocument->frameElement = nullptr;
   iframe->contentDocument = nullptr;
   iframe->contentWindow = nullptr;
@@ -328,6 +346,13 @@ void AfterInsert(dom::Node* node) {
   if (!node->IsElement() && !node->IsFragment()) return;
   dom::Node* root = dom::ShadowIncludingRoot(node);
   if (!root || !root->IsDocument()) return;
+  for (dom::Element* meta : HtmlElementsIn(node, "meta")) {
+    const std::optional<std::string> equiv = dom::GetAttribute(meta, "http-equiv");
+    const std::optional<std::string> content = dom::GetAttribute(meta, "content");
+    std::string name = equiv ? *equiv : "";
+    for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (equiv && content && name == "content-security-policy") csp::AddPolicy(static_cast<dom::Document*>(root), *content);
+  }
   const std::vector<dom::Element*> inserted = IframesIn(node);
   for (dom::Element* iframe : inserted) CreateContext(iframe);
   if (!inserted.empty()) SyncFrames(static_cast<dom::Document*>(root));
@@ -403,7 +428,7 @@ void RunFrameLoad(dom::Element* iframe, uint64_t load) {
     FrameFinished(iframe, true);
     return;
   }
-  std::optional<FrameContext> context = MakeContext(iframe, address);
+  std::optional<FrameContext> context = MakeContext(iframe, address, iframe->contentWindow);
   if (!context) {
     FrameFinished(iframe, true);
     return;
@@ -826,7 +851,7 @@ Value PostMessage(Context& ctx, Value, qe::Args args, Value) {
   if (wanted && *wanted != OriginOf(target)) return qe::Undefined();
   const std::string origin = caller ? OriginOf(caller) : "null";
   std::shared_ptr<qe::Persistent> source;
-  if (callerRealm) source = std::make_shared<qe::Persistent>(callerRealm->GetContext(), qe::FromObject(callerRealm->GetContext().get_global_object()));
+  if (callerRealm) source = std::make_shared<qe::Persistent>(callerRealm->GetContext(), qe::FromObject(caller && caller->globalObject ? caller->globalObject : callerRealm->GetContext().get_global_object()));
   qe::Realm* realm = target->realm;
   realm->EnqueueTask("postMessage", [realm, target, data, origin, source] {
     Context& tctx = realm->GetContext();
@@ -919,6 +944,16 @@ void DefineIframeMembers(Context& ctx, Object* prototype) {
   qe::DefineAccessor(prototype, "loading", GetString<kLoading>, dom::Reactions<SetString<kLoading>>);
   qe::DefineAccessor(prototype, "referrerPolicy", GetString<kReferrerPolicy>, dom::Reactions<SetString<kReferrerPolicy>>);
   qe::DefineAccessor(prototype, "allowFullscreen", GetFlag<kAllowFullscreen>, dom::Reactions<SetFlag<kAllowFullscreen>>);
+}
+
+std::string OriginOfDocument(const dom::Document* document) { return OriginOf(document); }
+std::vector<Quanta::Object*> ChildWindowsOf(dom::Document* document) { return ChildWindows(document); }
+Quanta::Object* ChildWindowNamed(dom::Document* document, const std::string& name) {
+  if (!document) return nullptr;
+  for (dom::Element* iframe : IframesIn(document)) {
+    if (iframe->contentWindow && dom::GetAttribute(iframe, "name") == name) return iframe->contentWindow;
+  }
+  return nullptr;
 }
 
 }  // namespace solar::html

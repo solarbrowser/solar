@@ -20,7 +20,8 @@ void DefineHtmlElementInterfaces(Quanta::Context& ctx);
 // Makes the realm a page's: window and its names, document (the given one, or the document the realm has),
 // and the window's own EventTarget methods and on<event> handlers. Call it once, after InstallHtmlApis.
 void InstallWindow(Quanta::Embed::Runtime& runtime, dom::Document* document = nullptr);
-void InstallWindow(Quanta::Embed::Realm& realm, dom::Document* document = nullptr);
+// `reuseProxy`, the WindowProxy of the window an iframe had before a navigation, is made to front this window instead.
+void InstallWindow(Quanta::Embed::Realm& realm, dom::Document* document = nullptr, Quanta::Object* reuseProxy = nullptr);
 
 // What the frames of a window are made of: the natives its script reads them with, and the members of iframe elements.
 void DefineFrameNatives(Quanta::Context& ctx);

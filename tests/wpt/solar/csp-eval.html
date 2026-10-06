@@ -1,0 +1,21 @@
+<!doctype html>
+<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline'">
+<title>CSP without unsafe-eval</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<body>
+<script>
+test(() => {
+  assert_throws_js(EvalError, () => eval("1 + 1"));
+  assert_throws_js(EvalError, () => new Function("return 1"));
+}, "eval and Function are refused");
+test(() => {
+  assert_equals(window.length, 0);
+  const frame = document.createElement("iframe");
+  document.body.appendChild(frame);
+  const proxy = frame.contentWindow;
+  assert_equals(window.length, 1);
+  assert_equals(window[0], proxy);
+  assert_equals(proxy.parent, window);
+}, "window proxies and frames by index");
+</script>

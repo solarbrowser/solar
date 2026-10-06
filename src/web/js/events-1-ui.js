@@ -34,7 +34,7 @@ const toDomString = (v) => String(v);
 const toAny = (v) => v;
 const toWindow = (v) => {
   if (v === null || v === undefined) return null;
-  if (v !== global) throw new TypeError("Failed to construct: member view is not of type 'Window'.");
+  if (v !== global && v !== globalThis) throw new TypeError("Failed to construct: member view is not of type 'Window'.");
   return v;
 };
 const toEventTarget = (v) => {

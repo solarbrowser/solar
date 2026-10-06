@@ -810,3 +810,5 @@ tests/wpt/webmessaging/without-ports/024.html
 tests/wpt/webmessaging/without-ports/026.html
 tests/wpt/webmessaging/without-ports/027.html
 tests/wpt/webmessaging/without-ports/029.html
+tests/wpt/solar/csp-eval.html
+tests/wpt/solar/csp-inline.html

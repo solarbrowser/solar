@@ -253,6 +253,10 @@ struct Document : Node {
   web::JsEventTarget* window = nullptr;
   // The global object of that window, and the iframe this document is the content of, if it is.
   Quanta::Object* globalObject = nullptr;
+  // For an about: document whose iframe is gone: the address it was resolving against, which is the origin it keeps.
+  std::string inheritedBase;
+  // The Content-Security-Policy values that apply to the document (the header's, and its meta elements').
+  std::vector<std::string> policies;
   Quanta::Embed::Realm* realm = nullptr;  // the realm of the window, which scripts of the document run in
   // A document the fragment parser makes for a window's elements: it has no window, but its elements are made as the
   // window's are, which is as custom elements if they are defined.
@@ -371,9 +375,6 @@ const web::EventTargetOps* NodeEventOps();
 void WindowNamesOf(const Node* subtree, std::vector<std::string>& names);
 // Whether `element` is named `name` for window[name]: its id does, or its name does if it is one of the few that may be.
 bool HasWindowName(const Element* element, const std::string& name);
-// "named access on the Window object": a name that elements gain or lose, which the window's script follows.
-void WindowNamesChanged(Quanta::Context& ctx, const std::string& name);
-bool HasWindowNames();
 
 // ---- The tree ----
 // Each is the algorithm of that name in the standard. All but the last return the error the standard

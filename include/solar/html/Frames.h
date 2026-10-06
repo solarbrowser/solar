@@ -1,9 +1,11 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "quanta/Embed.h"
 #include "solar/dom/Node.h"
@@ -37,6 +39,10 @@ class FrameEnvironment {
   // Whether the script at this URL is one the page is to go without (the test harness, which is already in place).
   virtual bool SkipScript(const std::string&) { return false; }
 
+  // The script at `address` compiled, if the environment keeps compiled scripts (one parse for every realm that runs it).
+  // Null: the page compiles it itself.
+  virtual std::shared_ptr<Quanta::Embed::Script> CompileScript(const std::string&, const std::string&) { return nullptr; }
+
   // Runs the jobs script has queued: the microtask checkpoint, after a script has run.
   virtual void RunJobs() = 0;
 
@@ -58,6 +64,11 @@ bool LoadPage(Quanta::Embed::Realm& realm, dom::Document* document, std::string_
 // URL's bytes included).
 std::string DocumentBaseUrl(const dom::Document* document);
 std::optional<std::string> LoadResource(const std::string& url);
+
+// For the cross-origin view of a window: a document's origin, and the windows of its frames, by index or by name.
+std::string OriginOfDocument(const dom::Document* document);
+std::vector<Quanta::Object*> ChildWindowsOf(dom::Document* document);
+Quanta::Object* ChildWindowNamed(dom::Document* document, const std::string& name);
 
 // Makes the tree hooks that give iframe elements their contexts. Called by the HTML bindings.
 void InstallFrameHooks();

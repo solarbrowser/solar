@@ -469,17 +469,6 @@ bool HasWindowName(const Element* element, const std::string& name) {
   return false;
 }
 
-// The window's script keeps its own record of which names are properties of it; it is told of each that changes.
-void WindowNamesChanged(Context& ctx, const std::string& name) {
-  Object* holder = Holder(ctx);
-  if (!holder) return;
-  Value update = qe::Get(ctx, qe::FromObject(holder), "windowNamedUpdate");
-  if (!qe::IsCallable(update)) return;
-  Value argument = qe::FromWtf8(ctx, name);
-  qe::Call(ctx, update, qe::Undefined(), qe::Args(&argument, 1));
-  if (qe::HasException(ctx)) ctx.clear_exception();
-}
-
 Object* HtmlElementPrototype(Context& ctx, std::string_view localName) {
   HtmlTable* table = TableOf(ctx, false);
   if (!table) return nullptr;

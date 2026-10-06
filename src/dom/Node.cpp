@@ -262,27 +262,7 @@ void WindowNamesOf(const Node* subtree, std::vector<std::string>& names) {
   }
 }
 
-namespace {
 
-// Told when something under `node` has come or gone, in a document that has a window.
-void NoteWindowNames(Node* node, Document* document) {
-  if (!document || !document->window || !document->context) return;
-  std::vector<std::string> names;
-  WindowNamesOf(node, names);
-  for (const std::string& name : names) WindowNamesChanged(*document->context, name);
-}
-
-// An attribute that names an element for the window has changed.
-void NoteWindowAttribute(Element* element, const std::string& attribute, const std::string& namespaceUri, const std::optional<std::string>& oldValue,
-                         const std::optional<std::string>& newValue) {
-  if (!namespaceUri.empty() || (attribute != "id" && attribute != "name")) return;
-  Document* document = element->Root()->IsDocument() ? static_cast<Document*>(element->Root()) : nullptr;
-  if (!document || !document->window || !document->context) return;
-  if (oldValue && !oldValue->empty()) WindowNamesChanged(*document->context, *oldValue);
-  if (newValue && !newValue->empty()) WindowNamesChanged(*document->context, *newValue);
-}
-
-}  // namespace
 
 // ---- Insertion and removal ----
 
@@ -429,14 +409,12 @@ void RemoveImpl(Node* node, bool suppress) {
   if (HasLiveRanges()) RangesBeforeRemove(node, parent, static_cast<uint32_t>(node->IndexInParent()));
   if (HasNodeIterators()) NodeIteratorsBeforeRemove(node);
   Element* wasAssignedTo = node->assignedSlot;
-  Document* wasIn = node->Root()->IsDocument() ? static_cast<Document*>(node->Root()) : nullptr;
   const bool wasConnected = (HasCustomDefinitions() || g_hooks.afterRemove) && ShadowIncludingRoot(parent)->IsDocument();
   Unlink(node);
   if (wasConnected && !g_moving) {
     CustomAfterRemove(node, true);
     if (g_hooks.afterRemove) g_hooks.afterRemove(node, true);
   }
-  if (wasIn) NoteWindowNames(node, wasIn);
   if (HasShadowTrees()) ShadowAfterRemove(node, parent, wasAssignedTo);
   if (observed && !suppress) QueueChildListRecord(parent, {}, {node}, oldPrevious, oldNext);
 }
@@ -475,7 +453,6 @@ void InsertImpl(Node* node, Node* parent, Node* child, bool suppress) {
       CustomAfterInsert(n);
       if (g_hooks.afterInsert) g_hooks.afterInsert(n);
     }
-    if (document && n->Root() == document) NoteWindowNames(n, document);
   }
   if (!suppress && HasMutationObservers()) QueueChildListRecord(parent, nodes, {}, previous, child);
 }
@@ -693,7 +670,6 @@ void SetAttrValue(Attr* attribute, std::string value) {
     CustomAttributeChanged(owner, attribute->localName, attribute->namespaceUri, old, attribute->value);
     if (g_hooks.attributeChanged) g_hooks.attributeChanged(owner, attribute->localName);
   }
-  if (owner) NoteWindowAttribute(owner, attribute->localName, attribute->namespaceUri, old, attribute->value);
 }
 
 void AppendAttr(Element* element, Attr* attribute) {
@@ -707,7 +683,6 @@ void AppendAttr(Element* element, Attr* attribute) {
   if (HasShadowTrees()) ShadowAttributeChanged(element, attribute->localName, attribute->namespaceUri, std::nullopt, attribute->value);
   CustomAttributeChanged(element, attribute->localName, attribute->namespaceUri, std::nullopt, attribute->value);
   if (g_hooks.attributeChanged) g_hooks.attributeChanged(element, attribute->localName);
-  NoteWindowAttribute(element, attribute->localName, attribute->namespaceUri, std::nullopt, attribute->value);
 }
 
 // ---- Clone, equality, position ----
@@ -1037,7 +1012,6 @@ void RemoveAttributeNode(Element* element, Attr* attribute) {
   if (HasShadowTrees()) ShadowAttributeChanged(element, attribute->localName, attribute->namespaceUri, attribute->value, std::nullopt);
   CustomAttributeChanged(element, attribute->localName, attribute->namespaceUri, attribute->value, std::nullopt);
   if (g_hooks.attributeChanged) g_hooks.attributeChanged(element, attribute->localName);
-  NoteWindowAttribute(element, attribute->localName, attribute->namespaceUri, attribute->value, std::nullopt);
 }
 
 bool RemoveAttribute(Element* element, std::string_view name) {

@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <type_traits>
 #include <string>
 
 #include "solar/dom/CustomElements.h"
@@ -8,6 +9,7 @@
 #include "solar/html/Errors.h"
 #include "solar/html/Frames.h"
 #include "solar/html/Modules.h"
+#include <algorithm>
 #include "solar/html/Parser.h"
 #include "solar/html/Serializer.h"
 #include "solar/html/Xml.h"
@@ -487,26 +489,6 @@ Value GetDefaultView(Context& ctx, Value t, qe::Args, Value) {
 // __solarDocument() and __solarSetWindow(target): what the window's script is made of.
 Value GlobalDocument(Context& ctx, Value, qe::Args, Value) { return qe::FromObject(dom::AssociatedDocument(ctx)); }
 
-// __solarNamedLookup(name): what window[name] is: the element with that name, or a collection of them, or undefined.
-Value NamedLookup(Context& ctx, Value, qe::Args args, Value) {
-  dom::Document* document = dom::AssociatedDocument(ctx);
-  if (!document || args.empty()) return qe::Undefined();
-  const std::string name = qe::ToWtf8(ctx, args[0]);
-  if (qe::HasException(ctx)) return qe::Undefined();
-  dom::Element* first = nullptr;
-  size_t count = 0;
-  for (dom::Node* node = document->NextInTree(document); node; node = node->NextInTree(document)) {
-    dom::Element* element = dom::AsElement(node);
-    if (element && dom::HasWindowName(element, name)) {
-      if (!first) first = element;
-      ++count;
-    }
-  }
-  if (count == 0) return qe::Undefined();
-  if (count == 1) return qe::FromObject(first);
-  return dom::NewWindowNamedCollection(ctx, document, name);
-}
-
 // __solarSetHelper(name, fn): a function of the window's script that the program calls into, kept by name on the
 // realm's holder (windowNamedUpdate, fireEvent, fireFocus, reportError, reportRejection, contentHandler).
 Value SetHelper(Context& ctx, Value, qe::Args args, Value) {
@@ -574,7 +556,6 @@ void Install(Host& host) {
   qe::DefineGlobalFunction(ctx, "__solarDocument", GlobalDocument, 0);
   qe::DefineGlobalFunction(ctx, "__solarSetWindow", SetWindowTarget, 1);
   qe::DefineGlobalFunction(ctx, "__solarSetDocumentUrl", SetDocumentUrl, 1);
-  qe::DefineGlobalFunction(ctx, "__solarNamedLookup", NamedLookup, 1);
   qe::DefineGlobalFunction(ctx, "__solarSetHelper", SetHelper, 2);
 
   qe::DefineStaticMethod(qe::Get(ctx, qe::FromObject(dom::InterfacePrototype(ctx, dom::Interface::Document)), "constructor").as_object(), "parseHTMLUnsafe", ParseHtmlUnsafe, 1);
@@ -604,7 +585,6 @@ const char* const kWindowScript = R"JS(
   __solarSetWindow(target);
   const getDocument = __solarDocument;
   const setDocumentUrl = __solarSetDocumentUrl;
-  const lookup = __solarNamedLookup;
   const setHelper = __solarSetHelper;
   const parentWindow = __solarParent;
   const frameElement = __solarFrameElement;
@@ -636,7 +616,6 @@ const char* const kWindowScript = R"JS(
   // window.focus() and blur(): the window has the focus already, and has no other window to give it to.
   for (const name of ["focus", "blur"]) Object.defineProperty(globalThis, name, { value: function () {}, writable: true, enumerable: true, configurable: true });
   for (const name of ["__solarParent", "__solarFrameElement", "__solarChildCount", "__solarChildWindow"]) delete globalThis[name];
-  delete globalThis.__solarNamedLookup;
   delete globalThis.__solarSetWindow;
   delete globalThis.__solarDocument;
   delete globalThis.__solarSetDocumentUrl;
@@ -649,26 +628,6 @@ const char* const kWindowScript = R"JS(
     const withoutHash = (u) => { const copy = new URL(u.href); copy.hash = ""; return copy.href; };
     if (withoutHash(current) === withoutHash(target)) setDocumentUrl(target.href);
   };
-  // window[name], for the elements of the document that have the name: a property that is there while one does,
-  // unless the page has made one of its own.
-  const named = new Set();
-  const hasOwn = Object.prototype.hasOwnProperty;
-  setHelper("windowNamedUpdate", (name) => {
-    const present = lookup(name) !== undefined;
-    if (present && !named.has(name)) {
-      if (hasOwn.call(globalThis, name)) return;
-      named.add(name);
-      Object.defineProperty(globalThis, name, {
-        get() { return lookup(name); },
-        set(value) { named.delete(name); Object.defineProperty(globalThis, name, { value, writable: true, enumerable: true, configurable: true }); },
-        enumerable: false,
-        configurable: true,
-      });
-    } else if (!present && named.has(name)) {
-      named.delete(name);
-      delete globalThis[name];
-    }
-  });
   const location = {};
   for (const name of ["origin", "protocol", "host", "hostname", "port", "pathname", "search"]) {
     Object.defineProperty(location, name, { get() { return url()[name]; }, set(value) {}, enumerable: true, configurable: false });
@@ -819,8 +778,92 @@ const char* const kEventHandlerScript = R"JS(
 void InstallHtmlApis(Quanta::Embed::Realm& realm) { Install(realm); }
 void InstallHtmlApis(Quanta::Embed::Runtime& runtime) { Install(runtime); }
 
+namespace {
+
+Value IllegalWindowConstructor(Context& ctx, Value, qe::Args, Value) {
+  qe::ThrowTypeError(ctx, "Illegal constructor");
+  return qe::Undefined();
+}
+
+// The elements of the window's document that have `name`, as window[name] is: the element if one has it, or a
+// collection of those that do.
+bool NamedWindowProperty(qe::Realm* realm, const std::string& name, Value& out) {
+  dom::Document* document = DocumentOfRealm(realm);
+  if (!document) return false;
+  dom::Element* first = nullptr;
+  size_t count = 0;
+  for (dom::Node* node = document->NextInTree(document); node; node = node->NextInTree(document)) {
+    dom::Element* element = dom::AsElement(node);
+    if (element && dom::HasWindowName(element, name)) {
+      if (!first) first = element;
+      ++count;
+    }
+  }
+  if (count == 0) return false;
+  out = count == 1 ? qe::FromObject(first) : dom::NewWindowNamedCollection(realm->GetContext(), document, name);
+  return true;
+}
+
+std::vector<std::string> NamedWindowPropertyNames(qe::Realm* realm) {
+  std::vector<std::string> names;
+  if (dom::Document* document = DocumentOfRealm(realm)) dom::WindowNamesOf(document, names);
+  std::vector<std::string> unique;
+  for (const std::string& name : names) {
+    if (std::find(unique.begin(), unique.end(), name) == unique.end()) unique.push_back(name);
+  }
+  return unique;
+}
+
+void SetUpWindowInterface(Context& ctx) {
+  Value global = qe::FromObject(ctx.get_global_object());
+  qe::ClassRef window = qe::DefineClass(ctx, "Window", IllegalWindowConstructor, 0);
+  qe::DefineGlobal(ctx, "Window", window.constructor);
+  Value eventTarget = qe::Get(ctx, qe::Get(ctx, global, "EventTarget"), "prototype");
+  qe::NamedPropertiesHooks hooks;
+  hooks.get = NamedWindowProperty;
+  hooks.names = NamedWindowPropertyNames;
+  Value named = qe::NewNamedPropertiesObject(ctx, global, eventTarget, std::move(hooks));
+  qe::SetPrototypeOf(ctx, qe::FromObject(window.prototype), named);
+  qe::SetPrototypeOf(ctx, global, qe::FromObject(window.prototype));
+}
+
+}  // namespace
+
+// What a window in another origin may reach (CrossOriginProperties of a Window).
+qe::CrossOriginHooks WindowCrossOriginHooks() {
+  qe::CrossOriginHooks hooks;
+  hooks.sameOrigin = [](qe::Realm* caller, qe::Realm* target) {
+    if (!caller || !target) return false;
+    dom::Document* a = DocumentOfRealm(caller);
+    dom::Document* b = DocumentOfRealm(target);
+    return a && b && OriginOfDocument(a) == OriginOfDocument(b);
+  };
+  hooks.properties = {{"window", true, false}, {"self", true, false},   {"location", true, true}, {"close", false, false},
+                      {"closed", true, false}, {"focus", false, false}, {"blur", false, false},   {"frames", true, false},
+                      {"length", true, false}, {"top", true, false},    {"opener", true, false},  {"parent", true, false},
+                      {"postMessage", false, false}};
+  hooks.childCount = [](qe::Realm* target) -> uint32_t {
+    dom::Document* document = DocumentOfRealm(target);
+    return document ? static_cast<uint32_t>(ChildWindowsOf(document).size()) : 0;
+  };
+  hooks.childAt = [](qe::Realm* target, uint32_t index) -> std::optional<Value> {
+    dom::Document* document = DocumentOfRealm(target);
+    if (!document) return std::nullopt;
+    const std::vector<Object*> windows = ChildWindowsOf(document);
+    if (index >= windows.size()) return std::nullopt;
+    return qe::FromObject(windows[index]);
+  };
+  hooks.childNamed = [](qe::Realm* target, const std::string& name) -> std::optional<Value> {
+    dom::Document* document = DocumentOfRealm(target);
+    if (!document) return std::nullopt;
+    if (Object* window = ChildWindowNamed(document, name)) return qe::FromObject(window);
+    return std::nullopt;
+  };
+  return hooks;
+}
+
 template <typename Host>
-void InstallWindowOn(Host& host, dom::Document* document, Quanta::Embed::Realm* realm) {
+void InstallWindowOn(Host& host, dom::Document* document, Quanta::Embed::Realm* realm, Object* reuseProxy) {
   Context& ctx = host.GetContext();
   if (document) {
     dom::SetAssociatedDocument(ctx, document);
@@ -829,6 +872,19 @@ void InstallWindowOn(Host& host, dom::Document* document, Quanta::Embed::Realm* 
     if (realm) RegisterRealmDocument(realm, document);
     document->NoteWrite();
   }
+  if constexpr (std::is_same_v<Host, qe::Realm>) {
+    // The window script is run through a WindowProxy, which stays the same across navigations of an iframe.
+    Value proxy;
+    if (reuseProxy && qe::IsWindowProxy(Value(reuseProxy)) && qe::SetWindowProxyTarget(Value(reuseProxy), *realm)) {
+      proxy = Value(reuseProxy);
+    } else {
+      proxy = qe::NewWindowProxy(*realm, WindowCrossOriginHooks());
+    }
+    if (document && qe::IsObject(proxy)) document->globalObject = proxy.as_object();
+  }
+  // The window is a Window, which has a named properties object in its prototype chain, between Window.prototype and
+  // EventTarget.prototype, for window[name].
+  SetUpWindowInterface(ctx);
   host.Evaluate(kWindowScript, "window.js");
   host.Evaluate(kEventHandlerScript, "handlers.js");
   std::string xhr;
@@ -837,7 +893,9 @@ void InstallWindowOn(Host& host, dom::Document* document, Quanta::Embed::Realm* 
   if (!xhrResult.ok) std::fprintf(stderr, "xhr.js: %s\n", xhrResult.error.c_str());
 }
 
-void InstallWindow(Quanta::Embed::Runtime& runtime, dom::Document* document) { InstallWindowOn(runtime, document, nullptr); }
-void InstallWindow(Quanta::Embed::Realm& realm, dom::Document* document) { InstallWindowOn(realm, document, &realm); }
+void InstallWindow(Quanta::Embed::Runtime& runtime, dom::Document* document) { InstallWindowOn(runtime, document, nullptr, nullptr); }
+void InstallWindow(Quanta::Embed::Realm& realm, dom::Document* document, Quanta::Object* reuseProxy) {
+  InstallWindowOn(realm, document, &realm, reuseProxy);
+}
 
 }  // namespace solar::html

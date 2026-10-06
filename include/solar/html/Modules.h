@@ -18,6 +18,7 @@ Quanta::Embed::ModuleHooks MakeModuleHooks();
 // program that destroys the realm forgets it first.
 void RegisterRealmDocument(Quanta::Embed::Realm* realm, dom::Document* document);
 void ForgetRealm(Quanta::Embed::Realm* realm);
+dom::Document* DocumentOfRealm(Quanta::Embed::Realm* realm);
 
 // "register an import map": the text of a <script type="importmap"> into the document's. False, with what was wrong.
 bool RegisterImportMap(Quanta::Embed::Realm& realm, dom::Document* document, const std::string& json, std::string& error);

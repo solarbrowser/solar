@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <sstream>
+#include <map>
 #include <string>
 #include <thread>
 #include <vector>
@@ -18,6 +19,7 @@
 #include "solar/css/CssBindings.h"
 #include "solar/dom/NodeBindings.h"
 #include "solar/dom/NodeBindingsInternal.h"
+#include "solar/html/Csp.h"
 #include "solar/html/Errors.h"
 #include "solar/html/Frames.h"
 #include "solar/html/Modules.h"
@@ -31,6 +33,7 @@
 #include "solar/web/FetchBindings.h"
 #include "solar/web/FetchHost.h"
 #include "solar/web/JsEventLoop.h"
+#include "solar/web/TimerHost.h"
 #include "solar/web/UrlBindings.h"
 
 namespace {
@@ -180,12 +183,24 @@ class TestEnvironment : public solar::html::FrameEnvironment {
     return path.ends_with("testharness.js") || path.ends_with("testharnessreport.js") || path.find("testdriver") != std::string::npos;
   }
 
+  // The scripts the pages load, parsed once for every realm that runs them. Keyed by address and text, so a changed
+  // file is not stale.
+  std::shared_ptr<qe::Script> CompileScript(const std::string& address, const std::string& code) override {
+    auto found = scripts_.find(address);
+    if (found != scripts_.end() && found->second.first == code) return found->second.second;
+    qe::CompileResult result = isolate_.CompileScript(code, address);
+    if (!result.script) return nullptr;  // the page compiles it, and reports the error as it does
+    scripts_[address] = {code, result.script};
+    return result.script;
+  }
+
   void RunJobs() override { isolate_.PerformMicrotaskCheckpoint(); }
 
   void ScriptFailed(const std::string& message) override { std::printf("  FAIL script error: %s\n", message.c_str()); }
 
  private:
   qe::Isolate& isolate_;
+  std::map<std::string, std::pair<std::string, std::shared_ptr<qe::Script>>> scripts_;
   solar::net::Loop& loop_;
   solar::net::HttpClient& client_;
   solar::web::JsEventLoop& events_;
@@ -222,6 +237,7 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
   auto isolate = qe::Isolate::Create();
   g_isolate = isolate.get();
   isolate->SetModuleHooks(solar::html::MakeModuleHooks());
+  isolate->SetCodeGenerationHooks(solar::html::csp::MakeCodeGenerationHooks());
   isolate->SetSerializationHooks(solar::web::MakeSerializationHooks());
   isolate->SetUncaughtExceptionHandler(solar::html::MakeUncaughtExceptionHandler());
   isolate->SetPromiseRejectionHandler(solar::html::MakeRejectionHandler());
@@ -229,8 +245,11 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
   isolate->SetSourcePositionTracking(true);
   auto loop = solar::net::Loop::Create();
   solar::net::HttpClient client(*loop);
-  solar::web::JsEventLoop events(*loop, {[&] { isolate->PerformMicrotaskCheckpoint(); }, [&] { isolate->RunDueTimers(); },
-                                         [&] { return isolate->NextTimerDelayMs(); }});
+  // The tasks of the page are the program's: timers go into its queue, which its event loop runs.
+  solar::web::TimerHost timers;
+  isolate->SetTimerProvider(timers.Provider());
+  solar::web::JsEventLoop events(*loop, {[&] { isolate->PerformMicrotaskCheckpoint(); }, [&] { timers.RunDue(); },
+                                         [&] { return timers.NextDelayMs(); }});
   TestEnvironment environment(*isolate, *loop, client, events);
   solar::html::SetFrameEnvironment(&environment);
   qe::Realm& realm = *environment.CreateRealm();

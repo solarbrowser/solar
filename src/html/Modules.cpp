@@ -248,6 +248,7 @@ std::string VisibleModuleUrl(const std::string& url) {
 
 void RegisterRealmDocument(qe::Realm* realm, dom::Document* document) { Registry()[realm] = document; }
 void ForgetRealm(qe::Realm* realm) { Registry().erase(realm); }
+dom::Document* DocumentOfRealm(qe::Realm* realm) { return DocumentOf(realm); }
 
 bool RegisterImportMap(qe::Realm& realm, dom::Document* document, const std::string& json, std::string& error) {
   Context& ctx = realm.GetContext();
