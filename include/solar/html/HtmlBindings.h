@@ -16,6 +16,8 @@ void InstallHtmlApis(Quanta::Embed::Runtime& runtime);
 
 // Defines HTMLElement's subinterfaces (HTMLDivElement and the rest) and tells the DOM which element gets which.
 void DefineHtmlElementInterfaces(Quanta::Context& ctx);
+// HTMLElement.dataset.
+void DefineDataset(Quanta::Context& ctx);
 
 // Makes the realm a page's: window and its names, document (the given one, or the document the realm has),
 // and the window's own EventTarget methods and on<event> handlers. Call it once, after InstallHtmlApis.

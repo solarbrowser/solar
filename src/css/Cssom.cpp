@@ -538,11 +538,23 @@ namespace {
 // default namespace a selector for any namespace is just a selector.
 bool ResolveNamespacesImpl(SelectorList& list, const CssStyleSheet* sheet) {
   bool hasDefault = false;
+  std::string defaultUri;
   if (sheet) {
     for (const CssRule* rule : sheet->rules) {
-      if (rule->kind == RuleKind::Namespace && rule->prefix.empty()) hasDefault = true;
+      if (rule->kind == RuleKind::Namespace && rule->prefix.empty()) {
+        hasDefault = true;
+        defaultUri = rule->namespaceUri;
+      }
     }
   }
+  const auto uriOf = [&](const std::string& prefix) {
+    if (sheet) {
+      for (const CssRule* rule : sheet->rules) {
+        if (rule->kind == RuleKind::Namespace && rule->prefix == prefix) return rule->namespaceUri;
+      }
+    }
+    return std::string();
+  };
   const auto declared = [&](const std::string& prefix) {
     if (!sheet) return false;
     for (const CssRule* rule : sheet->rules) {
@@ -557,6 +569,8 @@ bool ResolveNamespacesImpl(SelectorList& list, const CssStyleSheet* sheet) {
           const bool named = simple.kind == SimpleSelector::Kind::Type || simple.kind == SimpleSelector::Kind::Universal || simple.kind == SimpleSelector::Kind::Attribute;
           if (named && simple.namespaceName && *simple.namespaceName != "*" && !simple.namespaceName->empty() && !declared(*simple.namespaceName)) return false;
           if (named && !hasDefault && simple.kind != SimpleSelector::Kind::Attribute && simple.namespaceName && *simple.namespaceName == "*") simple.namespaceName.reset();
+          if (named && simple.namespaceName && *simple.namespaceName != "*" && !simple.namespaceName->empty()) simple.namespaceUri = uriOf(*simple.namespaceName);
+          else if (named && !simple.namespaceName && hasDefault && simple.kind != SimpleSelector::Kind::Attribute) simple.namespaceUri = defaultUri;
           if (simple.list && !walk(*simple.list)) return false;
         }
       }

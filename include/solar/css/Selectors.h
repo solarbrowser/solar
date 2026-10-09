@@ -46,6 +46,8 @@ struct SimpleSelector {
     Lang,          // :lang(): `languages`
     Dir,           // :dir(): `name` is ltr or rtl
     PseudoElement, // never matches an element
+    Host,          // :host, :host(), :host-context(): `name` says which, `list` is the argument
+    Heading,       // :heading and :heading(): `languages` holds the levels asked for
     Unknown,       // a pseudo-class this engine does not know: it matches nothing
   };
   Kind kind = Kind::Type;
@@ -53,6 +55,8 @@ struct SimpleSelector {
   std::string name;
   // A type's or an attribute's namespace: "*" any, "" none, or absent for "any, as no default is declared".
   std::optional<std::string> namespaceName;
+  // The namespace the prefix (or the default namespace) stands for, once a style sheet has said which: what is matched against.
+  std::optional<std::string> namespaceUri;
   // An attribute selector.
   AttributeOperator op = AttributeOperator::Exists;
   std::string value;
@@ -111,6 +115,8 @@ struct MatchContext {
   bool quirks = false;                   // class and id names compare without regard to case
   // Matching for a pseudo-element ("before", "first-line"): only selectors that end in it match, and then its element.
   const std::string* pseudoElement = nullptr;
+  // The shadow host whose tree the rule is of, for :host.
+  const dom::Element* host = nullptr;
 };
 
 bool MatchesComplex(const ComplexSelector& selector, const dom::Element* element, const MatchContext& context);

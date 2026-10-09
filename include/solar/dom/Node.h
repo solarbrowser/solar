@@ -198,6 +198,7 @@ struct Element : Node {
   // A style or link element's sheet, and the CSSStyleDeclaration of the style attribute: both the same object each time.
   Quanta::Object* styleSheet = nullptr;
   Quanta::Object* inlineStyle = nullptr;
+  Quanta::Object* dataset = nullptr;  // HTMLElement.dataset
   // A template element's contents, which are not its children.
   DocumentFragment* templateContents = nullptr;
   ShadowRoot* shadowRoot = nullptr;

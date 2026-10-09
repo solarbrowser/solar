@@ -432,6 +432,15 @@ class Parser {
         simple.name = name;
         return simple;
       }
+      if (name == "host") {
+        simple.kind = SimpleSelector::Kind::Host;
+        simple.name = "host";
+        return simple;
+      }
+      if (name == "heading") {
+        simple.kind = SimpleSelector::Kind::Heading;
+        return simple;
+      }
       for (const PseudoName& known : kPseudoClasses) {
         if (name == known.name) {
           simple.kind = SimpleSelector::Kind::Pseudo;
@@ -513,7 +522,31 @@ class Parser {
       if (!CloseParen()) throw ParseError();
       return simple;
     }
-    if (name == "host" || name == "host-context" || name == "state" || name == "current" || name == "past" || name == "future") {
+    if (name == "host" || name == "host-context") {
+      simple.kind = SimpleSelector::Kind::Host;
+      simple.list = std::make_shared<SelectorList>(ParseList(false, false));
+      SkipWhitespace();
+      if (!CloseParen() || simple.list->empty()) throw ParseError();
+      return simple;
+    }
+    if (name == "heading") {
+      simple.kind = SimpleSelector::Kind::Heading;
+      for (;;) {
+        SkipWhitespace();
+        const Token& level = Next();
+        if (level.type != Token::Type::Number || !level.isInteger) throw ParseError();
+        simple.languages.push_back(std::to_string(static_cast<int>(level.number)));
+        SkipWhitespace();
+        if (Peek().type == Token::Type::Comma) {
+          ++pos_;
+          continue;
+        }
+        break;
+      }
+      if (!CloseParen()) throw ParseError();
+      return simple;
+    }
+    if (name == "state" || name == "current" || name == "past" || name == "future") {
       // Valid, and matching nothing in the light tree of a document.
       simple.value = SkipFunctionBody();
       simple.kind = SimpleSelector::Kind::Unknown;
@@ -534,7 +567,10 @@ class Parser {
       else if (token.type == Token::Type::RightParen && --depth == 0) break;
       body.push_back(token);
     }
-    return SerializeTokens(body);
+    std::string text = SerializeTokens(body);
+    const size_t begin = text.find_first_not_of(" \t\n");
+    const size_t end = text.find_last_not_of(" \t\n");
+    return begin == std::string::npos ? std::string() : text.substr(begin, end - begin + 1);
   }
 
   std::vector<Token> tokens_;
@@ -585,6 +621,18 @@ Specificity SpecificityOf(const ComplexSelector& selector) {
         case SimpleSelector::Kind::PseudoElement:
           ++result.types;
           break;
+        case SimpleSelector::Kind::Host:
+          ++result.classes;
+          if (simple.list) {
+            const Specificity s = Max(*simple.list);
+            result.ids += s.ids;
+            result.classes += s.classes;
+            result.types += s.types;
+          }
+          break;
+        case SimpleSelector::Kind::Heading:
+          ++result.classes;
+          break;
         case SimpleSelector::Kind::Not:
         case SimpleSelector::Kind::Is:
         case SimpleSelector::Kind::Has: {
@@ -618,8 +666,8 @@ namespace {
 std::string SerializeAnPlusB(int a, int b) {
   if (a == 0) return std::to_string(b);
   std::string out = a == 1 ? "n" : a == -1 ? "-n" : std::to_string(a) + "n";
-  if (b > 0) out += " + " + std::to_string(b);
-  else if (b < 0) out += " - " + std::to_string(-b);
+  if (b > 0) out += "+" + std::to_string(b);
+  else if (b < 0) out += "-" + std::to_string(-b);
   return out;
 }
 
@@ -648,6 +696,13 @@ std::string SerializeSimple(const SimpleSelector& simple) {
       return out + "]";
     }
     case K::Pseudo: return ":" + simple.name;
+    case K::Host: return ":" + simple.name + (simple.list ? "(" + SerializeSelectorList(*simple.list) + ")" : "");
+    case K::Heading: {
+      if (simple.languages.empty()) return ":heading";
+      std::string out = ":heading(";
+      for (size_t i = 0; i < simple.languages.size(); ++i) out += (i ? ", " : "") + simple.languages[i];
+      return out + ")";
+    }
     case K::PseudoElement: return "::" + simple.name + (simple.value.empty() ? "" : "(" + simple.value + ")");
     case K::Unknown: return ":" + simple.name + (simple.value.empty() ? "" : "(" + simple.value + ")");
     case K::Not:

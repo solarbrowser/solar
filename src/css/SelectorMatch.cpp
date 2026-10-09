@@ -29,6 +29,14 @@ bool InHtmlDocument(const Element* element) { return element->IsHtml() && elemen
 
 const Element* ParentElement(const Element* element) { return dom::AsElement(element->parentNode); }
 
+// The parent, and for the child of a shadow root whose host the rules are of, that host.
+const Element* ParentOrHost(const Element* element, const MatchContext& context) {
+  if (const Element* parent = ParentElement(element)) return parent;
+  const dom::Node* node = element->parentNode;
+  if (context.host && node && node->IsFragment() && static_cast<const dom::DocumentFragment*>(node)->isShadowRoot && static_cast<const dom::DocumentFragment*>(node)->host == context.host) return context.host;
+  return nullptr;
+}
+
 const Element* PreviousElement(const Element* element) {
   for (const Node* node = element->previousSibling; node; node = node->previousSibling) {
     if (node->IsElement()) return static_cast<const Element*>(node);
@@ -76,7 +84,9 @@ bool MatchesAttribute(const SimpleSelector& selector, const Element* element) {
   bool matched = false;
   for (const dom::Attr* attribute : element->attributes) {
     if (attribute->localName != name) continue;
-    if (!selector.namespaceName) {
+    if (selector.namespaceUri) {
+      if (attribute->namespaceUri != *selector.namespaceUri) continue;
+    } else if (!selector.namespaceName) {
       if (!attribute->namespaceUri.empty()) continue;
     } else if (*selector.namespaceName == "") {
       if (!attribute->namespaceUri.empty()) continue;
@@ -311,8 +321,10 @@ bool MatchesPseudo(PseudoClass pseudo, const Element* element, const MatchContex
 bool MatchesSimple(const SimpleSelector& selector, const Element* element, const MatchContext& context) {
   switch (selector.kind) {
     case SimpleSelector::Kind::Universal:
+      if (selector.namespaceUri && element->namespaceUri != *selector.namespaceUri) return false;
       return !selector.namespaceName || *selector.namespaceName != "" || element->namespaceUri.empty();
     case SimpleSelector::Kind::Type: {
+      if (selector.namespaceUri && element->namespaceUri != *selector.namespaceUri) return false;
       if (selector.namespaceName && *selector.namespaceName == "" && !element->namespaceUri.empty()) return false;
       if (InHtmlDocument(element)) return LowerAscii(selector.name) == element->localName;
       return selector.name == element->localName;
@@ -395,6 +407,33 @@ bool MatchesSimple(const SimpleSelector& selector, const Element* element, const
       return std::any_of(selector.languages.begin(), selector.languages.end(), [&](const std::string& range) { return MatchesLanguage(range, *language); });
     }
     case SimpleSelector::Kind::Dir: return DirectionOf(element) == selector.value;
+    case SimpleSelector::Kind::Host: {
+      if (!context.host || element != context.host) return false;
+      if (!selector.list) return true;
+      // The argument is about the host as the tree outside sees it.
+      MatchContext outer = context;
+      outer.host = nullptr;
+      if (selector.name == "host") return MatchesSelectorListAt(*selector.list, element, outer);
+      // :host-context(): the host or one of the elements around it.
+      for (const Element* up = element; up;) {
+        if (MatchesSelectorListAt(*selector.list, up, outer)) return true;
+        const dom::Node* parent = up->parentNode;
+        if (!parent) break;
+        if (const Element* e = dom::AsElement(parent)) up = e;
+        else if (parent->IsFragment() && static_cast<const dom::DocumentFragment*>(parent)->isShadowRoot) up = static_cast<const dom::DocumentFragment*>(parent)->host;
+        else break;
+      }
+      return false;
+    }
+    case SimpleSelector::Kind::Heading: {
+      if (!element->IsHtml() || element->localName.size() != 2 || element->localName[0] != 'h' || element->localName[1] < '1' || element->localName[1] > '6') return false;
+      if (selector.languages.empty()) return true;
+      const int level = element->localName[1] - '0';
+      for (const std::string& wanted : selector.languages) {
+        if (std::atoi(wanted.c_str()) == level) return true;
+      }
+      return false;
+    }
     case SimpleSelector::Kind::PseudoElement: return context.pseudoElement && selector.name == *context.pseudoElement;
     case SimpleSelector::Kind::Unknown:
       return false;
@@ -403,6 +442,12 @@ bool MatchesSimple(const SimpleSelector& selector, const Element* element, const
 }
 
 bool MatchesCompound(const CompoundSelector& compound, const Element* element, const MatchContext& context) {
+  // The shadow host, seen from the rules of its shadow tree, is only :host.
+  if (context.host && element == context.host) {
+    bool isHost = false;
+    for (const SimpleSelector& simple : compound.simples) isHost = isHost || simple.kind == SimpleSelector::Kind::Host;
+    if (!isHost) return false;
+  }
   for (const SimpleSelector& simple : compound.simples) {
     if (!MatchesSimple(simple, element, context)) return false;
   }
@@ -415,12 +460,12 @@ bool MatchesFrom(const ComplexSelector& selector, size_t index, const Element* e
   if (index == 0) return true;
   switch (selector.combinators[index - 1]) {
     case Combinator::Descendant:
-      for (const Element* up = ParentElement(element); up; up = ParentElement(up)) {
+      for (const Element* up = ParentOrHost(element, context); up; up = ParentOrHost(up, context)) {
         if (MatchesFrom(selector, index - 1, up, context)) return true;
       }
       return false;
     case Combinator::Child: {
-      const Element* parent = ParentElement(element);
+      const Element* parent = ParentOrHost(element, context);
       return parent && MatchesFrom(selector, index - 1, parent, context);
     }
     case Combinator::NextSibling: {

@@ -407,6 +407,7 @@ void DefineHtmlElementInterfaces(Context& ctx) {
   qe::DefineGlobal(ctx, "HTMLUnknownElement", unknown.constructor);
   dom::SetUnknownHtmlElementInterface(ctx, unknown.prototype);
 
+  DefineDataset(ctx);
   qe::DefineAccessor(htmlElement, "title", GetPlain<kTitle>, dom::Reactions<SetPlain<kTitle>>);
   qe::DefineAccessor(htmlElement, "lang", GetPlain<kLang>, dom::Reactions<SetPlain<kLang>>);
   qe::DefineAccessor(htmlElement, "dir", GetKeyword<kDir, kLtr, kRtl, kAuto>, dom::Reactions<SetPlain<kDir>>);

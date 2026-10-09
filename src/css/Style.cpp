@@ -130,6 +130,7 @@ struct Gatherer {
   std::map<std::string, int> layers;
   int nextLayer = 0;
   const MediaEnvironment& media = CurrentMediaEnvironment();
+  bool hostScoped = false;  // the rules are of a shadow tree and the element is its host: author rules of the outer tree win
 
   int LayerId(const std::string& name, bool create) {
     const auto found = layers.find(name);
@@ -299,12 +300,26 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
       for (const DeclarationEntry& entry : rule.declarations) gatherer.Offer(entry, false, false, kUnlayered, best);
     }
   }
-  dom::Node* treeRoot = root;
+  // The tree the element is in: a shadow tree's elements are styled by that tree's sheets (and the document's own are not for
+  // them). The root of the element's own tree is not the document's when it is in a shadow tree.
+  dom::Node* treeRoot = element;
+  while (treeRoot->parentNode) treeRoot = treeRoot->parentNode;
   if (treeRoot && (treeRoot->IsDocument() || treeRoot->IsFragment())) {
-    // A shadow tree's elements are styled by that tree's sheets (and the document's own are not for them).
+    if (treeRoot->IsFragment() && static_cast<dom::DocumentFragment*>(treeRoot)->isShadowRoot) gatherer.matchContext.host = static_cast<dom::DocumentFragment*>(treeRoot)->host;
     for (CssStyleSheet* sheet : SheetsOfTree(treeRoot)) {
       if (sheet->disabled || !MediaListMatches(sheet->media ? sheet->media->queries : std::vector<std::string>(), gatherer.media)) continue;
       gatherer.Rules(sheet->rules, kUnlayered);
+    }
+  }
+  // A shadow host also takes the :host rules of its shadow tree, below the rules of the tree it is in.
+  if (element->shadowRoot && pseudo.empty()) {
+    Gatherer inner{element, gatherer.matchContext, style.cascade};
+    inner.matchContext.host = element;
+    inner.order = gatherer.order;
+    for (CssStyleSheet* sheet : SheetsOfTree(element->shadowRoot)) {
+      if (sheet->disabled || !MediaListMatches(sheet->media ? sheet->media->queries : std::vector<std::string>(), inner.media)) continue;
+      inner.hostScoped = true;
+      inner.Rules(sheet->rules, -1000);
     }
   }
   // The style attribute (a pseudo-element has none).

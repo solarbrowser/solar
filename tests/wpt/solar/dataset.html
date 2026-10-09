@@ -1,0 +1,22 @@
+<!doctype html>
+<title>dataset</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<div id="d" data-foo-bar="1" data-x="2"></div>
+<script>
+test(() => {
+  const d = document.getElementById("d").dataset;
+  assert_equals(d.fooBar, "1");
+  assert_equals(d.x, "2");
+  assert_equals(d.y, undefined);
+  assert_array_equals(Object.keys(d), ["fooBar", "x"]);
+  d.hello = "w";
+  assert_equals(document.getElementById("d").getAttribute("data-hello"), "w");
+  d.someThing = "z";
+  assert_equals(document.getElementById("d").getAttribute("data-some-thing"), "z");
+  delete d.hello;
+  assert_false(document.getElementById("d").hasAttribute("data-hello"));
+  assert_throws_dom("SyntaxError", () => { d["a-b"] = "c"; });
+  assert_equals(document.getElementById("d").dataset, d);
+}, "dataset");
+</script>

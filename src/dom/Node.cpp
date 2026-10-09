@@ -66,6 +66,7 @@ void Element::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(tokenList);
   visitor.Mark(styleSheet);
   visitor.Mark(inlineStyle);
+  visitor.Mark(dataset);
   visitor.Mark(templateContents);
   visitor.Mark(shadowRoot);
   for (Node* node : assignedNodes) visitor.Mark(node);
