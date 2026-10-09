@@ -597,6 +597,11 @@ std::string Resolver::Finish(dom::Element* element, const std::string& property,
     if (!initial.empty() && MatchPropertyValue(definition, initial, fallback, &context)) return TextOfComputed(fallback);
     return "";
   }
+  // Opacities are computed to the range of 0 to 1.
+  static const std::set<std::string> opacities = {"opacity", "shape-image-threshold", "fill-opacity", "stroke-opacity", "flood-opacity", "stop-opacity"};
+  if (opacities.count(property) && match.normalized.size() == 1 && match.normalized[0].kind == Cv::Kind::Token && match.normalized[0].token.type == T::Number) {
+    match.normalized[0].token.number = std::max(0.0, std::min(1.0, match.normalized[0].token.number));
+  }
   return TextOfComputed(match);
 }
 

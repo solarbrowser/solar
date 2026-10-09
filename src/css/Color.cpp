@@ -225,8 +225,8 @@ void HslToRgb(double h, double s, double l, double rgb[3]) {
 }
 
 void HwbToRgb(double h, double w, double b, double rgb[3]) {
-  w = Clamp(w, 0, 100) / 100;
-  b = Clamp(b, 0, 100) / 100;
+  w = std::max(0.0, w) / 100;
+  b = std::max(0.0, b) / 100;
   if (w + b >= 1) {
     const double gray = w / (w + b);
     rgb[0] = rgb[1] = rgb[2] = gray;
@@ -805,6 +805,741 @@ Cv RgbFromHex(unsigned rgb) {
 
 }  // namespace
 
+
+// ---- Color spaces ----
+
+namespace {
+
+enum class Space { Srgb, SrgbLinear, DisplayP3, DisplayP3Linear, A98, ProPhoto, Rec2020, XyzD50, XyzD65, Hsl, Hwb, Lab, Lch, Oklab, Oklch };
+
+struct Col {
+  Space space = Space::Srgb;
+  double c[3] = {0, 0, 0};
+  bool none[3] = {false, false, false};
+  bool powerless[3] = {false, false, false};  // a hue that has nothing to turn: missing when mixing, 0 when read
+  double alpha = 1;
+  bool alphaNone = false;
+};
+
+bool IsPolar(Space s) { return s == Space::Hsl || s == Space::Hwb || s == Space::Lch || s == Space::Oklch; }
+int HueIndex(Space s) { return (s == Space::Hsl || s == Space::Hwb) ? 0 : (s == Space::Lch || s == Space::Oklch) ? 2 : -1; }
+
+const char* SpaceName(Space s) {
+  switch (s) {
+    case Space::Srgb: return "srgb";
+    case Space::SrgbLinear: return "srgb-linear";
+    case Space::DisplayP3: return "display-p3";
+    case Space::DisplayP3Linear: return "display-p3-linear";
+    case Space::A98: return "a98-rgb";
+    case Space::ProPhoto: return "prophoto-rgb";
+    case Space::Rec2020: return "rec2020";
+    case Space::XyzD50: return "xyz-d50";
+    case Space::XyzD65: return "xyz-d65";
+    case Space::Hsl: return "hsl";
+    case Space::Hwb: return "hwb";
+    case Space::Lab: return "lab";
+    case Space::Lch: return "lch";
+    case Space::Oklab: return "oklab";
+    case Space::Oklch: return "oklch";
+  }
+  return "";
+}
+
+std::optional<Space> SpaceByName(const std::string& name) {
+  static const std::pair<const char*, Space> table[] = {
+      {"srgb", Space::Srgb}, {"srgb-linear", Space::SrgbLinear}, {"display-p3", Space::DisplayP3}, {"display-p3-linear", Space::DisplayP3Linear},
+      {"a98-rgb", Space::A98}, {"prophoto-rgb", Space::ProPhoto}, {"rec2020", Space::Rec2020}, {"xyz", Space::XyzD65}, {"xyz-d50", Space::XyzD50},
+      {"xyz-d65", Space::XyzD65}, {"hsl", Space::Hsl}, {"hwb", Space::Hwb}, {"lab", Space::Lab}, {"lch", Space::Lch}, {"oklab", Space::Oklab}, {"oklch", Space::Oklch}};
+  for (const auto& [n, s] : table) {
+    if (name == n) return s;
+  }
+  return std::nullopt;
+}
+
+using Vec3 = std::array<double, 3>;
+using Mat3 = std::array<std::array<double, 3>, 3>;
+
+Vec3 Mul(const Mat3& m, const Vec3& v) {
+  return {m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2], m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2], m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2]};
+}
+
+const Mat3 kSrgbToXyz = {{{0.41239079926595934, 0.357584339383878, 0.1804807884018343}, {0.21263900587151027, 0.715168678767756, 0.07219231536073371}, {0.01933081871559182, 0.11919477979462598, 0.9505321522496607}}};
+const Mat3 kXyzToSrgb = {{{3.2409699419045226, -1.537383177570094, -0.4986107602930034}, {-0.9692436362808796, 1.8759675015077202, 0.04155505740717559}, {0.05563007969699366, -0.20397695888897652, 1.0569715142428786}}};
+const Mat3 kP3ToXyz = {{{0.4865709486482162, 0.26566769316909306, 0.1982172852343625}, {0.2289745640697488, 0.6917385218365064, 0.079286914093745}, {0.0, 0.04511338185890264, 1.043944368900976}}};
+const Mat3 kXyzToP3 = {{{2.493496911941425, -0.9313836179191239, -0.40271078445071684}, {-0.8294889695615747, 1.7626640603183463, 0.023624685841943577}, {0.03584583024378447, -0.07617238926804182, 0.9568845240076872}}};
+const Mat3 kA98ToXyz = {{{0.5766690429101305, 0.1855582379065463, 0.1882286462349947}, {0.29734497525053605, 0.6273635662554661, 0.0752914584939978}, {0.02703136138641234, 0.07068885253582723, 0.9913375368376388}}};
+const Mat3 kXyzToA98 = {{{2.0415879038107465, -0.5650069742788596, -0.34473135077832956}, {-0.9692436362808795, 1.8759675015077202, 0.04155505740717557}, {0.013444280632031142, -0.11836239223101838, 1.0151749943912054}}};
+const Mat3 kRec2020ToXyz = {{{0.6369580483012914, 0.14461690358620832, 0.1688809751641721}, {0.2627002120112671, 0.6779980715188708, 0.05930171646986196}, {0.0, 0.028072693049087428, 1.060985057710791}}};
+const Mat3 kXyzToRec2020 = {{{1.7166511879712674, -0.35567078377639233, -0.25336628137365974}, {-0.6666843518324892, 1.6164812366349395, 0.01576854581391113}, {0.017639857445310783, -0.042770613257808524, 0.9421031212354738}}};
+const Mat3 kProPhotoToXyzD50 = {{{0.7977604896723027, 0.13518583717574031, 0.0313493495815248}, {0.2880711282292934, 0.7118432178101014, 0.00008565396060525902}, {0.0, 0.0, 0.8251046025104601}}};
+const Mat3 kXyzD50ToProPhoto = {{{1.3457989731028281, -0.25558010007997534, -0.05110628506753401}, {-0.5446224939028347, 1.5082327413132781, 0.02053603239147973}, {0.0, 0.0, 1.2119675456389454}}};
+const Mat3 kD65ToD50 = {{{1.0479297925449969, 0.022946870601609652, -0.05019226628920524}, {0.02962780877005599, 0.9904344267538799, -0.017073799063418826}, {-0.009243040646204504, 0.015055191490298152, 0.7518742814281371}}};
+const Mat3 kD50ToD65 = {{{0.955473421488075, -0.02309845494876471, 0.06325924320057072}, {-0.0283697093338637, 1.0099953980813041, 0.021041441191917323}, {0.012314014864481998, -0.020507649298898964, 1.330365926242124}}};
+const Mat3 kXyzToLms = {{{0.8190224379967030, 0.3619062600528904, -0.1288737815209879}, {0.0329836539323885, 0.9292868615863434, 0.0361446663506424}, {0.0481771893596242, 0.2642395317527308, 0.6335478284694309}}};
+const Mat3 kLmsToXyz = {{{1.2268798758459243, -0.5578149944602171, 0.2813910456659647}, {-0.0405757452148008, 1.1122868032803170, -0.0717110580655164}, {-0.0763729366746601, -0.4214933324022432, 1.5869240198367816}}};
+const Mat3 kLmsToOklab = {{{0.2104542683093140, 0.7936177747023054, -0.0040720430116193}, {1.9779985324311684, -2.4285922420485799, 0.4505937096174110}, {0.0259040424655478, 0.7827717124575296, -0.8086757549230774}}};
+const Mat3 kOklabToLms = {{{1.0, 0.3963377773761749, 0.2158037573099136}, {1.0, -0.1055613458156586, -0.0638541728258133}, {1.0, -0.0894841775298119, -1.2914855480194092}}};
+
+double SrgbDecode(double v) {
+  const double a = std::fabs(v);
+  const double r = a <= 0.04045 ? a / 12.92 : std::pow((a + 0.055) / 1.055, 2.4);
+  return v < 0 ? -r : r;
+}
+double SrgbEncode(double v) {
+  const double a = std::fabs(v);
+  const double r = a > 0.0031308 ? 1.055 * std::pow(a, 1 / 2.4) - 0.055 : 12.92 * a;
+  return v < 0 ? -r : r;
+}
+double A98Decode(double v) { return std::copysign(std::pow(std::fabs(v), 563.0 / 256), v); }
+double A98Encode(double v) { return std::copysign(std::pow(std::fabs(v), 256.0 / 563), v); }
+double ProPhotoDecode(double v) {
+  const double a = std::fabs(v);
+  return std::copysign(a <= 16.0 / 512 ? a / 16 : std::pow(a, 1.8), v);
+}
+double ProPhotoEncode(double v) {
+  const double a = std::fabs(v);
+  return std::copysign(a >= 1.0 / 512 ? std::pow(a, 1 / 1.8) : 16 * a, v);
+}
+constexpr double kRecAlpha = 1.09929682680944, kRecBeta = 0.018053968510807;
+double Rec2020Decode(double v) {
+  const double a = std::fabs(v);
+  return std::copysign(a < kRecBeta * 4.5 ? a / 4.5 : std::pow((a + kRecAlpha - 1) / kRecAlpha, 1 / 0.45), v);
+}
+double Rec2020Encode(double v) {
+  const double a = std::fabs(v);
+  return std::copysign(a >= kRecBeta ? kRecAlpha * std::pow(a, 0.45) - (kRecAlpha - 1) : 4.5 * a, v);
+}
+
+const Vec3 kD50White = {0.3457 / 0.3585, 1.0, (1.0 - 0.3457 - 0.3585) / 0.3585};
+constexpr double kEpsilon = 216.0 / 24389, kKappa = 24389.0 / 27;
+
+Vec3 XyzD50ToLab(const Vec3& xyz) {
+  Vec3 f;
+  for (int i = 0; i < 3; ++i) {
+    const double t = xyz[i] / kD50White[i];
+    f[i] = t > kEpsilon ? std::cbrt(t) : (kKappa * t + 16) / 116;
+  }
+  return {116 * f[1] - 16, 500 * (f[0] - f[1]), 200 * (f[1] - f[2])};
+}
+Vec3 LabToXyzD50(const Vec3& lab) {
+  const double f1 = (lab[0] + 16) / 116, f0 = lab[1] / 500 + f1, f2 = f1 - lab[2] / 200;
+  const auto inverse = [](double f, double l) { return std::pow(f, 3) > kEpsilon ? std::pow(f, 3) : (116 * f - 16) / kKappa; (void)l; };
+  const double x = inverse(f0, 0) * kD50White[0];
+  const double y = (lab[0] > kKappa * kEpsilon ? std::pow((lab[0] + 16) / 116, 3) : lab[0] / kKappa) * kD50White[1];
+  const double z = inverse(f2, 0) * kD50White[2];
+  return {x, y, z};
+}
+
+Vec3 XyzToOklab(const Vec3& xyz) {
+  Vec3 lms = Mul(kXyzToLms, xyz);
+  for (double& v : lms) v = std::cbrt(v);
+  return Mul(kLmsToOklab, lms);
+}
+Vec3 OklabToXyz(const Vec3& lab) {
+  Vec3 lms = Mul(kOklabToLms, lab);
+  for (double& v : lms) v = v * v * v;
+  return Mul(kLmsToXyz, lms);
+}
+
+// To and from the hue-based forms.
+Vec3 RgbToHsl(const Vec3& rgb) {
+  const double max = std::max({rgb[0], rgb[1], rgb[2]}), min = std::min({rgb[0], rgb[1], rgb[2]});
+  double h = NAN, s = 0;
+  const double l = (min + max) / 2, d = max - min;
+  if (d != 0) {
+    s = (l == 0 || l == 1) ? 0 : (max - l) / std::min(l, 1 - l);
+    if (max == rgb[0]) h = (rgb[1] - rgb[2]) / d + (rgb[1] < rgb[2] ? 6 : 0);
+    else if (max == rgb[1]) h = (rgb[2] - rgb[0]) / d + 2;
+    else h = (rgb[0] - rgb[1]) / d + 4;
+    h *= 60;
+  }
+  return {h, s * 100, l * 100};
+}
+Vec3 HslToRgb(const Vec3& hsl) {
+  double h = std::fmod(hsl[0], 360);
+  if (h < 0) h += 360;
+  const double s = hsl[1] / 100, l = hsl[2] / 100;
+  const auto f = [&](double n) {
+    const double k = std::fmod(n + h / 30, 12);
+    const double a = s * std::min(l, 1 - l);
+    return l - a * std::max(-1.0, std::min({k - 3, 9 - k, 1.0}));
+  };
+  return {f(0), f(8), f(4)};
+}
+Vec3 RgbToHwb(const Vec3& rgb) {
+  const Vec3 hsl = RgbToHsl(rgb);
+  const double w = std::min({rgb[0], rgb[1], rgb[2]}), b = 1 - std::max({rgb[0], rgb[1], rgb[2]});
+  return {hsl[0], w * 100, b * 100};
+}
+Vec3 HwbToRgb(const Vec3& hwb) {
+  double w = hwb[1] / 100, b = hwb[2] / 100;  // not clamped: more than the whole is shared out between them
+  if (w + b >= 1) {
+    const double gray = w / (w + b);
+    return {gray, gray, gray};
+  }
+  Vec3 rgb = HslToRgb({hwb[0], 100, 50});
+  for (double& v : rgb) v = v * (1 - w - b) + w;
+  return rgb;
+}
+
+Vec3 LabToLch(const Vec3& lab) {
+  const double c = std::hypot(lab[1], lab[2]);
+  double h = std::atan2(lab[2], lab[1]) * 180 / 3.14159265358979323846;
+  if (h < 0) h += 360;
+  return {lab[0], c, h};
+}
+Vec3 LchToLab(const Vec3& lch) {
+  const double h = lch[2] * 3.14159265358979323846 / 180;
+  return {lch[0], lch[1] * std::cos(h), lch[1] * std::sin(h)};
+}
+
+// A color of any space as XYZ with the D65 white; the components that are none are 0.
+Vec3 ToXyzD65(const Col& col) {
+  const Vec3 v = {col.none[0] ? 0 : col.c[0], col.none[1] ? 0 : col.c[1], col.none[2] ? 0 : col.c[2]};
+  const auto each = [&](double (*f)(double)) { return Vec3{f(v[0]), f(v[1]), f(v[2])}; };
+  switch (col.space) {
+    case Space::Srgb: return Mul(kSrgbToXyz, each(SrgbDecode));
+    case Space::SrgbLinear: return Mul(kSrgbToXyz, v);
+    case Space::DisplayP3: return Mul(kP3ToXyz, each(SrgbDecode));
+    case Space::DisplayP3Linear: return Mul(kP3ToXyz, v);
+    case Space::A98: return Mul(kA98ToXyz, each(A98Decode));
+    case Space::ProPhoto: return Mul(kD50ToD65, Mul(kProPhotoToXyzD50, each(ProPhotoDecode)));
+    case Space::Rec2020: return Mul(kRec2020ToXyz, each(Rec2020Decode));
+    case Space::XyzD50: return Mul(kD50ToD65, v);
+    case Space::XyzD65: return v;
+    case Space::Hsl: return Mul(kSrgbToXyz, Vec3{SrgbDecode(HslToRgb(v)[0]), SrgbDecode(HslToRgb(v)[1]), SrgbDecode(HslToRgb(v)[2])});
+    case Space::Hwb: return Mul(kSrgbToXyz, Vec3{SrgbDecode(HwbToRgb(v)[0]), SrgbDecode(HwbToRgb(v)[1]), SrgbDecode(HwbToRgb(v)[2])});
+    case Space::Lab: return Mul(kD50ToD65, LabToXyzD50(v));
+    case Space::Lch: return Mul(kD50ToD65, LabToXyzD50(LchToLab(v)));
+    case Space::Oklab: return OklabToXyz(v);
+    case Space::Oklch: return OklabToXyz(LchToLab(v));
+  }
+  return v;
+}
+
+Vec3 FromXyzD65(const Vec3& xyz, Space space) {
+  const auto each = [&](const Vec3& v, double (*f)(double)) { return Vec3{f(v[0]), f(v[1]), f(v[2])}; };
+  switch (space) {
+    case Space::Srgb: return each(Mul(kXyzToSrgb, xyz), SrgbEncode);
+    case Space::SrgbLinear: return Mul(kXyzToSrgb, xyz);
+    case Space::DisplayP3: return each(Mul(kXyzToP3, xyz), SrgbEncode);
+    case Space::DisplayP3Linear: return Mul(kXyzToP3, xyz);
+    case Space::A98: return each(Mul(kXyzToA98, xyz), A98Encode);
+    case Space::ProPhoto: return each(Mul(kXyzD50ToProPhoto, Mul(kD65ToD50, xyz)), ProPhotoEncode);
+    case Space::Rec2020: return each(Mul(kXyzToRec2020, xyz), Rec2020Encode);
+    case Space::XyzD50: return Mul(kD65ToD50, xyz);
+    case Space::XyzD65: return xyz;
+    case Space::Hsl: return RgbToHsl(each(Mul(kXyzToSrgb, xyz), SrgbEncode));
+    case Space::Hwb: return RgbToHwb(each(Mul(kXyzToSrgb, xyz), SrgbEncode));
+    case Space::Lab: return XyzD50ToLab(Mul(kD65ToD50, xyz));
+    case Space::Lch: return LabToLch(XyzD50ToLab(Mul(kD65ToD50, xyz)));
+    case Space::Oklab: return XyzToOklab(xyz);
+    case Space::Oklch: return LabToLch(XyzToOklab(xyz));
+  }
+  return xyz;
+}
+
+// Which component of another space takes a missing component over: the analogous ones.
+int Analogous(Space from, int index, Space to) {
+  const auto group = [](Space s, int i) -> int {
+    switch (s) {
+      case Space::Srgb: case Space::SrgbLinear: case Space::DisplayP3: case Space::DisplayP3Linear: case Space::A98: case Space::ProPhoto: case Space::Rec2020:
+      case Space::XyzD50: case Space::XyzD65:
+        return i;  // red/x, green/y, blue/z
+      case Space::Hsl: return i == 0 ? 10 : i == 1 ? 11 : 12;       // hue, saturation, lightness
+      case Space::Hwb: return i == 0 ? 10 : i == 1 ? 13 : 14;       // hue, whiteness, blackness
+      case Space::Lab: case Space::Oklab: return i == 0 ? 12 : i == 1 ? 15 : 16;   // lightness, a, b
+      case Space::Lch: case Space::Oklch: return i == 0 ? 12 : i == 1 ? 11 : 10;   // lightness, chroma, hue
+    }
+    return -1;
+  };
+  const int g = group(from, index);
+  for (int i = 0; i < 3; ++i) {
+    if (group(to, i) == g) return i;
+  }
+  return -1;
+}
+
+bool IsRgbLike(Space s) { return s == Space::Srgb || s == Space::SrgbLinear || s == Space::DisplayP3 || s == Space::DisplayP3Linear || s == Space::A98 || s == Space::ProPhoto || s == Space::Rec2020 || s == Space::XyzD50 || s == Space::XyzD65; }
+
+Col Convert(const Col& in, Space to) {
+  if (in.space == to) return in;
+  Col out;
+  out.space = to;
+  out.alpha = in.alpha;
+  out.alphaNone = in.alphaNone;
+  const Vec3 v = FromXyzD65(ToXyzD65(in), to);
+  for (int i = 0; i < 3; ++i) out.c[i] = v[i];
+  // Missing components carry over to the analogous ones.
+  for (int i = 0; i < 3; ++i) {
+    if (!in.none[i]) continue;
+    const int target = Analogous(in.space, i, to);
+    if (target >= 0) out.none[target] = true;
+  }
+  // A hue that has nothing to turn is missing.
+  const int hue = HueIndex(to);
+  if (hue >= 0 && !out.none[hue]) {
+    bool powerless = false;
+    if (to == Space::Hsl) powerless = out.c[1] <= 0.0001 || out.c[2] <= 0 || out.c[2] >= 100 - 1e-9;
+    else if (to == Space::Hwb) powerless = out.c[1] + out.c[2] >= 100 - 1e-9;
+    else if (to == Space::Lch) powerless = out.c[1] <= 0.0015;
+    else if (to == Space::Oklch) powerless = out.c[1] <= 0.000004;
+    if (powerless && !std::isnan(out.c[hue]) && !IsPolar(in.space)) out.powerless[hue] = true;
+    if (std::isnan(out.c[hue])) out.powerless[hue] = true;
+  }
+  for (int i = 0; i < 3; ++i) {
+    if (std::isnan(out.c[i])) out.c[i] = 0;
+  }
+  return out;
+}
+
+// ---- Reading a normalized color into a Col ----
+
+struct ChannelRef {
+  double percentScale;
+  bool angle;
+};
+
+ChannelRef ReferenceOf(const std::string& fn, Space space, int index) {
+  if (fn == "color") return {1, false};
+  if (fn == "rgb") return {255, false};
+  if (fn == "hsl" || fn == "hwb") return index == 0 ? ChannelRef{360, true} : ChannelRef{100, false};
+  if (fn == "lab") return index == 0 ? ChannelRef{100, false} : ChannelRef{125, false};
+  if (fn == "lch") return index == 0 ? ChannelRef{100, false} : index == 1 ? ChannelRef{150, false} : ChannelRef{360, true};
+  if (fn == "oklab") return index == 0 ? ChannelRef{1, false} : ChannelRef{0.4, false};
+  if (fn == "oklch") return index == 0 ? ChannelRef{1, false} : index == 1 ? ChannelRef{0.4, false} : ChannelRef{360, true};
+  (void)space;
+  return {1, false};
+}
+
+// A channel's value: a number, a percentage of the reference, an angle, a calculation; none.
+bool ChannelValue(const Cv& v, const ChannelRef& ref, double& value, bool& isNone) {
+  isNone = false;
+  if (v.IsIdent() && Lower(v.token.value) == "none") {
+    isNone = true;
+    value = 0;
+    return true;
+  }
+  const std::optional<MathValue> m = EvaluateNumeric(v);
+  if (!m) return false;
+  switch (m->kind) {
+    case MathKind::Number: value = m->value; return true;
+    case MathKind::Percentage: value = m->value * ref.percentScale / 100; return true;
+    case MathKind::Angle:
+      if (!ref.angle) return false;
+      value = m->value;
+      return true;
+    default: return false;
+  }
+}
+
+std::optional<Col> ReadColor(const Cv& v, const std::string& currentColor, const std::string& scheme);
+
+std::optional<Col> ReadFunction(const Cv& v, const std::string& currentColor, const std::string& scheme);
+
+// Whatever component values are written in a color function, as items before and after the slash.
+bool SplitItems(const ComponentValues& children, ComponentValues& channels, ComponentValues& alpha, bool& slash) {
+  slash = false;
+  for (const Cv& c : children) {
+    if (c.IsWhitespace()) continue;
+    if (c.IsToken(T::Comma)) continue;
+    if (c.IsDelim('/')) {
+      slash = true;
+      continue;
+    }
+    (slash ? alpha : channels).push_back(c);
+  }
+  return true;
+}
+
+std::optional<Col> ReadColor(const Cv& v, const std::string& currentColor, const std::string& scheme) {
+  if (v.kind == Cv::Kind::Token && v.token.type == T::Ident) {
+    std::optional<Cv> computed = ComputeColor(v, currentColor, scheme);
+    if (!computed) return std::nullopt;
+    return ReadColor(*computed, currentColor, scheme);
+  }
+  if (v.kind != Cv::Kind::Function) return std::nullopt;
+  return ReadFunction(v, currentColor, scheme);
+}
+
+std::optional<Col> ReadFunction(const Cv& v, const std::string& currentColor, const std::string& scheme) {
+  const std::string name = Lower(v.name);
+  ComponentValues channels, alpha;
+  bool slash = false;
+  SplitItems(v.children, channels, alpha, slash);
+  if (name == "color-mix" || name == "light-dark" || name == "contrast-color") {
+    std::optional<Cv> computed = ComputeColor(v, currentColor, scheme);
+    if (!computed || (computed->kind == Cv::Kind::Function && Lower(computed->name) == name)) return std::nullopt;
+    return ReadColor(*computed, currentColor, scheme);
+  }
+  if (!channels.empty() && channels[0].IsIdent() && Lower(channels[0].token.value) == "from") {
+    std::optional<Cv> computed = ComputeColor(v, currentColor, scheme);
+    if (!computed || (computed->kind == Cv::Kind::Function && !channels.empty() && computed->children.size() > 0 && computed->children[0].IsIdent() && Lower(computed->children[0].token.value) == "from")) return std::nullopt;
+    return ReadColor(*computed, currentColor, scheme);
+  }
+  Col col;
+  std::string fn = name == "rgba" ? "rgb" : name == "hsla" ? "hsl" : name;
+  if (!slash && channels.size() == 4 && fn != "color") {
+    // The legacy syntax: the alpha is the fourth value.
+    alpha.push_back(channels[3]);
+    channels.pop_back();
+    slash = true;
+  }
+  size_t first = 0;
+  if (fn == "color") {
+    if (channels.empty() || !channels[0].IsIdent()) return std::nullopt;
+    std::optional<Space> space = SpaceByName(Lower(channels[0].token.value));
+    if (!space) return std::nullopt;
+    col.space = *space;
+    first = 1;
+  } else if (fn == "rgb") {
+    col.space = Space::Srgb;
+  } else if (std::optional<Space> space = SpaceByName(fn)) {
+    col.space = *space;
+  } else {
+    return std::nullopt;
+  }
+  if (channels.size() != first + 3) return std::nullopt;
+  for (int i = 0; i < 3; ++i) {
+    const ChannelRef ref = ReferenceOf(fn, col.space, i);
+    double value;
+    bool isNone;
+    if (!ChannelValue(channels[first + i], ref, value, isNone)) return std::nullopt;
+    col.c[i] = fn == "rgb" ? value / 255 : value;
+    col.none[i] = isNone;
+  }
+  if (fn == "hsl" || fn == "hwb") {
+    // s, l, w, b are percentages: 100 is full.
+  }
+  if (slash) {
+    if (alpha.size() != 1) return std::nullopt;
+    double value;
+    bool isNone;
+    if (!ChannelValue(alpha[0], ChannelRef{1, false}, value, isNone)) return std::nullopt;
+    col.alpha = std::max(0.0, std::min(1.0, std::isnan(value) ? 0.0 : value));
+    col.alphaNone = isNone;
+  }
+  return col;
+}
+
+// ---- Writing a Col ----
+
+Cv N(double v) {
+  if (!std::isfinite(v)) return Fn("calc", {Ident(std::isnan(v) ? "NaN" : v < 0 ? "-infinity" : "infinity")});
+  Cv c = Num(0);
+  c.token.number = Round6(v);
+  c.token.isInteger = c.token.number == std::floor(c.token.number);
+  return c;
+}
+
+Cv NN(double v) {  // eight decimals, for color()'s channels
+  Cv c = Num(0);
+  c.token.number = Round8(v);
+  return c;
+}
+
+void AppendAlphaCol(const Col& col, ComponentValues& out) {
+  if (col.alphaNone) {
+    out.push_back(Slash());
+    out.push_back(Ident("none"));
+  } else if (col.alpha != 1) {
+    out.push_back(Slash());
+    out.push_back(N(std::max(0.0, std::min(1.0, col.alpha))));
+  }
+}
+
+Cv Write(const Col& in) {
+  Col col = in;
+  for (int i = 0; i < 3; ++i) {
+    if (!col.none[i] && std::isnan(col.c[i])) col.c[i] = 0;
+  }
+  ComponentValues out;
+  const auto chan = [&](int i, double value, bool percent = false) {
+    if (col.none[i]) return Ident("none");
+    return percent ? Pct(value) : N(value);
+  };
+  switch (col.space) {
+    case Space::Hsl:
+    case Space::Hwb: {
+      bool anyNone = col.alphaNone || col.none[0] || col.none[1] || col.none[2];
+      if (!anyNone) return Write(Convert(col, Space::Srgb));
+      out.push_back(chan(0, std::fmod(std::fmod(col.c[0], 360) + 360, 360)));
+      out.push_back(chan(1, col.c[1], true));
+      out.push_back(chan(2, col.c[2], true));
+      AppendAlphaCol(col, out);
+      return Fn(SpaceName(col.space), out);
+    }
+    case Space::Lab:
+    case Space::Oklab: {
+      const bool ok = col.space == Space::Oklab;
+      out.push_back(chan(0, std::max(0.0, std::min(ok ? 1.0 : 100.0, col.c[0]))));
+      out.push_back(chan(1, col.c[1]));
+      out.push_back(chan(2, col.c[2]));
+      AppendAlphaCol(col, out);
+      return Fn(SpaceName(col.space), out);
+    }
+    case Space::Lch:
+    case Space::Oklch: {
+      const bool ok = col.space == Space::Oklch;
+      out.push_back(chan(0, std::max(0.0, std::min(ok ? 1.0 : 100.0, col.c[0]))));
+      out.push_back(chan(1, std::max(0.0, col.c[1])));
+      out.push_back(chan(2, std::fmod(std::fmod(col.c[2], 360) + 360, 360)));
+      AppendAlphaCol(col, out);
+      return Fn(SpaceName(col.space), out);
+    }
+    default: {
+      out.push_back(Ident(SpaceName(col.space)));
+      for (int i = 0; i < 3; ++i) out.push_back(col.none[i] ? Ident("none") : NN(col.c[i]));
+      AppendAlphaCol(col, out);
+      return Fn("color", out);
+    }
+  }
+}
+
+// ---- Relative colors ----
+
+std::optional<Cv> ComputeRelative(const Cv& v, const std::string& currentColor, const std::string& scheme) {
+  const std::string name = Lower(v.name);
+  std::string fn = name == "rgba" ? "rgb" : name == "hsla" ? "hsl" : name;
+  ComponentValues channels, alpha;
+  bool slash = false;
+  SplitItems(v.children, channels, alpha, slash);
+  // from <color> [<space>] c1 c2 c3
+  if (channels.size() < 2) return std::nullopt;
+  std::optional<Col> origin = ReadColor(channels[1], currentColor, scheme);
+  if (!origin) return std::nullopt;
+  size_t at = 2;
+  Space target = Space::Srgb;
+  if (fn == "color") {
+    if (channels.size() <= at || !channels[at].IsIdent()) return std::nullopt;
+    std::optional<Space> space = SpaceByName(Lower(channels[at].token.value));
+    if (!space) return std::nullopt;
+    target = *space;
+    ++at;
+  } else if (fn == "rgb") {
+    target = Space::Srgb;
+  } else if (std::optional<Space> space = SpaceByName(fn)) {
+    target = *space;
+  } else {
+    return std::nullopt;
+  }
+  if (channels.size() != at + 3) return std::nullopt;
+  const Col source = Convert(*origin, target);
+  // The channel keywords and their values; rgb()'s are 0-255.
+  std::vector<std::string> names;
+  if (fn == "rgb") names = {"r", "g", "b"};
+  else if (fn == "hsl") names = {"h", "s", "l"};
+  else if (fn == "hwb") names = {"h", "w", "b"};
+  else if (fn == "lab" || fn == "oklab") names = {"l", "a", "b"};
+  else if (fn == "lch" || fn == "oklch") names = {"l", "c", "h"};
+  else if (target == Space::XyzD50 || target == Space::XyzD65) names = {"x", "y", "z"};
+  else names = {"r", "g", "b"};
+  double values[4];
+  for (int i = 0; i < 3; ++i) values[i] = (fn == "rgb" ? source.c[i] * 255 : source.c[i]);
+  values[3] = source.alpha;
+  const auto substitute = [&](const Cv& expression, auto&& self) -> Cv {
+    if (expression.kind == Cv::Kind::Token) {
+      if (expression.IsIdent()) {
+        const std::string word = Lower(expression.token.value);
+        for (int i = 0; i < 3; ++i) {
+          if (word == names[i]) return N(values[i]);
+        }
+        if (word == "alpha") return N(values[3]);
+      }
+      return expression;
+    }
+    Cv copy = expression;
+    for (Cv& child : copy.children) child = self(child, self);
+    return copy;
+  };
+  Col result;
+  result.space = target;
+  for (int i = 0; i < 3; ++i) {
+    const Cv& item = channels[at + i];
+    const ChannelRef ref = ReferenceOf(fn, target, i);
+    // A keyword on its own keeps the channel as it is, missing or not.
+    if (item.IsIdent()) {
+      const std::string word = Lower(item.token.value);
+      if (word == "none") { result.none[i] = true; continue; }
+      if (word == names[i] || [&] { for (int j = 0; j < 3; ++j) if (word == names[j]) return true; return false; }()) {
+        for (int j = 0; j < 3; ++j) {
+          if (word == names[j]) {
+            result.c[i] = source.c[j];
+            result.none[i] = source.none[j];
+          }
+        }
+        continue;
+      }
+    }
+    double value;
+    bool isNone;
+    if (!ChannelValue(substitute(item, substitute), ref, value, isNone)) return std::nullopt;
+    result.c[i] = fn == "rgb" ? value / 255 : value;
+    result.none[i] = isNone;
+  }
+  result.alpha = source.alpha;
+  result.alphaNone = source.alphaNone;
+  if (slash) {
+    if (alpha.size() != 1) return std::nullopt;
+    const Cv& item = alpha[0];
+    if (item.IsIdent() && Lower(item.token.value) == "alpha") {
+      result.alpha = source.alpha;
+      result.alphaNone = source.alphaNone;
+    } else {
+      double value;
+      bool isNone;
+      if (!ChannelValue(substitute(item, substitute), ChannelRef{1, false}, value, isNone)) return std::nullopt;
+      result.alpha = std::max(0.0, std::min(1.0, std::isnan(value) ? 0.0 : value));
+      result.alphaNone = isNone;
+    }
+  }
+  return Write(result);
+}
+
+// ---- color-mix ----
+
+struct MixItem {
+  Col color;
+  double percent;
+};
+
+double ArcDistance(double a, double b) { return b - a; }
+
+void AdjustHues(double& a, double& b, const std::string& method) {
+  a = std::fmod(std::fmod(a, 360) + 360, 360);
+  b = std::fmod(std::fmod(b, 360) + 360, 360);
+  if (method == "shorter") {
+    const double d = b - a;
+    if (d > 180) a += 360;
+    else if (d < -180) b += 360;
+  } else if (method == "longer") {
+    const double d = b - a;
+    if (d > 0 && d < 180) a += 360;
+    else if (d > -180 && d <= 0) b += 360;
+  } else if (method == "increasing") {
+    if (b < a) b += 360;
+  } else if (method == "decreasing") {
+    if (a < b) a += 360;
+  }
+  (void)ArcDistance;
+}
+
+std::optional<Cv> ComputeColorMix(const Cv& v, const std::string& currentColor, const std::string& scheme) {
+  std::vector<ComponentValues> parts = SplitOnCommas(v.children);
+  Space space = Space::Oklab;
+  std::string hueMethod = "shorter";
+  const ComponentValues method = Trimmed(parts[0]);
+  if (!method.empty() && method[0].IsIdent() && Lower(method[0].token.value) == "in") {
+    std::vector<Cv> words;
+    for (const Cv& c : method) {
+      if (!c.IsWhitespace()) words.push_back(c);
+    }
+    std::optional<Space> s = SpaceByName(Lower(words[1].token.value));
+    if (!s) return std::nullopt;
+    space = *s;
+    if (words.size() == 4) hueMethod = Lower(words[2].token.value);
+    parts.erase(parts.begin());
+  }
+  std::vector<MixItem> items;
+  for (const ComponentValues& part : parts) {
+    std::vector<Cv> pieces;
+    for (const Cv& c : Trimmed(part)) {
+      if (!c.IsWhitespace()) pieces.push_back(c);
+    }
+    if (pieces.empty()) return std::nullopt;
+    MixItem item;
+    item.percent = -1;
+    const Cv* colorCv = &pieces[0];
+    if (pieces.size() == 2) {
+      const bool firstIsPercent = (pieces[0].kind == Cv::Kind::Token && pieces[0].token.type == T::Percentage) || (pieces[0].kind == Cv::Kind::Function && IsMathFunctionName(pieces[0].name));
+      const Cv& pct = firstIsPercent ? pieces[0] : pieces[1];
+      colorCv = firstIsPercent ? &pieces[1] : &pieces[0];
+      const std::optional<MathValue> m = EvaluateNumeric(pct);
+      if (!m || m->kind != MathKind::Percentage) return std::nullopt;
+      item.percent = m->value;
+    }
+    std::optional<Col> col = ReadColor(*colorCv, currentColor, scheme);
+    if (!col) return std::nullopt;
+    item.color = Convert(*col, space);
+    for (int i = 0; i < 3; ++i) {
+      if (item.color.powerless[i]) item.color.none[i] = true;
+    }
+    items.push_back(item);
+  }
+  if (items.empty()) return std::nullopt;
+  // Percentages: the missing ones share what is left; the total is scaled to 100% (and the alpha lessened if it was less).
+  double given = 0;
+  size_t omitted = 0;
+  for (const MixItem& item : items) {
+    if (item.percent >= 0) given += item.percent; else ++omitted;
+  }
+  for (MixItem& item : items) {
+    if (item.percent < 0) item.percent = omitted ? std::max(0.0, 100 - given) / omitted : 0;
+  }
+  double total = 0;
+  for (const MixItem& item : items) total += item.percent;
+  double alphaMultiplier = 1;
+  if (total <= 0) {
+    // Nothing asked for: an even mix, made fully transparent.
+    for (MixItem& item : items) item.percent = 100.0 / items.size();
+    total = 100;
+    alphaMultiplier = 0;
+  } else if (total < 100) {
+    alphaMultiplier = total / 100;
+  }
+  for (MixItem& item : items) item.percent = item.percent / total;
+
+  // Interpolate pairwise from the left (the spec's n-ary form folds this way).
+  Col acc = items[0].color;
+  double accWeight = items[0].percent;
+  for (size_t k = 1; k < items.size(); ++k) {
+    const Col& next = items[k].color;
+    const double w2 = items[k].percent;
+    const double w = accWeight + w2;
+    const double t = w == 0 ? 0 : w2 / w;
+    Col result;
+    result.space = space;
+    // Missing components take the other's value; both missing stay missing.
+    double a[3], b[3];
+    bool none[3];
+    for (int i = 0; i < 3; ++i) {
+      none[i] = acc.none[i] && next.none[i];
+      a[i] = acc.none[i] ? (next.none[i] ? 0 : next.c[i]) : acc.c[i];
+      b[i] = next.none[i] ? (acc.none[i] ? 0 : acc.c[i]) : next.c[i];
+    }
+    double alphaA = acc.alphaNone ? (next.alphaNone ? 1 : next.alpha) : acc.alpha;
+    double alphaB = next.alphaNone ? (acc.alphaNone ? 1 : acc.alpha) : next.alpha;
+    const int hue = HueIndex(space);
+    if (hue >= 0) AdjustHues(a[hue], b[hue], hueMethod);
+    // Premultiply (not the hue).
+    for (int i = 0; i < 3; ++i) {
+      if (i == hue) continue;
+      a[i] *= alphaA;
+      b[i] *= alphaB;
+    }
+    const double mixedAlpha = alphaA * (1 - t) + alphaB * t;
+    for (int i = 0; i < 3; ++i) {
+      double value = a[i] * (1 - t) + b[i] * t;
+      if (i != hue && mixedAlpha != 0) value /= mixedAlpha;
+      result.c[i] = value;
+      result.none[i] = none[i];
+    }
+    result.alpha = mixedAlpha;
+    result.alphaNone = acc.alphaNone && next.alphaNone;
+    acc = result;
+    accWeight = w;
+  }
+  acc.alpha = acc.alphaNone ? acc.alpha : acc.alpha * alphaMultiplier;
+  if (acc.alphaNone) acc.alpha = 1;
+  return Write(acc);
+}
+
+}  // namespace
+
+std::optional<ComponentValue> ComputeColor(const ComponentValue& specified, const ComputeContext& context) {
+  return ComputeColor(ResolveRelativeLengths(specified, context), context.currentColor, context.colorScheme);
+}
+
 std::optional<ComponentValue> ComputeColor(const ComponentValue& specified, const std::string& currentColor, const std::string& scheme) {
   if (specified.kind == Cv::Kind::Token && specified.token.type == T::Ident) {
     const std::string word = Lower(specified.token.value);
@@ -825,14 +1560,53 @@ std::optional<ComponentValue> ComputeColor(const ComponentValue& specified, cons
     }
     return std::nullopt;
   }
-  if (specified.kind == Cv::Kind::Function && Lower(specified.name) == "light-dark") {
+  if (specified.kind != Cv::Kind::Function) return specified;
+  const std::string name = Lower(specified.name);
+  if (name == "light-dark") {
     std::vector<ComponentValues> parts = SplitOnCommas(specified.children);
     if (parts.size() != 2) return std::nullopt;
     const ComponentValues chosen = Trimmed(parts[scheme == "dark" ? 1 : 0]);
     if (chosen.size() != 1) return std::nullopt;
     return ComputeColor(chosen[0], currentColor, scheme);
   }
-  return specified;
+  if (name == "color-mix") return ComputeColorMix(specified, currentColor, scheme);
+  if (name == "contrast-color") {
+    const ComponentValues inner = Trimmed(specified.children);
+    if (inner.size() != 1) return std::nullopt;
+    std::optional<Col> col = ReadColor(inner[0], currentColor, scheme);
+    if (!col) return std::nullopt;
+    const Vec3 xyz = ToXyzD65(Convert(*col, Space::Srgb));
+    const double y = xyz[1];
+    // The one of black and white that contrasts more.
+    const double lightContrast = 1.05 / (y + 0.05), darkContrast = (y + 0.05) / 0.05;
+    const double v[3] = {lightContrast > darkContrast ? 1.0 : 0.0, lightContrast > darkContrast ? 1.0 : 0.0, lightContrast > darkContrast ? 1.0 : 0.0};
+    return LegacyRgb(v, 1);
+  }
+  // Relative colors.
+  ComponentValues channels, alpha;
+  bool slash = false;
+  SplitItems(specified.children, channels, alpha, slash);
+  if (!channels.empty() && channels[0].IsIdent() && Lower(channels[0].token.value) == "from") return ComputeRelative(specified, currentColor, scheme);
+  // rgb()/rgba() in the legacy form are done.
+  const bool legacyRgb = (name == "rgb" || name == "rgba") && !specified.children.empty() && std::any_of(specified.children.begin(), specified.children.end(), [](const Cv& c) { return c.IsToken(T::Comma); });
+  if (legacyRgb) return specified;
+  // The rest: calculations worked out, and the colors that could be legacy rgb() written as that.
+  std::optional<Col> col = ReadFunction(specified, currentColor, scheme);
+  if (!col) return specified;
+  if (name == "rgb" || name == "rgba") {
+    if (!col->none[0] && !col->none[1] && !col->none[2] && !col->alphaNone) {
+      const double rgb[3] = {col->c[0], col->c[1], col->c[2]};
+      return LegacyRgb(rgb, col->alpha);
+    }
+    Col asRgb = *col;
+    return Write(asRgb);
+  }
+  if ((name == "hsl" || name == "hsla" || name == "hwb") && !col->none[0] && !col->none[1] && !col->none[2] && !col->alphaNone) {
+    const Col srgb = Convert(*col, Space::Srgb);
+    const double rgb[3] = {srgb.c[0], srgb.c[1], srgb.c[2]};
+    return LegacyRgb(rgb, srgb.alpha);
+  }
+  return Write(*col);
 }
 
 }  // namespace solar::css

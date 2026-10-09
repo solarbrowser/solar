@@ -802,6 +802,14 @@ ComponentValue DelimToken(char32_t c) {
   v.token.delim = c;
   return v;
 }
+// A + or - with the whitespace around it that makes it an operator (serialization leaves the whitespace out).
+void Operator(ComponentValues& out, char32_t c) {
+  ComponentValue space;
+  space.token.type = T::Whitespace;
+  out.push_back(space);
+  out.push_back(DelimToken(c));
+  out.push_back(space);
+}
 
 void EmitNumeric(const CalcNode& node, ComponentValues& out, double value) {
   if (value == 0) value = 0;  // not -0
@@ -882,13 +890,13 @@ void Emit(const CalcNode& node, ComponentValues& out, bool inProduct) {
       bool first = true;
       for (const CalcNode& kid : node.kids) {
         if (kid.kind == CalcNode::Kind::Negate) {
-          body.push_back(DelimToken('-'));
+          Operator(body, '-');
           EmitOperand(kid.kids[0], body);
         } else if (kid.Numeric() && kid.value < 0 && !first) {
-          body.push_back(DelimToken('-'));
+          Operator(body, '-');
           EmitNumeric(kid, body, -kid.value);
         } else {
-          if (!first) body.push_back(DelimToken('+'));
+          if (!first) Operator(body, '+');
           EmitOperand(kid, body);
         }
         first = false;

@@ -17,4 +17,8 @@ std::optional<ComponentValue> NormalizeColor(const ComponentValue& value);
 // currentcolor as `currentColor` (an rgb() text), system colors in the given scheme.
 std::optional<ComponentValue> ComputeColor(const ComponentValue& specified, const std::string& currentColor, const std::string& scheme);
 
+// The same, with the lengths in calculations worked out against the context first.
+struct ComputeContext;
+std::optional<ComponentValue> ComputeColor(const ComponentValue& specified, const ComputeContext& context);
+
 }  // namespace solar::css

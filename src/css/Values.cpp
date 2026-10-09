@@ -949,7 +949,7 @@ class Matcher {
     if (name == "color") {
       std::optional<ComponentValue> normalized = NormalizeColor(original);
       if (!normalized) return;
-      if (std::optional<ComponentValue> computed = ComputeColor(*normalized, compute_->currentColor, compute_->colorScheme)) Set(pos, *computed);
+      if (std::optional<ComponentValue> computed = ComputeColor(*normalized, *compute_)) Set(pos, *computed);
       return;
     }
     static const char* const numericTypes[] = {"length", "length-percentage", "angle", "angle-percentage", "time", "time-percentage", "frequency",
@@ -1170,5 +1170,7 @@ std::string SerializeValue(const ComponentValues& values) {
   SerializeList(values, out);
   return out;
 }
+
+ComponentValue ResolveRelativeLengths(const ComponentValue& value, const ComputeContext& context) { return CanonicalTree(value, context); }
 
 }  // namespace solar::css

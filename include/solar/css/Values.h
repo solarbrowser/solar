@@ -24,6 +24,9 @@ struct ComputeContext {
   std::string colorScheme = "light";
 };
 
+// The component value with its relative lengths (em, rem, vw...) worked out against the context, everything else as it was.
+ComponentValue ResolveRelativeLengths(const ComponentValue& value, const ComputeContext& context);
+
 // How a value matched a syntax. `normalized` is the value with keywords, units and numbers in their canonical form.
 // For a shorthand, `assigned` says which of the top-level components of the value each of the `<'longhand'>`s of its
 // syntax took: [begin, end) positions in `normalized` (whitespace not counted), in the order they were matched.
