@@ -655,11 +655,77 @@ bool ContainsSubstitution(const ComponentValues& values) {
 
 namespace {
 
+namespace {
+
+// A dimension token in its canonical unit, with the relative lengths worked out against the context.
+ComponentValue Canonical(const ComponentValue& v, const ComputeContext& c, bool& changed) {
+  ComponentValue out = v;
+  if (v.kind != ComponentValue::Kind::Token || v.token.type != T::Dimension) return out;
+  const std::string unit = Lower(v.token.value);
+  double px = -1;
+  const double n = v.token.number;
+  if (unit == "em") px = n * c.fontSize;
+  else if (unit == "rem") px = n * c.rootFontSize;
+  else if (unit == "ex" || unit == "ch") px = n * c.fontSize * 0.5;
+  else if (unit == "cap") px = n * c.fontSize * 0.7;
+  else if (unit == "ic") px = n * c.fontSize;
+  else if (unit == "rex" || unit == "rch") px = n * c.rootFontSize * 0.5;
+  else if (unit == "rcap") px = n * c.rootFontSize * 0.7;
+  else if (unit == "ric") px = n * c.rootFontSize;
+  else if (unit == "lh") px = n * c.lineHeight;
+  else if (unit == "rlh") px = n * c.rootLineHeight;
+  else {
+    // viewport units: 1% of the viewport, whichever flavor (small, large, dynamic), and container units as the viewport's
+    std::string base = unit;
+    if (base.size() > 2 && (base[0] == 's' || base[0] == 'l' || base[0] == 'd') && base[1] == 'v') base = base.substr(1);
+    if (base.size() > 2 && base.starts_with("cq")) base = "v" + base.substr(2);
+    const double w = c.viewportWidth / 100, h = c.viewportHeight / 100;
+    if (base == "vw" || base == "vi") px = n * w;
+    else if (base == "vh" || base == "vb") px = n * h;
+    else if (base == "vmin") px = n * std::min(w, h);
+    else if (base == "vmax") px = n * std::max(w, h);
+    // cqw and cqh stand for the width and the height, cqi and cqb for the inline and the block axis
+    else if (base == "vw") px = n * w;
+  }
+  if (px >= 0 || (px == -1 && false)) {
+    out.token.number = px;
+    out.token.value = "px";
+    changed = true;
+    return out;
+  }
+  if (const std::optional<MathValue> m = EvaluateNumeric(v)) {
+    out.token.number = m->value;
+    switch (m->kind) {
+      case MathKind::Length: out.token.value = "px"; break;
+      case MathKind::Angle: out.token.value = "deg"; break;
+      case MathKind::Time: out.token.value = "s"; break;
+      case MathKind::Frequency: out.token.value = "hz"; break;
+      case MathKind::Resolution: out.token.value = "dppx"; break;
+      default: break;
+    }
+    changed = true;
+  }
+  return out;
+}
+
+ComponentValue CanonicalTree(const ComponentValue& v, const ComputeContext& c) {
+  if (v.kind == ComponentValue::Kind::Token) {
+    bool changed = false;
+    return Canonical(v, c, changed);
+  }
+  ComponentValue copy = v;
+  for (ComponentValue& child : copy.children) child = CanonicalTree(child, c);
+  return copy;
+}
+
+}  // namespace
+
+
 class Matcher {
  public:
   using K = std::function<bool(size_t)>;
 
-  explicit Matcher(const ComponentValues& values) {
+  explicit Matcher(const ComponentValues& values, const ComputeContext* compute = nullptr) : compute_(compute) {
     for (const ComponentValue& v : values) {
       if (!v.IsWhitespace()) items_.push_back(v);
     }
@@ -813,7 +879,7 @@ class Matcher {
     } else if (!item.IsBlock(opener)) {
       return false;
     }
-    Matcher inner(item.children);
+    Matcher inner(item.children, compute_);
     inner.steps_ = steps_;
     if (!inner.Run(*node.children[0])) {
       steps_ = inner.steps_;
@@ -852,6 +918,7 @@ class Matcher {
         } else if (pos < items_.size() && items_[pos].kind == ComponentValue::Kind::Function && IsMathFunctionName(items_[pos].name)) {
           if (std::optional<ComponentValue> normalized = NormalizeMathFunction(items_[pos])) Set(pos, *normalized);
         }
+        if (compute_ && pos < items_.size()) ComputeLeaf(name, pos);
         assigned_.push_back({"<" + name + ">", pos, end});
         if (k(end)) return true;
         assigned_.pop_back();
@@ -874,6 +941,56 @@ class Matcher {
       assigned_.pop_back();
       return false;
     });
+  }
+
+  // The leaf at `pos`, in its computed form.
+  void ComputeLeaf(const std::string& name, size_t pos) {
+    const ComponentValue& original = items_[pos];
+    if (name == "color") {
+      std::optional<ComponentValue> normalized = NormalizeColor(original);
+      if (!normalized) return;
+      if (std::optional<ComponentValue> computed = ComputeColor(*normalized, compute_->currentColor, compute_->colorScheme)) Set(pos, *computed);
+      return;
+    }
+    static const char* const numericTypes[] = {"length", "length-percentage", "angle", "angle-percentage", "time", "time-percentage", "frequency",
+                                               "frequency-percentage", "resolution", "number", "integer", "percentage", "zero", "flex", "quirky-length", "dimension"};
+    bool numeric = false;
+    for (const char* t : numericTypes) numeric = numeric || name == t;
+    if (!numeric) return;
+    if (std::optional<ComponentValue> computed = ComputeNumber(original, name)) Set(pos, *computed);
+  }
+
+  std::optional<ComponentValue> ComputeNumber(const ComponentValue& v, const std::string& typeName) const {
+  const ComputeContext& c = *compute_;
+  if (v.kind == ComponentValue::Kind::Token) {
+    if (v.token.type == T::Number && v.token.number == 0 && (typeName == "length" || typeName == "length-percentage" || typeName == "quirky-length")) {
+      ComponentValue zero;
+      zero.token.type = T::Dimension;
+      zero.token.number = 0;
+      zero.token.value = "px";
+      return zero;
+    }
+    if (v.token.type == T::Dimension) {
+      bool changed = false;
+      ComponentValue out = Canonical(v, c, changed);
+      return changed ? std::optional<ComponentValue>(out) : std::nullopt;
+    }
+    return std::nullopt;
+  }
+  if (v.kind == ComponentValue::Kind::Function && IsMathFunctionName(v.name)) {
+    ComponentValue converted = CanonicalTree(v, c);
+    std::optional<ComponentValue> normalized = NormalizeMathFunction(converted);
+    if (!normalized) return std::nullopt;
+    // calc() of one value is that value.
+    if (normalized->kind == ComponentValue::Kind::Function && normalized->name == "calc" && normalized->children.size() == 1 && normalized->children[0].kind == ComponentValue::Kind::Token) {
+      const ComponentValue& only = normalized->children[0];
+      if (only.token.type == T::Number || only.token.type == T::Dimension || only.token.type == T::Percentage) {
+        if (std::isfinite(only.token.number)) return only;
+      }
+    }
+    return normalized;
+  }
+  return std::nullopt;
   }
 
   // Types that are not defined by a syntax. `handled` is set when this is one (whether or not it matched); the end of a
@@ -961,6 +1078,7 @@ class Matcher {
     }
   }
 
+  const ComputeContext* compute_ = nullptr;
   static constexpr size_t kBudget = 400000;
   std::vector<ComponentValue> items_;
   std::vector<ComponentValue> out_;
@@ -971,18 +1089,18 @@ class Matcher {
 
 }  // namespace
 
-bool MatchSyntax(std::string_view syntax, const ComponentValues& values, ValueMatch& out) {
+bool MatchSyntax(std::string_view syntax, const ComponentValues& values, ValueMatch& out, const ComputeContext* compute) {
   NodePtr root = SyntaxOf(syntax);
   if (!root) return false;
-  Matcher matcher(values);
+  Matcher matcher(values, compute);
   if (!matcher.Run(*root)) return false;
   out.normalized = matcher.Output();
   out.assigned = matcher.Assigned();
   return true;
 }
 
-bool MatchPropertyValue(const PropertyDefinition& property, const ComponentValues& values, ValueMatch& out) {
-  return MatchSyntax(property.syntax, values, out);
+bool MatchPropertyValue(const PropertyDefinition& property, const ComponentValues& values, ValueMatch& out, const ComputeContext* compute) {
+  return MatchSyntax(property.syntax, values, out, compute);
 }
 
 // ---- Serialization ----

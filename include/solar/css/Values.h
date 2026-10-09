@@ -12,6 +12,18 @@
 // it, and the canonical form a matched value is serialized in.
 namespace solar::css {
 
+// What turning a specified value into a computed one needs to know: the sizes the relative units are relative to.
+struct ComputeContext {
+  double fontSize = 16;        // of the element, in px
+  double rootFontSize = 16;
+  double lineHeight = 18.4;    // of the element (what 1lh is), in px
+  double rootLineHeight = 18.4;
+  double viewportWidth = 800;
+  double viewportHeight = 600;
+  std::string currentColor = "rgb(0, 0, 0)";  // what currentcolor stands for
+  std::string colorScheme = "light";
+};
+
 // How a value matched a syntax. `normalized` is the value with keywords, units and numbers in their canonical form.
 // For a shorthand, `assigned` says which of the top-level components of the value each of the `<'longhand'>`s of its
 // syntax took: [begin, end) positions in `normalized` (whitespace not counted), in the order they were matched.
@@ -26,9 +38,11 @@ struct ValueMatch {
 };
 
 // Whether `values` (the value of a declaration, without !important) is in the language of the property's syntax.
-bool MatchPropertyValue(const PropertyDefinition& property, const ComponentValues& values, ValueMatch& out);
+// With a ComputeContext the matched value comes out as the computed value: lengths in px, times in s, angles in deg,
+// colors resolved, calculations resolved as far as they can be.
+bool MatchPropertyValue(const PropertyDefinition& property, const ComponentValues& values, ValueMatch& out, const ComputeContext* compute = nullptr);
 // The same for a syntax given as text, such as a registered custom property's, a descriptor's or CSS.supports'.
-bool MatchSyntax(std::string_view syntax, const ComponentValues& values, ValueMatch& out);
+bool MatchSyntax(std::string_view syntax, const ComponentValues& values, ValueMatch& out, const ComputeContext* compute = nullptr);
 
 // The canonical text of a list of component values: single spaces, ", " after commas, " / " around slashes.
 std::string SerializeValue(const ComponentValues& values);

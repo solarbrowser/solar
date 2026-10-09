@@ -2,6 +2,7 @@
 #include <cctype>
 
 #include "solar/css/Cssom.h"
+#include "solar/css/Style.h"
 #include "solar/dom/CustomElements.h"
 #include "solar/dom/NodeBindingsInternal.h"
 #include "solar/web/DomBindingsInternal.h"
@@ -107,7 +108,17 @@ std::string PropertyForIdlName(const std::string& name) {
   return normalized;
 }
 
+uint32_t CssDeclarations::IndexedLength(Context&, CssDeclarations& self) {
+  return static_cast<uint32_t>(self.computedElement ? ComputedPropertyNames().size() : self.items.size());
+}
+
 bool CssDeclarations::IndexedGetter(Context& ctx, CssDeclarations& self, uint32_t index, Value& out) {
+  if (self.computedElement) {
+    const std::vector<std::string>& names = ComputedPropertyNames();
+    if (index >= names.size()) return false;
+    out = qe::FromWtf8(ctx, names[index]);
+    return true;
+  }
   if (index >= self.items.size()) return false;
   out = qe::FromWtf8(ctx, self.items[index].name);
   return true;
@@ -175,7 +186,7 @@ bool NeedArgs(Context& ctx, qe::Args args, size_t count, const char* what) {
 
 Value DeclLength(Context& ctx, Value t, qe::Args, Value) {
   CssDeclarations* self = This<CssDeclarations>(ctx, t);
-  return self ? qe::FromUint32(static_cast<uint32_t>(self->items.size())) : qe::Undefined();
+  return self ? qe::FromUint32(CssDeclarations::IndexedLength(ctx, *self)) : qe::Undefined();
 }
 
 Value DeclGetCssText(Context& ctx, Value t, qe::Args, Value) {
@@ -202,7 +213,9 @@ Value DeclItem(Context& ctx, Value t, qe::Args args, Value) {
   CssDeclarations* self = This<CssDeclarations>(ctx, t);
   if (!self || !NeedArgs(ctx, args, 1, "item")) return qe::Undefined();
   const uint32_t index = qe::ToUint32(ctx, args[0]);
-  return qe::FromWtf8(ctx, index < self->items.size() ? self->items[index].name : "");
+  Value name;
+  if (!CssDeclarations::IndexedGetter(ctx, *self, index, name)) return qe::FromWtf8(ctx, "");
+  return name;
 }
 
 std::string PropertyKey(const std::string& name) { return name.starts_with("--") ? name : Lowercase(name); }
@@ -503,6 +516,7 @@ Value StyleRuleSetSelectorText(Context& ctx, Value t, qe::Args args, Value) {
   if (!list) return qe::Undefined();
   self->selectors = std::make_shared<SelectorList>(std::move(*list));
   self->selectorText = SerializeSelectorList(*self->selectors);
+  NoteStyleChange();
   return qe::Undefined();
 }
 
@@ -772,6 +786,7 @@ Value SheetSetDisabled(Context& ctx, Value t, qe::Args args, Value) {
   CssStyleSheet* self = This<CssStyleSheet>(ctx, t);
   if (!self || !NeedArgs(ctx, args, 1, "set disabled")) return qe::Undefined();
   self->disabled = qe::ToBoolean(args[0]);
+  NoteStyleChange();
   return qe::Undefined();
 }
 
@@ -921,6 +936,7 @@ Value ConstructSheet(Context& ctx, Value, qe::Args args, Value newTarget) {
 // ---- Style and link elements ----
 
 void UpdateStyleElement(Context& ctx, dom::Element* element) {
+  NoteStyleChange();
   const bool wasLinked = element->styleSheet != nullptr;
   element->styleSheet = nullptr;
   if (!element->IsHtml("style")) return;
@@ -1032,6 +1048,24 @@ void StyleAttributeChanged(dom::Element* element) {
   declarations->updatingAttribute = false;
 }
 
+// getComputedStyle(element, pseudo): the computed values of the element, read when they are asked for.
+Value GetComputedStyle(Context& ctx, Value, qe::Args args, Value) {
+  if (args.empty()) {
+    qe::ThrowTypeError(ctx, "Failed to execute 'getComputedStyle' on 'Window': 1 argument required, but only 0 present.");
+    return qe::Undefined();
+  }
+  dom::Element* element = DOMObject::Cast<dom::Element>(args[0]);
+  if (!element) {
+    qe::ThrowTypeError(ctx, "Failed to execute 'getComputedStyle' on 'Window': parameter 1 is not of type 'Element'.");
+    return qe::Undefined();
+  }
+  CssDeclarations* declarations = NewDeclarations(ctx);
+  declarations->readonly = true;
+  declarations->computedElement = element;
+  declarations->computedContext = element->nodeDocument && element->nodeDocument->context ? element->nodeDocument->context : &ctx;
+  return qe::FromObject(declarations);
+}
+
 // CSS.supports(property, value) and CSS.supports(condition).
 Value CssSupports(Context& ctx, Value, qe::Args args, Value) {
   if (args.empty()) {
@@ -1073,6 +1107,7 @@ void DefineCssomClasses(Context& ctx) {
   qe::DefineMethod(d, "setProperty", dom::Reactions<DeclSetProperty>, 2);
   qe::DefineMethod(d, "removeProperty", dom::Reactions<DeclRemoveProperty>, 1);
   qe::DefineGlobal(ctx, "CSSStyleDeclaration", declaration.constructor);
+  qe::DefineGlobalFunction(ctx, "getComputedStyle", GetComputedStyle, 1);
 
   // MediaList
   qe::ClassRef media = qe::DefineClass(ctx, "MediaList", IllegalConstructor, 0);

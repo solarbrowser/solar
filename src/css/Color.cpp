@@ -774,3 +774,65 @@ std::optional<ComponentValue> NormalizeColor(const ComponentValue& value) {
 }
 
 }  // namespace solar::css
+
+namespace solar::css {
+
+namespace {
+
+struct SystemColor {
+  const char* name;
+  unsigned light;
+  unsigned dark;
+};
+
+const SystemColor kSystemColors[] = {
+    {"accentcolor", 0x0075ff, 0x99c8ff}, {"accentcolortext", 0xffffff, 0x000000}, {"activetext", 0xff0000, 0xff9e9e}, {"buttonborder", 0x767676, 0x6b6b6b},
+    {"buttonface", 0xefefef, 0x6b6b6b}, {"buttontext", 0x000000, 0xffffff}, {"canvas", 0xffffff, 0x121212}, {"canvastext", 0x000000, 0xffffff},
+    {"field", 0xffffff, 0x3b3b3b}, {"fieldtext", 0x000000, 0xffffff}, {"graytext", 0x6d6d6d, 0xa9a9a9}, {"highlight", 0xb5d5ff, 0x3b5a8a},
+    {"highlighttext", 0x000000, 0xffffff}, {"linktext", 0x0000ee, 0x9e9eff}, {"mark", 0xffff00, 0x666600}, {"marktext", 0x000000, 0xffffff},
+    {"selecteditem", 0xb5d5ff, 0x3b5a8a}, {"selecteditemtext", 0x000000, 0xffffff}, {"visitedtext", 0x551a8b, 0xd0adf0},
+    {"activeborder", 0xffffff, 0x3b3b3b}, {"activecaption", 0xccccff, 0x3b3b3b}, {"appworkspace", 0xffffff, 0x3b3b3b}, {"background", 0xffffff, 0x121212},
+    {"buttonhighlight", 0xefefef, 0x6b6b6b}, {"buttonshadow", 0xefefef, 0x6b6b6b}, {"captiontext", 0x000000, 0xffffff}, {"inactiveborder", 0xffffff, 0x3b3b3b},
+    {"inactivecaption", 0xffffff, 0x3b3b3b}, {"inactivecaptiontext", 0x7f7f7f, 0xa9a9a9}, {"infobackground", 0xffffff, 0x3b3b3b}, {"infotext", 0x000000, 0xffffff},
+    {"menu", 0xefefef, 0x3b3b3b}, {"menutext", 0x000000, 0xffffff}, {"scrollbar", 0xffffff, 0x3b3b3b}, {"threeddarkshadow", 0xefefef, 0x6b6b6b},
+    {"threedface", 0xefefef, 0x6b6b6b}, {"threedhighlight", 0xefefef, 0x6b6b6b}, {"threedlightshadow", 0xefefef, 0x6b6b6b}, {"threedshadow", 0xefefef, 0x6b6b6b},
+    {"window", 0xffffff, 0x121212}, {"windowframe", 0xffffff, 0x121212}, {"windowtext", 0x000000, 0xffffff}};
+
+Cv RgbFromHex(unsigned rgb) {
+  const double channels[3] = {((rgb >> 16) & 0xff) / 255.0, ((rgb >> 8) & 0xff) / 255.0, (rgb & 0xff) / 255.0};
+  return LegacyRgb(channels, 1);
+}
+
+}  // namespace
+
+std::optional<ComponentValue> ComputeColor(const ComponentValue& specified, const std::string& currentColor, const std::string& scheme) {
+  if (specified.kind == Cv::Kind::Token && specified.token.type == T::Ident) {
+    const std::string word = Lower(specified.token.value);
+    if (word == "currentcolor") {
+      Cv parsed;
+      if (ParseComponentValue(currentColor, parsed)) return parsed;
+      return std::nullopt;
+    }
+    if (word == "transparent") {
+      const double none[3] = {0, 0, 0};
+      return LegacyRgb(none, 0);
+    }
+    for (const Named& named : kNamedColors) {
+      if (word == named.name) return RgbFromHex(named.rgb);
+    }
+    for (const SystemColor& system : kSystemColors) {
+      if (word == system.name) return RgbFromHex(scheme == "dark" ? system.dark : system.light);
+    }
+    return std::nullopt;
+  }
+  if (specified.kind == Cv::Kind::Function && Lower(specified.name) == "light-dark") {
+    std::vector<ComponentValues> parts = SplitOnCommas(specified.children);
+    if (parts.size() != 2) return std::nullopt;
+    const ComponentValues chosen = Trimmed(parts[scheme == "dark" ? 1 : 0]);
+    if (chosen.size() != 1) return std::nullopt;
+    return ComputeColor(chosen[0], currentColor, scheme);
+  }
+  return specified;
+}
+
+}  // namespace solar::css

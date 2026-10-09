@@ -1,5 +1,6 @@
 #include "solar/css/Cssom.h"
 #include "solar/css/Shorthands.h"
+#include "solar/css/Style.h"
 #include "solar/css/Values.h"
 
 #include <algorithm>
@@ -78,7 +79,7 @@ const DeclarationEntry* CssDeclarations::Find(const std::string& name) const {
   return nullptr;
 }
 
-bool CssDeclarations::Apply(const std::string& name, const std::string& text, bool important) {
+bool ApplyDeclaration(std::vector<DeclarationEntry>& items, const std::string& name, const std::string& text, bool important) {
   if (name.starts_with("--")) {
     AddOrReplace(items, {name, css::Serialize(Trimmed(ParseComponentValues(text))), important, "", ""});
     return true;
@@ -94,6 +95,20 @@ bool CssDeclarations::Apply(const std::string& name, const std::string& text, bo
   for (Longhand& longhand : longhands) AddOrReplace(items, {longhand.name, longhand.value, important, longhand.pendingShorthand, longhand.pendingText});
   return true;
 }
+
+std::vector<DeclarationEntry> ParseDeclarationList(std::string_view text) {
+  std::vector<DeclarationEntry> items;
+  for (const BlockItem& item : ParseBlockContents(text)) {
+    if (!item.isDeclaration) continue;
+    std::string name = item.declaration.name;
+    if (!NormalizePropertyName(name)) continue;
+    const std::string source = name.starts_with("--") ? item.declaration.originalText : css::Serialize(Trimmed(item.declaration.value));
+    ApplyDeclaration(items, name, source, item.declaration.important);
+  }
+  return items;
+}
+
+bool CssDeclarations::Apply(const std::string& name, const std::string& text, bool important) { return ApplyDeclaration(items, name, text, important); }
 
 namespace {
 
@@ -157,6 +172,17 @@ std::optional<std::string> ShorthandValue(const std::vector<DeclarationEntry>& i
 
 std::string CssDeclarations::ValueOf(const std::string& name) const {
   const PropertyDefinition* definition = FindProperty(name);
+  if (computedElement) {
+    if (name.starts_with("--")) return ComputedValue(*computedContext, computedElement, name);
+    if (!definition) return "";
+    if (IsShorthandProperty(*definition)) {
+      std::vector<DeclarationEntry> leaves;
+      for (const std::string& leaf : LeavesOf(*definition)) leaves.push_back({leaf, ComputedValue(*computedContext, computedElement, leaf), false, "", ""});
+      std::optional<bool> important;
+      return ShorthandValue(leaves, *definition, important).value_or("");
+    }
+    return ComputedValue(*computedContext, computedElement, name);
+  }
   if (definition && IsShorthandProperty(*definition)) {
     std::optional<bool> important;
     return ShorthandValue(items, *definition, important).value_or("");
@@ -212,14 +238,7 @@ std::string CssDeclarations::Serialize() const {
 }
 
 void CssDeclarations::SetText(Context& ctx, std::string_view text) {
-  items.clear();
-  for (const BlockItem& item : ParseBlockContents(text)) {
-    if (!item.isDeclaration) continue;
-    std::string name = item.declaration.name;
-    if (!NormalizePropertyName(name)) continue;
-    const std::string source = name.starts_with("--") ? item.declaration.originalText : css::Serialize(Trimmed(item.declaration.value));
-    Apply(name, source, item.declaration.important);
-  }
+  items = ParseDeclarationList(text);
   Changed(ctx);
 }
 
@@ -253,6 +272,7 @@ std::string CssDeclarations::Remove(Context& ctx, const std::string& propertyNam
 }
 
 void CssDeclarations::Changed(Context& ctx) {
+  NoteStyleChange();
   if (ownerElement && !updatingAttribute) {
     updatingAttribute = true;
     dom::SetAttribute(ctx, ownerElement, "style", Serialize());
@@ -263,6 +283,7 @@ void CssDeclarations::Changed(Context& ctx) {
 void CssDeclarations::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(parentRule);
   visitor.Mark(ownerElement);
+  visitor.Mark(computedElement);
 }
 
 // ---- Media ----
@@ -364,6 +385,7 @@ std::string MediaList::Text() const {
 }
 
 void MediaList::SetText(std::string_view text) {
+  NoteStyleChange();
   queries.clear();
   if (Trim(std::string(text)).empty()) return;
   for (const ComponentValues& part : SplitOnCommas(ParseComponentValues(text))) {
@@ -778,6 +800,7 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
 }  // namespace
 
 void ParseSheetInto(Context& ctx, CssStyleSheet* sheet, std::string_view text) {
+  NoteStyleChange();
   sheet->rules.clear();
   bool importsAllowed = true, namespacesAllowed = true;
   for (const Rule& syntax : ParseStylesheetContents(text)) {
@@ -854,6 +877,7 @@ std::string InsertRule(Context& ctx, CssStyleSheet* sheet, CssRule* parent, std:
   std::string error;
   CssRule* rule = ParseRuleText(ctx, text, sheet, parent, index, error);
   if (!rule) return error;
+  NoteStyleChange();
   list.insert(list.begin() + index, rule);
   (parent ? static_cast<Quanta::DOMObject*>(parent) : static_cast<Quanta::DOMObject*>(sheet))->NoteWrite();
   result = index;
@@ -869,6 +893,7 @@ std::string DeleteRule(Context&, CssStyleSheet* sheet, CssRule* parent, uint32_t
       if (other->kind != RuleKind::Import && other->kind != RuleKind::Namespace && other->kind != RuleKind::LayerStatement) return "InvalidStateError";
     }
   }
+  NoteStyleChange();
   list[index]->parentRule = nullptr;
   list[index]->parentSheet = nullptr;
   list.erase(list.begin() + index);

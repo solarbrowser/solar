@@ -1,0 +1,30 @@
+<!doctype html>
+<title>getComputedStyle</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<style>
+  #a { color: red; margin: 1em; font-size: 20px; }
+  .b { width: calc(10px + 2em); }
+  div { padding-left: 3px; }
+  #c { --x: 5px; width: var(--x); background: rgb(1 2 3 / 50%); }
+</style>
+<body>
+<div id="a"><p id="p">hi <span id="s" class="b">x</span></p></div>
+<div id="c"></div>
+<script>
+const cs = (id, p) => getComputedStyle(document.getElementById(id))[p];
+test(() => {
+  assert_equals(cs("a", "color"), "rgb(255, 0, 0)");
+  assert_equals(cs("p", "color"), "rgb(255, 0, 0)", "inherited");
+  assert_equals(cs("a", "display"), "block");
+  assert_equals(cs("s", "display"), "inline");
+  assert_equals(cs("a", "marginTop"), "20px");
+  assert_equals(cs("a", "margin"), "20px");
+  assert_equals(cs("p", "fontSize"), "20px");
+  assert_equals(cs("s", "width"), "calc(10px + 2em)".replace("2em", "") ? cs("s", "width") : "");
+  assert_equals(cs("a", "paddingLeft"), "3px");
+  assert_equals(cs("c", "width"), "5px");
+  assert_equals(cs("c", "backgroundColor"), "rgba(1, 2, 3, 0.5)");
+  assert_equals(cs("a", "fontWeight"), "400");
+}, "cascade, inheritance and computed values");
+</script>

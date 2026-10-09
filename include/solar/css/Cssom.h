@@ -59,6 +59,9 @@ struct CssDeclarations : Quanta::DOMObject {
   dom::Element* ownerElement = nullptr;  // for the style attribute
   bool readonly = false;                  // computed style
   bool updatingAttribute = false;
+  // getComputedStyle's: the element the values are the computed ones of, read when they are asked for.
+  dom::Element* computedElement = nullptr;
+  Quanta::Context* computedContext = nullptr;
 
   // The CSSOM serialization of the block: "a: b; c: d !important;".
   std::string Serialize() const;
@@ -78,7 +81,7 @@ struct CssDeclarations : Quanta::DOMObject {
 
   // The legacy platform object hooks: style[0], style.color, style["background-color"], style.cssFloat.
   static bool IndexedGetter(Quanta::Context& ctx, CssDeclarations& self, uint32_t index, Quanta::Value& out);
-  static uint32_t IndexedLength(Quanta::Context&, CssDeclarations& self) { return static_cast<uint32_t>(self.items.size()); }
+  static uint32_t IndexedLength(Quanta::Context&, CssDeclarations& self);
   static bool NamedGetter(Quanta::Context& ctx, CssDeclarations& self, const std::string& name, Quanta::Value& out);
   static void NamedSetter(Quanta::Context& ctx, CssDeclarations& self, const std::string& name, const Quanta::Value& value);
   static std::vector<std::string> NamedKeys(Quanta::Context&, CssDeclarations&) { return {}; }
@@ -177,6 +180,11 @@ struct CssStyleSheet : Quanta::DOMObject {
 
   void Visit(Quanta::Visitor& visitor);
 };
+
+// The declarations of a style attribute or of a declaration block's text, expanded into longhands.
+std::vector<DeclarationEntry> ParseDeclarationList(std::string_view text);
+// A declaration added to a list of entries: false if its value is not valid for the property.
+bool ApplyDeclaration(std::vector<DeclarationEntry>& items, const std::string& name, const std::string& text, bool important);
 
 // ---- Making them ----
 
