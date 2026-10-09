@@ -1,4 +1,6 @@
 #include "solar/css/Values.h"
+#include "solar/css/Calc.h"
+#include "solar/css/Color.h"
 
 #include <algorithm>
 #include <charconv>
@@ -567,9 +569,18 @@ std::optional<NumType> TypeOfMath(const ComponentValue& function) {
   };
   const std::vector<NumType> list = args();
   if (name == "min" || name == "max" || name == "hypot") return same(list);
-  if (name == "clamp") return list.size() >= 1 && types.size() == 3 ? same(list) : std::nullopt;
+  if (name == "clamp") {
+    // The middle one is not optional.
+    if (types.size() != 3 || !types[1]) return std::nullopt;
+    return same(list);
+  }
   if (name == "round") {
-    if (types.size() < 2 || types.size() > 3) return std::nullopt;
+    const size_t strategy = keywords.size();
+    if (strategy > 1 || (strategy == 1 && (types.empty() || types[0]))) return std::nullopt;
+    const size_t operands = list.size();
+    if (operands < 1 || operands > 2) return std::nullopt;
+    // Without B, A has to be a number.
+    if (operands == 1 && !IsPureNumber(list[0])) return std::nullopt;
     return same(list);
   }
   if (name == "mod" || name == "rem") return list.size() == 2 ? same(list) : std::nullopt;
@@ -621,6 +632,8 @@ bool IsCssWide(const std::string& lower) {
 }
 
 }  // namespace
+
+bool IsValidMathFunction(const ComponentValue& function) { return TypeOfComponent(function).has_value(); }
 
 bool IsCssWideKeyword(const ComponentValues& values) {
   const ComponentValues trimmed = Trimmed(values);
@@ -824,7 +837,26 @@ class Matcher {
       size_t end = pos + 1;
       if (MatchLeaf(node, pos, consumed, end)) {
         if (!consumed) return false;
-        return k(end);
+        // A math function stands in the value as its simplified, serialized self.
+        const size_t mark = log_.size();
+        if (name == "color") {
+          std::optional<ComponentValue> normalized = NormalizeColor(items_[pos]);
+          if (!normalized) return false;
+          Set(pos, *normalized);
+        } else if ((name == "alpha-value" || name == "opacity-value") && items_[pos].kind == ComponentValue::Kind::Token && items_[pos].token.type == T::Percentage) {
+          // A percentage here is the number it stands for.
+          ComponentValue number;
+          number.token.type = T::Number;
+          number.token.number = items_[pos].token.number / 100;
+          Set(pos, number);
+        } else if (pos < items_.size() && items_[pos].kind == ComponentValue::Kind::Function && IsMathFunctionName(items_[pos].name)) {
+          if (std::optional<ComponentValue> normalized = NormalizeMathFunction(items_[pos])) Set(pos, *normalized);
+        }
+        assigned_.push_back({"<" + name + ">", pos, end});
+        if (k(end)) return true;
+        assigned_.pop_back();
+        Rollback(mark);
+        return false;
       }
       if (consumed) return false;  // a leaf that did not match
     }
@@ -912,6 +944,8 @@ class Matcher {
     if (name == "hex-color") return IsHexColorToken(v);
     if (name == "url-modifier") return (isToken && v.token.type == T::Ident) || v.kind == ComponentValue::Kind::Function;
     if (name == "quirky-length") return false;
+    if (name == "color") return NormalizeColor(v).has_value();
+    if (name == "alpha-value" || name == "opacity-value") return numeric && numeric->cat == Cat::Number;
     handled = false;
     return false;
   }

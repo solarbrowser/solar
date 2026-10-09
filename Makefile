@@ -189,7 +189,7 @@ $(BUILD_DIR)/UrlRealmsTest: $(OBJ_DIR)/tests/UrlRealmsTest.o $(URL_OBJECTS) $(WE
 	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
 
 # The value grammar does not need the DOM either.
-$(BUILD_DIR)/CssValuesTest: $(OBJ_DIR)/tests/CssValuesTest.o $(OBJ_DIR)/src/css/Tokenizer.o $(OBJ_DIR)/src/css/Syntax.o $(OBJ_DIR)/src/css/Values.o $(OBJ_DIR)/src/css/Shorthands.o $(OBJ_DIR)/src/css/Properties.o $(OBJ_DIR)/src/css/PropertyData.o
+$(BUILD_DIR)/CssValuesTest: $(OBJ_DIR)/tests/CssValuesTest.o $(OBJ_DIR)/src/css/Tokenizer.o $(OBJ_DIR)/src/css/Syntax.o $(OBJ_DIR)/src/css/Values.o $(OBJ_DIR)/src/css/Calc.o $(OBJ_DIR)/src/css/Color.o $(OBJ_DIR)/src/css/Shorthands.o $(OBJ_DIR)/src/css/Properties.o $(OBJ_DIR)/src/css/PropertyData.o
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^
 

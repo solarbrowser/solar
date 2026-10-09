@@ -113,6 +113,16 @@
       }
     }
   };
+  globalThis.assert_approx_equals = (actual, expected, epsilon, description) => {
+    if (typeof actual !== 'number') fail('expected a number but got ' + describe(actual), description);
+    if (!(Math.abs(actual - expected) <= epsilon)) fail('expected ' + describe(expected) + ' +/- ' + epsilon + ' but got ' + describe(actual), description);
+  };
+  globalThis.assert_array_approx_equals = (actual, expected, epsilon, description) => {
+    if (actual.length !== expected.length) fail('lengths differ, expected ' + expected.length + ' but got ' + actual.length, description);
+    for (let i = 0; i < expected.length; i++) {
+      if (!(Math.abs(actual[i] - expected[i]) <= epsilon)) fail('index ' + i + ': expected ' + describe(expected[i]) + ' +/- ' + epsilon + ' but got ' + describe(actual[i]), description);
+    }
+  };
   globalThis.assert_throws_js = (constructor, func, description) => {
     try {
       func();

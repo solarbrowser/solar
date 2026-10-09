@@ -3,10 +3,10 @@
 <script src="/resources/testharnessreport.js"></script>
 <body><script>
 const cases = [
- ["color","red","red"],["color","RED","red"],["color","banana",""],["width","10PX","10px"],["width","calc(10px + 5%)","calc(10px + 5%)"],
+ ["color","red","red"],["color","RED","red"],["color","banana",""],["width","10PX","10px"],["width","calc(10px + 5%)","calc(5% + 10px)"],
  ["width","auto","auto"],["width","-5px",""],["margin-top","1.50em","1.5em"],["opacity","0.50","0.5"],["z-index","3","3"],["z-index","1.5",""],
  ["display","BLOCK","block"],["display","banana",""],["transition-duration","1s, 200ms","1s, 200ms"],["font-family","Arial, sans-serif","Arial, sans-serif"],
- ["background-image","url(a.png)","url(\"a.png\")"],["aspect-ratio","16/9","16 / 9"],["width","min(1px, 2px)","min(1px, 2px)"],["width","calc(1px*2)","calc(1px * 2)"],
+ ["background-image","url(a.png)","url(\"a.png\")"],["aspect-ratio","16/9","16 / 9"],["width","min(1px, 2px)","calc(1px)"],["width","calc(1px*2)","calc(2px)"],
  ["width","calc(1px+2px)",""],["border-top-width","thin","thin"],["flex-grow","-1",""],["line-height","1.2","1.2"],["height","initial","initial"],["height","var(--x)","var(--x)"],
 ];
 for (const [p,v,exp] of cases) test(() => { const e=document.createElement("div"); e.style.setProperty(p,v); assert_equals(e.style.getPropertyValue(p), exp); }, p+": "+v);
