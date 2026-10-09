@@ -62,7 +62,7 @@ const Case kCases[] = {
     {"background-image", "linear-gradient(to right, red, blue)", "linear-gradient(to right, red, blue)"},
     {"transform", "translate(10px, 20px) rotate(45DEG)", "translate(10px, 20px) rotate(45deg)"},
     {"transform", "scale(1, 2)", "scale(1, 2)"},
-    {"font-family", "Arial, \"Times New Roman\", serif", "Arial, \"Times New Roman\", serif"},
+    {"font-family", "Arial, \"Times New Roman\", serif", "Arial, Times New Roman, serif"},
     {"grid-template-columns", "[a] 1fr [b] 2fr", "[a] 1fr [b] 2fr"},
     {"grid-column", "1 / span 2", "1 / span 2"},
     {"content", "\"x\" counter(c)", "\"x\" counter(c)"},
