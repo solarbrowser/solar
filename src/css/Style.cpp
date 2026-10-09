@@ -384,6 +384,86 @@ bool Resolver::SubstituteValues(dom::Element* element, const std::string& pseudo
       }
       continue;
     }
+    if (v.kind == Cv::Kind::Function && Lower(v.name) == "attr") {
+      AttrCall call;
+      Cv head = v;
+      if (ContainsSubstitution(v.children)) {
+        // var() in the name and type; the fallback is substituted only if it is used.
+        size_t comma = v.children.size();
+        for (size_t i = 0; i < v.children.size(); ++i) {
+          if (v.children[i].IsToken(T::Comma)) {
+            comma = i;
+            break;
+          }
+        }
+        const ComponentValues before(v.children.begin(), v.children.begin() + comma);
+        head.children.clear();
+        if (!SubstituteValues(element, pseudo, before, head.children, depth + 1, stack)) return false;
+        head.children.insert(head.children.end(), v.children.begin() + comma, v.children.end());
+      }
+      if (!ParseAttrCall(head, call)) return false;
+      const dom::Attr* attribute = nullptr;
+      if (!call.hasNamespace) {
+        attribute = call.anyNamespace ? element->FindAttribute(call.name) : element->FindAttribute("", call.name);
+        if (!attribute && element->namespaceUri == "http://www.w3.org/1999/xhtml") {
+          const std::string lower = Lower(call.name);
+          attribute = call.anyNamespace ? element->FindAttribute(lower) : element->FindAttribute("", lower);
+        }
+      }
+      ComponentValues produced;
+      bool ok = false;
+      if (attribute) {
+        const std::string& text = attribute->value;
+        switch (call.type) {
+          case AttrCall::Type::Raw: {
+            Cv string;
+            string.token.type = T::String;
+            string.token.value = text;
+            produced.push_back(string);
+            ok = true;
+            break;
+          }
+          case AttrCall::Type::Number:
+          case AttrCall::Type::Unit: {
+            const ComponentValues parsed = Trimmed(ParseComponentValues(text));
+            if (parsed.size() == 1 && parsed[0].IsToken(T::Number)) {
+              Cv number = parsed[0];
+              if (call.type == AttrCall::Type::Unit) {
+                number.token.type = call.unit == "%" ? T::Percentage : T::Dimension;
+                if (call.unit != "%") number.token.value = call.unit;
+              }
+              produced.push_back(number);
+              ok = true;
+            }
+            break;
+          }
+          case AttrCall::Type::Syntax: {
+            const ComponentValues parsed = Trimmed(ParseComponentValues(text));
+            ValueMatch match;
+            if (!parsed.empty() && !ContainsSubstitution(parsed) && (call.syntax == "*" || MatchSyntax(call.syntax, parsed, match))) {
+              produced = parsed;
+              for (Cv& p : produced) {
+                if (p.IsToken(T::Dimension)) p.token.value = Lower(p.token.value);
+              }
+              ok = true;
+            }
+            break;
+          }
+        }
+      }
+      if (ok) {
+        for (Cv& p : produced) out.push_back(p);
+      } else if (call.hasFallback) {
+        if (!SubstituteValues(element, pseudo, call.fallback, out, depth + 1, stack)) return false;
+      } else if (!call.explicitType || call.type == AttrCall::Type::Raw) {
+        Cv empty;
+        empty.token.type = T::String;
+        out.push_back(empty);
+      } else {
+        return false;
+      }
+      continue;
+    }
     if (v.kind != Cv::Kind::Token && ContainsSubstitution(v.children)) {
       Cv copy = v;
       copy.children.clear();

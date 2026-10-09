@@ -52,6 +52,22 @@ std::string SerializeValue(const ComponentValues& values);
 // A number as CSS writes it: the shortest text that reads back as the same value, no exponent, no trailing zeros.
 std::string FormatNumber(double number);
 
+// attr( <attr-name> <attr-type>? , <declaration-value>? ), taken apart.
+struct AttrCall {
+  enum class Type { Raw, Number, Unit, Syntax };
+  bool anyNamespace = false;  // *|name
+  bool hasNamespace = false;  // prefix|name (the prefix is in `prefix`)
+  std::string prefix;
+  std::string name;
+  Type type = Type::Raw;
+  bool explicitType = false;
+  std::string unit;    // for Unit: "%" or the unit
+  std::string syntax;  // for Syntax
+  ComponentValues fallback;
+  bool hasFallback = false;
+};
+bool ParseAttrCall(const ComponentValue& function, AttrCall& out);
+
 // The CSS-wide keywords (initial, inherit, unset, revert, revert-layer) a value can be on its own.
 bool IsCssWideKeyword(const ComponentValues& values);
 // Whether a value has a var(), env() or attr() in it, so that it is known only when it is used.

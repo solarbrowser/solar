@@ -643,8 +643,88 @@ bool IsCssWideKeyword(const ComponentValues& values) {
   return trimmed.size() == 1 && trimmed[0].IsIdent() && IsCssWide(Lower(trimmed[0].token.value));
 }
 
+bool ParseAttrCall(const ComponentValue& v, AttrCall& out) {
+  if (v.kind != ComponentValue::Kind::Function || Lower(v.name) != "attr") return false;
+  std::vector<ComponentValue> items;
+  size_t comma = v.children.size();
+  for (size_t i = 0; i < v.children.size(); ++i) {
+    if (v.children[i].IsToken(T::Comma)) {
+      comma = i;
+      break;
+    }
+    if (!v.children[i].IsWhitespace()) items.push_back(v.children[i]);
+  }
+  // Name: ident, |ident, ns|ident, *|ident; the parts are adjacent so look at the written text.
+  std::string nameText;
+  size_t n = 0;
+  while (n < v.children.size() && v.children[n].IsWhitespace()) ++n;
+  for (; n < v.children.size() && n < comma; ++n) {
+    if (v.children[n].IsWhitespace()) break;
+    const ComponentValue& c = v.children[n];
+    if (c.IsIdent()) nameText += c.token.value;
+    else if (c.IsDelim('|')) nameText += "|";
+    else if (c.IsDelim('*')) nameText += "*";
+    else return false;
+  }
+  if (nameText.empty()) return false;
+  const size_t bar = nameText.find('|');
+  if (bar == std::string::npos) {
+    out.name = nameText;
+  } else {
+    out.name = nameText.substr(bar + 1);
+    const std::string prefix = nameText.substr(0, bar);
+    if (prefix == "*") out.anyNamespace = true;
+    else if (!prefix.empty()) out.hasNamespace = true, out.prefix = prefix;
+  }
+  if (out.name.empty() || out.name.find('|') != std::string::npos || out.name.find('*') != std::string::npos) return false;
+  while (n < comma && v.children[n].IsWhitespace()) ++n;
+  if (n < comma) {
+    const ComponentValue& t = v.children[n];
+    size_t end = n + 1;
+    if (t.kind == ComponentValue::Kind::Function && Lower(t.name) == "type") {
+      out.type = AttrCall::Type::Syntax;
+      out.syntax = Serialize(Trimmed(t.children));
+      if (out.syntax.empty()) return false;
+    } else if (t.IsIdent()) {
+      const std::string word = Lower(t.token.value);
+      static const std::set<std::string> units = {"em", "ex", "cap", "ch", "ic", "lh", "rem", "rex", "rcap", "rch", "ric", "rlh", "vw", "vh", "vi", "vb", "vmin", "vmax", "svw", "svh", "lvw", "lvh", "dvw", "dvh", "cqw", "cqh", "cqi", "cqb", "cqmin", "cqmax", "cm", "mm", "q", "in", "pt", "pc", "px", "deg", "grad", "rad", "turn", "s", "ms", "hz", "khz", "dpi", "dpcm", "dppx", "x", "fr"};
+      if (word == "raw-string") out.type = AttrCall::Type::Raw;
+      else if (word == "number") out.type = AttrCall::Type::Number;
+      else if (units.count(word)) out.type = AttrCall::Type::Unit, out.unit = t.token.value;
+      else return false;
+    } else if (t.IsDelim('%')) {
+      out.type = AttrCall::Type::Unit;
+      out.unit = "%";
+    } else if (t.IsToken(T::Percentage)) {
+      return false;
+    } else {
+      return false;
+    }
+    out.explicitType = true;
+    while (end < comma && v.children[end].IsWhitespace()) ++end;
+    if (end < comma) return false;
+  }
+  if (comma < v.children.size()) {
+    out.hasFallback = true;
+    out.fallback.assign(v.children.begin() + comma + 1, v.children.end());
+  }
+  return true;
+}
+
 bool ValidSubstitutions(const ComponentValues& values) {
   for (const ComponentValue& v : values) {
+    if (v.kind == ComponentValue::Kind::Function && Lower(v.name) == "attr") {
+      AttrCall call;
+      bool hasVar = false;
+      for (const ComponentValue& c : v.children) hasVar = hasVar || (c.kind == ComponentValue::Kind::Function && Lower(c.name) == "var");
+      if (hasVar) {
+        if (!ValidSubstitutions(v.children)) return false;
+        continue;  // the name is known only once the var()s are substituted
+      }
+      if (!ParseAttrCall(v, call)) return false;
+      if (call.hasFallback && !ValidSubstitutions(call.fallback)) return false;
+      continue;
+    }
     if (v.kind == ComponentValue::Kind::Function && Lower(v.name) == "var") {
       // var( --name [, fallback]? ): after the name there is the end or a comma.
       size_t i = 0;
