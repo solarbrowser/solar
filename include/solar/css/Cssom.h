@@ -46,6 +46,10 @@ struct DeclarationEntry {
   std::string name;
   std::string value;
   bool important = false;
+  // A longhand set by a shorthand with a var() in it has no value of its own until the variable is known: it reads as
+  // empty, and the shorthand's text is kept here.
+  std::string pendingShorthand;
+  std::string pendingText;
 };
 
 // A CSSStyleDeclaration: the declarations of a style rule, a style attribute, or the computed style of an element.
@@ -64,6 +68,11 @@ struct CssDeclarations : Quanta::DOMObject {
   bool Set(Quanta::Context& ctx, const std::string& name, const std::string& value, bool important);
   std::string Remove(Quanta::Context& ctx, const std::string& name);
   const DeclarationEntry* Find(const std::string& name) const;
+  // A declaration of a property (a shorthand is expanded into its longhands); false if the value is not valid for it.
+  bool Apply(const std::string& name, const std::string& text, bool important);
+  // What getPropertyValue and getPropertyPriority answer; a shorthand is answered from its longhands.
+  std::string ValueOf(const std::string& name) const;
+  std::string PriorityOf(const std::string& name) const;
   // Told to the owner: a style attribute is rewritten, a rule's sheet is marked changed.
   void Changed(Quanta::Context& ctx);
 
@@ -192,10 +201,19 @@ std::string DeleteRule(Quanta::Context& ctx, CssStyleSheet* sheet, CssRule* pare
 // Whether a property name is one this engine knows (or a custom property), lowercased in `name` if so.
 bool NormalizePropertyName(std::string& name);
 
+// ---- Feature queries ----
+
+// CSS.supports(property, value): whether the engine takes the declaration.
+bool SupportsDeclaration(const std::string& property, const std::string& value);
+// The condition of @supports and CSS.supports(condition): its truth, false for one that is not a <supports-condition>.
+bool SupportsCondition(const ComponentValues& condition);
+
 // ---- Binding ----
 
 // Defines the CSSOM interfaces in a realm; the prototypes are kept there for NewRule and the rest.
 void DefineCssomClasses(Quanta::Context& ctx);
+// Defines the native that the CSS namespace's supports() is (as __solarCssSupports, for the script that makes CSS to take).
+void InstallCssSupports(Quanta::Context& ctx);
 // The StyleSheet of a <style> or <link> element, made and parsed on demand; null if the element has none.
 CssStyleSheet* StyleSheetOfElement(Quanta::Context& ctx, dom::Element* element);
 // Re-reads the sheet of an element whose text, type or media changed (<style>), or that was inserted or removed.

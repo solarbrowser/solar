@@ -116,8 +116,7 @@ bool CssDeclarations::IndexedGetter(Context& ctx, CssDeclarations& self, uint32_
 bool CssDeclarations::NamedGetter(Context& ctx, CssDeclarations& self, const std::string& name, Value& out) {
   const std::string property = PropertyForIdlName(name);
   if (property.empty()) return false;
-  const DeclarationEntry* entry = self.Find(property);
-  out = qe::FromWtf8(ctx, entry ? entry->value : "");
+  out = qe::FromWtf8(ctx, self.ValueOf(property));
   return true;
 }
 
@@ -212,15 +211,13 @@ Value DeclGetPropertyValue(Context& ctx, Value t, qe::Args args, Value) {
   CssDeclarations* self = This<CssDeclarations>(ctx, t);
   if (!self || !NeedArgs(ctx, args, 1, "getPropertyValue")) return qe::Undefined();
   const std::string name = PropertyKey(ArgString(ctx, args, 0));
-  const DeclarationEntry* entry = self->Find(name);
-  return qe::FromWtf8(ctx, entry ? entry->value : "");
+  return qe::FromWtf8(ctx, self->ValueOf(name));
 }
 
 Value DeclGetPropertyPriority(Context& ctx, Value t, qe::Args args, Value) {
   CssDeclarations* self = This<CssDeclarations>(ctx, t);
   if (!self || !NeedArgs(ctx, args, 1, "getPropertyPriority")) return qe::Undefined();
-  const DeclarationEntry* entry = self->Find(PropertyKey(ArgString(ctx, args, 0)));
-  return qe::FromWtf8(ctx, entry && entry->important ? "important" : "");
+  return qe::FromWtf8(ctx, self->PriorityOf(PropertyKey(ArgString(ctx, args, 0))));
 }
 
 Value DeclSetProperty(Context& ctx, Value t, qe::Args args, Value) {
@@ -1033,6 +1030,33 @@ void StyleAttributeChanged(dom::Element* element) {
   declarations->updatingAttribute = true;
   declarations->SetText(*ctx, style ? style->value : "");
   declarations->updatingAttribute = false;
+}
+
+// CSS.supports(property, value) and CSS.supports(condition).
+Value CssSupports(Context& ctx, Value, qe::Args args, Value) {
+  if (args.empty()) {
+    qe::ThrowTypeError(ctx, "Failed to execute 'supports' on 'CSS': 1 argument required, but only 0 present.");
+    return qe::Undefined();
+  }
+  const std::string first = qe::ToWtf8(ctx, args[0]);
+  if (qe::HasException(ctx)) return qe::Undefined();
+  if (args.size() >= 2) {
+    const std::string second = qe::ToWtf8(ctx, args[1]);
+    if (qe::HasException(ctx)) return qe::Undefined();
+    return qe::FromBool(SupportsDeclaration(first, second));
+  }
+  const ComponentValues condition = ParseComponentValues(first);
+  if (SupportsCondition(condition)) return qe::FromBool(true);
+  // A declaration without its parentheses is taken as if it had them.
+  ComponentValue block;
+  block.kind = ComponentValue::Kind::Block;
+  block.open = Token::Type::LeftParen;
+  block.children = condition;
+  return qe::FromBool(SupportsCondition({block}));
+}
+
+void InstallCssSupports(Context& ctx) {
+  qe::DefineGlobalFunction(ctx, "__solarCssSupports", CssSupports, 1);
 }
 
 void DefineCssomClasses(Context& ctx) {

@@ -113,6 +113,8 @@ void Install(Host& host) {
   // The CSS namespace object: an object with static operations and no constructor.
   host.Evaluate("globalThis.CSS = Object.create(Object.prototype); Object.defineProperty(CSS, Symbol.toStringTag, { value: 'CSS', configurable: true });");
   qe::DefineGlobalFunction(ctx, "__solarCssEscape", Escape, 1);
+  InstallCssSupports(ctx);
+  host.Evaluate("Object.defineProperty(CSS, 'supports', { value: __solarCssSupports, writable: true, enumerable: true, configurable: true }); delete globalThis.__solarCssSupports;");
   host.Evaluate("Object.defineProperty(CSS, 'escape', { value: __solarCssEscape, writable: true, enumerable: true, configurable: true }); delete globalThis.__solarCssEscape;");
 }
 

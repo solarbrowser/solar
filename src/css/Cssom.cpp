@@ -1,4 +1,6 @@
 #include "solar/css/Cssom.h"
+#include "solar/css/Shorthands.h"
+#include "solar/css/Values.h"
 
 #include <algorithm>
 #include <cctype>
@@ -37,109 +39,25 @@ std::string Trim(const std::string& text) {
 
 // ---- Properties ----
 
-namespace {
-
-const std::set<std::string>& KnownProperties() {
-  static const std::set<std::string> names = {
-      "align-content", "align-items", "align-self", "all", "animation", "animation-delay", "animation-direction", "animation-duration",
-      "animation-fill-mode", "animation-iteration-count", "animation-name", "animation-play-state", "animation-timing-function",
-      "appearance", "aspect-ratio", "backdrop-filter", "backface-visibility", "background", "background-attachment", "background-blend-mode",
-      "background-clip", "background-color", "background-image", "background-origin", "background-position", "background-position-x",
-      "background-position-y", "background-repeat", "background-size", "block-size", "border", "border-block", "border-block-color",
-      "border-block-end", "border-block-end-color", "border-block-end-style", "border-block-end-width", "border-block-start",
-      "border-block-start-color", "border-block-start-style", "border-block-start-width", "border-block-style", "border-block-width",
-      "border-bottom", "border-bottom-color", "border-bottom-left-radius", "border-bottom-right-radius", "border-bottom-style",
-      "border-bottom-width", "border-collapse", "border-color", "border-image", "border-inline", "border-inline-color", "border-inline-end",
-      "border-inline-end-color", "border-inline-end-style", "border-inline-end-width", "border-inline-start", "border-inline-start-color",
-      "border-inline-start-style", "border-inline-start-width", "border-inline-style", "border-inline-width", "border-left",
-      "border-left-color", "border-left-style", "border-left-width", "border-radius", "border-right", "border-right-color",
-      "border-right-style", "border-right-width", "border-spacing", "border-style", "border-top", "border-top-color",
-      "border-top-left-radius", "border-top-right-radius", "border-top-style", "border-top-width", "border-width", "bottom", "box-shadow",
-      "box-sizing", "break-after", "break-before", "break-inside", "caption-side", "caret-color", "clear", "clip", "clip-path", "color",
-      "color-scheme", "column-count", "column-fill", "column-gap", "column-rule", "column-rule-color", "column-rule-style",
-      "column-rule-width", "column-span", "column-width", "columns", "contain", "content", "counter-increment", "counter-reset",
-      "counter-set", "cursor", "direction", "display", "empty-cells", "fill", "filter", "flex", "flex-basis", "flex-direction",
-      "flex-flow", "flex-grow", "flex-shrink", "flex-wrap", "float", "font", "font-family", "font-feature-settings", "font-kerning",
-      "font-size", "font-size-adjust", "font-stretch", "font-style", "font-variant", "font-variant-caps", "font-variant-east-asian",
-      "font-variant-ligatures", "font-variant-numeric", "font-variation-settings", "font-weight", "gap", "grid", "grid-area",
-      "grid-auto-columns", "grid-auto-flow", "grid-auto-rows", "grid-column", "grid-column-end", "grid-column-gap", "grid-column-start",
-      "grid-gap", "grid-row", "grid-row-end", "grid-row-gap", "grid-row-start", "grid-template", "grid-template-areas",
-      "grid-template-columns", "grid-template-rows", "height", "hyphens", "image-rendering", "inline-size", "inset", "inset-block",
-      "inset-block-end", "inset-block-start", "inset-inline", "inset-inline-end", "inset-inline-start", "isolation", "justify-content",
-      "justify-items", "justify-self", "left", "letter-spacing", "line-break", "line-height", "list-style", "list-style-image",
-      "list-style-position", "list-style-type", "margin", "margin-block", "margin-block-end", "margin-block-start", "margin-bottom",
-      "margin-inline", "margin-inline-end", "margin-inline-start", "margin-left", "margin-right", "margin-top", "mask", "max-block-size",
-      "max-height", "max-inline-size", "max-width", "min-block-size", "min-height", "min-inline-size", "min-width", "mix-blend-mode",
-      "object-fit", "object-position", "opacity", "order", "orphans", "outline", "outline-color", "outline-offset", "outline-style",
-      "outline-width", "overflow", "overflow-anchor", "overflow-wrap", "overflow-x", "overflow-y", "padding", "padding-block",
-      "padding-block-end", "padding-block-start", "padding-bottom", "padding-inline", "padding-inline-end", "padding-inline-start",
-      "padding-left", "padding-right", "padding-top", "page-break-after", "page-break-before", "page-break-inside", "perspective",
-      "perspective-origin", "place-content", "place-items", "place-self", "pointer-events", "position", "quotes", "resize", "right",
-      "rotate", "row-gap", "scale", "scroll-behavior", "scroll-margin", "scroll-padding", "scrollbar-color", "scrollbar-width",
-      "shape-outside", "table-layout", "tab-size", "text-align", "text-align-last", "text-decoration", "text-decoration-color",
-      "text-decoration-line", "text-decoration-style", "text-decoration-thickness", "text-indent", "text-justify", "text-overflow",
-      "text-shadow", "text-transform", "text-underline-offset", "text-underline-position", "top", "touch-action", "transform",
-      "transform-origin", "transform-style", "transition", "transition-delay", "transition-duration", "transition-property",
-      "transition-timing-function", "translate", "unicode-bidi", "user-select", "vertical-align", "visibility", "white-space",
-      "widows", "width", "will-change", "word-break", "word-spacing", "word-wrap", "writing-mode", "z-index", "zoom",
-  };
-  return names;
-}
-
-}  // namespace
-
 bool NormalizePropertyName(std::string& name) {
   if (name.size() >= 2 && name[0] == '-' && name[1] == '-') return name.size() > 2;
-  std::string lower = Lower(name);
-  if (lower.size() > 1 && lower[0] == '-' && lower[1] != '-') {
-    // A vendor prefix: the engine does not know what it means, but the property is there for script to set and read.
-    if (lower.starts_with("-webkit-") || lower.starts_with("-moz-") || lower.starts_with("-ms-") || lower.starts_with("-o-")) {
-      name = lower;
-      return true;
-    }
+  const std::string lower = Lower(name);
+  if (FindProperty(lower)) {
+    name = lower;
+    return true;
   }
-  if (KnownProperties().count(lower) == 0) return false;
-  name = lower;
-  return true;
+  // A vendor prefix: the engine does not know what it means, but the property is there for script to set and read.
+  if (lower.size() > 1 && lower[0] == '-' && lower[1] != '-' &&
+      (lower.starts_with("-webkit-") || lower.starts_with("-moz-") || lower.starts_with("-ms-") || lower.starts_with("-o-"))) {
+    name = lower;
+    return true;
+  }
+  return false;
 }
 
 // ---- Declarations ----
 
-const DeclarationEntry* CssDeclarations::Find(const std::string& name) const {
-  for (const DeclarationEntry& entry : items) {
-    if (entry.name == name) return &entry;
-  }
-  return nullptr;
-}
-
-std::string CssDeclarations::Serialize() const {
-  std::string out;
-  for (const DeclarationEntry& entry : items) {
-    if (!out.empty()) out += ' ';
-    out += entry.name + ": " + entry.value + (entry.important ? " !important" : "") + ";";
-  }
-  return out;
-}
-
 namespace {
-
-// Whether `value` (already trimmed) is a value the property may be given, and its serialization.
-bool ParseValue(const std::string& name, const std::string& text, std::string& out) {
-  const ComponentValues values = ParseComponentValues(text);
-  // A ; or an unbalanced bit that closes the declaration is not a value.
-  if (name.starts_with("--")) {
-    out = Serialize(Trimmed(values));
-    return true;
-  }
-  const ComponentValues trimmed = Trimmed(values);
-  if (trimmed.empty()) return false;
-  for (const ComponentValue& value : trimmed) {
-    if (value.IsToken(T::Semicolon) || value.IsToken(T::BadString) || value.IsToken(T::BadUrl) || value.IsToken(T::RightBrace) || value.IsToken(T::RightParen) || value.IsToken(T::RightBracket)) return false;
-    if (value.IsDelim('!')) return false;
-  }
-  out = Serialize(trimmed);
-  return true;
-}
 
 void AddOrReplace(std::vector<DeclarationEntry>& items, DeclarationEntry entry) {
   for (DeclarationEntry& existing : items) {
@@ -153,16 +71,154 @@ void AddOrReplace(std::vector<DeclarationEntry>& items, DeclarationEntry entry) 
 
 }  // namespace
 
+const DeclarationEntry* CssDeclarations::Find(const std::string& name) const {
+  for (const DeclarationEntry& entry : items) {
+    if (entry.name == name) return &entry;
+  }
+  return nullptr;
+}
+
+bool CssDeclarations::Apply(const std::string& name, const std::string& text, bool important) {
+  if (name.starts_with("--")) {
+    AddOrReplace(items, {name, css::Serialize(Trimmed(ParseComponentValues(text))), important, "", ""});
+    return true;
+  }
+  const ComponentValues values = Trimmed(ParseComponentValues(text));
+  if (values.empty()) return false;
+  for (const ComponentValue& value : values) {
+    if (value.IsToken(T::Semicolon) || value.IsToken(T::BadString) || value.IsToken(T::BadUrl) || value.IsToken(T::RightBrace) || value.IsToken(T::RightParen) || value.IsToken(T::RightBracket)) return false;
+    if (value.IsDelim('!')) return false;
+  }
+  std::vector<Longhand> longhands;
+  if (!ExpandDeclaration(name, css::Serialize(values), longhands)) return false;
+  for (Longhand& longhand : longhands) AddOrReplace(items, {longhand.name, longhand.value, important, longhand.pendingShorthand, longhand.pendingText});
+  return true;
+}
+
+namespace {
+
+// The value a block gives a shorthand, from its longhands: nothing when it has not all of them, or they differ in
+// priority, or cannot be written as the shorthand.
+std::optional<std::string> ShorthandValue(const std::vector<DeclarationEntry>& items, const PropertyDefinition& shorthand, std::optional<bool>& important) {
+  const auto entryOf = [&](const std::string& name) -> const DeclarationEntry* {
+    for (const DeclarationEntry& entry : items) {
+      if (entry.name == name) return &entry;
+    }
+    return nullptr;
+  };
+  // Pending on a var(): every longhand is, on this very text.
+  size_t pendingCount = 0;
+  const std::vector<std::string> leaves = LeavesOf(shorthand);
+  for (const std::string& leaf : leaves) {
+    const DeclarationEntry* entry = entryOf(leaf);
+    if (!entry) return std::nullopt;
+    if (!entry->pendingShorthand.empty()) ++pendingCount;
+  }
+  if (pendingCount > 0) {
+    if (pendingCount != leaves.size()) return std::nullopt;
+    const DeclarationEntry* first = entryOf(leaves[0]);
+    for (const std::string& leaf : leaves) {
+      const DeclarationEntry* entry = entryOf(leaf);
+      if (entry->pendingShorthand != first->pendingShorthand || entry->pendingText != first->pendingText || entry->important != first->important) return std::nullopt;
+    }
+    if (first->pendingShorthand != shorthand.name) return std::nullopt;
+    if (important && *important != first->important) return std::nullopt;
+    important = first->important;
+    return first->pendingText;
+  }
+  ShorthandInput input;
+  for (const char* name : shorthand.longhands) {
+    const PropertyDefinition* inner = FindProperty(name);
+    std::optional<std::string> value;
+    if (inner && IsShorthandProperty(*inner)) {
+      value = ShorthandValue(items, *inner, important);
+      if (!value) return std::nullopt;
+    } else {
+      const DeclarationEntry* found = entryOf(name);
+      if (!found) return std::nullopt;
+      if (important && *important != found->important) return std::nullopt;
+      important = found->important;
+      value = found->value;
+    }
+    input.values.push_back(*value);
+    input.pending.push_back(false);
+  }
+  // What the shorthand resets must be what it would reset: the initial values.
+  for (const std::string& leaf : ResetLeavesOf(shorthand)) {
+    const DeclarationEntry* found = entryOf(leaf);
+    if (!found) return std::nullopt;
+    const PropertyDefinition* inner = FindProperty(leaf);
+    if (!(found->value == "initial" || (inner && found->value == InitialValueText(*inner)))) return std::nullopt;
+  }
+  return SerializeShorthand(shorthand, input);
+}
+
+}  // namespace
+
+std::string CssDeclarations::ValueOf(const std::string& name) const {
+  const PropertyDefinition* definition = FindProperty(name);
+  if (definition && IsShorthandProperty(*definition)) {
+    std::optional<bool> important;
+    return ShorthandValue(items, *definition, important).value_or("");
+  }
+  const DeclarationEntry* entry = Find(name);
+  return entry ? entry->value : "";
+}
+
+std::string CssDeclarations::PriorityOf(const std::string& name) const {
+  const PropertyDefinition* definition = FindProperty(name);
+  if (definition && IsShorthandProperty(*definition)) {
+    const std::vector<std::string> leaves = LeavesOf(*definition);
+    if (leaves.empty()) return "";
+    for (const std::string& leaf : leaves) {
+      const DeclarationEntry* entry = Find(leaf);
+      if (!entry || !entry->important) return "";
+    }
+    return "important";
+  }
+  const DeclarationEntry* entry = Find(name);
+  return entry && entry->important ? "important" : "";
+}
+
+std::string CssDeclarations::Serialize() const {
+  std::string out;
+  std::set<std::string> done;
+  for (const DeclarationEntry& entry : items) {
+    if (done.count(entry.name)) continue;
+    bool written = false;
+    if (!entry.pendingShorthand.empty() || FindProperty(entry.name)) {
+      for (const PropertyDefinition* shorthand : ShorthandsOf(entry.name)) {
+        const std::vector<std::string> leaves = LeavesOf(*shorthand);
+        bool all = true;
+        for (const std::string& leaf : leaves) all = all && Find(leaf) && !done.count(leaf);
+        if (!all) continue;
+        std::optional<bool> important;
+        const std::optional<std::string> value = ShorthandValue(items, *shorthand, important);
+        if (!value) continue;
+        if (!out.empty()) out += ' ';
+        out += std::string(shorthand->name) + ": " + *value + (important.value_or(false) ? " !important" : "") + ";";
+        for (const std::string& leaf : leaves) done.insert(leaf);
+        written = true;
+        break;
+      }
+    }
+    if (written) continue;
+    done.insert(entry.name);
+    if (!entry.pendingShorthand.empty()) continue;  // known only once its variables are
+    if (!out.empty()) out += ' ';
+    out += entry.name + ": " + entry.value + (entry.important ? " !important" : "") + ";";
+  }
+  return out;
+}
+
 void CssDeclarations::SetText(Context& ctx, std::string_view text) {
   items.clear();
   for (const BlockItem& item : ParseBlockContents(text)) {
     if (!item.isDeclaration) continue;
     std::string name = item.declaration.name;
     if (!NormalizePropertyName(name)) continue;
-    std::string value;
     const std::string source = name.starts_with("--") ? item.declaration.originalText : css::Serialize(Trimmed(item.declaration.value));
-    if (!ParseValue(name, source, value)) continue;
-    AddOrReplace(items, {name, value, item.declaration.important});
+    Apply(name, source, item.declaration.important);
   }
   Changed(ctx);
 }
@@ -170,9 +226,7 @@ void CssDeclarations::SetText(Context& ctx, std::string_view text) {
 bool CssDeclarations::Set(Context& ctx, const std::string& propertyName, const std::string& value, bool important) {
   std::string name = propertyName;
   if (!NormalizePropertyName(name)) return false;
-  std::string serialized;
-  if (!ParseValue(name, value, serialized)) return false;
-  AddOrReplace(items, {name, serialized, important});
+  if (!Apply(name, value, important)) return false;
   Changed(ctx);
   return true;
 }
@@ -180,15 +234,22 @@ bool CssDeclarations::Set(Context& ctx, const std::string& propertyName, const s
 std::string CssDeclarations::Remove(Context& ctx, const std::string& propertyName) {
   std::string name = propertyName;
   if (!name.starts_with("--")) name = Lower(name);
-  for (auto it = items.begin(); it != items.end(); ++it) {
-    if (it->name == name) {
-      std::string old = it->value;
-      items.erase(it);
-      Changed(ctx);
-      return old;
+  const std::string old = ValueOf(name);
+  const PropertyDefinition* definition = FindProperty(name);
+  std::vector<std::string> targets = definition ? LeavesOf(*definition) : std::vector<std::string>{name};
+  if (targets.empty()) targets.push_back(name);
+  bool removed = false;
+  for (const std::string& target : targets) {
+    for (auto it = items.begin(); it != items.end(); ++it) {
+      if (it->name == target) {
+        items.erase(it);
+        removed = true;
+        break;
+      }
     }
   }
-  return "";
+  if (removed) Changed(ctx);
+  return old;
 }
 
 void CssDeclarations::Changed(Context& ctx) {
@@ -426,9 +487,7 @@ CssDeclarations* DeclarationsFrom(Context& ctx, const std::vector<BlockItem>& it
     std::string name = item.declaration.name;
     if (!NormalizePropertyName(name)) continue;
     const std::string source = name.starts_with("--") ? item.declaration.originalText : Serialize(Trimmed(item.declaration.value));
-    std::string value;
-    if (!ParseValue(name, source, value)) continue;
-    AddOrReplace(declarations->items, {name, value, item.declaration.important});
+    declarations->Apply(name, source, item.declaration.important);
   }
   return declarations;
 }
@@ -815,5 +874,84 @@ std::string DeleteRule(Context&, CssStyleSheet* sheet, CssRule* parent, uint32_t
   list.erase(list.begin() + index);
   return "";
 }
+
+}  // namespace solar::css
+
+namespace solar::css {
+
+bool SupportsDeclaration(const std::string& property, const std::string& value) {
+  std::string name = property;
+  if (!NormalizePropertyName(name)) return false;
+  const ComponentValues values = Trimmed(ParseComponentValues(value));
+  if (name.starts_with("--")) return true;
+  if (values.empty()) return false;
+  std::vector<Longhand> out;
+  return ExpandDeclaration(name, Serialize(values), out);
+}
+
+namespace {
+
+// <supports-in-parens>: (condition), (declaration), selector(...), or something unknown, which is false.
+std::optional<bool> InParens(const ComponentValue& v);
+
+std::optional<bool> Condition(const ComponentValues& values) {
+  size_t i = 0;
+  const auto skip = [&] {
+    while (i < values.size() && values[i].IsWhitespace()) ++i;
+  };
+  skip();
+  if (i >= values.size()) return std::nullopt;
+  const auto word = [&](size_t at) { return at < values.size() && values[at].IsIdent() ? Lower(values[at].token.value) : std::string(); };
+  if (word(i) == "not") {
+    ++i;
+    skip();
+    if (i >= values.size()) return std::nullopt;
+    const std::optional<bool> inner = InParens(values[i++]);
+    skip();
+    if (!inner || i != values.size()) return std::nullopt;
+    return !*inner;
+  }
+  std::optional<bool> result = InParens(values[i++]);
+  if (!result) return std::nullopt;
+  std::string op;
+  for (;;) {
+    skip();
+    if (i >= values.size()) return result;
+    const std::string w = word(i);
+    if ((w != "and" && w != "or") || (!op.empty() && op != w)) return std::nullopt;
+    op = w;
+    ++i;
+    skip();
+    if (i >= values.size()) return std::nullopt;
+    const std::optional<bool> next = InParens(values[i++]);
+    if (!next) return std::nullopt;
+    result = w == "and" ? (*result && *next) : (*result || *next);
+  }
+}
+
+std::optional<bool> InParens(const ComponentValue& v) {
+  if (v.IsBlock(T::LeftParen)) {
+    const ComponentValues inner = Trimmed(v.children);
+    // A declaration: ident, colon, value.
+    if (inner.size() >= 2 && inner[0].IsIdent() && (inner[1].IsToken(T::Colon) || (inner.size() > 2 && inner[1].IsWhitespace() && inner[2].IsToken(T::Colon)))) {
+      Declaration declaration;
+      if (!ParseDeclaration(Serialize(inner), declaration)) return false;
+      const std::string value = declaration.name.starts_with("--") ? declaration.originalText : Serialize(Trimmed(declaration.value));
+      return SupportsDeclaration(declaration.name, value);
+    }
+    if (std::optional<bool> nested = Condition(inner)) return *nested;
+    return false;  // general-enclosed
+  }
+  if (v.kind == ComponentValue::Kind::Function) {
+    const std::string name = Lower(v.name);
+    if (name == "selector") return ParseSelectorList(Serialize(Trimmed(v.children))).has_value();
+    return false;  // font-tech(), font-format() and unknown functions
+  }
+  return std::nullopt;
+}
+
+}  // namespace
+
+bool SupportsCondition(const ComponentValues& condition) { return Condition(condition).value_or(false); }
 
 }  // namespace solar::css
