@@ -46,6 +46,7 @@ struct SimpleSelector {
     Lang,          // :lang(): `languages`
     Dir,           // :dir(): `name` is ltr or rtl
     PseudoElement, // never matches an element
+    Nesting,       // &: `list` is the selector list of the rule it is nested in (none: the scoping root)
     Host,          // :host, :host(), :host-context(): `name` says which, `list` is the argument
     Heading,       // :heading and :heading(): `languages` holds the levels asked for
     Unknown,       // a pseudo-class this engine does not know: it matches nothing
@@ -82,6 +83,8 @@ struct ComplexSelector {
   std::vector<Combinator> combinators;
   Combinator leading = Combinator::Descendant;
   bool relative = false;
+  // The first compound is the & that a nested selector gets without writing it: it is not written back.
+  bool implicitNesting = false;
 };
 
 using SelectorList = std::vector<ComplexSelector>;
@@ -91,6 +94,9 @@ using SelectorList = std::vector<ComplexSelector>;
 std::optional<SelectorList> ParseSelectorList(std::string_view text);
 // The same for the selector of a style rule, which may use the prefixes of @namespace rules (checked by the sheet).
 std::optional<SelectorList> ParseSelectorListForRule(std::string_view text);
+// The selector of a style rule nested in another: relative selectors are allowed, and a selector without & is taken to have
+// one in front of it. `parent` is what & stands for (the parent rule's list).
+std::optional<SelectorList> ParseNestedSelectorList(std::string_view text, const std::shared_ptr<SelectorList>& parent);
 
 // "serialize a group of selectors" (CSSOM): the text selectorText answers with.
 std::string SerializeSelectorList(const SelectorList& list);

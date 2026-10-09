@@ -85,6 +85,17 @@ class Parser {
  public:
   explicit Parser(std::vector<Token> tokens, bool allowPrefixes = false) : tokens_(std::move(tokens)), allowPrefixes_(allowPrefixes) {}
 
+  // A list in which every selector may begin with a combinator (nested rules).
+  std::optional<SelectorList> ParseTopRelative() {
+    try {
+      SelectorList list = ParseList(false, true);
+      if (Peek().type != Token::Type::EndOfFile) throw ParseError();
+      return list;
+    } catch (const ParseError&) {
+      return std::nullopt;
+    }
+  }
+
   std::optional<SelectorList> ParseTop() {
     try {
       SelectorList list = ParseList(false, false);
@@ -166,7 +177,7 @@ class Parser {
       case Token::Type::Colon:
         return true;
       case Token::Type::Delim:
-        return token.delim == '*' || token.delim == '.' || token.delim == '|';
+        return token.delim == '*' || token.delim == '.' || token.delim == '|' || token.delim == '&';
       default:
         return false;
     }
@@ -248,7 +259,12 @@ class Parser {
 
   CompoundSelector ParseCompound() {
     CompoundSelector compound;
-    if (auto name = TryParseQualifiedName(true)) {
+    if (Peek().IsDelim('&')) {
+      ++pos_;
+      SimpleSelector nesting;
+      nesting.kind = SimpleSelector::Kind::Nesting;
+      compound.simples.push_back(std::move(nesting));
+    } else if (auto name = TryParseQualifiedName(true)) {
       SimpleSelector simple;
       simple.kind = name->name == "*" ? SimpleSelector::Kind::Universal : SimpleSelector::Kind::Type;
       simple.name = name->name;
@@ -271,6 +287,11 @@ class Parser {
         simple.kind = SimpleSelector::Kind::Class;
         simple.name = Next().value;
         compound.simples.push_back(std::move(simple));
+      } else if (token.IsDelim('&')) {
+        ++pos_;
+        SimpleSelector nesting;
+        nesting.kind = SimpleSelector::Kind::Nesting;
+        compound.simples.push_back(std::move(nesting));
       } else if (token.type == Token::Type::LeftBracket) {
         compound.simples.push_back(ParseAttribute());
       } else if (token.type == Token::Type::Colon) {
@@ -596,6 +617,66 @@ std::optional<SelectorList> ParseSelectorList(std::string_view text) {
   return list;
 }
 
+namespace {
+bool ContainsNesting(const SelectorList& list);
+bool ContainsNestingIn(const ComplexSelector& complex) {
+  for (const CompoundSelector& compound : complex.compounds) {
+    for (const SimpleSelector& simple : compound.simples) {
+      if (simple.kind == SimpleSelector::Kind::Nesting) return true;
+      if (simple.list && ContainsNesting(*simple.list)) return true;
+    }
+  }
+  return false;
+}
+bool ContainsNesting(const SelectorList& list) {
+  for (const ComplexSelector& complex : list) {
+    if (ContainsNestingIn(complex)) return true;
+  }
+  return false;
+}
+void SetNestingParent(SelectorList& list, const std::shared_ptr<SelectorList>& parent) {
+  for (ComplexSelector& complex : list) {
+    for (CompoundSelector& compound : complex.compounds) {
+      for (SimpleSelector& simple : compound.simples) {
+        if (simple.kind == SimpleSelector::Kind::Nesting) simple.list = parent;
+        else if (simple.list) SetNestingParent(*simple.list, parent);
+      }
+    }
+  }
+}
+}  // namespace
+
+std::optional<SelectorList> ParseNestedSelectorList(std::string_view text, const std::shared_ptr<SelectorList>& parent) {
+  Parser parser(Tokenize(text), true);
+  std::optional<SelectorList> list = parser.ParseTopRelative();
+  if (!list || list->empty()) return std::nullopt;
+  for (ComplexSelector& complex : *list) {
+    if (!ContainsNestingIn(complex)) {
+      // No & written: the selector is about what is inside the parent, or what its combinator reaches from it.
+      CompoundSelector nesting;
+      SimpleSelector simple;
+      simple.kind = SimpleSelector::Kind::Nesting;
+      nesting.simples.push_back(simple);
+      complex.compounds.insert(complex.compounds.begin(), nesting);
+      complex.combinators.insert(complex.combinators.begin(), complex.leading);
+      complex.leading = Combinator::Descendant;
+      complex.implicitNesting = true;
+    } else if (complex.relative && complex.leading != Combinator::Descendant) {
+      CompoundSelector nesting;
+      SimpleSelector simple;
+      simple.kind = SimpleSelector::Kind::Nesting;
+      nesting.simples.push_back(simple);
+      complex.compounds.insert(complex.compounds.begin(), nesting);
+      complex.combinators.insert(complex.combinators.begin(), complex.leading);
+      complex.leading = Combinator::Descendant;
+      complex.implicitNesting = true;
+    }
+    complex.relative = false;
+  }
+  SetNestingParent(*list, parent);
+  return list;
+}
+
 std::optional<SelectorList> ParseSelectorListForRule(std::string_view text) {
   Parser parser(Tokenize(text), true);
   std::optional<SelectorList> list = parser.ParseTop();
@@ -620,6 +701,16 @@ Specificity SpecificityOf(const ComplexSelector& selector) {
         case SimpleSelector::Kind::Type:
         case SimpleSelector::Kind::PseudoElement:
           ++result.types;
+          break;
+        case SimpleSelector::Kind::Nesting:
+          if (simple.list) {
+            const Specificity s = Max(*simple.list);
+            result.ids += s.ids;
+            result.classes += s.classes;
+            result.types += s.types;
+          } else {
+            ++result.classes;  // :scope
+          }
           break;
         case SimpleSelector::Kind::Host:
           ++result.classes;
@@ -695,6 +786,7 @@ std::string SerializeSimple(const SimpleSelector& simple) {
       }
       return out + "]";
     }
+    case K::Nesting: return "&";
     case K::Pseudo: return ":" + simple.name;
     case K::Host: return ":" + simple.name + (simple.list ? "(" + SerializeSelectorList(*simple.list) + ")" : "");
     case K::Heading: {

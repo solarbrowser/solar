@@ -407,6 +407,11 @@ bool MatchesSimple(const SimpleSelector& selector, const Element* element, const
       return std::any_of(selector.languages.begin(), selector.languages.end(), [&](const std::string& range) { return MatchesLanguage(range, *language); });
     }
     case SimpleSelector::Kind::Dir: return DirectionOf(element) == selector.value;
+    case SimpleSelector::Kind::Nesting: {
+      if (selector.list) return MatchesSelectorListAt(*selector.list, element, context);
+      // At the top level & is :scope.
+      return context.scope ? element == context.scope : IsRoot(element);
+    }
     case SimpleSelector::Kind::Host: {
       if (!context.host || element != context.host) return false;
       if (!selector.list) return true;

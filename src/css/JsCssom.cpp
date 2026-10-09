@@ -520,9 +520,19 @@ Value StyleRuleSetSelectorText(Context& ctx, Value t, qe::Args args, Value) {
   if (!self || !NeedArgs(ctx, args, 1, "set selectorText")) return qe::Undefined();
   const std::string text = qe::ToWtf8(ctx, args[0]);
   if (qe::HasException(ctx)) return qe::Undefined();
-  std::optional<SelectorList> list = ParseSelectorListForRule(Serialize(Trimmed(ParseComponentValues(text))));
+  std::shared_ptr<SelectorList> nesting;
+  for (const CssRule* up = self->parentRule; up; up = up->parentRule) {
+    if (up->kind == RuleKind::Style) {
+      nesting = up->selectors;
+      break;
+    }
+  }
+  const std::string selectorSource = Serialize(Trimmed(ParseComponentValues(text)));
+  std::optional<SelectorList> list = nesting ? ParseNestedSelectorList(selectorSource, nesting) : ParseSelectorListForRule(selectorSource);
   if (!list || !ResolveNamespaces(*list, self->parentSheet)) return qe::Undefined();
-  self->selectors = std::make_shared<SelectorList>(std::move(*list));
+  // In place: the rules nested in this one hold the very list that & stands for.
+  if (self->selectors) *self->selectors = std::move(*list);
+  else self->selectors = std::make_shared<SelectorList>(std::move(*list));
   self->selectorText = SerializeSelectorList(*self->selectors);
   NoteStyleChange();
   return qe::Undefined();
@@ -1278,6 +1288,17 @@ void DefineCssomClasses(Context& ctx) {
   qe::DefineAccessor(property, "name", RuleName, nullptr);
   Object* layerStatement = DefineRule(ctx, kLayerStatementRule, "CSSLayerStatementRule", ruleBase);
   qe::DefineAccessor(layerStatement, "nameList", LayerNameList, nullptr);
+
+  // The interface objects inherit from their parents' as the prototypes do.
+  const std::pair<const char*, const char*> inherits[] = {
+      {"CSSStyleSheet", "StyleSheet"}, {"CSSGroupingRule", "CSSRule"}, {"CSSConditionRule", "CSSGroupingRule"}, {"CSSStyleRule", "CSSGroupingRule"},
+      {"CSSMediaRule", "CSSConditionRule"}, {"CSSSupportsRule", "CSSConditionRule"}, {"CSSContainerRule", "CSSConditionRule"},
+      {"CSSLayerBlockRule", "CSSGroupingRule"}, {"CSSScopeRule", "CSSGroupingRule"}, {"CSSStartingStyleRule", "CSSGroupingRule"}, {"CSSPageRule", "CSSGroupingRule"},
+      {"CSSNestedDeclarations", "CSSRule"}, {"CSSImportRule", "CSSRule"}, {"CSSNamespaceRule", "CSSRule"}, {"CSSFontFaceRule", "CSSRule"},
+      {"CSSKeyframesRule", "CSSRule"}, {"CSSKeyframeRule", "CSSRule"}, {"CSSCounterStyleRule", "CSSRule"}, {"CSSPropertyRule", "CSSRule"},
+      {"CSSLayerStatementRule", "CSSRule"}};
+  const Value global = qe::FromObject(ctx.get_global_object());
+  for (const auto& [child, parent] : inherits) qe::SetPrototypeOf(ctx, qe::Get(ctx, global, child), qe::Get(ctx, global, parent));
 
   // The members of the DOM that lead to sheets and styles.
   if (Object* element = dom::InterfacePrototype(ctx, dom::Interface::HtmlElement)) qe::DefineAccessor(element, "style", ElementStyle, ElementSetStyle);

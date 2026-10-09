@@ -154,9 +154,16 @@ struct Gatherer {
     if (Beats(candidate, slot)) slot = candidate;
   }
 
-  void Rules(const std::vector<CssRule*>& rules, int layer) {
+  // `outer` is the specificity of the style rule these rules are in, when it matched the element: its nested declarations
+  // apply as it does.
+  void Rules(const std::vector<CssRule*>& rules, int layer, const Specificity* outer = nullptr) {
     for (CssRule* rule : rules) {
       switch (rule->kind) {
+        case RuleKind::NestedDeclarations:
+          if (outer && rule->style) {
+            for (const DeclarationEntry& entry : rule->style->items) Offer(entry, true, false, layer, *outer);
+          }
+          break;
         case RuleKind::Style: {
           if (!rule->selectors || !rule->style) break;
           Specificity best;
@@ -171,14 +178,15 @@ struct Gatherer {
           if (matched) {
             for (const DeclarationEntry& entry : rule->style->items) Offer(entry, true, false, layer, best);
           }
-          // Rules nested in a style rule apply on their own selectors.
+          // Rules nested in a style rule apply on their own selectors; its trailing declarations as it does.
+          Rules(rule->rules, layer, matched ? &best : nullptr);
           break;
         }
         case RuleKind::Media:
-          if (!rule->media || MediaListMatches(rule->media->queries, media)) Rules(rule->rules, layer);
+          if (!rule->media || MediaListMatches(rule->media->queries, media)) Rules(rule->rules, layer, outer);
           break;
         case RuleKind::Supports:
-          if (SupportsCondition(ParseComponentValues(rule->supportsText))) Rules(rule->rules, layer);
+          if (SupportsCondition(ParseComponentValues(rule->supportsText))) Rules(rule->rules, layer, outer);
           break;
         case RuleKind::Import: {
           CssStyleSheet* imported = rule->importedSheet;
@@ -192,7 +200,7 @@ struct Gatherer {
         }
         case RuleKind::LayerBlock: {
           const int id = rule->name.empty() ? LayerId("\x01" + std::to_string(order) + std::to_string(nextLayer), true) : LayerId(rule->name, true);
-          Rules(rule->rules, id);
+          Rules(rule->rules, id, outer);
           break;
         }
         case RuleKind::LayerStatement: {

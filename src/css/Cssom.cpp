@@ -471,32 +471,27 @@ void CssStyleSheet::Visit(Quanta::Visitor& visitor) {
 
 namespace {
 
-std::string Indent(const std::string& text) {
+// The rules inside a rule as its text lists them: one to a line, each after two spaces, empty nested declarations left out.
+std::string Children(const CssRule& rule) {
   std::string out;
-  for (char c : text) {
-    out += c;
-    if (c == '\n') out += "  ";
+  for (const CssRule* inner : rule.rules) {
+    if (inner->kind == RuleKind::NestedDeclarations && (!inner->style || inner->style->items.empty())) continue;
+    out += "  " + inner->CssText() + "\n";
   }
   return out;
 }
 
-std::string GroupBody(const CssRule& rule) {
-  std::string out = " {";
-  for (const CssRule* inner : rule.rules) out += "\n  " + Indent(inner->CssText());
-  return out + "\n}";
-}
+std::string GroupBody(const CssRule& rule) { return " {\n" + Children(rule) + "}"; }
 
 }  // namespace
 
 std::string CssRule::CssText() const {
   switch (kind) {
     case RuleKind::Style: {
-      std::string body = style ? style->Serialize() : "";
-      std::string out = selectorText + " {";
-      if (!body.empty()) out += " " + body;
-      for (const CssRule* inner : rules) out += "\n  " + Indent(inner->CssText());
-      if (!rules.empty()) return out + "\n}";
-      return out + (body.empty() ? " }" : " }");
+      const std::string body = style ? style->Serialize() : "";
+      const std::string children = Children(*this);
+      if (children.empty()) return selectorText + (body.empty() ? " { }" : " { " + body + " }");
+      return selectorText + " {\n" + (body.empty() ? "" : "  " + body + "\n") + children + "}";
     }
     case RuleKind::NestedDeclarations: return style ? style->Serialize() : "";
     case RuleKind::Import: {
@@ -521,7 +516,7 @@ std::string CssRule::CssText() const {
     }
     case RuleKind::CounterStyle: return "@counter-style " + SerializeIdentifier(name) + " { " + (style ? style->Serialize() : "") + " }";
     case RuleKind::Property: return "@property " + name + " { " + (style ? style->Serialize() : "") + " }";
-    case RuleKind::LayerBlock: return "@layer " + (name.empty() ? "" : name + " ") + "{" + (rules.empty() ? "\n}" : GroupBody(*this).substr(2));
+    case RuleKind::LayerBlock: return "@layer " + (name.empty() ? "" : name + " ") + "{\n" + Children(*this) + "}";
     case RuleKind::LayerStatement: return "@layer " + layerName + ";";
     case RuleKind::Container: return "@container " + prelude + GroupBody(*this);
     case RuleKind::Scope: return "@scope" + (prelude.empty() ? "" : " " + prelude) + GroupBody(*this);
@@ -602,9 +597,42 @@ void AddChild(CssRule* parent, CssRule* child) {
 }
 
 // The rules inside the block of a grouping rule; declarations in it (nested style rule context) are kept apart.
-void FillGroup(Context& ctx, CssRule* group, const Rule& syntax, CssStyleSheet* sheet, bool nestedStyle) {
+// The selectors of the style rule that & stands for in the rules inside `parent`: the nearest style rule going outwards.
+std::shared_ptr<SelectorList> NestingParentOf(const CssRule* parent) {
+  for (const CssRule* rule = parent; rule; rule = rule->parentRule) {
+    if (rule->kind == RuleKind::Style) return rule->selectors;
+  }
+  return nullptr;
+}
+
+// mode 0: a rule list. 1: a style rule's block: its declarations and the rules in it. 2: the block of a conditional group
+// rule in a style rule: declarations in it are nested declarations rules.
+void FillGroup(Context& ctx, CssRule* group, const Rule& syntax, CssStyleSheet* sheet, int mode) {
   if (!syntax.hasBlock) return;
-  if (nestedStyle) {
+  if (mode == 2) {
+    const std::vector<BlockItem> items = ParseBlockContents(syntax.block);
+    std::vector<BlockItem> run;
+    const auto flush = [&] {
+      if (run.empty()) return;
+      CssRule* nested = NewRule(ctx, RuleKind::NestedDeclarations);
+      nested->parentRule = group;
+      nested->parentSheet = sheet;
+      nested->style = DeclarationsFrom(ctx, run, nested);
+      AddChild(group, nested);
+      run.clear();
+    };
+    for (const BlockItem& item : items) {
+      if (item.isDeclaration) {
+        run.push_back(item);
+        continue;
+      }
+      flush();
+      if (CssRule* inner = BuildRule(ctx, item.rule, sheet, group)) AddChild(group, inner);
+    }
+    flush();
+    return;
+  }
+  if (mode == 1) {
     // A style rule: declarations and nested rules, in order. The declarations before the first nested rule are the
     // rule's own; the rest are wrapped in nested declarations rules.
     const std::vector<BlockItem> items = ParseBlockContents(syntax.block);
@@ -735,7 +763,8 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
   if (!syntax.isAtRule) {
     // A style rule.
     const std::string text = Serialize(Trimmed(syntax.prelude));
-    std::optional<SelectorList> selectors = ParseSelectorListForRule(text);
+    const std::shared_ptr<SelectorList> nestingParent = NestingParentOf(parent);
+    std::optional<SelectorList> selectors = nestingParent ? ParseNestedSelectorList(text, nestingParent) : ParseSelectorListForRule(text);
     if (!selectors || !ResolveNamespaces(*selectors, sheet)) return nullptr;
     rule = NewRule(ctx, RuleKind::Style);
     rule->selectors = std::make_shared<SelectorList>(std::move(*selectors));
@@ -743,7 +772,7 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
     rule->parentRule = parent;
     rule->parentSheet = sheet;
     rule->isNested = parent != nullptr;
-    FillGroup(ctx, rule, syntax, sheet, true);
+    FillGroup(ctx, rule, syntax, sheet, 1);
     return rule;
   }
   const std::string name = Lower(syntax.name);
@@ -757,7 +786,7 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
     rule->media->SetText(Serialize(Trimmed(syntax.prelude)));
     rule->parentRule = parent;
     rule->parentSheet = sheet;
-    FillGroup(ctx, rule, syntax, sheet, false);
+    FillGroup(ctx, rule, syntax, sheet, NestingParentOf(parent) ? 2 : 0);
     return rule;
   } else if (name == "supports") {
     if (!syntax.hasBlock) return nullptr;
@@ -767,7 +796,7 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
     rule->supportsText = condition;
     rule->parentRule = parent;
     rule->parentSheet = sheet;
-    FillGroup(ctx, rule, syntax, sheet, false);
+    FillGroup(ctx, rule, syntax, sheet, NestingParentOf(parent) ? 2 : 0);
     return rule;
   } else if (name == "namespace") {
     if (parent || syntax.hasBlock) return nullptr;
@@ -829,7 +858,7 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
       rule->name = names;
       rule->parentRule = parent;
       rule->parentSheet = sheet;
-      FillGroup(ctx, rule, syntax, sheet, false);
+      FillGroup(ctx, rule, syntax, sheet, NestingParentOf(parent) ? 2 : 0);
       return rule;
     }
     if (names.empty()) return nullptr;
@@ -865,7 +894,7 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
     rule->prelude = Serialize(Trimmed(syntax.prelude));
     rule->parentRule = parent;
     rule->parentSheet = sheet;
-    FillGroup(ctx, rule, syntax, sheet, false);
+    FillGroup(ctx, rule, syntax, sheet, NestingParentOf(parent) ? 2 : 0);
     return rule;
   } else if (name == "scope") {
     if (!syntax.hasBlock) return nullptr;
@@ -873,14 +902,14 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
     rule->prelude = Serialize(Trimmed(syntax.prelude));
     rule->parentRule = parent;
     rule->parentSheet = sheet;
-    FillGroup(ctx, rule, syntax, sheet, false);
+    FillGroup(ctx, rule, syntax, sheet, NestingParentOf(parent) ? 2 : 0);
     return rule;
   } else if (name == "starting-style") {
     if (!syntax.hasBlock || !Trimmed(syntax.prelude).empty()) return nullptr;
     rule = NewRule(ctx, RuleKind::StartingStyle);
     rule->parentRule = parent;
     rule->parentSheet = sheet;
-    FillGroup(ctx, rule, syntax, sheet, false);
+    FillGroup(ctx, rule, syntax, sheet, NestingParentOf(parent) ? 2 : 0);
     return rule;
   } else {
     return nullptr;
@@ -915,6 +944,19 @@ void ParseSheetInto(Context& ctx, CssStyleSheet* sheet, std::string_view text) {
 CssRule* ParseRuleText(Context& ctx, std::string_view text, CssStyleSheet* sheet, CssRule* parent, size_t index, std::string& error) {
   Rule syntax;
   if (!ParseRule(text, syntax)) {
+    // Inside a style rule a run of declarations is a rule too: a nested declarations rule.
+    if (parent && NestingParentOf(parent)) {
+      const std::vector<BlockItem> items = ParseBlockContents(text);
+      bool all = !items.empty();
+      for (const BlockItem& item : items) all = all && item.isDeclaration;
+      if (all) {
+        CssRule* nested = NewRule(ctx, RuleKind::NestedDeclarations);
+        nested->parentRule = parent;
+        nested->parentSheet = sheet;
+        nested->style = DeclarationsFrom(ctx, items, nested);
+        return nested;
+      }
+    }
     error = "SyntaxError";
     return nullptr;
   }
