@@ -54,7 +54,7 @@ const Case kCases[] = {
     {"z-index", "1.5", "<invalid>"},
     {"z-index", "-3", "-3"},
     {"display", "BLOCK", "block"},
-    {"display", "inline flow-root", "inline flow-root"},
+    {"display", "inline flow-root", "inline-block"},
     {"transition-duration", "1s, 200ms", "1s, 200ms"},
     {"aspect-ratio", "16/9", "16 / 9"},
     {"aspect-ratio", "auto 3 / 4", "auto 3 / 4"},

@@ -994,7 +994,7 @@ const TypeDefinition kTypeDefinitions[] = {
     {"<generic-voice>", "<age>? <gender> <integer [1,∞]>?"},
     {"<geometry-box>", "<shape-box> | fill-box | stroke-box | view-box"},
     {"<gradient>", "[ <linear-gradient()> | <repeating-linear-gradient()> | <radial-gradient()> | <repeating-radial-gradient()> | <conic-gradient()> | <repeating-conic-gradient()> ]"},
-    {"<grid-line>", "auto | <custom-ident> | [ [ <integer [-∞,-1]> | <integer [1,∞]> ] && <custom-ident>? ] | [ span && [ <integer [1,∞]> || <custom-ident> ] ]"},
+    {"<grid-line>", "auto | <grid-ident> | [ <integer> && <grid-ident>? ] | [ span && [ <integer> || <grid-ident> ] ]"},
     {"<highlight-name-selector>", "'*' | <custom-ident>"},
     {"<historical-lig-values>", "[ historical-ligatures | no-historical-ligatures ]"},
     {"<horizontal-line-command>", "hline [ to [ <length-percentage> | left | center | right | x-start | x-end ] | by <length-percentage> ]"},

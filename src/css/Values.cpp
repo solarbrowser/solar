@@ -9,6 +9,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <set>
 #include <unordered_map>
 
 namespace solar::css {
@@ -770,6 +771,9 @@ ComponentValues CanonicalPosition(const ComponentValues& in) {
   return v;
 }
 
+// Properties that keep a combination in the order it was written.
+thread_local bool g_keepWrittenOrder = false;
+
 class Matcher {
  public:
   using K = std::function<bool(size_t)>;
@@ -829,8 +833,8 @@ class Matcher {
           assigned_.resize(assignedMark);
         }
         return false;
-      case Kind::AllOf: return MatchUnordered(node, 0, 0, pos, true, k);
-      case Kind::AnyOf: return MatchUnordered(node, 0, 0, pos, false, k);
+      case Kind::AllOf: return MatchUnordered(node, 0, 0, pos, true, k, pos, assigned_.size(), {});
+      case Kind::AnyOf: return MatchUnordered(node, 0, 0, pos, false, k, pos, assigned_.size(), {});
       case Kind::Repeat: return MatchRepeat(node, 0, pos, k);
       case Kind::NonEmpty: return Match(*node.children[0], pos, [&, pos](size_t end) { return end > pos && k(end); });
       case Kind::Function: return MatchContainer(node, pos, k, true);
@@ -877,19 +881,68 @@ class Matcher {
   }
 
   // && (every child, any order) and || (at least one, any order, each once). `used` is a bit set of the children done.
-  bool MatchUnordered(const SyntaxNode& node, unsigned used, unsigned count, size_t pos, bool all, const K& k) {
+  struct Part {
+    size_t child, begin, end;
+  };
+
+  // Put what the parts matched in the order the syntax lists them (properties whose tests keep the order written excepted) ("canonical order: per grammar"), and move the
+  // assignments made inside them along.
+  void Reorder(const std::vector<Part>& parts, size_t start, size_t assignedFrom) {
+    if (g_keepWrittenOrder) return;
+    std::vector<Part> sorted = parts;
+    std::sort(sorted.begin(), sorted.end(), [](const Part& a, const Part& b) { return a.child < b.child; });
+    bool changed = false;
+    for (size_t i = 0; i < parts.size(); ++i) changed = changed || parts[i].child != sorted[i].child;
+    if (!changed) return;
+    std::vector<ComponentValue> joined;
+    std::vector<std::pair<Part, size_t>> moved;  // the part and where it begins now
+    for (const Part& part : sorted) {
+      moved.push_back({part, start + joined.size()});
+      for (size_t i = part.begin; i < part.end; ++i) joined.push_back(out_[i]);
+    }
+    for (size_t i = 0; i < joined.size(); ++i) Set(start + i, joined[i]);
+    for (size_t a = assignedFrom; a < assigned_.size(); ++a) {
+      for (const auto& [part, begin] : moved) {
+        if (assigned_[a].begin >= part.begin && assigned_[a].end <= part.end && assigned_[a].begin < part.end) {
+          const size_t shift = begin - part.begin;
+          assigned_[a].begin += shift;
+          assigned_[a].end += shift;
+          break;
+        }
+      }
+    }
+  }
+
+  // && (every child, any order) and || (at least one, any order, each once). `used` is a bit set of the children done.
+  bool MatchUnordered(const SyntaxNode& node, unsigned used, unsigned count, size_t pos, bool all, const K& k, size_t start, size_t assignedFrom, std::vector<Part> parts) {
     const size_t n = node.children.size();
-    if (used == (1u << n) - 1) return k(pos);
+    const auto finish = [&]() {
+      const size_t mark = log_.size();
+      const std::vector<ValueMatch::Assignment> savedAssignments(assigned_.begin() + assignedFrom, assigned_.end());
+      Reorder(parts, start, assignedFrom);
+      if (k(pos)) return true;
+      Rollback(mark);
+      assigned_.resize(assignedFrom);
+      assigned_.insert(assigned_.end(), savedAssignments.begin(), savedAssignments.end());
+      return false;
+    };
+    if (used == (1u << n) - 1) return finish();
     for (size_t i = 0; i < n; ++i) {
       if (used & (1u << i)) continue;
       const size_t mark = log_.size();
       const size_t assignedMark = assigned_.size();
-      if (Match(*node.children[i], pos, [&, i](size_t next) { return MatchUnordered(node, used | (1u << i), count + 1, next, all, k); })) return true;
+      if (Match(*node.children[i], pos, [&, i](size_t next) {
+            std::vector<Part> extended = parts;
+            extended.push_back({i, pos, next});
+            return MatchUnordered(node, used | (1u << i), count + 1, next, all, k, start, assignedFrom, extended);
+          })) {
+        return true;
+      }
       Rollback(mark);
       assigned_.resize(assignedMark);
     }
     // || may stop once something matched.
-    if (!all && count > 0) return k(pos);
+    if (!all && count > 0) return finish();
     return false;
   }
 
@@ -1120,6 +1173,12 @@ class Matcher {
       const std::string lower = Lower(v.token.value);
       return !IsCssWide(lower) && lower != "default";
     }
+    if (name == "grid-ident") {
+      // The name of a grid line: any identifier but span (and auto, which is a keyword of its own here).
+      if (!(isToken && v.token.type == T::Ident)) return false;
+      const std::string lower = Lower(v.token.value);
+      return !IsCssWide(lower) && lower != "default" && lower != "span" && lower != "auto";
+    }
     if (name == "dashed-ident") return isToken && v.token.type == T::Ident && v.token.value.size() > 2 && v.token.value.starts_with("--");
     if (name == "url-token") return isToken && v.token.type == T::Url;
     if (name == "number-token") return isToken && v.token.type == T::Number;
@@ -1165,8 +1224,56 @@ bool MatchSyntax(std::string_view syntax, const ComponentValues& values, ValueMa
   return true;
 }
 
+namespace {
+
+// The shortest way display is written (css-display-3, "Short display").
+void CanonicalDisplay(ValueMatch& match) {
+  std::vector<std::string> words;
+  for (const ComponentValue& v : match.normalized) {
+    if (v.IsWhitespace()) continue;
+    if (!v.IsIdent()) return;
+    words.push_back(Lower(v.token.value));
+  }
+  std::string outside, inside;
+  bool listItem = false;
+  for (const std::string& w : words) {
+    if (w == "block" || w == "inline" || w == "run-in") outside = w;
+    else if (w == "flow" || w == "flow-root" || w == "table" || w == "flex" || w == "grid" || w == "ruby") inside = w;
+    else if (w == "list-item") listItem = true;
+    else return;  // a keyword of its own
+  }
+  if (words.size() == 1 && outside.empty() && inside.empty() && !listItem) return;
+  if (inside.empty()) inside = "flow";
+  if (outside.empty()) outside = inside == "ruby" ? "inline" : "block";
+  std::string text;
+  if (listItem) {
+    text = (outside == "block" ? "" : outside + " ") + (inside == "flow" ? "" : inside + " ") + "list-item";
+  } else if (inside == "flow") {
+    text = outside;
+  } else if (inside == "flow-root") {
+    text = outside == "block" ? "flow-root" : outside == "inline" ? "inline-block" : outside + " flow-root";
+  } else if (inside == "ruby") {
+    text = outside == "inline" ? "ruby" : outside + " ruby";
+  } else {
+    text = outside == "block" ? inside : outside == "inline" ? "inline-" + inside : outside + " " + inside;
+  }
+  match.normalized.clear();
+  for (const ComponentValue& v : ParseComponentValues(text)) {
+    if (!v.IsWhitespace()) match.normalized.push_back(v);
+  }
+  match.assigned.clear();
+}
+
+}  // namespace
+
 bool MatchPropertyValue(const PropertyDefinition& property, const ComponentValues& values, ValueMatch& out, const ComputeContext* compute) {
-  return MatchSyntax(property.syntax, values, out, compute);
+  static const std::set<std::string> keepOrder = {"image-resolution", "hanging-punctuation", "word-space-transform"};
+  g_keepWrittenOrder = keepOrder.count(property.name) > 0;
+  const bool matched = MatchSyntax(property.syntax, values, out, compute);
+  g_keepWrittenOrder = false;
+  if (!matched) return false;
+  if (std::string(property.name) == "display") CanonicalDisplay(out);
+  return true;
 }
 
 // ---- Serialization ----

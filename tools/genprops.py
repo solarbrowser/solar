@@ -28,7 +28,7 @@ def cstr(s):
 # Types whose syntax the specifications give only in prose.
 SUPPLEMENT = {
     "<alpha-value>": "<number> | <percentage>",
-    "<grid-line>": "auto | <custom-ident> | [ <integer> && <custom-ident>? ] | [ span && [ <integer> || <custom-ident> ] ]",
+    "<grid-line>": "auto | <grid-ident> | [ <integer> && <grid-ident>? ] | [ span && [ <integer> || <grid-ident> ] ]",
     "<cursor-image>": "<url> [ <number> <number> ]?",
     "<feature-tag-value>": "<string> [ <integer [0,\u221e]> | on | off ]?",
     "<palette-identifier>": "<dashed-ident>",
@@ -42,6 +42,7 @@ SUPPLEMENT = {
 
 # Where the machine-readable syntax is not what browsers accept.
 OVERRIDE = {
+    "<grid-line>": "auto | <grid-ident> | [ <integer> && <grid-ident>? ] | [ span && [ <integer> || <grid-ident> ] ]",
     "<paint>": "none | <color> | <url> [ none | <color> ]? | context-fill | context-stroke",
 }
 

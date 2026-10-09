@@ -68,7 +68,7 @@ void FlattenLeavesImpl(const PropertyDefinition& property, std::vector<std::stri
 
 std::string InitialValueText(const PropertyDefinition& property) {
   const std::string initial = property.initial;
-  if (initial.empty() || !property.longhands.empty()) return "initial";
+  if (initial.empty()) return "initial";
   const ComponentValues values = Trimmed(ParseComponentValues(initial));
   ValueMatch match;
   if (!values.empty() && MatchPropertyValue(property, values, match)) return SerializeValue(match.normalized);
