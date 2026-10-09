@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <climits>
+#include <cstdio>
 #include <cmath>
 #include <deque>
 #include <map>
@@ -280,7 +281,7 @@ class Resolver {
  private:
   std::optional<std::string> Substitute(dom::Element* element, const std::string& pseudo, const std::string& text, int depth, std::set<std::string>& stack);
   bool SubstituteValues(dom::Element* element, const std::string& pseudo, const ComponentValues& in, ComponentValues& out, int depth, std::set<std::string>& stack);
-  ComputeContext ContextFor(dom::Element* element, const std::string& property, const std::string& pseudo);
+  ComputeContext ContextFor(dom::Element* element, const std::string& property, const std::string& pseudo, const std::string& text);
   std::string Specified(dom::Element* element, const std::string& property, const PropertyDefinition& definition, bool& valid, const std::string& pseudo);
   std::string Finish(dom::Element* element, const std::string& property, const PropertyDefinition& definition, const std::string& specified, ComputeContext& context, const std::string& pseudo);
 
@@ -423,7 +424,7 @@ std::optional<std::string> Resolver::Custom(dom::Element* element, const std::st
   const auto initialOf = [&]() -> std::optional<std::string> {
     if (!registration || !registration->initialValue) return std::nullopt;
     if (registration->universal()) return registration->initialValue;
-    ComputeContext context = ContextFor(element, "--", pseudo);
+    ComputeContext context = ContextFor(element, "--", pseudo, *registration->initialValue);
     ValueMatch match;
     if (!MatchSyntax(registration->matcherSyntax, Trimmed(ParseComponentValues(*registration->initialValue)), match, &context)) return std::nullopt;
     return SerializeValue(match.normalized);
@@ -459,7 +460,7 @@ std::optional<std::string> Resolver::Custom(dom::Element* element, const std::st
       inherit = false;
       if (text && registration && !registration->universal()) {
         cycleHit_ = false;
-        ComputeContext context = ContextFor(element, "--", pseudo);
+        ComputeContext context = ContextFor(element, "--", pseudo, *text);
         ValueMatch match;
         if (cycleHit_) {
           // It depends on a value that depends on it.
@@ -512,8 +513,15 @@ Parent ParentOf(dom::Element* element, const std::string& pseudo) {
   return {FlatParent(element), ""};
 }
 
-ComputeContext Resolver::ContextFor(dom::Element* element, const std::string& property, const std::string& pseudo) {
+ComputeContext Resolver::ContextFor(dom::Element* element, const std::string& property, const std::string& pseudo, const std::string& text) {
   ComputeContext c;
+  // What the value needs to be worked out: the sizes and the color only when it says something about them.
+  const bool hasDigit = std::any_of(text.begin(), text.end(), [](char ch) { return ch >= '0' && ch <= '9'; });
+  std::string lowered = text;
+  for (char& ch : lowered) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  const bool needsLineHeight = lowered.find("lh") != std::string::npos;
+  const bool needsColor = lowered.find("currentcolor") != std::string::npos;
+  const bool needsSizes = hasDigit || property == "font-size";
   const Parent parent = ParentOf(element, pseudo);
   const MediaEnvironment& media = CurrentMediaEnvironment();
   c.viewportWidth = media.width;
@@ -526,7 +534,9 @@ ComputeContext Resolver::ContextFor(dom::Element* element, const std::string& pr
     c.rootFontSize = std::isnan(rootSize) ? 16 : rootSize;
   }
   const bool isFontSize = property == "font-size";
-  if (isFontSize) {
+  if (!needsSizes) {
+    // keywords only
+  } else if (isFontSize) {
     const double parentSize = parent.element ? ParsePx(Compute(parent.element, "font-size", parent.pseudo)) : 16;
     c.fontSize = std::isnan(parentSize) ? 16 : parentSize;
     if (root == element && pseudo.empty()) c.rootFontSize = c.fontSize;
@@ -537,7 +547,7 @@ ComputeContext Resolver::ContextFor(dom::Element* element, const std::string& pr
   }
   c.lineHeight = c.fontSize * 1.15;
   c.rootLineHeight = c.rootFontSize * 1.15;
-  if (property != "line-height" && property != "font-size") {
+  if (needsLineHeight && property != "line-height" && property != "font-size") {
     const std::string lh = Compute(element, "line-height", pseudo);
     const double px = ParsePx(lh);
     if (!std::isnan(px)) c.lineHeight = px;
@@ -547,7 +557,9 @@ ComputeContext Resolver::ContextFor(dom::Element* element, const std::string& pr
     }
   }
   // currentcolor: the element's color, and for color itself the parent's.
-  if (property == "color") {
+  if (!needsColor) {
+    c.currentColor = "rgb(0, 0, 0)";
+  } else if (property == "color") {
     c.currentColor = parent.element ? Compute(parent.element, "color", parent.pseudo) : "rgb(0, 0, 0)";
   } else {
     c.currentColor = Compute(element, "color", pseudo);
@@ -636,14 +648,15 @@ std::string Resolver::Compute(dom::Element* element, const std::string& property
   dom::Node* root = dom::ShadowIncludingRoot(element);
   if (!root || !root->IsDocument()) return "";
 
-  bool valid = true;
-  std::string specified = initialOnly ? "initial" : Specified(element, name, *definition, valid, pseudo);
   if (style.resolving.count("\x02" + name)) {
-    cycleHit_ = true;
+    // Only the sizes that lengths are relative to make a cycle of it.
+    if (name == "font-size" || name == "line-height") cycleHit_ = true;
     return "";
   }
   style.resolving.insert("\x02" + name);
-  ComputeContext context = ContextFor(element, name, pseudo);
+  bool valid = true;
+  std::string specified = initialOnly ? "initial" : Specified(element, name, *definition, valid, pseudo);
+  ComputeContext context = ContextFor(element, name, pseudo, specified == "initial" ? InitialValueText(*definition) : specified);
   std::string result = Finish(element, name, *definition, specified, context, pseudo);
   style.resolving.erase("\x02" + name);
   if (!initialOnly) StyleOf(element, pseudo).computed[name] = result;
