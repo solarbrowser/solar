@@ -151,7 +151,7 @@ void CssDeclarations::NamedSetter(Context& ctx, CssDeclarations& self, const std
   const std::string property = PropertyForIdlName(name);
   if (property.empty()) return;
   dom::ReactionsScope reactions(ctx);
-  const std::string text = qe::ToWtf8(ctx, value);
+  const std::string text = value.is_null() ? "" : qe::ToWtf8(ctx, value);  // [LegacyNullToEmptyString]
   if (qe::HasException(ctx)) return;
   if (self.readonly) {
     web::ThrowDomException(ctx, "These styles are computed, and the properties are therefore read-only.", "NoModificationAllowedError");
@@ -253,8 +253,9 @@ Value DeclSetProperty(Context& ctx, Value t, qe::Args args, Value) {
   CssDeclarations* self = This<CssDeclarations>(ctx, t);
   if (!self || !NeedArgs(ctx, args, 2, "setProperty")) return qe::Undefined();
   const std::string name = ArgString(ctx, args, 0);
-  const std::string value = ArgString(ctx, args, 1);
-  const std::string priority = args.size() > 2 && !args[2].is_undefined() ? qe::ToWtf8(ctx, args[2]) : "";
+  // [LegacyNullToEmptyString]
+  const std::string value = args[1].is_null() ? "" : ArgString(ctx, args, 1);
+  const std::string priority = args.size() > 2 && !args[2].is_undefined() ? (args[2].is_null() ? "" : qe::ToWtf8(ctx, args[2])) : "";
   if (qe::HasException(ctx) || !CheckWritable(ctx, self)) return qe::Undefined();
   const std::string key = PropertyKey(name);
   if (value.find_first_not_of(" \t\n\r\f") == std::string::npos) {
@@ -390,7 +391,7 @@ bool CssRuleList::IndexedGetter(Context&, CssRuleList& self, uint32_t index, Val
   return true;
 }
 
-StyleSheetList* NewStyleSheetList(Context& ctx, dom::Document* document) {
+StyleSheetList* NewStyleSheetList(Context& ctx, dom::Node* document) {
   StyleSheetList* list = Make<StyleSheetList>(ctx, kStyleSheetList);
   list->document = document;
   return list;
@@ -1053,6 +1054,14 @@ Value ElementSheet(Context& ctx, Value t, qe::Args, Value) {
 Value DocumentStyleSheets(Context& ctx, Value t, qe::Args, Value) {
   dom::Node* node = dom::ThisNode(ctx, t);
   if (!node) return qe::Undefined();
+  if (node->IsFragment()) {
+    dom::DocumentFragment* fragment = static_cast<dom::DocumentFragment*>(node);
+    if (!fragment->styleSheetList) {
+      fragment->styleSheetList = NewStyleSheetList(ctx, fragment);
+      fragment->NoteWrite();
+    }
+    return qe::FromObject(fragment->styleSheetList);
+  }
   if (!node->IsDocument()) {
     qe::ThrowTypeError(ctx, "Illegal invocation");
     return qe::Undefined();
@@ -1176,6 +1185,28 @@ Object*& AdoptedSlot(dom::Node* node) {
   return node->IsDocument() ? static_cast<dom::Document*>(node)->adoptedStyleSheets : static_cast<dom::DocumentFragment*>(node)->adoptedStyleSheets;
 }
 
+// The array is observable: the engine's own array behind a proxy (made by the script of InstallSelectorApis) that checks what is put
+// in it. These are the checks, and the note that style may have changed.
+Value AdoptValidate(Context& ctx, Value, qe::Args args, Value) {
+  dom::Node* owner = args.size() > 0 ? DOMObject::Cast<dom::Node>(args[0]) : nullptr;
+  CssStyleSheet* sheet = args.size() > 1 ? DOMObject::Cast<CssStyleSheet>(args[1]) : nullptr;
+  if (!sheet) {
+    qe::ThrowTypeError(ctx, "Failed to set the 'adoptedStyleSheets' property: Failed to convert value to 'CSSStyleSheet'.");
+    return qe::Undefined();
+  }
+  dom::Document* document = owner ? (owner->IsDocument() ? static_cast<dom::Document*>(owner) : owner->nodeDocument) : nullptr;
+  if (!sheet->constructed || sheet->constructorDocument != document) {
+    web::ThrowDomException(ctx, "Sharing constructed stylesheets in multiple documents is not allowed", "NotAllowedError");
+    return qe::Undefined();
+  }
+  return qe::Undefined();
+}
+
+Value AdoptChanged(Context&, Value, qe::Args, Value) {
+  NoteStyleChange();
+  return qe::Undefined();
+}
+
 Value GetAdopted(Context& ctx, Value t, qe::Args, Value) {
   dom::Node* node = dom::ThisNode(ctx, t);
   if (!node) return qe::Undefined();
@@ -1185,7 +1216,11 @@ Value GetAdopted(Context& ctx, Value t, qe::Args, Value) {
   }
   Object*& slot = AdoptedSlot(node);
   if (!slot) {
-    slot = qe::NewArray(ctx).as_object();
+    Value make = qe::Get(ctx, qe::FromObject(ctx.get_global_object()), "__solarMakeAdopted");
+    Value owner = qe::FromObject(node);
+    Value made = qe::IsCallable(make) ? qe::Call(ctx, make, qe::Undefined(), qe::Args(&owner, 1)) : qe::NewArray(ctx);
+    if (qe::HasException(ctx)) return qe::Undefined();
+    slot = made.as_object();
     node->NoteWrite();
   }
   return qe::FromObject(slot);
@@ -1198,24 +1233,26 @@ Value SetAdopted(Context& ctx, Value t, qe::Args args, Value) {
     qe::ThrowTypeError(ctx, "Failed to set the 'adoptedStyleSheets' property: The provided value is not a sequence.");
     return qe::Undefined();
   }
-  dom::Document* owner = node->IsDocument() ? static_cast<dom::Document*>(node) : node->nodeDocument;
   const uint32_t length = qe::ToUint32(ctx, qe::Get(ctx, args[0], "length"));
   Value copy = qe::NewArray(ctx);
+  Value owner = qe::FromObject(node);
   for (uint32_t i = 0; i < length; ++i) {
     Value item = qe::Get(ctx, args[0], std::to_string(i));
     if (qe::HasException(ctx)) return qe::Undefined();
-    CssStyleSheet* sheet = DOMObject::Cast<CssStyleSheet>(item);
-    if (!sheet) {
-      qe::ThrowTypeError(ctx, "Failed to set the 'adoptedStyleSheets' property: Failed to convert value to 'CSSStyleSheet'.");
-      return qe::Undefined();
-    }
-    if (!sheet->constructed || sheet->constructorDocument != owner) {
-      web::ThrowDomException(ctx, "Sharing constructed stylesheets in multiple documents is not allowed", "NotAllowedError");
-      return qe::Undefined();
-    }
+    Value checked[] = {owner, item};
+    AdoptValidate(ctx, qe::Undefined(), qe::Args(checked, 2), qe::Undefined());
+    if (qe::HasException(ctx)) return qe::Undefined();
     qe::ArrayPush(ctx, copy, item);
   }
-  AdoptedSlot(node) = copy.as_object();
+  // The same array, with the new contents.
+  Value array = GetAdopted(ctx, t, qe::Args(), qe::Undefined());
+  if (qe::HasException(ctx)) return qe::Undefined();
+  Value replace = qe::Get(ctx, qe::FromObject(ctx.get_global_object()), "__solarReplaceAdopted");
+  if (qe::IsCallable(replace)) {
+    Value arguments[] = {array, copy};
+    qe::Call(ctx, replace, qe::Undefined(), qe::Args(arguments, 2));
+    if (qe::HasException(ctx)) return qe::Undefined();
+  }
   node->NoteWrite();
   NoteStyleChange();
   return qe::Undefined();
@@ -1287,6 +1324,8 @@ Value RegisterProperty(Context& ctx, Value, qe::Args args, Value) {
 void InstallCssSupports(Context& ctx) {
   qe::DefineGlobalFunction(ctx, "__solarCssRegisterProperty", RegisterProperty, 1);
   qe::DefineGlobalFunction(ctx, "__solarCssSupports", CssSupports, 1);
+  qe::DefineGlobalFunction(ctx, "__solarAdoptValidate", AdoptValidate, 2);
+  qe::DefineGlobalFunction(ctx, "__solarAdoptChanged", AdoptChanged, 0);
 }
 
 void DefineCssomClasses(Context& ctx) {
@@ -1457,6 +1496,7 @@ void DefineCssomClasses(Context& ctx) {
   }
   if (Object* shadow = dom::InterfacePrototype(ctx, dom::Interface::ShadowRoot)) {
     qe::DefineAccessor(shadow, "adoptedStyleSheets", GetAdopted, SetAdopted);
+    qe::DefineAccessor(shadow, "styleSheets", DocumentStyleSheets, nullptr);
   }
   for (const char* tag : {"style", "link"}) {
     Object* prototype = dom::HtmlElementPrototype(ctx, tag);

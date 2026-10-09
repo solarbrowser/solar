@@ -170,7 +170,7 @@ struct CssRuleList : Quanta::DOMObject {
 
 // document.styleSheets: the sheets of the document's style and link elements, in tree order, as they are now.
 struct StyleSheetList : Quanta::DOMObject {
-  dom::Document* document = nullptr;
+  dom::Node* document = nullptr;  // the document, or the shadow root, whose style and link elements these are the sheets of
   std::vector<CssStyleSheet*> Sheets() const;
   static bool IndexedGetter(Quanta::Context& ctx, StyleSheetList& self, uint32_t index, Quanta::Value& out);
   static uint32_t IndexedLength(Quanta::Context&, StyleSheetList& self) { return static_cast<uint32_t>(self.Sheets().size()); }
@@ -214,7 +214,7 @@ CssRule* NewRule(Quanta::Context& ctx, RuleKind kind);
 CssDeclarations* NewDeclarations(Quanta::Context& ctx);
 MediaList* NewMediaList(Quanta::Context& ctx);
 CssRuleList* NewRuleList(Quanta::Context& ctx);
-StyleSheetList* NewStyleSheetList(Quanta::Context& ctx, dom::Document* document);
+StyleSheetList* NewStyleSheetList(Quanta::Context& ctx, dom::Node* document);
 
 // Fills a sheet with the rules of `text`: "parse a CSS style sheet".
 void ParseSheetInto(Quanta::Context& ctx, CssStyleSheet* sheet, std::string_view text);

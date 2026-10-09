@@ -112,7 +112,7 @@ bool HasBadTokens(const ComponentValues& values) {
 
 std::vector<DeclarationEntry> ParseDeclarationList(std::string_view text) {
   std::vector<DeclarationEntry> items;
-  for (const BlockItem& item : ParseBlockContents(text)) {
+  for (const BlockItem& item : ParseDeclarationItems(text)) {
     if (!item.isDeclaration) continue;
     std::string name = item.declaration.name;
     if (!NormalizePropertyName(name)) continue;

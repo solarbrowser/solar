@@ -153,6 +153,7 @@ struct DocumentFragment : Node {
   Element* host = nullptr;  // for the content of a <template>, or the shadow host of a shadow root
   bool isShadowRoot = false;
   Quanta::Object* adoptedStyleSheets = nullptr;  // a shadow root's adoptedStyleSheets
+  Quanta::Object* styleSheetList = nullptr;      // a shadow root's styleSheets
 
   void Visit(Quanta::Visitor& visitor);
 };

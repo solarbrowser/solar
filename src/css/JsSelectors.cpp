@@ -116,6 +116,49 @@ void Install(Host& host) {
   InstallCssSupports(ctx);
   host.Evaluate("for (const name of ['CSSRuleList', 'StyleSheetList', 'MediaList', 'CSSStyleDeclaration']) Object.defineProperty(globalThis[name].prototype, Symbol.iterator, { value: Array.prototype[Symbol.iterator], writable: true, configurable: true });");
   host.Evaluate("Object.defineProperty(CSS, 'supports', { value: __solarCssSupports, writable: true, enumerable: true, configurable: true }); delete globalThis.__solarCssSupports; Object.defineProperty(CSS, 'registerProperty', { value: __solarCssRegisterProperty, writable: true, enumerable: true, configurable: true }); delete globalThis.__solarCssRegisterProperty;");
+  // adoptedStyleSheets is an observable array: the engine's array behind a proxy that checks what goes in.
+  host.Evaluate(R"JS((function () {
+    const validate = globalThis.__solarAdoptValidate, changed = globalThis.__solarAdoptChanged;
+    delete globalThis.__solarAdoptValidate;
+    delete globalThis.__solarAdoptChanged;
+    const backings = new WeakMap();
+    const isIndex = (key) => typeof key === 'string' && /^(?:0|[1-9][0-9]*)$/.test(key) && Number(key) < 4294967295;
+    const hide = (name, value) => Object.defineProperty(globalThis, name, { value, writable: true, configurable: true });
+    hide('__solarMakeAdopted', function (owner) {
+      const backing = [];
+      const proxy = new Proxy(backing, {
+        set(target, key, value) {
+          if (isIndex(key)) {
+            validate(owner, value);
+            Reflect.defineProperty(target, key, { value, writable: true, enumerable: true, configurable: true });
+          } else {
+            Reflect.set(target, key, value, target);
+          }
+          changed();
+          return true;
+        },
+        defineProperty(target, key, descriptor) {
+          if (Object.hasOwn(descriptor, 'get') || Object.hasOwn(descriptor, 'set')) throw new TypeError("Failed to define property on 'adoptedStyleSheets': accessors are not allowed");
+          if (isIndex(key) && Object.hasOwn(descriptor, 'value')) validate(owner, descriptor.value);
+          const result = Reflect.defineProperty(target, key, descriptor);
+          changed();
+          return result;
+        },
+        deleteProperty(target, key) {
+          const result = Reflect.deleteProperty(target, key);
+          changed();
+          return result;
+        },
+      });
+      backings.set(proxy, backing);
+      return proxy;
+    });
+    hide('__solarReplaceAdopted', function (proxy, items) {
+      const backing = backings.get(proxy);
+      backing.length = 0;
+      for (let i = 0; i < items.length; ++i) Reflect.defineProperty(backing, String(i), { value: items[i], writable: true, enumerable: true, configurable: true });
+    });
+  })();)JS");
   host.Evaluate("Object.defineProperty(CSS, 'escape', { value: __solarCssEscape, writable: true, enumerable: true, configurable: true }); delete globalThis.__solarCssEscape;");
 }
 

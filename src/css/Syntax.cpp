@@ -347,7 +347,7 @@ bool ParseRule(std::string_view text, Rule& out) {
 
 namespace {
 
-std::vector<BlockItem> ConsumeBlockContents(Stream& in, bool topLevel = false) {
+std::vector<BlockItem> ConsumeBlockContents(Stream& in, bool topLevel = false, bool rulesAllowed = true) {
   std::vector<BlockItem> items;
   for (;;) {
     const T type = in.Peek().type;
@@ -358,7 +358,7 @@ std::vector<BlockItem> ConsumeBlockContents(Stream& in, bool topLevel = false) {
     }
     BlockItem item;
     if (type == T::AtKeyword) {
-      if (ConsumeAtRule(in, true, item.rule)) {
+      if (ConsumeAtRule(in, true, item.rule) && rulesAllowed) {
         item.isDeclaration = false;
         items.push_back(std::move(item));
       }
@@ -370,8 +370,12 @@ std::vector<BlockItem> ConsumeBlockContents(Stream& in, bool topLevel = false) {
       items.push_back(std::move(item));
       continue;
     }
-    // Not a declaration: a nested qualified rule, from the same place.
+    // Not a declaration: a nested qualified rule, from the same place (in a list of declarations, nothing but the remnants).
     in.Reset(mark);
+    if (!rulesAllowed) {
+      ConsumeBadDeclarationRemnants(in, !topLevel);
+      continue;
+    }
     if (ConsumeQualifiedRule(in, !topLevel, T::Semicolon, item.rule)) {
       items.push_back(std::move(item));
     } else {
@@ -386,6 +390,12 @@ std::vector<BlockItem> ConsumeBlockContents(Stream& in, bool topLevel = false) {
 std::vector<BlockItem> ParseBlockContents(const ComponentValues& block) {
   Stream in(block);
   return ConsumeBlockContents(in);
+}
+
+std::vector<BlockItem> ParseDeclarationItems(std::string_view text) {
+  const std::vector<Token> tokens = Tokenize(text);
+  Stream in(tokens);
+  return ConsumeBlockContents(in, true, false);
 }
 
 std::vector<BlockItem> ParseBlockContents(std::string_view text) {

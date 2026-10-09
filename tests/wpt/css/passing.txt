@@ -902,6 +902,8 @@ tests/wpt/css/cssom/HTMLStyleElement-load-event.html
 tests/wpt/css/cssom/MediaList-parsing.html
 tests/wpt/css/cssom/MediaList2.xhtml
 tests/wpt/css/cssom/StyleSheet-properties.html
+tests/wpt/css/cssom/StyleSheetList-constructable-shadow-with-style-recalc.html
+tests/wpt/css/cssom/StyleSheetList-constructable-shadow.html
 tests/wpt/css/cssom/StyleSheetList-constructable-with-style-recalc.html
 tests/wpt/css/cssom/StyleSheetList-constructable.html
 tests/wpt/css/cssom/StyleSheetList.html
@@ -992,6 +994,7 @@ tests/wpt/css/cssom/overflow-serialization.html
 tests/wpt/css/cssom/preferred-stylesheet-reversed-order.html
 tests/wpt/css/cssom/property-accessors.html
 tests/wpt/css/cssom/resolved-border-width.html
+tests/wpt/css/cssom/selectorText-modification-restyle-002.html
 tests/wpt/css/cssom/serialization-CSSDeclaration-with-important.html
 tests/wpt/css/cssom/serialize-all-longhands.html
 tests/wpt/css/cssom/serialize-custom-props.html
@@ -999,8 +1002,10 @@ tests/wpt/css/cssom/serialize-media-rule.html
 tests/wpt/css/cssom/serialize-variable-reference.html
 tests/wpt/css/cssom/serialize-whitespace.html
 tests/wpt/css/cssom/set-selector-text-attachment.html
+tests/wpt/css/cssom/setproperty-null-undefined.html
 tests/wpt/css/cssom/shadow-dom-style-sheet.html
 tests/wpt/css/cssom/shorthand-serialization.html
+tests/wpt/css/cssom/style-attr-stray-braces.tentative.html
 tests/wpt/css/cssom/style-attr-update-across-documents.html
 tests/wpt/css/cssom/style-background-position-longhands.html
 tests/wpt/css/cssom/style-background-position.html
@@ -1014,11 +1019,14 @@ tests/wpt/css/cssom/style-element-inline-important.html
 tests/wpt/css/cssom/style-element-insertion-removal-computed.html
 tests/wpt/css/cssom/style-font-shorthand.html
 tests/wpt/css/cssom/style-global-variable.html
+tests/wpt/css/cssom/style-set-cssText.html
 tests/wpt/css/cssom/style-set-custom-property.html
+tests/wpt/css/cssom/style-set-property.html
 tests/wpt/css/cssom/style-sheet-interfaces-002.html
 tests/wpt/css/cssom/style-width-calc-vh-vw.html
 tests/wpt/css/cssom/stylesheet-cross-origin-redirect-quirks.sub.html
 tests/wpt/css/cssom/system-color-inherit.html
+tests/wpt/css/cssom/system-color-lowercase.html
 tests/wpt/css/cssom/ttwf-cssom-document-extension.html
 tests/wpt/css/cssom/xml-stylesheet-pi-in-doctype.xhtml
 tests/wpt/css/mediaqueries/aspect-ratio-serialization.html

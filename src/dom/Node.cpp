@@ -52,6 +52,7 @@ void DocumentFragment::Visit(Quanta::Visitor& visitor) {
   Node::Visit(visitor);
   visitor.Mark(host);
   visitor.Mark(adoptedStyleSheets);
+  visitor.Mark(styleSheetList);
 }
 
 void Attr::Visit(Quanta::Visitor& visitor) {

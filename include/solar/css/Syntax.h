@@ -64,6 +64,8 @@ bool ParseRule(std::string_view text, Rule& out);
 // "parse a block's contents" as the declarations and rules of a style rule's block, or of a style attribute.
 std::vector<BlockItem> ParseBlockContents(const ComponentValues& block);
 std::vector<BlockItem> ParseBlockContents(std::string_view text);
+// "parse a list of declarations": a style attribute's or cssText's; what is not a declaration is skipped, rules included.
+std::vector<BlockItem> ParseDeclarationItems(std::string_view text);
 // "parse a declaration": exactly one declaration. False if it is not one.
 bool ParseDeclaration(std::string_view text, Declaration& out);
 // "parse a component value": exactly one. False if there are none or more.
