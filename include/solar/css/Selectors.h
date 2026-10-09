@@ -85,6 +85,8 @@ struct ComplexSelector {
   bool relative = false;
   // The first compound is the & that a nested selector gets without writing it: it is not written back.
   bool implicitNesting = false;
+  // A selector scoped by @scope: the implicit & is not written back, nor is a leading combinator's absence.
+  bool hideNesting = false;
 };
 
 using SelectorList = std::vector<ComplexSelector>;
@@ -96,7 +98,11 @@ std::optional<SelectorList> ParseSelectorList(std::string_view text);
 std::optional<SelectorList> ParseSelectorListForRule(std::string_view text);
 // The selector of a style rule nested in another: relative selectors are allowed, and a selector without & is taken to have
 // one in front of it. `parent` is what & stands for (the parent rule's list).
-std::optional<SelectorList> ParseNestedSelectorList(std::string_view text, const std::shared_ptr<SelectorList>& parent);
+std::optional<SelectorList> ParseNestedSelectorList(std::string_view text, const std::shared_ptr<SelectorList>& parent, bool hideNesting = false);
+bool ContainsPseudoElement(const SelectorList& list);
+// The <scope-start> of an @scope rule: a selector list in which & is the parent rule's selector (or the outer scope's root).
+// Pseudo-elements are not allowed in it.
+std::optional<SelectorList> ParseScopeStart(std::string_view text, const std::shared_ptr<SelectorList>& parent);
 
 // "serialize a group of selectors" (CSSOM): the text selectorText answers with.
 std::string SerializeSelectorList(const SelectorList& list);

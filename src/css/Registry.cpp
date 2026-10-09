@@ -81,7 +81,7 @@ std::optional<std::string> ParseSyntaxDefinition(const std::string& text) {
       const std::vector<Token> tokens = Tokenize(part);
       if (tokens.size() != 2 || tokens[0].type != T::Ident || tokens[1].type != T::EndOfFile) return std::nullopt;
       const std::string lower = Lower(tokens[0].value);
-      if (lower == "inherit" || lower == "initial" || lower == "unset" || lower == "revert" || lower == "revert-layer" || lower == "default") return std::nullopt;
+      if (lower == "inherit" || lower == "initial" || lower == "unset" || lower == "revert" || lower == "revert-layer" || lower == "revert-rule" || lower == "default") return std::nullopt;
       item = SerializeIdentifier(tokens[0].value);
     }
     out += (out.empty() ? "" : " | ") + item;

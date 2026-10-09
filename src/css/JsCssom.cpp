@@ -521,14 +521,20 @@ Value StyleRuleSetSelectorText(Context& ctx, Value t, qe::Args args, Value) {
   const std::string text = qe::ToWtf8(ctx, args[0]);
   if (qe::HasException(ctx)) return qe::Undefined();
   std::shared_ptr<SelectorList> nesting;
+  bool inScope = false, nested = false;
   for (const CssRule* up = self->parentRule; up; up = up->parentRule) {
     if (up->kind == RuleKind::Style) {
       nesting = up->selectors;
+      nested = true;
+      break;
+    }
+    if (up->kind == RuleKind::Scope) {
+      inScope = nested = true;
       break;
     }
   }
   const std::string selectorSource = Serialize(Trimmed(ParseComponentValues(text)));
-  std::optional<SelectorList> list = nesting ? ParseNestedSelectorList(selectorSource, nesting) : ParseSelectorListForRule(selectorSource);
+  std::optional<SelectorList> list = nested ? ParseNestedSelectorList(selectorSource, nesting, inScope) : ParseSelectorListForRule(selectorSource);
   if (!list || !ResolveNamespaces(*list, self->parentSheet)) return qe::Undefined();
   // In place: the rules nested in this one hold the very list that & stands for.
   if (self->selectors) *self->selectors = std::move(*list);

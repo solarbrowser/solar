@@ -619,10 +619,12 @@ std::optional<SelectorList> ParseSelectorList(std::string_view text) {
 
 namespace {
 bool ContainsNesting(const SelectorList& list);
+thread_local bool g_scopeCounts = false;  // in @scope, :scope is as good as & for saying what the selector is relative to
 bool ContainsNestingIn(const ComplexSelector& complex) {
   for (const CompoundSelector& compound : complex.compounds) {
     for (const SimpleSelector& simple : compound.simples) {
       if (simple.kind == SimpleSelector::Kind::Nesting) return true;
+      if (g_scopeCounts && simple.kind == SimpleSelector::Kind::Pseudo && simple.pseudo == PseudoClass::Scope) return true;
       if (simple.list && ContainsNesting(*simple.list)) return true;
     }
   }
@@ -633,6 +635,16 @@ bool ContainsNesting(const SelectorList& list) {
     if (ContainsNestingIn(complex)) return true;
   }
   return false;
+}
+void MarkScoped(SelectorList& list) {
+  for (ComplexSelector& complex : list) {
+    for (CompoundSelector& compound : complex.compounds) {
+      for (SimpleSelector& simple : compound.simples) {
+        if (simple.kind == SimpleSelector::Kind::Nesting) simple.value = "scope";
+        else if (simple.list) MarkScoped(*simple.list);
+      }
+    }
+  }
 }
 void SetNestingParent(SelectorList& list, const std::shared_ptr<SelectorList>& parent) {
   for (ComplexSelector& complex : list) {
@@ -646,10 +658,11 @@ void SetNestingParent(SelectorList& list, const std::shared_ptr<SelectorList>& p
 }
 }  // namespace
 
-std::optional<SelectorList> ParseNestedSelectorList(std::string_view text, const std::shared_ptr<SelectorList>& parent) {
+std::optional<SelectorList> ParseNestedSelectorList(std::string_view text, const std::shared_ptr<SelectorList>& parent, bool hideNesting) {
   Parser parser(Tokenize(text), true);
   std::optional<SelectorList> list = parser.ParseTopRelative();
   if (!list || list->empty()) return std::nullopt;
+  g_scopeCounts = hideNesting;
   for (ComplexSelector& complex : *list) {
     if (!ContainsNestingIn(complex)) {
       // No & written: the selector is about what is inside the parent, or what its combinator reaches from it.
@@ -672,8 +685,31 @@ std::optional<SelectorList> ParseNestedSelectorList(std::string_view text, const
       complex.implicitNesting = true;
     }
     complex.relative = false;
+    complex.hideNesting = hideNesting && complex.implicitNesting;
   }
+  g_scopeCounts = false;
+  if (hideNesting) MarkScoped(*list);
   SetNestingParent(*list, parent);
+  return list;
+}
+
+bool ContainsPseudoElement(const SelectorList& list) {
+  for (const ComplexSelector& complex : list) {
+    for (const CompoundSelector& compound : complex.compounds) {
+      for (const SimpleSelector& simple : compound.simples) {
+        if (simple.kind == SimpleSelector::Kind::PseudoElement) return true;
+        if (simple.list && simple.kind != SimpleSelector::Kind::Nesting && ContainsPseudoElement(*simple.list)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+std::optional<SelectorList> ParseScopeStart(std::string_view text, const std::shared_ptr<SelectorList>& parent) {
+  Parser parser(Tokenize(text), true);
+  std::optional<SelectorList> list = parser.ParseTop();
+  if (!list || list->empty() || ContainsPseudoElement(*list)) return std::nullopt;
+  if (parent) SetNestingParent(*list, parent);
   return list;
 }
 
@@ -708,7 +744,7 @@ Specificity SpecificityOf(const ComplexSelector& selector) {
             result.ids += s.ids;
             result.classes += s.classes;
             result.types += s.types;
-          } else {
+          } else if (simple.value != "scope") {
             ++result.classes;  // :scope
           }
           break;
@@ -834,8 +870,13 @@ const char* CombinatorText(Combinator c) {
 std::string SerializeComplexSelector(const ComplexSelector& selector) {
   std::string out;
   if (selector.relative && selector.leading != Combinator::Descendant) out += std::string(CombinatorText(selector.leading)).substr(1);
-  for (size_t i = 0; i < selector.compounds.size(); ++i) {
-    if (i > 0) out += CombinatorText(selector.combinators[i - 1]);
+  size_t first = 0;
+  if (selector.hideNesting && selector.compounds.size() > 1) {
+    first = 1;
+    if (selector.combinators[0] != Combinator::Descendant) out += std::string(CombinatorText(selector.combinators[0])).substr(1);
+  }
+  for (size_t i = first; i < selector.compounds.size(); ++i) {
+    if (i > first) out += CombinatorText(selector.combinators[i - 1]);
     const std::vector<SimpleSelector>& simples = selector.compounds[i].simples;
     for (const SimpleSelector& simple : simples) {
       // A universal selector with nothing to say about the namespace is not written when something else follows it.

@@ -137,6 +137,8 @@ struct CssRule : Quanta::DOMObject {
   std::string name;
   // The prelude of a rule this module keeps as written (container, scope, page): its serialization.
   std::string prelude;
+  // Scope rule: <scope-start> and <scope-end> (none: absent).
+  std::shared_ptr<SelectorList> scopeStart, scopeEnd;
   bool isNested = false;  // a style rule inside another
   // A property rule: what it registers, if it is a valid one.
   std::optional<RegisteredProperty> registered;

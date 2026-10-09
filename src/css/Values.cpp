@@ -631,7 +631,7 @@ bool IsHexColorToken(const ComponentValue& v) {
 }
 
 bool IsCssWide(const std::string& lower) {
-  return lower == "initial" || lower == "inherit" || lower == "unset" || lower == "revert" || lower == "revert-layer";
+  return lower == "initial" || lower == "inherit" || lower == "unset" || lower == "revert" || lower == "revert-layer" || lower == "revert-rule";
 }
 
 }  // namespace

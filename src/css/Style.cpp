@@ -111,6 +111,9 @@ struct Winner {
   Specificity specificity;
   uint32_t order = 0;
   bool author = false;
+  uint32_t rule = 0;  // the rule it came from
+  uint32_t proximity = UINT32_MAX;  // from the scoping root, when in an @scope
+  std::vector<Winner> rest;  // what lost to it, for revert and revert-layer
 };
 
 constexpr int kUnlayered = INT_MAX / 2;
@@ -121,6 +124,7 @@ bool Beats(const Winner& a, const Winner& b) {
   if (a.layer != b.layer) return a.layer > b.layer;
   if (b.specificity < a.specificity) return true;
   if (a.specificity < b.specificity) return false;
+  if (a.proximity != b.proximity) return a.proximity < b.proximity;
   return a.order > b.order;
 }
 
@@ -129,6 +133,8 @@ struct Gatherer {
   MatchContext matchContext;
   std::map<std::string, Winner>& winners;
   uint32_t order = 0;
+  uint32_t ruleSerial = 0;
+  uint32_t proximity = UINT32_MAX;
   std::map<std::string, int> layers;
   int nextLayer = 0;
   const MediaEnvironment& media = CurrentMediaEnvironment();
@@ -148,12 +154,24 @@ struct Gatherer {
     candidate.author = author;
     candidate.specificity = spec;
     candidate.order = ++order;
+    candidate.rule = ruleSerial;
+    candidate.proximity = proximity;
     if (inlineStyle) candidate.specificity = Specificity{1000000, 0, 0};
     // Normal: user agent, author; important: author, user agent. Layers reverse for important declarations.
     candidate.origin = entry.important ? (author ? 2 : 3) : (author ? 1 : 0);
     candidate.layer = entry.important ? (layer == kUnlayered ? -1 : 1000000 - layer) : layer;
     Winner& slot = winners[entry.name];
-    if (Beats(candidate, slot)) slot = candidate;
+    if (Beats(candidate, slot)) {
+      candidate.rest = std::move(slot.rest);
+      if (slot.entry) {
+        Winner lost = slot;
+        lost.rest.clear();
+        candidate.rest.push_back(std::move(lost));
+      }
+      slot = std::move(candidate);
+    } else {
+      slot.rest.push_back(std::move(candidate));
+    }
   }
 
   // `outer` is the specificity of the style rule these rules are in, when it matched the element: its nested declarations
@@ -163,6 +181,7 @@ struct Gatherer {
       switch (rule->kind) {
         case RuleKind::NestedDeclarations:
           if (outer && rule->style) {
+            ++ruleSerial;
             for (const DeclarationEntry& entry : rule->style->items) Offer(entry, true, false, layer, *outer);
           }
           break;
@@ -178,10 +197,65 @@ struct Gatherer {
             }
           }
           if (matched) {
+            ++ruleSerial;
             for (const DeclarationEntry& entry : rule->style->items) Offer(entry, true, false, layer, best);
           }
           // Rules nested in a style rule apply on their own selectors; its trailing declarations as it does.
           Rules(rule->rules, layer, matched ? &best : nullptr);
+          break;
+        }
+        case RuleKind::Scope: {
+          // The scoping roots of the element: the elements it is inside of (or is) that <scope-start> matches, or the parent of
+          // the sheet's owner; those with no <scope-end> element between them and the element.
+          const auto parentElement = [](const dom::Element* e) -> const dom::Element* { return e->parentNode ? dom::AsElement(e->parentNode) : nullptr; };
+          const dom::Element* implicitRoot = nullptr;
+          if (!rule->scopeStart) {
+            const CssStyleSheet* sheet = rule->parentSheet;
+            while (sheet && sheet->ownerRule && sheet->ownerRule->parentSheet) sheet = sheet->ownerRule->parentSheet;
+            if (sheet && sheet->ownerNode && sheet->ownerNode->parentNode) {
+              const dom::Node* parent = sheet->ownerNode->parentNode;
+              if (const dom::Element* e = dom::AsElement(parent)) implicitRoot = e;
+              else if (parent->IsFragment() && static_cast<const dom::DocumentFragment*>(parent)->isShadowRoot) implicitRoot = static_cast<const dom::DocumentFragment*>(parent)->host;
+            }
+            if (!implicitRoot) break;
+          }
+          bool insideScope = false;
+          for (const CssRule* up = rule->parentRule; up && !insideScope; up = up->parentRule) insideScope = up->kind == RuleKind::Scope;
+          std::vector<std::pair<const dom::Element*, uint32_t>> roots;
+          uint32_t distance = 0;
+          for (const dom::Element* up = element; up; up = parentElement(up), ++distance) {
+            bool isRoot;
+            if (rule->scopeStart) {
+              MatchContext c = matchContext;
+              isRoot = MatchesAny(*rule->scopeStart, up, c);
+            } else {
+              isRoot = up == implicitRoot;
+            }
+            if (!isRoot) continue;
+            if (insideScope && matchContext.scope) {
+              // The root of a scope inside another is in the outer one.
+              bool within = false;
+              for (const dom::Element* x = up; x && !within; x = parentElement(x)) within = x == matchContext.scope;
+              if (!within) continue;
+            }
+            bool limited = false;
+            if (rule->scopeEnd) {
+              MatchContext c = matchContext;
+              c.scope = up;
+              for (const dom::Element* x = element; x && !limited; x = x == up ? nullptr : parentElement(x)) limited = MatchesAny(*rule->scopeEnd, x, c);
+            }
+            if (!limited) roots.push_back({up, distance});
+          }
+          const dom::Element* savedScope = matchContext.scope;
+          const uint32_t savedProximity = proximity;
+          const Specificity none;
+          for (const auto& [root, d] : roots) {
+            matchContext.scope = root;
+            proximity = d;
+            Rules(rule->rules, layer, root == element ? &none : nullptr);
+          }
+          matchContext.scope = savedScope;
+          proximity = savedProximity;
           break;
         }
         case RuleKind::Media:
@@ -297,6 +371,50 @@ class Resolver {
   bool cycleHit_ = false;  // a property was asked for while it was being worked out
 };
 
+// revert and revert-layer: the declaration is replaced by the one that applies when its origin or layer is left out.
+void RollBack(std::map<std::string, Winner>& winners) {
+  for (auto it = winners.begin(); it != winners.end();) {
+    Winner* w = &it->second;
+    bool gone = false;
+    Winner holder;
+    for (;;) {
+      if (w->entry->value.find("evert") == std::string::npos && w->entry->value.find("EVERT") == std::string::npos) break;
+      const ComponentValues value = Trimmed(ParseComponentValues(w->entry->value));
+      if (value.size() != 1 || !value[0].IsIdent()) break;
+      const std::string keyword = Lower(value[0].token.value);
+      if (keyword != "revert" && keyword != "revert-layer" && keyword != "revert-rule") break;
+      const bool layerOnly = keyword == "revert-layer";
+      const bool ruleOnly = keyword == "revert-rule";
+      Winner best;
+      std::vector<Winner> left;
+      for (Winner& c : w->rest) {
+        const bool sameOrigin = c.author == w->author;
+        const bool dropped = ruleOnly ? c.rule == w->rule : layerOnly ? (sameOrigin && c.layer == w->layer && (c.origin == w->origin)) : sameOrigin;
+        if (dropped) continue;
+        left.push_back(std::move(c));
+      }
+      if (left.empty()) {
+        gone = true;
+        break;
+      }
+      size_t top = 0;
+      for (size_t i = 1; i < left.size(); ++i) {
+        if (Beats(left[i], left[top])) top = i;
+      }
+      holder = std::move(left[top]);
+      left.erase(left.begin() + top);
+      holder.rest = std::move(left);
+      w = &holder;
+    }
+    if (gone) {
+      it = winners.erase(it);
+      continue;
+    }
+    if (w == &holder) it->second = std::move(holder);
+    ++it;
+  }
+}
+
 void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo) {
   if (style.built) return;
   style.built = true;
@@ -316,6 +434,7 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
       }
     }
     if (matched) {
+      ++gatherer.ruleSerial;
       for (const DeclarationEntry& entry : rule.declarations) gatherer.Offer(entry, false, false, kUnlayered, best);
     }
   }
@@ -335,6 +454,7 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
     Gatherer inner{element, gatherer.matchContext, style.cascade};
     inner.matchContext.host = element;
     inner.order = gatherer.order;
+    inner.ruleSerial = gatherer.ruleSerial + 1000000;
     for (CssStyleSheet* sheet : SheetsOfTree(element->shadowRoot, element->nodeDocument ? element->nodeDocument->context : nullptr)) {
       if (sheet->disabled || !MediaListMatches(sheet->media ? sheet->media->queries : std::vector<std::string>(), inner.media)) continue;
       inner.hostScoped = true;
@@ -344,8 +464,10 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
   // The style attribute (a pseudo-element has none).
   if (const dom::Attr* attribute = pseudo.empty() ? element->FindAttribute("", "style") : nullptr) {
     style.storage.push_back(ParseDeclarationList(attribute->value));
+    ++gatherer.ruleSerial;
     for (const DeclarationEntry& entry : style.storage.back()) gatherer.Offer(entry, true, true, kUnlayered, Specificity{});
   }
+  RollBack(style.cascade);
 }
 
 // ---- var() ----
