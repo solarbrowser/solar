@@ -83,7 +83,7 @@ const char* const kPseudoElements[] = {"before", "after", "first-line", "first-l
 
 class Parser {
  public:
-  explicit Parser(std::vector<Token> tokens) : tokens_(std::move(tokens)) {}
+  explicit Parser(std::vector<Token> tokens, bool allowPrefixes = false) : tokens_(std::move(tokens)), allowPrefixes_(allowPrefixes) {}
 
   std::optional<SelectorList> ParseTop() {
     try {
@@ -226,8 +226,10 @@ class Parser {
       if (prefix.IsDelim('*')) {
         result.namespaceName = "*";
       } else {
-        // A prefix names a namespace some @namespace rule declared, and there is none here.
-        throw ParseError();
+        // A prefix names a namespace some @namespace rule declared: a style rule is checked against them afterwards, and
+        // there are none for querySelector.
+        if (!allowPrefixes_) throw ParseError();
+        result.namespaceName = prefix.value;
       }
     }
     const Token& name = Peek();
@@ -536,6 +538,7 @@ class Parser {
   }
 
   std::vector<Token> tokens_;
+  bool allowPrefixes_ = false;
   size_t pos_ = 0;
 };
 
@@ -552,6 +555,13 @@ Specificity Max(const SelectorList& list) {
 
 std::optional<SelectorList> ParseSelectorList(std::string_view text) {
   Parser parser(Tokenize(text));
+  std::optional<SelectorList> list = parser.ParseTop();
+  if (list && list->empty()) return std::nullopt;
+  return list;
+}
+
+std::optional<SelectorList> ParseSelectorListForRule(std::string_view text) {
+  Parser parser(Tokenize(text), true);
   std::optional<SelectorList> list = parser.ParseTop();
   if (list && list->empty()) return std::nullopt;
   return list;
@@ -679,7 +689,12 @@ std::string SerializeComplexSelector(const ComplexSelector& selector) {
   if (selector.relative && selector.leading != Combinator::Descendant) out += std::string(CombinatorText(selector.leading)).substr(1);
   for (size_t i = 0; i < selector.compounds.size(); ++i) {
     if (i > 0) out += CombinatorText(selector.combinators[i - 1]);
-    for (const SimpleSelector& simple : selector.compounds[i].simples) out += SerializeSimple(simple);
+    const std::vector<SimpleSelector>& simples = selector.compounds[i].simples;
+    for (const SimpleSelector& simple : simples) {
+      // A universal selector with nothing to say about the namespace is not written when something else follows it.
+      if (simple.kind == SimpleSelector::Kind::Universal && !simple.namespaceName && simples.size() > 1) continue;
+      out += SerializeSimple(simple);
+    }
   }
   return out;
 }

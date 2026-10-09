@@ -85,6 +85,8 @@ using SelectorList = std::vector<ComplexSelector>;
 // Parses a selector list as querySelector does: nullopt if it is not valid (a SyntaxError). `forgiving`
 // is for the lists of :is() and :where(), where what is invalid is dropped.
 std::optional<SelectorList> ParseSelectorList(std::string_view text);
+// The same for the selector of a style rule, which may use the prefixes of @namespace rules (checked by the sheet).
+std::optional<SelectorList> ParseSelectorListForRule(std::string_view text);
 
 // "serialize a group of selectors" (CSSOM): the text selectorText answers with.
 std::string SerializeSelectorList(const SelectorList& list);
@@ -107,6 +109,8 @@ Specificity SpecificityOf(const ComplexSelector& selector);
 struct MatchContext {
   const dom::Element* scope = nullptr;  // :scope
   bool quirks = false;                   // class and id names compare without regard to case
+  // Matching for a pseudo-element ("before", "first-line"): only selectors that end in it match, and then its element.
+  const std::string* pseudoElement = nullptr;
 };
 
 bool MatchesComplex(const ComplexSelector& selector, const dom::Element* element, const MatchContext& context);

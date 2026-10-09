@@ -11,7 +11,7 @@ namespace solar::css {
 
 // The computed value of a longhand property for an element, as getComputedStyle answers: empty for an element that is not
 // in a document, or a property that has no such value.
-std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std::string& property);
+std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std::string& property, const std::string& pseudo = "");
 
 // The longhand properties getComputedStyle lists, in the order it lists them.
 const std::vector<std::string>& ComputedPropertyNames();

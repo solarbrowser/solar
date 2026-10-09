@@ -77,6 +77,20 @@ std::string InitialValueText(const PropertyDefinition& property) {
 
 bool IsShorthandProperty(const PropertyDefinition& property) { return IsRealShorthand(property); }
 
+const std::vector<std::string>& AllLonghands() {
+  static const std::vector<std::string> names = [] {
+    std::vector<std::string> list;
+    for (size_t i = 0; i < kPropertyDefinitionCount; ++i) {
+      const PropertyDefinition& p = kPropertyDefinitions[i];
+      const std::string name = p.name;
+      if (IsRealShorthand(p) || name == "all" || name == "direction" || name == "unicode-bidi" || name[0] == '-') continue;
+      list.push_back(name);
+    }
+    return list;
+  }();
+  return names;
+}
+
 std::vector<std::string> LeavesOf(const PropertyDefinition& property) {
   std::vector<std::string> leaves;
   FlattenLeavesImpl(property, leaves);
@@ -393,11 +407,7 @@ bool ExpandValue(const PropertyDefinition& property, const ComponentValues& valu
   if (name == "all") {
     if (!IsCssWideKeyword(values)) return false;
     const std::string keyword = Lower(values[0].token.value);
-    for (size_t i = 0; i < kPropertyDefinitionCount; ++i) {
-      const PropertyDefinition& p = kPropertyDefinitions[i];
-      if (IsRealShorthand(p) || p.name == std::string("all") || p.name == std::string("direction") || p.name == std::string("unicode-bidi")) continue;
-      out.push_back({p.name, keyword, "", ""});
-    }
+    for (const std::string& name : AllLonghands()) out.push_back({name, keyword, "", ""});
     return true;
   }
   if (values.empty()) return false;

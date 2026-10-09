@@ -179,6 +179,16 @@ struct Gatherer {
         case RuleKind::Supports:
           if (SupportsCondition(ParseComponentValues(rule->supportsText))) Rules(rule->rules, layer);
           break;
+        case RuleKind::Import: {
+          CssStyleSheet* imported = rule->importedSheet;
+          if (!imported || imported->disabled) break;
+          if (rule->media && !MediaListMatches(rule->media->queries, media)) break;
+          if (!rule->supportsText.empty() && !SupportsCondition(ParseComponentValues(rule->supportsText))) break;
+          int id = layer;
+          if (!rule->layerName.empty()) id = rule->layerName == "\x01" ? LayerId("\x01import" + std::to_string(order) + std::to_string(nextLayer), true) : LayerId(rule->layerName, true);
+          Rules(imported->rules, id);
+          break;
+        }
         case RuleKind::LayerBlock: {
           const int id = rule->name.empty() ? LayerId("\x01" + std::to_string(order) + std::to_string(nextLayer), true) : LayerId(rule->name, true);
           Rules(rule->rules, id);
@@ -231,47 +241,49 @@ struct ElementStyle {
   bool built = false;
 };
 
-std::unordered_map<dom::Element*, ElementStyle>& Cache() {
-  static std::unordered_map<dom::Element*, ElementStyle> cache;
+std::map<std::pair<dom::Element*, std::string>, ElementStyle>& Cache() {
+  static std::map<std::pair<dom::Element*, std::string>, ElementStyle> cache;
   return cache;
 }
 
-ElementStyle& StyleOf(dom::Element* element) {
+ElementStyle& StyleOf(dom::Element* element, const std::string& pseudo = "") {
   static uint64_t cachedVersion = 0;
   const uint64_t version = dom::TreeVersion() * 1000003 + g_styleVersion;
   if (cachedVersion != version) {
     Cache().clear();
     cachedVersion = version;
   }
-  ElementStyle& style = Cache()[element];
+  ElementStyle& style = Cache()[{element, pseudo}];
   style.version = version;
   return style;
 }
 
-void Build(dom::Element* element, ElementStyle& style);
+void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo);
 
 class Resolver {
  public:
   explicit Resolver(Quanta::Context& ctx) : ctx_(ctx) {}
 
-  std::string Compute(dom::Element* element, const std::string& property);
-  std::optional<std::string> Custom(dom::Element* element, const std::string& name);
+  std::string Compute(dom::Element* element, const std::string& property, const std::string& pseudo = "");
+  std::optional<std::string> Custom(dom::Element* element, const std::string& name, const std::string& pseudo = "");
 
  private:
-  std::optional<std::string> Substitute(dom::Element* element, const std::string& text, int depth, std::set<std::string>& stack);
-  bool SubstituteValues(dom::Element* element, const ComponentValues& in, ComponentValues& out, int depth, std::set<std::string>& stack);
-  ComputeContext ContextFor(dom::Element* element, const std::string& property);
-  std::string Specified(dom::Element* element, const std::string& property, const PropertyDefinition& definition, bool& valid);
-  std::string Finish(dom::Element* element, const std::string& property, const PropertyDefinition& definition, const std::string& specified, ComputeContext& context);
+  std::optional<std::string> Substitute(dom::Element* element, const std::string& pseudo, const std::string& text, int depth, std::set<std::string>& stack);
+  bool SubstituteValues(dom::Element* element, const std::string& pseudo, const ComponentValues& in, ComponentValues& out, int depth, std::set<std::string>& stack);
+  ComputeContext ContextFor(dom::Element* element, const std::string& property, const std::string& pseudo);
+  std::string Specified(dom::Element* element, const std::string& property, const PropertyDefinition& definition, bool& valid, const std::string& pseudo);
+  std::string Finish(dom::Element* element, const std::string& property, const PropertyDefinition& definition, const std::string& specified, ComputeContext& context, const std::string& pseudo);
 
   Quanta::Context& ctx_;
 };
 
-void Build(dom::Element* element, ElementStyle& style) {
+void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo) {
   if (style.built) return;
   style.built = true;
   dom::Node* root = dom::ShadowIncludingRoot(element);
-  Gatherer gatherer{element, MatchContext{}, style.cascade};
+  MatchContext matchContext;
+  matchContext.pseudoElement = pseudo.empty() ? nullptr : &pseudo;
+  Gatherer gatherer{element, matchContext, style.cascade};
   // The user agent's rules first, then the author's.
   for (const UserAgentRule& rule : UserAgentRules()) {
     Specificity best;
@@ -295,8 +307,8 @@ void Build(dom::Element* element, ElementStyle& style) {
       gatherer.Rules(sheet->rules, kUnlayered);
     }
   }
-  // The style attribute.
-  if (const dom::Attr* attribute = element->FindAttribute("", "style")) {
+  // The style attribute (a pseudo-element has none).
+  if (const dom::Attr* attribute = pseudo.empty() ? element->FindAttribute("", "style") : nullptr) {
     style.storage.push_back(ParseDeclarationList(attribute->value));
     for (const DeclarationEntry& entry : style.storage.back()) gatherer.Offer(entry, true, true, kUnlayered, Specificity{});
   }
@@ -304,7 +316,7 @@ void Build(dom::Element* element, ElementStyle& style) {
 
 // ---- var() ----
 
-bool Resolver::SubstituteValues(dom::Element* element, const ComponentValues& in, ComponentValues& out, int depth, std::set<std::string>& stack) {
+bool Resolver::SubstituteValues(dom::Element* element, const std::string& pseudo, const ComponentValues& in, ComponentValues& out, int depth, std::set<std::string>& stack) {
   if (depth > 64) return false;
   for (const Cv& v : in) {
     if (v.kind == Cv::Kind::Function && Lower(v.name) == "var") {
@@ -325,14 +337,14 @@ bool Resolver::SubstituteValues(dom::Element* element, const ComponentValues& in
       std::optional<std::string> value;
       if (!stack.count(name)) {
         stack.insert(name);
-        value = Custom(element, name);
+        value = Custom(element, name, pseudo);
         stack.erase(name);
       }
       if (value) {
         ComponentValues parts = ParseComponentValues(*value);
         for (Cv& p : parts) out.push_back(p);
       } else if (hasFallback) {
-        if (!SubstituteValues(element, fallback, out, depth + 1, stack)) return false;
+        if (!SubstituteValues(element, pseudo, fallback, out, depth + 1, stack)) return false;
       } else {
         return false;
       }
@@ -341,7 +353,7 @@ bool Resolver::SubstituteValues(dom::Element* element, const ComponentValues& in
     if (v.kind != Cv::Kind::Token && ContainsSubstitution(v.children)) {
       Cv copy = v;
       copy.children.clear();
-      if (!SubstituteValues(element, v.children, copy.children, depth + 1, stack)) return false;
+      if (!SubstituteValues(element, pseudo, v.children, copy.children, depth + 1, stack)) return false;
       out.push_back(copy);
       continue;
     }
@@ -350,16 +362,16 @@ bool Resolver::SubstituteValues(dom::Element* element, const ComponentValues& in
   return true;
 }
 
-std::optional<std::string> Resolver::Substitute(dom::Element* element, const std::string& text, int depth, std::set<std::string>& stack) {
+std::optional<std::string> Resolver::Substitute(dom::Element* element, const std::string& pseudo, const std::string& text, int depth, std::set<std::string>& stack) {
   ComponentValues out;
-  if (!SubstituteValues(element, ParseComponentValues(text), out, depth, stack)) return std::nullopt;
+  if (!SubstituteValues(element, pseudo, ParseComponentValues(text), out, depth, stack)) return std::nullopt;
   return Serialize(Trimmed(out));
 }
 
 // The value of a custom property on an element: its own, or its parent's; nothing for the guaranteed-invalid value.
-std::optional<std::string> Resolver::Custom(dom::Element* element, const std::string& name) {
-  ElementStyle& style = StyleOf(element);
-  Build(element, style);
+std::optional<std::string> Resolver::Custom(dom::Element* element, const std::string& name, const std::string& pseudo) {
+  ElementStyle& style = StyleOf(element, pseudo);
+  Build(element, style, pseudo);
   const auto cached = style.custom.find(name);
   if (cached != style.custom.end()) return cached->second;
   if (style.resolving.count(name)) return std::nullopt;  // a cycle
@@ -379,14 +391,15 @@ std::optional<std::string> Resolver::Custom(dom::Element* element, const std::st
       inherit = false;
       if (ContainsSubstitution(parsed)) {
         std::set<std::string> stack{name};
-        result = Substitute(element, value, 0, stack);
+        result = Substitute(element, pseudo, value, 0, stack);
       } else {
         result = value;
       }
     }
   }
   if (inherit) {
-    if (dom::Element* parent = FlatParent(element)) result = Custom(parent, name);
+    if (!pseudo.empty()) result = Custom(element, name, "");
+    else if (dom::Element* parent = FlatParent(element)) result = Custom(parent, name, "");
     else result = std::nullopt;
   }
   style.resolving.erase(name);
@@ -408,9 +421,20 @@ double ParsePx(const std::string& text) {
   return NAN;
 }
 
-ComputeContext Resolver::ContextFor(dom::Element* element, const std::string& property) {
+// Where inheritance comes from: a pseudo-element inherits from its element, an element from its parent.
+struct Parent {
+  dom::Element* element;
+  std::string pseudo;
+};
+
+Parent ParentOf(dom::Element* element, const std::string& pseudo) {
+  if (!pseudo.empty()) return {element, ""};
+  return {FlatParent(element), ""};
+}
+
+ComputeContext Resolver::ContextFor(dom::Element* element, const std::string& property, const std::string& pseudo) {
   ComputeContext c;
-  dom::Element* parent = FlatParent(element);
+  const Parent parent = ParentOf(element, pseudo);
   const MediaEnvironment& media = CurrentMediaEnvironment();
   c.viewportWidth = media.width;
   c.viewportHeight = media.height;
@@ -418,23 +442,23 @@ ComputeContext Resolver::ContextFor(dom::Element* element, const std::string& pr
   dom::Document* document = element->nodeDocument;
   dom::Element* root = document ? document->DocumentElement() : nullptr;
   if (root) {
-    const double rootSize = root == element ? NAN : ParsePx(Compute(root, "font-size"));
+    const double rootSize = root == element && pseudo.empty() ? NAN : ParsePx(Compute(root, "font-size"));
     c.rootFontSize = std::isnan(rootSize) ? 16 : rootSize;
   }
   const bool isFontSize = property == "font-size";
   if (isFontSize) {
-    const double parentSize = parent ? ParsePx(Compute(parent, "font-size")) : 16;
+    const double parentSize = parent.element ? ParsePx(Compute(parent.element, "font-size", parent.pseudo)) : 16;
     c.fontSize = std::isnan(parentSize) ? 16 : parentSize;
-    if (root == element) c.rootFontSize = c.fontSize;
+    if (root == element && pseudo.empty()) c.rootFontSize = c.fontSize;
   } else {
-    const double own = ParsePx(Compute(element, "font-size"));
+    const double own = ParsePx(Compute(element, "font-size", pseudo));
     c.fontSize = std::isnan(own) ? 16 : own;
-    if (root == element) c.rootFontSize = c.fontSize;
+    if (root == element && pseudo.empty()) c.rootFontSize = c.fontSize;
   }
   c.lineHeight = c.fontSize * 1.15;
   c.rootLineHeight = c.rootFontSize * 1.15;
   if (property != "line-height" && property != "font-size") {
-    const std::string lh = Compute(element, "line-height");
+    const std::string lh = Compute(element, "line-height", pseudo);
     const double px = ParsePx(lh);
     if (!std::isnan(px)) c.lineHeight = px;
     else {
@@ -444,38 +468,38 @@ ComputeContext Resolver::ContextFor(dom::Element* element, const std::string& pr
   }
   // currentcolor: the element's color, and for color itself the parent's.
   if (property == "color") {
-    c.currentColor = parent ? Compute(parent, "color") : "rgb(0, 0, 0)";
+    c.currentColor = parent.element ? Compute(parent.element, "color", parent.pseudo) : "rgb(0, 0, 0)";
   } else {
-    c.currentColor = Compute(element, "color");
+    c.currentColor = Compute(element, "color", pseudo);
   }
   if (c.currentColor.empty()) c.currentColor = "rgb(0, 0, 0)";
   return c;
 }
 
 // The specified value text of a property for the element: the declared one, or the inherited or initial one.
-std::string Resolver::Specified(dom::Element* element, const std::string& property, const PropertyDefinition& definition, bool& valid) {
+std::string Resolver::Specified(dom::Element* element, const std::string& property, const PropertyDefinition& definition, bool& valid, const std::string& pseudo) {
   valid = true;
-  ElementStyle& style = StyleOf(element);
-  Build(element, style);
-  dom::Element* parent = FlatParent(element);
+  ElementStyle& style = StyleOf(element, pseudo);
+  Build(element, style, pseudo);
+  const Parent parent = ParentOf(element, pseudo);
   const auto fromParent = [&]() -> std::string {
-    if (parent) return Compute(parent, property);
-    return Compute(element, "\x01initial:" + property);
+    if (parent.element) return Compute(parent.element, property, parent.pseudo);
+    return Compute(element, "\x01initial:" + property, pseudo);
   };
   const auto winner = style.cascade.find(property);
   if (winner == style.cascade.end()) {
-    if (definition.inherited && parent) return fromParent();
+    if (definition.inherited && parent.element) return fromParent();
     return "initial";
   }
   const DeclarationEntry& entry = *winner->second.entry;
   std::string text = entry.value;
   if (!entry.pendingShorthand.empty()) {
     std::set<std::string> stack;
-    std::optional<std::string> substituted = Substitute(element, entry.pendingText, 0, stack);
+    std::optional<std::string> substituted = Substitute(element, pseudo, entry.pendingText, 0, stack);
     std::vector<Longhand> longhands;
     if (!substituted || !ExpandDeclaration(entry.pendingShorthand, *substituted, longhands)) {
       valid = false;
-      return definition.inherited && parent ? fromParent() : "initial";
+      return definition.inherited && parent.element ? fromParent() : "initial";
     }
     text.clear();
     for (const Longhand& l : longhands) {
@@ -487,10 +511,10 @@ std::string Resolver::Specified(dom::Element* element, const std::string& proper
     }
   } else if (ContainsSubstitution(ParseComponentValues(text))) {
     std::set<std::string> stack;
-    std::optional<std::string> substituted = Substitute(element, text, 0, stack);
+    std::optional<std::string> substituted = Substitute(element, pseudo, text, 0, stack);
     if (!substituted) {
       valid = false;
-      return definition.inherited && parent ? fromParent() : "initial";
+      return definition.inherited && parent.element ? fromParent() : "initial";
     }
     text = *substituted;
   }
@@ -498,9 +522,9 @@ std::string Resolver::Specified(dom::Element* element, const std::string& proper
   if (IsCssWideKeyword(parsed)) {
     const std::string keyword = Lower(parsed[0].token.value);
     if (keyword == "initial") return "initial";
-    if (keyword == "inherit") return parent ? Compute(parent, property) : "initial";
+    if (keyword == "inherit") return parent.element ? Compute(parent.element, property, parent.pseudo) : "initial";
     // unset, revert, revert-layer
-    if (definition.inherited && parent) return fromParent();
+    if (definition.inherited && parent.element) return fromParent();
     return "initial";
   }
   return text;
@@ -508,7 +532,7 @@ std::string Resolver::Specified(dom::Element* element, const std::string& proper
 
 std::string TextOfComputed(const ValueMatch& match) { return SerializeValue(match.normalized); }
 
-std::string Resolver::Compute(dom::Element* element, const std::string& property) {
+std::string Resolver::Compute(dom::Element* element, const std::string& property, const std::string& pseudo) {
   if (!element) return "";
   // The initial value, asked for by the root of the tree.
   bool initialOnly = false;
@@ -517,13 +541,13 @@ std::string Resolver::Compute(dom::Element* element, const std::string& property
     initialOnly = true;
     name = property.substr(9);
   }
-  ElementStyle& style = StyleOf(element);
+  ElementStyle& style = StyleOf(element, pseudo);
   if (!initialOnly) {
     const auto cached = style.computed.find(name);
     if (cached != style.computed.end()) return cached->second;
   }
   if (name.starts_with("--")) {
-    std::optional<std::string> value = Custom(element, name);
+    std::optional<std::string> value = Custom(element, name, pseudo);
     return value.value_or("");
   }
   const PropertyDefinition* definition = FindProperty(name);
@@ -533,22 +557,23 @@ std::string Resolver::Compute(dom::Element* element, const std::string& property
   if (!root || !root->IsDocument()) return "";
 
   bool valid = true;
-  std::string specified = initialOnly ? "initial" : Specified(element, name, *definition, valid);
+  std::string specified = initialOnly ? "initial" : Specified(element, name, *definition, valid, pseudo);
   if (style.resolving.count("\x02" + name)) return "";
   style.resolving.insert("\x02" + name);
-  ComputeContext context = ContextFor(element, name);
-  std::string result = Finish(element, name, *definition, specified, context);
+  ComputeContext context = ContextFor(element, name, pseudo);
+  std::string result = Finish(element, name, *definition, specified, context, pseudo);
   style.resolving.erase("\x02" + name);
-  if (!initialOnly) StyleOf(element).computed[name] = result;
+  if (!initialOnly) StyleOf(element, pseudo).computed[name] = result;
   return result;
 }
 
-std::string Resolver::Finish(dom::Element* element, const std::string& property, const PropertyDefinition& definition, const std::string& specified, ComputeContext& context) {
+std::string Resolver::Finish(dom::Element* element, const std::string& property, const PropertyDefinition& definition, const std::string& specified, ComputeContext& context, const std::string& pseudo) {
   std::string text = specified;
   if (text == "initial") text = InitialValueText(definition);
   ComponentValues values = Trimmed(ParseComponentValues(text));
   if (values.empty()) return "";
   if (IsCssWideKeyword(values)) return Lower(values[0].token.value);
+  const Parent parent = ParentOf(element, pseudo);
 
   // Properties whose computed values are not got by working through their types.
   if (property == "font-size") {
@@ -565,8 +590,7 @@ std::string Resolver::Finish(dom::Element* element, const std::string& property,
     if (word == "normal") return "400";
     if (word == "bold") return "700";
     if (word == "bolder" || word == "lighter") {
-      dom::Element* parent = FlatParent(element);
-      const double inherited = parent ? std::atof(Compute(parent, "font-weight").c_str()) : 400;
+      const double inherited = parent.element ? std::atof(Compute(parent.element, "font-weight", parent.pseudo).c_str()) : 400;
       if (word == "bolder") return inherited < 350 ? "400" : inherited < 550 ? "700" : "900";
       return inherited < 550 ? "100" : inherited < 750 ? "400" : "700";
     }
@@ -577,7 +601,7 @@ std::string Resolver::Finish(dom::Element* element, const std::string& property,
   static const std::set<std::string> borderWidths = {"border-top-width", "border-right-width", "border-bottom-width", "border-left-width", "outline-width", "column-rule-width"};
   if (borderWidths.count(property)) {
     std::string styleProperty = property.substr(0, property.size() - 5) + "style";
-    const std::string borderStyle = Compute(element, styleProperty);
+    const std::string borderStyle = Compute(element, styleProperty, pseudo);
     if (borderStyle == "none" || borderStyle == "hidden") return "0px";
     if (values.size() == 1 && values[0].IsIdent()) {
       const std::string word = Lower(values[0].token.value);
@@ -590,8 +614,7 @@ std::string Resolver::Finish(dom::Element* element, const std::string& property,
   ValueMatch match;
   if (!MatchPropertyValue(definition, values, match, &context)) {
     // Not a value of the property after all (a var() that made it one that is not): as if unset.
-    dom::Element* parent = FlatParent(element);
-    if (definition.inherited && parent) return Compute(parent, property);
+    if (definition.inherited && parent.element) return Compute(parent.element, property, parent.pseudo);
     ComponentValues initial = Trimmed(ParseComponentValues(InitialValueText(definition)));
     ValueMatch fallback;
     if (!initial.empty() && MatchPropertyValue(definition, initial, fallback, &context)) return TextOfComputed(fallback);
@@ -610,9 +633,9 @@ std::string Resolver::Finish(dom::Element* element, const std::string& property,
 void NoteStyleChange() { ++g_styleVersion; }
 uint64_t StyleVersion() { return g_styleVersion; }
 
-std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std::string& property) {
+std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std::string& property, const std::string& pseudo) {
   Resolver resolver(ctx);
-  return resolver.Compute(element, property);
+  return resolver.Compute(element, property, pseudo);
 }
 
 const std::vector<std::string>& ComputedPropertyNames() {

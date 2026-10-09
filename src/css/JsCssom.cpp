@@ -108,14 +108,22 @@ std::string PropertyForIdlName(const std::string& name) {
   return normalized;
 }
 
+namespace {
+bool InDocument(dom::Element* element) {
+  dom::Node* root = dom::ShadowIncludingRoot(element);
+  return root && root->IsDocument();
+}
+}  // namespace
+
 uint32_t CssDeclarations::IndexedLength(Context&, CssDeclarations& self) {
-  return static_cast<uint32_t>(self.computedElement ? ComputedPropertyNames().size() : self.items.size());
+  if (self.computedElement) return InDocument(self.computedElement) ? static_cast<uint32_t>(ComputedPropertyNames().size()) : 0;
+  return static_cast<uint32_t>(self.items.size());
 }
 
 bool CssDeclarations::IndexedGetter(Context& ctx, CssDeclarations& self, uint32_t index, Value& out) {
   if (self.computedElement) {
     const std::vector<std::string>& names = ComputedPropertyNames();
-    if (index >= names.size()) return false;
+    if (index >= names.size() || !InDocument(self.computedElement)) return false;
     out = qe::FromWtf8(ctx, names[index]);
     return true;
   }
@@ -512,8 +520,8 @@ Value StyleRuleSetSelectorText(Context& ctx, Value t, qe::Args args, Value) {
   if (!self || !NeedArgs(ctx, args, 1, "set selectorText")) return qe::Undefined();
   const std::string text = qe::ToWtf8(ctx, args[0]);
   if (qe::HasException(ctx)) return qe::Undefined();
-  std::optional<SelectorList> list = ParseSelectorList(Serialize(Trimmed(ParseComponentValues(text))));
-  if (!list) return qe::Undefined();
+  std::optional<SelectorList> list = ParseSelectorListForRule(Serialize(Trimmed(ParseComponentValues(text))));
+  if (!list || !ResolveNamespaces(*list, self->parentSheet)) return qe::Undefined();
   self->selectors = std::make_shared<SelectorList>(std::move(*list));
   self->selectorText = SerializeSelectorList(*self->selectors);
   NoteStyleChange();
@@ -620,21 +628,38 @@ Value RuleKeyText(Context& ctx, Value t, qe::Args, Value) {
   return self ? qe::FromWtf8(ctx, self->name) : qe::Undefined();
 }
 
+Value RuleSetKeyText(Context& ctx, Value t, qe::Args args, Value) {
+  CssRule* self = ThisRuleOf(ctx, t, RuleKind::Keyframe);
+  if (!self || !NeedArgs(ctx, args, 1, "set keyText")) return qe::Undefined();
+  const std::string text = qe::ToWtf8(ctx, args[0]);
+  if (qe::HasException(ctx)) return qe::Undefined();
+  const std::optional<std::string> key = NormalizeKeyText(text);
+  if (!key) {
+    web::ThrowDomException(ctx, "Failed to set 'keyText' on 'CSSKeyframeRule': the keyframe selector is invalid.", "SyntaxError");
+    return qe::Undefined();
+  }
+  self->name = *key;
+  NoteStyleChange();
+  return qe::Undefined();
+}
+
+Value KeyframesLength(Context& ctx, Value t, qe::Args, Value) {
+  CssRule* self = ThisRuleOf(ctx, t, RuleKind::Keyframes);
+  return self ? qe::FromUint32(static_cast<uint32_t>(self->rules.size())) : qe::Undefined();
+}
+
 // CSSKeyframesRule
 Value KeyframesAppend(Context& ctx, Value t, qe::Args args, Value) {
   CssRule* self = ThisRuleOf(ctx, t, RuleKind::Keyframes);
   if (!self || !NeedArgs(ctx, args, 1, "appendRule")) return qe::Undefined();
   const std::string text = qe::ToWtf8(ctx, args[0]);
   if (qe::HasException(ctx)) return qe::Undefined();
-  const std::string wrapped = "@keyframes a { " + text + " }";
-  std::string error;
-  CssRule* parsed = ParseRuleText(ctx, wrapped, self->parentSheet, nullptr, 0, error);
-  if (!parsed || parsed->rules.empty()) return qe::Undefined();
-  CssRule* frame = parsed->rules[0];
-  frame->parentRule = self;
-  frame->parentSheet = self->parentSheet;
+  Rule syntax;
+  CssRule* frame = ParseRule(text, syntax) ? BuildKeyframe(ctx, syntax, self->parentSheet, self) : nullptr;
+  if (!frame) return qe::Undefined();
   self->rules.push_back(frame);
   self->NoteWrite();
+  NoteStyleChange();
   return qe::Undefined();
 }
 
@@ -646,15 +671,7 @@ int FindKeyframe(CssRule* self, const std::string& key) {
   return -1;
 }
 
-std::string NormalizeKey(const std::string& key) {
-  std::string out;
-  for (const ComponentValues& part : SplitOnCommas(ParseComponentValues(key))) {
-    const ComponentValues trimmed = Trimmed(part);
-    if (trimmed.size() != 1) return key;
-    out += (out.empty() ? "" : ", ") + Lowercase(Serialize(trimmed[0]));
-  }
-  return out;
-}
+std::string NormalizeKey(const std::string& key) { return NormalizeKeyText(key).value_or(key); }
 
 Value KeyframesFind(Context& ctx, Value t, qe::Args args, Value) {
   CssRule* self = ThisRuleOf(ctx, t, RuleKind::Keyframes);
@@ -1061,8 +1078,36 @@ Value GetComputedStyle(Context& ctx, Value, qe::Args args, Value) {
   }
   CssDeclarations* declarations = NewDeclarations(ctx);
   declarations->readonly = true;
-  declarations->computedElement = element;
-  declarations->computedContext = element->nodeDocument && element->nodeDocument->context ? element->nodeDocument->context : &ctx;
+  // The pseudo-element asked for: nothing, one this engine styles, or one it does not (an empty declaration).
+  std::string pseudo;
+  bool known = true;
+  if (args.size() > 1 && !args[1].is_undefined() && !args[1].is_null()) {
+    const std::string text = qe::ToWtf8(ctx, args[1]);
+    if (qe::HasException(ctx)) return qe::Undefined();
+    known = false;
+    if (!text.empty()) {
+      const std::optional<SelectorList> list = ParseSelectorList(text);
+      if (list && list->size() == 1 && (*list)[0].compounds.size() == 1 && (*list)[0].compounds[0].simples.size() == 1) {
+        const SimpleSelector& simple = (*list)[0].compounds[0].simples[0];
+        static const char* const styled[] = {"before", "after", "first-line", "first-letter", "marker", "placeholder", "selection", "backdrop"};
+        if (simple.kind == SimpleSelector::Kind::PseudoElement && simple.value.empty()) {
+          for (const char* name : styled) {
+            if (simple.name == name) {
+              pseudo = simple.name;
+              known = true;
+            }
+          }
+        }
+      }
+    } else {
+      known = true;
+    }
+  }
+  if (known) {
+    declarations->computedElement = element;
+    declarations->computedContext = element->nodeDocument && element->nodeDocument->context ? element->nodeDocument->context : &ctx;
+    declarations->computedPseudo = pseudo;
+  }
   return qe::FromObject(declarations);
 }
 
@@ -1108,6 +1153,8 @@ void DefineCssomClasses(Context& ctx) {
   qe::DefineMethod(d, "removeProperty", dom::Reactions<DeclRemoveProperty>, 1);
   qe::DefineGlobal(ctx, "CSSStyleDeclaration", declaration.constructor);
   qe::DefineGlobalFunction(ctx, "getComputedStyle", GetComputedStyle, 1);
+
+  DefineMediaQueryList(ctx);
 
   // MediaList
   qe::ClassRef media = qe::DefineClass(ctx, "MediaList", IllegalConstructor, 0);
@@ -1218,11 +1265,12 @@ void DefineCssomClasses(Context& ctx) {
   Object* keyframes = DefineRule(ctx, kKeyframesRule, "CSSKeyframesRule", ruleBase);
   qe::DefineAccessor(keyframes, "name", RuleName, RuleSetName);
   qe::DefineAccessor(keyframes, "cssRules", GroupCssRules, nullptr);
+  qe::DefineAccessor(keyframes, "length", KeyframesLength, nullptr);
   qe::DefineMethod(keyframes, "appendRule", KeyframesAppend, 1);
   qe::DefineMethod(keyframes, "deleteRule", KeyframesDelete, 1);
   qe::DefineMethod(keyframes, "findRule", KeyframesFind, 1);
   Object* keyframe = DefineRule(ctx, kKeyframeRule, "CSSKeyframeRule", ruleBase);
-  qe::DefineAccessor(keyframe, "keyText", RuleKeyText, nullptr);
+  qe::DefineAccessor(keyframe, "keyText", RuleKeyText, RuleSetKeyText);
   qe::DefineAccessor(keyframe, "style", RuleStyle, RuleSetStyle);
   Object* counter = DefineRule(ctx, kCounterStyleRule, "CSSCounterStyleRule", ruleBase);
   qe::DefineAccessor(counter, "name", RuleName, RuleSetName);

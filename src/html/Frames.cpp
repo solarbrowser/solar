@@ -1,6 +1,7 @@
 #include "solar/html/Frames.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 
 #include "solar/dom/CustomElements.h"
@@ -8,6 +9,7 @@
 #include "solar/html/HtmlBindings.h"
 #include "solar/html/Parser.h"
 #include "solar/css/Cssom.h"
+#include "solar/css/Style.h"
 #include "solar/html/Csp.h"
 #include "solar/html/Errors.h"
 #include "solar/html/Modules.h"
@@ -343,6 +345,67 @@ void SyncFrames(dom::Document* document) {
   if (qe::HasException(ctx)) ctx.clear_exception();
 }
 
+// ---- Linked style sheets ----
+
+namespace {
+
+bool HasToken(const std::string& list, std::string_view wanted) {
+  size_t i = 0;
+  while (i < list.size()) {
+    while (i < list.size() && std::isspace(static_cast<unsigned char>(list[i]))) ++i;
+    size_t j = i;
+    while (j < list.size() && !std::isspace(static_cast<unsigned char>(list[j]))) ++j;
+    if (j > i) {
+      std::string token = list.substr(i, j - i);
+      for (char& c : token) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      if (token == wanted) return true;
+    }
+    i = j;
+  }
+  return false;
+}
+
+// "update a style block" for a link element: the sheet at its href, loaded now (the loader answers at once) and its imports
+// with it; load or error follows as a task.
+void UpdateLink(dom::Element* link) {
+  link->styleSheet = nullptr;
+  dom::Document* document = link->nodeDocument;
+  if (!document || !document->context || !g_environment) return;
+  dom::Node* root = dom::ShadowIncludingRoot(link);
+  if (!root || !root->IsDocument()) return;
+  const dom::Attr* rel = link->FindAttribute("", "rel");
+  const dom::Attr* href = link->FindAttribute("", "href");
+  if (!rel || !HasToken(rel->value, "stylesheet") || !href || href->value.empty()) return;
+  if (const dom::Attr* type = link->FindAttribute("", "type")) {
+    std::string lower = type->value;
+    for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (!lower.empty() && lower != "text/css") return;
+  }
+  const std::string address = Resolve(href->value, BaseOf(document));
+  const std::optional<url::Url> parsed = url::Parse(address);
+  if (!parsed) {
+    QueueTask(document, "link error", link, [link] { FireEvent(*link->nodeDocument->context, link, "error"); });
+    return;
+  }
+  const std::optional<std::string> text = LoadResource(address);
+  if (!text) {
+    QueueTask(document, "link error", link, [link] { FireEvent(*link->nodeDocument->context, link, "error"); });
+    return;
+  }
+  Context& ctx = *document->context;
+  css::CssStyleSheet* sheet = css::NewLinkedSheet(ctx, link, address, *text);
+  css::ProcessImports(ctx, sheet, [](const std::string& url) { return LoadResource(url); });
+  // An alternate style sheet with a title is off until it is chosen.
+  if (HasToken(rel->value, "alternate") && sheet->hasTitle) sheet->disabled = true;
+  if (link->FindAttribute("", "disabled")) sheet->disabled = true;
+  link->styleSheet = sheet;
+  link->NoteWrite();
+  css::NoteStyleChange();
+  QueueTask(document, "link load", link, [link] { FireEvent(*link->nodeDocument->context, link, "load"); });
+}
+
+}  // namespace
+
 void AfterInsert(dom::Node* node) {
   if (!node->IsElement() && !node->IsFragment()) return;
   dom::Node* root = dom::ShadowIncludingRoot(node);
@@ -350,6 +413,7 @@ void AfterInsert(dom::Node* node) {
   for (dom::Element* style : HtmlElementsIn(node, "style")) {
     if (style->nodeDocument && style->nodeDocument->context) css::UpdateStyleElement(*style->nodeDocument->context, style);
   }
+  for (dom::Element* link : HtmlElementsIn(node, "link")) UpdateLink(link);
   for (dom::Element* meta : HtmlElementsIn(node, "meta")) {
     const std::optional<std::string> equiv = dom::GetAttribute(meta, "http-equiv");
     const std::optional<std::string> content = dom::GetAttribute(meta, "content");
@@ -369,6 +433,10 @@ void AfterRemove(dom::Node* node, bool) {
   dom::Document* document = node->nodeDocument;
   for (dom::Element* style : HtmlElementsIn(node, "style")) {
     if (style->nodeDocument && style->nodeDocument->context) css::UpdateStyleElement(*style->nodeDocument->context, style);
+  }
+  for (dom::Element* link : HtmlElementsIn(node, "link")) {
+    link->styleSheet = nullptr;
+    css::NoteStyleChange();
   }
   const std::vector<dom::Element*> removed = IframesIn(node);
   for (dom::Element* iframe : removed) DiscardContext(iframe);
@@ -392,6 +460,17 @@ void ContentHandlerChanged(dom::Element* element, const std::string& name) {
 void AttributeChanged(dom::Element* element, const std::string& name) {
   if (name.size() > 2 && name.starts_with("on")) ContentHandlerChanged(element, name);
   if (name == "style") css::StyleAttributeChanged(element);
+  if (element->IsHtml("link") && (name == "href" || name == "rel" || name == "media" || name == "type" || name == "title" || name == "disabled")) {
+    if (name == "media" || name == "title" || name == "disabled") {
+      if (css::CssStyleSheet* sheet = static_cast<css::CssStyleSheet*>(element->styleSheet)) {
+        if (name == "media") sheet->media->SetText(element->FindAttribute("", "media") ? element->FindAttribute("", "media")->value : "");
+        if (name == "disabled") sheet->disabled = element->FindAttribute("", "disabled") != nullptr;
+        css::NoteStyleChange();
+        return;
+      }
+    }
+    UpdateLink(element);
+  }
   if (element->IsHtml("style") && (name == "media" || name == "type" || name == "title") && element->nodeDocument && element->nodeDocument->context) {
     css::UpdateStyleElement(*element->nodeDocument->context, element);
   }

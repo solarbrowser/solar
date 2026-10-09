@@ -1,6 +1,8 @@
 #pragma once
 
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -62,6 +64,7 @@ struct CssDeclarations : Quanta::DOMObject {
   // getComputedStyle's: the element the values are the computed ones of, read when they are asked for.
   dom::Element* computedElement = nullptr;
   Quanta::Context* computedContext = nullptr;
+  std::string computedPseudo;   // "before", "after"...: the style of the pseudo-element
 
   // The CSSOM serialization of the block: "a: b; c: d !important;".
   std::string Serialize() const;
@@ -206,8 +209,26 @@ CssRule* ParseRuleText(Quanta::Context& ctx, std::string_view text, CssStyleShee
 std::string InsertRule(Quanta::Context& ctx, CssStyleSheet* sheet, CssRule* parent, std::string_view text, uint32_t index, uint32_t& result);
 std::string DeleteRule(Quanta::Context& ctx, CssStyleSheet* sheet, CssRule* parent, uint32_t index);
 
+// A keyframe selector as it is written back: from and to as percentages. Nothing if it is not a list of them.
+std::optional<std::string> NormalizeKeyText(const std::string& text);
+// A keyframe rule from its parsed form; null when it is not one.
+CssRule* BuildKeyframe(Quanta::Context& ctx, const Rule& frame, CssStyleSheet* sheet, CssRule* parent);
+
 // Whether a property name is one this engine knows (or a custom property), lowercased in `name` if so.
 bool NormalizePropertyName(std::string& name);
+
+// Checks the namespaces a selector list names against the sheet's @namespace rules (and drops the any-namespace prefix when no
+// default is declared); false if a prefix is not declared.
+bool ResolveNamespaces(SelectorList& list, const CssStyleSheet* sheet);
+
+// ---- Loading ----
+
+using SheetLoader = std::function<std::optional<std::string>(const std::string& absoluteUrl)>;
+// Loads the style sheets that the @import rules of `sheet` name, and theirs in turn: each rule's styleSheet is the sheet,
+// or null where it could not be had. A sheet that imports one it is already in the middle of is not loaded again.
+void ProcessImports(Quanta::Context& ctx, CssStyleSheet* sheet, const SheetLoader& load, int depth = 0);
+// A sheet for a link element, made of the text at `address`.
+CssStyleSheet* NewLinkedSheet(Quanta::Context& ctx, dom::Element* link, const std::string& address, const std::string& text);
 
 // ---- Feature queries ----
 
@@ -220,6 +241,8 @@ bool SupportsCondition(const ComponentValues& condition);
 
 // Defines the CSSOM interfaces in a realm; the prototypes are kept there for NewRule and the rest.
 void DefineCssomClasses(Quanta::Context& ctx);
+// window.matchMedia and MediaQueryList.
+void DefineMediaQueryList(Quanta::Context& ctx);
 // Defines the native that the CSS namespace's supports() is (as __solarCssSupports, for the script that makes CSS to take).
 void InstallCssSupports(Quanta::Context& ctx);
 // The StyleSheet of a <style> or <link> element, made and parsed on demand; null if the element has none.

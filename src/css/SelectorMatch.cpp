@@ -395,7 +395,7 @@ bool MatchesSimple(const SimpleSelector& selector, const Element* element, const
       return std::any_of(selector.languages.begin(), selector.languages.end(), [&](const std::string& range) { return MatchesLanguage(range, *language); });
     }
     case SimpleSelector::Kind::Dir: return DirectionOf(element) == selector.value;
-    case SimpleSelector::Kind::PseudoElement:
+    case SimpleSelector::Kind::PseudoElement: return context.pseudoElement && selector.name == *context.pseudoElement;
     case SimpleSelector::Kind::Unknown:
       return false;
   }
@@ -446,6 +446,12 @@ bool MatchesSelectorListAt(const SelectorList& list, const Element* element, con
 }  // namespace
 
 bool MatchesComplex(const ComplexSelector& selector, const Element* element, const MatchContext& context) {
+  // A selector ends in a pseudo-element or it does not; it matches the pseudo-element asked for, or the element when none is.
+  bool endsInPseudo = false;
+  for (const SimpleSelector& simple : selector.compounds.back().simples) {
+    if (simple.kind == SimpleSelector::Kind::PseudoElement) endsInPseudo = true;
+  }
+  if (endsInPseudo != (context.pseudoElement != nullptr)) return false;
   return MatchesFrom(selector, selector.compounds.size() - 1, element, context);
 }
 

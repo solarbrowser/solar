@@ -108,6 +108,7 @@ tests/wpt/css/css-box/parsing/visibility-valid.html
 tests/wpt/css/css-box/parsing/width-invalid.html
 tests/wpt/css/css-box/parsing/width-valid.html
 tests/wpt/css/css-cascade/parsing/all-invalid.html
+tests/wpt/css/css-cascade/parsing/all-valid.html
 tests/wpt/css/css-cascade/parsing/supports-import-parsing.html
 tests/wpt/css/css-color/parsing/alpha-color-parsing-invalid.html
 tests/wpt/css/css-color/parsing/color-computed-contrast-color-function.html
@@ -383,6 +384,9 @@ tests/wpt/css/css-sizing/parsing/size-invalid.html
 tests/wpt/css/css-sizing/parsing/width-invalid.html
 tests/wpt/css/css-syntax/cdc-vs-ident-tokens.html
 tests/wpt/css/css-syntax/charset-is-not-a-rule.html
+tests/wpt/css/css-syntax/charset/page-windows-1251-css-at-charset-utf16-ascii-only.html
+tests/wpt/css/css-syntax/charset/page-windows-1251-css-at-charset-utf16.html
+tests/wpt/css/css-syntax/charset/page-windows-1251-css-at-charset-utf16be.html
 tests/wpt/css/css-syntax/decimal-points-in-numbers.html
 tests/wpt/css/css-syntax/declarations-trim-whitespace.html
 tests/wpt/css/css-syntax/ident-three-code-points.html
@@ -547,6 +551,7 @@ tests/wpt/css/css-ui/parsing/outline-style-computed.html
 tests/wpt/css/css-ui/parsing/outline-style-invalid.html
 tests/wpt/css/css-ui/parsing/outline-style-valid.html
 tests/wpt/css/css-ui/parsing/outline-width-invalid.html
+tests/wpt/css/css-ui/parsing/resize-computed.html
 tests/wpt/css/css-ui/parsing/resize-invalid.html
 tests/wpt/css/css-ui/parsing/resize-valid.html
 tests/wpt/css/css-ui/parsing/user-select-computed-contain.html
@@ -648,7 +653,10 @@ tests/wpt/css/cssom/CSSContainerRule.tentative.html
 tests/wpt/css/cssom/CSSCounterStyleRule.html
 tests/wpt/css/cssom/CSSFontFaceRule.html
 tests/wpt/css/cssom/CSSGroupingRule-insertRule-computed.html
+tests/wpt/css/cssom/CSSKeyframeRule-keyText.html
 tests/wpt/css/cssom/CSSKeyframeRule.html
+tests/wpt/css/cssom/CSSKeyframesRule-appendRule-invalid.html
+tests/wpt/css/cssom/CSSKeyframesRule-appendRule-multiple.html
 tests/wpt/css/cssom/CSSNamespaceRule.html
 tests/wpt/css/cssom/CSSRule-type.html
 tests/wpt/css/cssom/CSSRuleList.html
@@ -666,12 +674,15 @@ tests/wpt/css/cssom/StyleSheetList.html
 tests/wpt/css/cssom/at-namespace.html
 tests/wpt/css/cssom/border-shorthand-serialization.html
 tests/wpt/css/cssom/computed-style-set-property.html
+tests/wpt/css/cssom/css-rule-selector-text.html
 tests/wpt/css/cssom/css-style-attribute-modifications.html
 tests/wpt/css/cssom/css-style-declaration-modifications.html
 tests/wpt/css/cssom/css-style-reparse.html
+tests/wpt/css/cssom/cssimportrule-sheet-identity.html
 tests/wpt/css/cssom/cssom-cssText-serialize.html
 tests/wpt/css/cssom/cssom-cssstyledeclaration-set.html
 tests/wpt/css/cssom/cssom-getPropertyValue-common-checks.html
+tests/wpt/css/cssom/cssom-ruleTypeAndOrder.html
 tests/wpt/css/cssom/cssom-setProperty-shorthand.html
 tests/wpt/css/cssom/cssstyledeclaration-csstext-final-delimiter.html
 tests/wpt/css/cssom/cssstyledeclaration-csstext-setter.window.js
@@ -681,6 +692,7 @@ tests/wpt/css/cssom/cssstyledeclaration-mutationrecord-002.html
 tests/wpt/css/cssom/cssstyledeclaration-mutationrecord-003.html
 tests/wpt/css/cssom/cssstyledeclaration-mutationrecord-004.html
 tests/wpt/css/cssom/cssstyledeclaration-mutationrecord-005.html
+tests/wpt/css/cssom/cssstyledeclaration-removeProperty-all.html
 tests/wpt/css/cssom/cssstyledeclaration-setter-attr.html
 tests/wpt/css/cssom/cssstyledeclaration-setter-form-controls.html
 tests/wpt/css/cssom/delete-namespace-rule-when-child-rule-exists.html
@@ -701,6 +713,7 @@ tests/wpt/css/cssom/getComputedStyle-margins-roundtrip.html
 tests/wpt/css/cssom/getComputedStyle-page-rule.xhtml
 tests/wpt/css/cssom/getComputedStyle-pointerEvents.html
 tests/wpt/css/cssom/getComputedStyle-pseudo-class.html
+tests/wpt/css/cssom/getComputedStyle-pseudo-shadow.html
 tests/wpt/css/cssom/getComputedStyle-resolved-colors.html
 tests/wpt/css/cssom/getComputedStyle-resolved-min-max-clamping.html
 tests/wpt/css/cssom/getComputedStyle-root-variables.html
@@ -715,6 +728,7 @@ tests/wpt/css/cssom/historical.html
 tests/wpt/css/cssom/import-namespace-invalid-prelude.html
 tests/wpt/css/cssom/inline-style-001.html
 tests/wpt/css/cssom/insertRule-across-context.html
+tests/wpt/css/cssom/insertRule-charset-no-index.html
 tests/wpt/css/cssom/insertRule-font-face.html
 tests/wpt/css/cssom/insertRule-import-no-index.html
 tests/wpt/css/cssom/insertRule-namespace-after-import.html
@@ -724,6 +738,7 @@ tests/wpt/css/cssom/insertRule-syntax-error-01.html
 tests/wpt/css/cssom/medialist-appendmedium-parse-single-and-dedup.html
 tests/wpt/css/cssom/medialist-interfaces-002.html
 tests/wpt/css/cssom/medialist-interfaces-004.html
+tests/wpt/css/cssom/mediaquery-sort-dedup.html
 tests/wpt/css/cssom/nested-import-namespace-invalid.html
 tests/wpt/css/cssom/overflow-serialization.html
 tests/wpt/css/cssom/preferred-stylesheet-reversed-order.html
@@ -760,3 +775,4 @@ tests/wpt/solar/csp-eval.html
 tests/wpt/solar/csp-inline.html
 tests/wpt/solar/css-values.html
 tests/wpt/solar/cssom-basic.html
+tests/wpt/solar/link-sheet.html

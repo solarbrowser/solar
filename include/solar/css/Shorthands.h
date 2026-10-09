@@ -36,6 +36,8 @@ std::vector<std::string> LeavesOf(const PropertyDefinition& property);
 // The longhands a shorthand sets to their initial values besides its own (border resets border-image).
 std::vector<std::string> ResetLeavesOf(const PropertyDefinition& property);
 bool IsShorthandProperty(const PropertyDefinition& property);
+// The longhands that `all` stands for: every one but direction, unicode-bidi and the prefixed ones.
+const std::vector<std::string>& AllLonghands();
 
 // What a block holds for the longhands of a shorthand, to be written as one declaration: its values in the order of
 // the shorthand's longhands (empty for a longhand the block does not have).

@@ -37,7 +37,7 @@ bool IEquals(std::string_view a, std::string_view b) {
 std::string FormatNumber(double number) {
   if (std::isnan(number)) return "NaN";
   if (std::isinf(number)) return number < 0 ? "-infinity" : "infinity";
-  if (number == 0) return std::signbit(number) ? "-0" : "0";
+  if (number == 0) return "0";
   char buffer[400];
   const auto result = std::to_chars(buffer, buffer + sizeof(buffer), number, std::chars_format::fixed);
   std::string text(buffer, result.ptr);

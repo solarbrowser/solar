@@ -1,6 +1,8 @@
 #include "solar/css/Cssom.h"
 #include "solar/css/Shorthands.h"
 #include "solar/css/Style.h"
+#include "solar/url/Parser.h"
+#include "solar/url/Serializer.h"
 #include "solar/css/Values.h"
 
 #include <algorithm>
@@ -170,18 +172,42 @@ std::optional<std::string> ShorthandValue(const std::vector<DeclarationEntry>& i
 
 }  // namespace
 
+namespace {
+
+// The keyword every longhand of `all` has in the block, if they have one and the same, and whether it is important.
+std::optional<std::pair<std::string, bool>> AllKeyword(const std::vector<DeclarationEntry>& items) {
+  std::optional<std::pair<std::string, bool>> found;
+  for (const std::string& name : AllLonghands()) {
+    const DeclarationEntry* entry = nullptr;
+    for (const DeclarationEntry& e : items) {
+      if (e.name == name) entry = &e;
+    }
+    if (!entry || !entry->pendingShorthand.empty()) return std::nullopt;
+    if (!IsCssWideKeyword(ParseComponentValues(entry->value))) return std::nullopt;
+    if (found && (found->first != entry->value || found->second != entry->important)) return std::nullopt;
+    found = std::make_pair(entry->value, entry->important);
+  }
+  return found;
+}
+
+}  // namespace
+
 std::string CssDeclarations::ValueOf(const std::string& name) const {
+  if (name == "all" && !computedElement) {
+    const auto keyword = AllKeyword(items);
+    return keyword ? keyword->first : "";
+  }
   const PropertyDefinition* definition = FindProperty(name);
   if (computedElement) {
-    if (name.starts_with("--")) return ComputedValue(*computedContext, computedElement, name);
+    if (name.starts_with("--")) return ComputedValue(*computedContext, computedElement, name, computedPseudo);
     if (!definition) return "";
     if (IsShorthandProperty(*definition)) {
       std::vector<DeclarationEntry> leaves;
-      for (const std::string& leaf : LeavesOf(*definition)) leaves.push_back({leaf, ComputedValue(*computedContext, computedElement, leaf), false, "", ""});
+      for (const std::string& leaf : LeavesOf(*definition)) leaves.push_back({leaf, ComputedValue(*computedContext, computedElement, leaf, computedPseudo), false, "", ""});
       std::optional<bool> important;
       return ShorthandValue(leaves, *definition, important).value_or("");
     }
-    return ComputedValue(*computedContext, computedElement, name);
+    return ComputedValue(*computedContext, computedElement, name, computedPseudo);
   }
   if (definition && IsShorthandProperty(*definition)) {
     std::optional<bool> important;
@@ -192,6 +218,10 @@ std::string CssDeclarations::ValueOf(const std::string& name) const {
 }
 
 std::string CssDeclarations::PriorityOf(const std::string& name) const {
+  if (name == "all") {
+    const auto keyword = AllKeyword(items);
+    return keyword && keyword->second ? "important" : "";
+  }
   const PropertyDefinition* definition = FindProperty(name);
   if (definition && IsShorthandProperty(*definition)) {
     const std::vector<std::string> leaves = LeavesOf(*definition);
@@ -209,6 +239,10 @@ std::string CssDeclarations::PriorityOf(const std::string& name) const {
 std::string CssDeclarations::Serialize() const {
   std::string out;
   std::set<std::string> done;
+  if (const auto keyword = AllKeyword(items)) {
+    out = "all: " + keyword->first + (keyword->second ? " !important" : "") + ";";
+    for (const std::string& name : AllLonghands()) done.insert(name);
+  }
   for (const DeclarationEntry& entry : items) {
     if (done.count(entry.name)) continue;
     bool written = false;
@@ -255,7 +289,7 @@ std::string CssDeclarations::Remove(Context& ctx, const std::string& propertyNam
   if (!name.starts_with("--")) name = Lower(name);
   const std::string old = ValueOf(name);
   const PropertyDefinition* definition = FindProperty(name);
-  std::vector<std::string> targets = definition ? LeavesOf(*definition) : std::vector<std::string>{name};
+  std::vector<std::string> targets = name == "all" ? AllLonghands() : definition ? LeavesOf(*definition) : std::vector<std::string>{name};
   if (targets.empty()) targets.push_back(name);
   bool removed = false;
   for (const std::string& target : targets) {
@@ -337,12 +371,14 @@ std::string SerializeMediaQuery(const ComponentValues& tokens) {
     if (!prefix.empty()) out = prefix + " ";
     out += type;
     skipSpace();
+    const bool omittable = type == "all" && prefix.empty();
+    if (omittable && i < values.size()) out.clear();
     while (i < values.size()) {
       if (word(values[i]) != "and") return "not all";
       ++i;
       skipSpace();
       if (i >= values.size() || !condition(values[i])) return "not all";
-      out += " and " + serializeCondition(values[i]);
+      out += (out.empty() ? "" : " and ") + serializeCondition(values[i]);
       ++i;
       skipSpace();
     }
@@ -498,6 +534,38 @@ std::string CssRule::CssText() const {
 
 namespace {
 
+// The namespaces of a selector list against the sheet's @namespace rules: a prefix has to have been declared, and with no
+// default namespace a selector for any namespace is just a selector.
+bool ResolveNamespacesImpl(SelectorList& list, const CssStyleSheet* sheet) {
+  bool hasDefault = false;
+  if (sheet) {
+    for (const CssRule* rule : sheet->rules) {
+      if (rule->kind == RuleKind::Namespace && rule->prefix.empty()) hasDefault = true;
+    }
+  }
+  const auto declared = [&](const std::string& prefix) {
+    if (!sheet) return false;
+    for (const CssRule* rule : sheet->rules) {
+      if (rule->kind == RuleKind::Namespace && rule->prefix == prefix) return true;
+    }
+    return false;
+  };
+  const std::function<bool(SelectorList&)> walk = [&](SelectorList& selectors) {
+    for (ComplexSelector& complex : selectors) {
+      for (CompoundSelector& compound : complex.compounds) {
+        for (SimpleSelector& simple : compound.simples) {
+          const bool named = simple.kind == SimpleSelector::Kind::Type || simple.kind == SimpleSelector::Kind::Universal || simple.kind == SimpleSelector::Kind::Attribute;
+          if (named && simple.namespaceName && *simple.namespaceName != "*" && !simple.namespaceName->empty() && !declared(*simple.namespaceName)) return false;
+          if (named && !hasDefault && simple.kind != SimpleSelector::Kind::Attribute && simple.namespaceName && *simple.namespaceName == "*") simple.namespaceName.reset();
+          if (simple.list && !walk(*simple.list)) return false;
+        }
+      }
+    }
+    return true;
+  };
+  return walk(list);
+}
+
 // Builds the rule `syntax` is, in the context of `sheet` and `parent`; null when it is no valid rule there.
 CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRule* parent);
 
@@ -617,13 +685,44 @@ CssRule* BuildImport(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, Css
   return rule;
 }
 
+}  // namespace
+
+std::optional<std::string> NormalizeKeyText(const std::string& text) {
+  std::string key;
+  for (const ComponentValues& part : SplitOnCommas(Trimmed(ParseComponentValues(text)))) {
+    const ComponentValues trimmed = Trimmed(part);
+    if (trimmed.size() != 1) return std::nullopt;
+    std::string item;
+    if (trimmed[0].IsIdent() && Lower(trimmed[0].token.value) == "from") item = "0%";
+    else if (trimmed[0].IsIdent() && Lower(trimmed[0].token.value) == "to") item = "100%";
+    else if (trimmed[0].IsToken(T::Percentage) && trimmed[0].token.number >= 0 && trimmed[0].token.number <= 100) item = css::Serialize(trimmed[0]);
+    else return std::nullopt;
+    key += (key.empty() ? "" : ", ") + item;
+  }
+  return key.empty() ? std::nullopt : std::optional<std::string>(key);
+}
+
+CssRule* BuildKeyframe(Context& ctx, const Rule& frame, CssStyleSheet* sheet, CssRule* parent) {
+  if (frame.isAtRule || !frame.hasBlock) return nullptr;
+  const std::optional<std::string> key = NormalizeKeyText(Serialize(Trimmed(frame.prelude)));
+  if (!key) return nullptr;
+  CssRule* keyframe = NewRule(ctx, RuleKind::Keyframe);
+  keyframe->name = *key;
+  keyframe->parentRule = parent;
+  keyframe->parentSheet = sheet;
+  keyframe->style = DeclarationsFrom(ctx, ParseBlockContents(frame.block), keyframe);
+  return keyframe;
+}
+
+namespace {
+
 CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRule* parent) {
   CssRule* rule = nullptr;
   if (!syntax.isAtRule) {
     // A style rule.
     const std::string text = Serialize(Trimmed(syntax.prelude));
-    std::optional<SelectorList> selectors = ParseSelectorList(text);
-    if (!selectors) return nullptr;
+    std::optional<SelectorList> selectors = ParseSelectorListForRule(text);
+    if (!selectors || !ResolveNamespaces(*selectors, sheet)) return nullptr;
     rule = NewRule(ctx, RuleKind::Style);
     rule->selectors = std::make_shared<SelectorList>(std::move(*selectors));
     rule->selectorText = SerializeSelectorList(*rule->selectors);
@@ -689,25 +788,7 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
     rule->parentSheet = sheet;
     for (const Rule& frame : ParseRuleList(Serialize(syntax.block))) {
       if (frame.isAtRule) continue;
-      // The key text: from, to or percentages.
-      std::string key;
-      bool valid = true;
-      for (const ComponentValues& part : SplitOnCommas(Trimmed(frame.prelude))) {
-        const ComponentValues trimmed = Trimmed(part);
-        if (trimmed.size() != 1) { valid = false; break; }
-        std::string item;
-        if (trimmed[0].IsIdent() && (IEquals(trimmed[0].token.value, "from") || IEquals(trimmed[0].token.value, "to"))) item = Lower(trimmed[0].token.value);
-        else if (trimmed[0].IsToken(T::Percentage) && trimmed[0].token.number >= 0 && trimmed[0].token.number <= 100) item = Serialize(trimmed[0]);
-        else { valid = false; break; }
-        key += (key.empty() ? "" : ", ") + item;
-      }
-      if (!valid || key.empty()) continue;
-      CssRule* keyframe = NewRule(ctx, RuleKind::Keyframe);
-      keyframe->name = key;
-      keyframe->parentRule = rule;
-      keyframe->parentSheet = sheet;
-      keyframe->style = DeclarationsFrom(ctx, ParseBlockContents(frame.block), keyframe);
-      AddChild(rule, keyframe);
+      if (CssRule* keyframe = BuildKeyframe(ctx, frame, sheet, rule)) AddChild(rule, keyframe);
     }
     return rule;
   } else if (name == "layer") {
@@ -979,4 +1060,59 @@ std::optional<bool> InParens(const ComponentValue& v) {
 
 bool SupportsCondition(const ComponentValues& condition) { return Condition(condition).value_or(false); }
 
+}  // namespace solar::css
+
+namespace solar::css {
+
+void ProcessImports(Context& ctx, CssStyleSheet* sheet, const SheetLoader& load, int depth) {
+  if (depth > 8) return;
+  for (CssRule* rule : sheet->rules) {
+    if (rule->kind != RuleKind::Import || rule->importedSheet) continue;
+    std::optional<url::Url> base = url::Parse(sheet->baseUrl);
+    std::optional<url::Url> parsed = url::Parse(rule->href, base ? &*base : nullptr);
+    if (!parsed) continue;
+    const std::string address = url::Serialize(*parsed);
+    // A sheet reaching itself again through its imports.
+    bool cycle = false;
+    for (CssStyleSheet* up = sheet; up; up = up->parentSheet) {
+      if (up->hasHref && up->href == address) cycle = true;
+    }
+    if (cycle) continue;
+    std::optional<std::string> text = load(address);
+    if (!text) continue;
+    CssStyleSheet* imported = NewStyleSheet(ctx);
+    imported->parentSheet = sheet;
+    imported->ownerRule = rule;
+    imported->href = address;
+    imported->hasHref = true;
+    imported->baseUrl = address;
+    if (rule->media) imported->media->queries = rule->media->queries;
+    ParseSheetInto(ctx, imported, *text);
+    rule->importedSheet = imported;
+    rule->NoteWrite();
+    ProcessImports(ctx, imported, load, depth + 1);
+  }
+}
+
+CssStyleSheet* NewLinkedSheet(Context& ctx, dom::Element* link, const std::string& address, const std::string& text) {
+  CssStyleSheet* sheet = NewStyleSheet(ctx);
+  sheet->ownerNode = link;
+  sheet->href = address;
+  sheet->hasHref = true;
+  sheet->baseUrl = address;
+  if (const dom::Attr* media = link->FindAttribute("", "media")) sheet->media->SetText(media->value);
+  if (const dom::Attr* title = link->FindAttribute("", "title")) {
+    if (!title->value.empty()) {
+      sheet->title = title->value;
+      sheet->hasTitle = true;
+    }
+  }
+  ParseSheetInto(ctx, sheet, text);
+  return sheet;
+}
+
+}  // namespace solar::css
+
+namespace solar::css {
+bool ResolveNamespaces(SelectorList& list, const CssStyleSheet* sheet) { return ResolveNamespacesImpl(list, sheet); }
 }  // namespace solar::css

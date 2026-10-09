@@ -344,11 +344,11 @@ bool ParseRule(std::string_view text, Rule& out) {
 
 namespace {
 
-std::vector<BlockItem> ConsumeBlockContents(Stream& in) {
+std::vector<BlockItem> ConsumeBlockContents(Stream& in, bool topLevel = false) {
   std::vector<BlockItem> items;
   for (;;) {
     const T type = in.Peek().type;
-    if (type == T::EndOfFile || type == T::RightBrace) return items;
+    if (type == T::EndOfFile || (type == T::RightBrace && !topLevel)) return items;
     if (type == T::Whitespace || type == T::Semicolon) {
       in.Next();
       continue;
@@ -362,18 +362,18 @@ std::vector<BlockItem> ConsumeBlockContents(Stream& in) {
       continue;
     }
     const size_t mark = in.Mark();
-    if (ConsumeDeclaration(in, true, item.declaration)) {
+    if (ConsumeDeclaration(in, !topLevel, item.declaration)) {
       item.isDeclaration = true;
       items.push_back(std::move(item));
       continue;
     }
     // Not a declaration: a nested qualified rule, from the same place.
     in.Reset(mark);
-    if (ConsumeQualifiedRule(in, true, T::Semicolon, item.rule)) {
+    if (ConsumeQualifiedRule(in, !topLevel, T::Semicolon, item.rule)) {
       items.push_back(std::move(item));
     } else {
       // Whatever the rule left unread up to the ; is gone with it.
-      ConsumeBadDeclarationRemnants(in, true);
+      ConsumeBadDeclarationRemnants(in, !topLevel);
     }
   }
 }
@@ -388,14 +388,8 @@ std::vector<BlockItem> ParseBlockContents(const ComponentValues& block) {
 std::vector<BlockItem> ParseBlockContents(std::string_view text) {
   const std::vector<Token> tokens = Tokenize(text);
   Stream in(tokens);
-  std::vector<BlockItem> items;
-  // A stray } at the top level of a style attribute ends nothing: it is skipped with its declaration.
-  for (;;) {
-    std::vector<BlockItem> part = ConsumeBlockContents(in);
-    for (BlockItem& item : part) items.push_back(std::move(item));
-    if (in.AtEnd()) return items;
-    in.Next();  // the }
-  }
+  // Not inside a block: a } is not the end of anything here.
+  return ConsumeBlockContents(in, true);
 }
 
 bool ParseDeclaration(std::string_view text, Declaration& out) {

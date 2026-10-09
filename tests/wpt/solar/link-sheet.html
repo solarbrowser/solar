@@ -1,0 +1,16 @@
+<!doctype html>
+<title>link and @import</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<link rel="stylesheet" href="/css/support/a-green.css" id="l">
+<body>
+<script>
+async_test(t => {
+  const l = document.getElementById("l");
+  l.addEventListener("load", t.step_func_done(() => {
+    assert_true(!!l.sheet);
+    assert_equals(l.sheet.href, new URL("/css/support/a-green.css", location).href);
+    assert_equals(document.styleSheets.length, 1);
+  }));
+}, "link load event and sheet");
+</script>
