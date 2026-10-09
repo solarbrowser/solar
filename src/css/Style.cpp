@@ -223,11 +223,19 @@ struct Gatherer {
   }
 };
 
-std::vector<CssStyleSheet*> SheetsOfTree(dom::Node* root) {
+std::vector<CssStyleSheet*> SheetsOfTree(dom::Node* root, Quanta::Context* ctx = nullptr) {
   std::vector<CssStyleSheet*> sheets;
   for (dom::Node* node = root; node; node = node->NextInTree(root)) {
     dom::Element* element = dom::AsElement(node);
     if (element && element->styleSheet) sheets.push_back(static_cast<CssStyleSheet*>(element->styleSheet));
+  }
+  // Then the ones adopted, in the order they are in the array.
+  Quanta::Object* adopted = root->IsDocument() ? static_cast<dom::Document*>(root)->adoptedStyleSheets : root->IsFragment() ? static_cast<dom::DocumentFragment*>(root)->adoptedStyleSheets : nullptr;
+  if (adopted && ctx) {
+    const uint32_t length = Quanta::Embed::ToUint32(*ctx, Quanta::Embed::Get(*ctx, Quanta::Embed::FromObject(adopted), "length"));
+    for (uint32_t i = 0; i < length; ++i) {
+      if (CssStyleSheet* sheet = Quanta::DOMObject::Cast<CssStyleSheet>(Quanta::Embed::Get(*ctx, Quanta::Embed::FromObject(adopted), std::to_string(i)))) sheets.push_back(sheet);
+    }
   }
   return sheets;
 }
@@ -317,7 +325,7 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
   while (treeRoot->parentNode) treeRoot = treeRoot->parentNode;
   if (treeRoot && (treeRoot->IsDocument() || treeRoot->IsFragment())) {
     if (treeRoot->IsFragment() && static_cast<dom::DocumentFragment*>(treeRoot)->isShadowRoot) gatherer.matchContext.host = static_cast<dom::DocumentFragment*>(treeRoot)->host;
-    for (CssStyleSheet* sheet : SheetsOfTree(treeRoot)) {
+    for (CssStyleSheet* sheet : SheetsOfTree(treeRoot, element->nodeDocument ? element->nodeDocument->context : nullptr)) {
       if (sheet->disabled || !MediaListMatches(sheet->media ? sheet->media->queries : std::vector<std::string>(), gatherer.media)) continue;
       gatherer.Rules(sheet->rules, kUnlayered);
     }
@@ -327,7 +335,7 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
     Gatherer inner{element, gatherer.matchContext, style.cascade};
     inner.matchContext.host = element;
     inner.order = gatherer.order;
-    for (CssStyleSheet* sheet : SheetsOfTree(element->shadowRoot)) {
+    for (CssStyleSheet* sheet : SheetsOfTree(element->shadowRoot, element->nodeDocument ? element->nodeDocument->context : nullptr)) {
       if (sheet->disabled || !MediaListMatches(sheet->media ? sheet->media->queries : std::vector<std::string>(), inner.media)) continue;
       inner.hostScoped = true;
       inner.Rules(sheet->rules, -1000);
@@ -731,6 +739,12 @@ void NoteStyleChangeForRegistry() { ++g_styleVersion; }
 uint64_t StyleVersion() { return g_styleVersion; }
 
 std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std::string& property, const std::string& pseudo) {
+  // An adopted sheets array can be changed in place, which nothing tells us of: styles are made again when there is one.
+  if (element && element->nodeDocument) {
+    dom::Node* root = element;
+    while (root->parentNode) root = root->parentNode;
+    if (element->nodeDocument->adoptedStyleSheets || (root->IsFragment() && static_cast<dom::DocumentFragment*>(root)->adoptedStyleSheets)) ++g_styleVersion;
+  }
   Resolver resolver(ctx);
   return resolver.Compute(element, property, pseudo);
 }

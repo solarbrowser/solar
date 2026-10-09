@@ -1137,6 +1137,56 @@ Value GetComputedStyle(Context& ctx, Value, qe::Args args, Value) {
   return qe::FromObject(declarations);
 }
 
+// document.adoptedStyleSheets and the shadow root's: an array of constructed sheets of the same document.
+Object*& AdoptedSlot(dom::Node* node) {
+  return node->IsDocument() ? static_cast<dom::Document*>(node)->adoptedStyleSheets : static_cast<dom::DocumentFragment*>(node)->adoptedStyleSheets;
+}
+
+Value GetAdopted(Context& ctx, Value t, qe::Args, Value) {
+  dom::Node* node = dom::ThisNode(ctx, t);
+  if (!node) return qe::Undefined();
+  if (!node->IsDocument() && !node->IsFragment()) {
+    qe::ThrowTypeError(ctx, "Illegal invocation");
+    return qe::Undefined();
+  }
+  Object*& slot = AdoptedSlot(node);
+  if (!slot) {
+    slot = qe::NewArray(ctx).as_object();
+    node->NoteWrite();
+  }
+  return qe::FromObject(slot);
+}
+
+Value SetAdopted(Context& ctx, Value t, qe::Args args, Value) {
+  dom::Node* node = dom::ThisNode(ctx, t);
+  if (!node || !NeedArgs(ctx, args, 1, "set adoptedStyleSheets")) return qe::Undefined();
+  if (!qe::IsObject(args[0])) {
+    qe::ThrowTypeError(ctx, "Failed to set the 'adoptedStyleSheets' property: The provided value is not a sequence.");
+    return qe::Undefined();
+  }
+  dom::Document* owner = node->IsDocument() ? static_cast<dom::Document*>(node) : node->nodeDocument;
+  const uint32_t length = qe::ToUint32(ctx, qe::Get(ctx, args[0], "length"));
+  Value copy = qe::NewArray(ctx);
+  for (uint32_t i = 0; i < length; ++i) {
+    Value item = qe::Get(ctx, args[0], std::to_string(i));
+    if (qe::HasException(ctx)) return qe::Undefined();
+    CssStyleSheet* sheet = DOMObject::Cast<CssStyleSheet>(item);
+    if (!sheet) {
+      qe::ThrowTypeError(ctx, "Failed to set the 'adoptedStyleSheets' property: Failed to convert value to 'CSSStyleSheet'.");
+      return qe::Undefined();
+    }
+    if (!sheet->constructed || sheet->constructorDocument != owner) {
+      web::ThrowDomException(ctx, "Sharing constructed stylesheets in multiple documents is not allowed", "NotAllowedError");
+      return qe::Undefined();
+    }
+    qe::ArrayPush(ctx, copy, item);
+  }
+  AdoptedSlot(node) = copy.as_object();
+  node->NoteWrite();
+  NoteStyleChange();
+  return qe::Undefined();
+}
+
 // CSS.supports(property, value) and CSS.supports(condition).
 Value CssSupports(Context& ctx, Value, qe::Args args, Value) {
   if (args.empty()) {
@@ -1362,7 +1412,13 @@ void DefineCssomClasses(Context& ctx) {
 
   // The members of the DOM that lead to sheets and styles.
   if (Object* element = dom::InterfacePrototype(ctx, dom::Interface::HtmlElement)) qe::DefineAccessor(element, "style", ElementStyle, ElementSetStyle);
-  if (Object* document = dom::InterfacePrototype(ctx, dom::Interface::Document)) qe::DefineAccessor(document, "styleSheets", DocumentStyleSheets, nullptr);
+  if (Object* document = dom::InterfacePrototype(ctx, dom::Interface::Document)) {
+    qe::DefineAccessor(document, "styleSheets", DocumentStyleSheets, nullptr);
+    qe::DefineAccessor(document, "adoptedStyleSheets", GetAdopted, SetAdopted);
+  }
+  if (Object* shadow = dom::InterfacePrototype(ctx, dom::Interface::ShadowRoot)) {
+    qe::DefineAccessor(shadow, "adoptedStyleSheets", GetAdopted, SetAdopted);
+  }
   for (const char* tag : {"style", "link"}) {
     Object* prototype = dom::HtmlElementPrototype(ctx, tag);
     if (prototype && prototype != dom::InterfacePrototype(ctx, dom::Interface::HtmlElement)) qe::DefineAccessor(prototype, "sheet", ElementSheet, nullptr);

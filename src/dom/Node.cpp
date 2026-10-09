@@ -44,12 +44,14 @@ void Document::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(window);
   visitor.Mark(globalObject);
   visitor.Mark(styleSheetList);
+  visitor.Mark(adoptedStyleSheets);
   visitor.Mark(frameElement);
 }
 
 void DocumentFragment::Visit(Quanta::Visitor& visitor) {
   Node::Visit(visitor);
   visitor.Mark(host);
+  visitor.Mark(adoptedStyleSheets);
 }
 
 void Attr::Visit(Quanta::Visitor& visitor) {

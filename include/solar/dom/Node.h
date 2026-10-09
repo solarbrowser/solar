@@ -152,6 +152,7 @@ struct DocumentFragment : Node {
   using Parent = Node;
   Element* host = nullptr;  // for the content of a <template>, or the shadow host of a shadow root
   bool isShadowRoot = false;
+  Quanta::Object* adoptedStyleSheets = nullptr;  // a shadow root's adoptedStyleSheets
 
   void Visit(Quanta::Visitor& visitor);
 };
@@ -258,6 +259,7 @@ struct Document : Node {
   // The global object of that window, and the iframe this document is the content of, if it is.
   Quanta::Object* globalObject = nullptr;
   Quanta::Object* styleSheetList = nullptr;  // document.styleSheets
+  Quanta::Object* adoptedStyleSheets = nullptr;
   // For an about: document whose iframe is gone: the address it was resolving against, which is the origin it keeps.
   std::string inheritedBase;
   // The Content-Security-Policy values that apply to the document (the header's, and its meta elements').
