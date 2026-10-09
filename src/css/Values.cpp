@@ -721,6 +721,55 @@ ComponentValue CanonicalTree(const ComponentValue& v, const ComputeContext& c) {
 }  // namespace
 
 
+// A <position> in its canonical form: two values (an x and a y), or the edge-and-offset forms as x then y.
+bool IsHorizontalKeyword(const ComponentValue& v) {
+  if (!v.IsIdent()) return false;
+  const std::string w = Lower(v.token.value);
+  return w == "left" || w == "right" || w == "x-start" || w == "x-end";
+}
+bool IsVerticalKeyword(const ComponentValue& v) {
+  if (!v.IsIdent()) return false;
+  const std::string w = Lower(v.token.value);
+  return w == "top" || w == "bottom" || w == "y-start" || w == "y-end";
+}
+bool IsCenterKeyword(const ComponentValue& v) { return v.IsIdent() && Lower(v.token.value) == "center"; }
+
+ComponentValues CanonicalPosition(const ComponentValues& in) {
+  ComponentValues v;
+  for (const ComponentValue& c : in) {
+    if (!c.IsWhitespace()) v.push_back(c);
+  }
+  ComponentValue center;
+  center.token.type = T::Ident;
+  center.token.value = "center";
+  // Already made one by a part of the syntax.
+  if (v.size() == 1 && v[0].kind == ComponentValue::Kind::Function && v[0].name == "\x01") return v[0].children;
+  if (v.size() == 1) {
+    if (IsVerticalKeyword(v[0])) return {center, v[0]};
+    return {v[0], center};
+  }
+  if (v.size() == 2) {
+    if (IsVerticalKeyword(v[0]) || IsHorizontalKeyword(v[1])) return {v[1], v[0]};
+    return v;
+  }
+  // Edge and offset pairs: the horizontal ones first.
+  size_t verticalAt = v.size();
+  for (size_t i = 0; i < v.size(); ++i) {
+    if (IsVerticalKeyword(v[i])) { verticalAt = i; break; }
+  }
+  size_t horizontalAt = v.size();
+  for (size_t i = 0; i < v.size(); ++i) {
+    if (IsHorizontalKeyword(v[i])) { horizontalAt = i; break; }
+  }
+  if (verticalAt < horizontalAt && horizontalAt < v.size()) {
+    // top 10px left 20px -> left 20px top 10px
+    ComponentValues out(v.begin() + horizontalAt, v.end());
+    out.insert(out.end(), v.begin() + verticalAt, v.begin() + horizontalAt);
+    return out;
+  }
+  return v;
+}
+
 class Matcher {
  public:
   using K = std::function<bool(size_t)>;
@@ -936,9 +985,26 @@ class Matcher {
     if (!root) return false;
     // A defined type is told to the shorthand expansion, which finds the longhand that takes it.
     return Match(*root, pos, [&, pos](size_t end) {
+      const size_t mark = log_.size();
+      if ((name == "position" || name == "bg-position") && end > pos) {
+        // The position as an x and a y, in one group standing where the matched values were.
+        ComponentValues matched(out_.begin() + pos, out_.begin() + end);
+        ComponentValue group;
+        group.kind = ComponentValue::Kind::Function;
+        group.name = "\x01";
+        group.children = CanonicalPosition(matched);
+        if (end - pos == 1 || true) {
+          // Keep the items aligned: the group in the first slot, empty space after it.
+          ComponentValue gap;
+          gap.token.type = T::Whitespace;
+          Set(pos, group);
+          for (size_t i = pos + 1; i < end; ++i) Set(i, gap);
+        }
+      }
       assigned_.push_back({key, pos, end});
       if (k(end)) return true;
       assigned_.pop_back();
+      Rollback(mark);
       return false;
     });
   }
@@ -1124,6 +1190,11 @@ void SerializeOne(const ComponentValue& v, std::string& out) {
         default: out += SerializeToken(v.token); return;
       }
     case ComponentValue::Kind::Function:
+      // A group made by the matcher: its values stand where it is, without a name or parentheses.
+      if (v.name == "\x01") {
+        SerializeList(v.children, out);
+        return;
+      }
       out += SerializeIdentifier(Lower(v.name)) + "(";
       SerializeList(v.children, out);
       out += ")";

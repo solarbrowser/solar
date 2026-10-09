@@ -3,6 +3,7 @@
 #include <string>
 
 #include "solar/css/Properties.h"
+#include "solar/css/Shorthands.h"
 #include "solar/css/Syntax.h"
 #include "solar/css/Values.h"
 
@@ -75,6 +76,15 @@ const Case kCases[] = {
 }  // namespace
 
 int main(int argc, char** argv) {
+  if (argc == 4 && std::string(argv[1]) == "expand") {
+    std::vector<Longhand> longhands;
+    if (!ExpandDeclaration(argv[2], argv[3], longhands)) {
+      std::printf("<invalid>\n");
+      return 0;
+    }
+    for (const Longhand& l : longhands) std::printf("%s: %s\n", l.name.c_str(), l.value.c_str());
+    return 0;
+  }
   if (argc == 3) {
     std::printf("%s\n", Parse(argv[1], argv[2]).c_str());
     return 0;

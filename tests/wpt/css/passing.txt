@@ -215,7 +215,9 @@ tests/wpt/css/css-grid/parsing/grid-auto-flow-invalid.html
 tests/wpt/css/css-grid/parsing/grid-auto-rows-invalid.html
 tests/wpt/css/css-grid/parsing/grid-auto-rows-valid.html
 tests/wpt/css/css-grid/parsing/grid-column-shortest-serialization.html
+tests/wpt/css/css-grid/parsing/grid-column-shorthand.html
 tests/wpt/css/css-grid/parsing/grid-row-shortest-serialization.html
+tests/wpt/css/css-grid/parsing/grid-row-shorthand.html
 tests/wpt/css/css-grid/parsing/grid-shorthand-invalid.html
 tests/wpt/css/css-grid/parsing/grid-template-columns-computed-nogrid.html
 tests/wpt/css/css-grid/parsing/grid-template-columns-repeat-intrinsic-valid.tentative.html
@@ -226,6 +228,7 @@ tests/wpt/css/css-grid/parsing/grid-template-shorthand-invalid.html
 tests/wpt/css/css-images/parsing/conic-gradient-calc-angle-percentage-invalid.html
 tests/wpt/css/css-images/parsing/conic-gradient-calc-angle-percentage-valid.html
 tests/wpt/css/css-images/parsing/gradient-position-invalid.html
+tests/wpt/css/css-images/parsing/gradient-position-valid.html
 tests/wpt/css/css-images/parsing/image-function-computed.html
 tests/wpt/css/css-images/parsing/image-function-valid.html
 tests/wpt/css/css-images/parsing/image-orientation-computed.html
@@ -238,6 +241,7 @@ tests/wpt/css/css-images/parsing/image-resolution-valid.html
 tests/wpt/css/css-images/parsing/object-fit-computed.html
 tests/wpt/css/css-images/parsing/object-fit-invalid.html
 tests/wpt/css/css-images/parsing/object-position-invalid.html
+tests/wpt/css/css-images/parsing/object-position-valid.html
 tests/wpt/css/css-lists/parsing/list-style-image-invalid.html
 tests/wpt/css/css-lists/parsing/list-style-image-valid.html
 tests/wpt/css/css-lists/parsing/list-style-position-computed.html
@@ -291,6 +295,7 @@ tests/wpt/css/css-masking/parsing/mask-composite-computed.html
 tests/wpt/css/css-masking/parsing/mask-composite-invalid.html
 tests/wpt/css/css-masking/parsing/mask-composite-valid.html
 tests/wpt/css/css-masking/parsing/mask-position-invalid.html
+tests/wpt/css/css-masking/parsing/mask-position-valid.html
 tests/wpt/css/css-masking/parsing/mask-repeat-invalid.html
 tests/wpt/css/css-masking/parsing/mask-size-invalid.html
 tests/wpt/css/css-masking/parsing/mask-type-computed.html
@@ -487,6 +492,7 @@ tests/wpt/css/css-transforms/parsing/backface-visibility-invalid.html
 tests/wpt/css/css-transforms/parsing/backface-visibility-valid.html
 tests/wpt/css/css-transforms/parsing/perspective-invalid.html
 tests/wpt/css/css-transforms/parsing/perspective-origin-invalid.html
+tests/wpt/css/css-transforms/parsing/perspective-origin-valid.html
 tests/wpt/css/css-transforms/parsing/rotate-parsing-invalid.html
 tests/wpt/css/css-transforms/parsing/scale-parsing-invalid.html
 tests/wpt/css/css-transforms/parsing/transform-box-computed.html
@@ -497,14 +503,17 @@ tests/wpt/css/css-transforms/parsing/transform-origin-invalid.html
 tests/wpt/css/css-transforms/parsing/translate-parsing-invalid.html
 tests/wpt/css/css-transforms/parsing/webkit-perspective-invalid.tentative.html
 tests/wpt/css/css-transitions/parsing/starting-style-parsing.html
+tests/wpt/css/css-transitions/parsing/transition-behavior.html
 tests/wpt/css/css-transitions/parsing/transition-delay-computed.html
 tests/wpt/css/css-transitions/parsing/transition-delay-invalid.html
 tests/wpt/css/css-transitions/parsing/transition-delay-valid.html
 tests/wpt/css/css-transitions/parsing/transition-duration-computed.html
 tests/wpt/css/css-transitions/parsing/transition-duration-invalid.html
 tests/wpt/css/css-transitions/parsing/transition-duration-valid.html
+tests/wpt/css/css-transitions/parsing/transition-invalid.html
 tests/wpt/css/css-transitions/parsing/transition-property-computed.html
 tests/wpt/css/css-transitions/parsing/transition-property-valid.html
+tests/wpt/css/css-transitions/parsing/transition-shorthand.html
 tests/wpt/css/css-ui/parsing/box-sizing-computed.html
 tests/wpt/css/css-ui/parsing/box-sizing-invalid.html
 tests/wpt/css/css-ui/parsing/box-sizing-valid.html
@@ -533,6 +542,8 @@ tests/wpt/css/css-values/absolute-length-units-001.html
 tests/wpt/css/css-values/attr-IACVT.html
 tests/wpt/css/css-values/attr-security-transition.html
 tests/wpt/css/css-values/attr-universal-selector.html
+tests/wpt/css/css-values/calc-background-position-002.html
+tests/wpt/css/css-values/calc-background-position-003.html
 tests/wpt/css/css-values/calc-catch-divide-by-0.html
 tests/wpt/css/css-values/calc-dimension-serialization-order.html
 tests/wpt/css/css-values/calc-in-color-001.html
@@ -583,6 +594,7 @@ tests/wpt/css/css-values/minmax-percentage-invalid.html
 tests/wpt/css/css-values/minmax-time-invalid.html
 tests/wpt/css/css-values/minmax-time-serialize.html
 tests/wpt/css/css-values/position/position-invalid.tentative.html
+tests/wpt/css/css-values/position/position-valid.tentative.html
 tests/wpt/css/css-values/progress-invalid.html
 tests/wpt/css/css-values/random-in-keyframe.html
 tests/wpt/css/css-values/random-invalid.tentative.html
@@ -673,6 +685,7 @@ tests/wpt/css/cssom/getComputedStyle-margins-roundtrip.html
 tests/wpt/css/cssom/getComputedStyle-page-rule.xhtml
 tests/wpt/css/cssom/getComputedStyle-pointerEvents.html
 tests/wpt/css/cssom/getComputedStyle-pseudo-class.html
+tests/wpt/css/cssom/getComputedStyle-resolved-colors.html
 tests/wpt/css/cssom/getComputedStyle-resolved-min-max-clamping.html
 tests/wpt/css/cssom/getComputedStyle-root-variables.html
 tests/wpt/css/cssom/getComputedStyle-root.html
@@ -708,6 +721,8 @@ tests/wpt/css/cssom/set-selector-text-attachment.html
 tests/wpt/css/cssom/shadow-dom-style-sheet.html
 tests/wpt/css/cssom/shorthand-serialization.html
 tests/wpt/css/cssom/style-attr-update-across-documents.html
+tests/wpt/css/cssom/style-background-position-longhands.html
+tests/wpt/css/cssom/style-background-position.html
 tests/wpt/css/cssom/style-backgroundcolor-oklch.html
 tests/wpt/css/cssom/style-backgroundcolor-table-row.html
 tests/wpt/css/cssom/style-backgroundimage-lineargradient.html

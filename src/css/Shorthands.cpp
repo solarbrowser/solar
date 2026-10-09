@@ -102,7 +102,11 @@ const std::vector<const PropertyDefinition*>& ShorthandsOf(const std::string& lo
       for (const std::string& leaf : LeavesOf(property)) map[leaf].push_back(&property);
     }
     for (auto& [name, list] : map) {
-      std::stable_sort(list.begin(), list.end(), [](const PropertyDefinition* a, const PropertyDefinition* b) { return LeavesOf(*a).size() > LeavesOf(*b).size(); });
+      std::stable_sort(list.begin(), list.end(), [](const PropertyDefinition* a, const PropertyDefinition* b) {
+        const size_t x = LeavesOf(*a).size(), y = LeavesOf(*b).size();
+        if (x != y) return x > y;
+        return a->name[0] != '-' && b->name[0] == '-';
+      });
     }
     return map;
   }();
@@ -137,36 +141,166 @@ bool Overlaps(const std::vector<bool>& claimed, size_t begin, size_t end) {
   return false;
 }
 
-// The longhand of `shorthand` that takes what the type `<name>` matched.
-std::string LonghandForType(const PropertyDefinition& shorthand, const std::string& typeName) {
+// The longhands of `shorthand` that can take what the type `<name>` matched, in the order the shorthand lists them.
+std::vector<std::string> LonghandsForType(const PropertyDefinition& shorthand, const std::string& typeName) {
   static const std::map<std::string, std::string> special = {{"<font-variant-css2>", "font-variant"}, {"<font-width-css3>", "font-stretch"}};
-  if (const auto found = special.find(typeName); found != special.end()) {
+  std::vector<std::string> found;
+  if (const auto s = special.find(typeName); s != special.end()) {
     for (const char* name : shorthand.longhands) {
-      if (found->second == name) return name;
+      if (s->second == name) found.push_back(name);
     }
+    if (!found.empty()) return found;
   }
+  // "<time>" is also written "<time [0,∞]>" in a syntax.
+  const std::string stem = typeName.substr(0, typeName.size() - 1);
   for (const char* name : shorthand.longhands) {
     const PropertyDefinition* longhand = FindProperty(name);
     if (!longhand) continue;
     const std::string syntax = longhand->syntax;
-    // "<line-width>" in "<line-width>" and in "<'border-top-width'>{1,4}"-less syntaxes: the longhand takes the type.
-    size_t at = syntax.find(typeName);
-    while (at != std::string::npos) {
-      const size_t after = at + typeName.size();
-      if (after >= syntax.size() || syntax[after] != '[') return name;
-      at = syntax.find(typeName, after);
+    bool contains = false;
+    for (size_t at = syntax.find(stem); at != std::string::npos; at = syntax.find(stem, at + 1)) {
+      const size_t after = at + stem.size();
+      if (after < syntax.size() && (syntax[after] == '>' || syntax[after] == ' ')) {
+        contains = true;
+        break;
+      }
     }
-    if (IsRealShorthand(*longhand)) {
-      // A nested shorthand takes it when one of its own longhands does.
-      if (!LonghandForType(*longhand, typeName).empty()) return name;
-    }
+    if (!contains && IsRealShorthand(*longhand)) contains = !LonghandsForType(*longhand, typeName).empty();
+    if (contains) found.push_back(name);
   }
-  return "";
+  return found;
 }
 
 std::string Join(const ComponentValues& values, size_t begin, size_t end) {
   ComponentValues slice(values.begin() + begin, values.begin() + end);
   return SerializeValue(slice);
+}
+
+// What each longhand of `shorthand` took of a match: the largest matches first, each component to one longhand; a type that
+// more than one longhand has (the duration and the delay are both a <time>) goes to them in the order they are written.
+std::map<std::string, std::string> AssignLonghands(const PropertyDefinition& property, const ValueMatch& match) {
+  const ComponentValues& items = match.normalized;
+  std::vector<ValueMatch::Assignment> assigned = match.assigned;
+  std::stable_sort(assigned.begin(), assigned.end(), [](const auto& a, const auto& b) {
+    if ((a.end - a.begin) != (b.end - b.begin)) return (a.end - a.begin) > (b.end - b.begin);
+    return a.begin < b.begin;
+  });
+  std::vector<bool> claimed(items.size(), false);
+  std::map<std::string, std::string> taken;
+  std::map<std::string, size_t> occurrence;  // how many of a type have been given out
+  for (const auto& a : assigned) {
+    if (a.begin >= a.end || Overlaps(claimed, a.begin, a.end)) continue;
+    std::string target;
+    if (!a.property.empty() && a.property[0] == '<') {
+      const std::vector<std::string> candidates = LonghandsForType(property, a.property);
+      size_t& used = occurrence[a.property];
+      // The first candidate that has not taken something yet, in written order.
+      for (const std::string& candidate : candidates) {
+        if (!taken.count(candidate)) {
+          target = candidate;
+          break;
+        }
+      }
+      (void)used;
+    } else {
+      for (const char* longhand : property.longhands) {
+        if (a.property == longhand) target = longhand;
+      }
+    }
+    if (target.empty() || taken.count(target)) continue;
+    for (size_t i = a.begin; i < a.end; ++i) claimed[i] = true;
+    taken[target] = Join(items, a.begin, a.end);
+  }
+  return taken;
+}
+
+// A shorthand written as <A># or <A>#? , <B>: a comma-separated list of layers, the last of which may be a different kind.
+struct LayerForm {
+  std::string layer;
+  std::string last;
+};
+
+std::optional<LayerForm> LayersOf(const PropertyDefinition& property) {
+  const std::string syntax = property.syntax;
+  if (syntax.size() < 4 || syntax[0] != '<') return std::nullopt;
+  const size_t close = syntax.find('>');
+  if (close == std::string::npos) return std::nullopt;
+  const std::string first = syntax.substr(1, close - 1);
+  const std::string rest = syntax.substr(close + 1);
+  if (first.empty() || first.find_first_of(" '[") != std::string::npos) return std::nullopt;
+  if (rest == "#") return LayerForm{first, first};
+  if (rest.starts_with("#? , <") && rest.back() == '>') {
+    const std::string last = rest.substr(6, rest.size() - 7);
+    if (last.find_first_of(" '[") == std::string::npos) return LayerForm{first, last};
+  }
+  return std::nullopt;
+}
+
+bool IsListLonghand(const PropertyDefinition& property) { return std::string(property.syntax).find('#') != std::string::npos; }
+
+// The x and the y of a position, as the longhands take them.
+void SplitPosition(const ComponentValue& group, std::string& x, std::string& y) {
+  const ComponentValues& v = group.children;
+  size_t verticalAt = v.size();
+  for (size_t i = 0; i < v.size(); ++i) {
+    if (v[i].IsIdent()) {
+      const std::string w = Lower(v[i].token.value);
+      if (w == "top" || w == "bottom" || w == "y-start" || w == "y-end") {
+        verticalAt = i;
+        break;
+      }
+    }
+  }
+  if (v.size() == 2 || verticalAt >= v.size()) verticalAt = 1;
+  x = SerializeValue(ComponentValues(v.begin(), v.begin() + std::min(verticalAt, v.size())));
+  y = SerializeValue(ComponentValues(v.begin() + std::min(verticalAt, v.size()), v.end()));
+}
+
+bool ExpandLayered(const PropertyDefinition& property, const LayerForm& form, const ComponentValues& items, std::vector<Longhand>& out) {
+  std::vector<ComponentValues> layers = SplitOnCommas(items);
+  const size_t n = layers.size();
+  std::map<std::string, std::vector<std::string>> perLonghand;
+  const bool position = std::string(property.name) == "background-position";
+  for (size_t i = 0; i < n; ++i) {
+    const std::string type = i + 1 == n ? form.last : form.layer;
+    ValueMatch m;
+    if (!MatchSyntax("<" + type + ">", layers[i], m)) return false;
+    if (position) {
+      const ComponentValue* group = nullptr;
+      size_t count = 0;
+      for (const ComponentValue& v : m.normalized) {
+        if (v.IsWhitespace()) continue;
+        group = &v;
+        ++count;
+      }
+      if (count != 1 || group->kind != ComponentValue::Kind::Function) return false;
+      std::string x, y;
+      SplitPosition(*group, x, y);
+      perLonghand["background-position-x"].resize(n);
+      perLonghand["background-position-y"].resize(n);
+      perLonghand["background-position-x"][i] = x;
+      perLonghand["background-position-y"][i] = y;
+      continue;
+    }
+    for (const auto& [longhand, text] : AssignLonghands(property, m)) {
+      perLonghand[longhand].resize(n);
+      perLonghand[longhand][i] = text;
+    }
+  }
+  for (const char* name : property.longhands) {
+    const PropertyDefinition* longhand = FindProperty(name);
+    std::vector<std::string> list = perLonghand[name];
+    list.resize(n);
+    const std::string initial = longhand ? (std::string(name) == "background-position" ? "0% 0%" : InitialValueText(*longhand)) : "initial";
+    std::string text;
+    if (longhand && IsListLonghand(*longhand)) {
+      for (size_t i = 0; i < n; ++i) text += (i ? ", " : "") + (list[i].empty() ? initial : list[i]);
+    } else {
+      text = list[n - 1].empty() ? initial : list[n - 1];
+    }
+    ExpandLonghand(name, text, out);
+  }
+  return true;
 }
 
 bool ExpandBorderRadius(const PropertyDefinition& property, const ComponentValues& normalized, std::vector<Longhand>& out) {
@@ -206,6 +340,12 @@ bool ExpandShorthand(const PropertyDefinition& property, const ComponentValues& 
     for (Longhand& l : mine) out.push_back(std::move(l));
     return true;
   }
+  if (const std::optional<LayerForm> form = LayersOf(property)) {
+    if (!ExpandLayered(property, *form, values, mine)) return false;
+    for (const char* reset : property.resetLonghands) add(reset, "initial");
+    for (Longhand& l : mine) out.push_back(std::move(l));
+    return true;
+  }
   if (name == "flex" && items.size() == 1 && items[0].IsIdent() && Lower(items[0].token.value) == "none") {
     add("flex-grow", "0");
     add("flex-shrink", "0");
@@ -214,31 +354,7 @@ bool ExpandShorthand(const PropertyDefinition& property, const ComponentValues& 
     return true;
   }
 
-  // What each longhand took: the largest matches first, each component to one longhand.
-  std::vector<ValueMatch::Assignment> assigned = match.assigned;
-  std::stable_sort(assigned.begin(), assigned.end(), [](const auto& a, const auto& b) { return (a.end - a.begin) > (b.end - b.begin); });
-  std::vector<bool> claimed(items.size(), false);
-  std::map<std::string, std::string> taken;
-  for (const auto& a : assigned) {
-    std::string target;
-    if (!a.property.empty() && a.property[0] == '<') {
-      target = LonghandForType(property, a.property);
-    } else {
-      for (const char* longhand : property.longhands) {
-        if (a.property == longhand) target = longhand;
-      }
-    }
-    if (target.empty() || taken.count(target) || Overlaps(claimed, a.begin, a.end) || a.begin >= a.end) continue;
-    for (size_t i = a.begin; i < a.end; ++i) claimed[i] = true;
-    taken[target] = Join(items, a.begin, a.end);
-  }
-  // A slash in a value the longhands did not take is a syntax this table does not know: fail closed.
-  for (size_t i = 0; i < items.size(); ++i) {
-    if (!claimed[i] && !items[i].IsDelim('/') && !items[i].IsToken(T::Comma)) {
-      // Keywords of the shorthand itself (a system font, "none"): all longhands go to their initial values.
-      break;
-    }
-  }
+  std::map<std::string, std::string> taken = AssignLonghands(property, match);
   // Omitted: the initial value, except where the specification says otherwise.
   static const std::set<std::string> copyFirst = {"gap", "grid-gap", "place-content", "place-items", "place-self"};
   const std::string firstLonghand = property.longhands.empty() ? "" : property.longhands[0];
@@ -251,6 +367,14 @@ bool ExpandShorthand(const PropertyDefinition& property, const ComponentValues& 
       text = longhand == "flex-basis" ? "0%" : "1";
     } else if (copyFirst.count(name) && i == 1 && taken.count(firstLonghand)) {
       text = taken[firstLonghand];
+    } else if ((name == "grid-row" || name == "grid-column" || name == "grid-area") && i > 0) {
+      // A line left out is the line before it if that is a name, and auto otherwise.
+      const size_t from = name == "grid-area" ? (i == 1 ? 0 : i == 2 ? 0 : 1) : 0;
+      const std::string& source = property.longhands[from];
+      const auto it = taken.find(source);
+      const std::string named = it != taken.end() ? it->second : "";
+      const bool isName = !named.empty() && named.find(' ') == std::string::npos && !std::isdigit(static_cast<unsigned char>(named[0])) && named[0] != '-' && named != "auto";
+      text = isName ? named : "auto";
     } else if (const PropertyDefinition* l = FindProperty(longhand)) {
       text = InitialValueText(*l);
     } else {
@@ -405,6 +529,73 @@ std::optional<std::string> SerializeShorthand(const PropertyDefinition& shorthan
     }
     candidate = JoinWords(CompressEdges(h));
     if (h != v) candidate += " / " + JoinWords(CompressEdges(v));
+  } else if (const std::optional<LayerForm> form = LayersOf(shorthand)) {
+    // Layer by layer: what is not the initial value, in the order the shorthand's longhands come.
+    std::vector<std::vector<std::string>> lists(n);
+    size_t layers = 1;
+    for (size_t i = 0; i < n; ++i) {
+      for (const ComponentValues& part : SplitOnCommas(ParseComponentValues(input.values[i]))) lists[i].push_back(Serialize(Trimmed(part)));
+      const PropertyDefinition* longhand = FindProperty(shorthand.longhands[i]);
+      if (longhand && IsListLonghand(*longhand)) layers = std::max(layers, lists[i].size());
+    }
+    for (size_t i = 0; i < n; ++i) {
+      const PropertyDefinition* longhand = FindProperty(shorthand.longhands[i]);
+      const bool isList = longhand && IsListLonghand(*longhand);
+      if (isList && lists[i].size() != layers) return std::nullopt;
+      if (!isList && lists[i].size() != 1) return std::nullopt;
+    }
+    if (name == "background-position") {
+      // x and y of each layer.
+      if (n != 2) return std::nullopt;
+      for (size_t l = 0; l < layers; ++l) candidate += (l ? ", " : "") + lists[0][l] + " " + lists[1][l];
+    } else {
+      const auto initialOf = [&](size_t i) {
+        const PropertyDefinition* longhand = FindProperty(shorthand.longhands[i]);
+        if (std::string(shorthand.longhands[i]).ends_with("position")) return std::string("0% 0%");
+        return longhand ? InitialValueText(*longhand) : std::string("initial");
+      };
+      const auto longhandAt = [&](const char* suffix) -> int {
+        for (size_t i = 0; i < n; ++i) {
+          if (std::string(shorthand.longhands[i]).ends_with(suffix)) return static_cast<int>(i);
+        }
+        return -1;
+      };
+      for (size_t l = 0; l < layers; ++l) {
+        std::string layer;
+        const auto value = [&](size_t i) { return lists[i].size() == 1 && !IsListLonghand(*FindProperty(shorthand.longhands[i])) ? lists[i][0] : lists[i][l]; };
+        const int positionAt = longhandAt("position"), sizeAt = longhandAt("size"), originAt = longhandAt("origin"), clipAt = longhandAt("clip");
+        for (size_t i = 0; i < n; ++i) {
+          const std::string v = value(i);
+          const bool isLast = l + 1 == layers;
+          const PropertyDefinition* longhand = FindProperty(shorthand.longhands[i]);
+          const bool isList = longhand && IsListLonghand(*longhand);
+          if (!isList && !isLast) continue;  // a color is for the last layer
+          if (static_cast<int>(i) == sizeAt) continue;  // with the position
+          if (static_cast<int>(i) == originAt || static_cast<int>(i) == clipAt) continue;  // below
+          if (v == initialOf(i) && !(static_cast<int>(i) == positionAt && sizeAt >= 0 && value(sizeAt) != initialOf(sizeAt))) continue;
+          std::string piece = v;
+          if (static_cast<int>(i) == positionAt && sizeAt >= 0 && value(sizeAt) != initialOf(sizeAt)) piece += " / " + value(sizeAt);
+          layer += (layer.empty() ? "" : " ") + piece;
+        }
+        if (originAt >= 0 && clipAt >= 0) {
+          const std::string origin = value(originAt), clip = value(clipAt);
+          const bool originInitial = origin == initialOf(originAt), clipInitial = clip == initialOf(clipAt);
+          if (!(originInitial && clipInitial)) {
+            std::string boxes = origin == clip ? origin : origin + " " + clip;
+            layer += (layer.empty() ? "" : " ") + boxes;
+          }
+        }
+        // A color goes at the end of the last layer.
+        if (layer.empty()) layer = "none";
+        candidate += (l ? ", " : "") + layer;
+      }
+    }
+  } else if (name == "grid-row" || name == "grid-column") {
+    if (n != 2) return std::nullopt;
+    const std::string start = input.values[0], end = input.values[1];
+    const bool isName = !start.empty() && start.find(' ') == std::string::npos && !std::isdigit(static_cast<unsigned char>(start[0])) && start[0] != '-' && start != "auto";
+    candidate = start;
+    if (!(end == "auto" || (isName && end == start))) candidate += " / " + end;
   } else if (name == "font") {
     // [style] [weight] [stretch] size [/ line-height] family, the ones that are not initial.
     const auto value = [&](const char* longhand) {
