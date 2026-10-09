@@ -29,6 +29,8 @@ void InstallWindow(Quanta::Embed::Realm& realm, dom::Document* document = nullpt
 void DefineFrameNatives(Quanta::Context& ctx);
 void DefineIframeMembers(Quanta::Context& ctx, Quanta::Object* prototype);
 void DefineScriptMembers(Quanta::Context& ctx, Quanta::Object* prototype);
+void DefineStyleMembers(Quanta::Context& ctx, Quanta::Object* prototype);
+void DefineLinkMembers(Quanta::Context& ctx, Quanta::Object* prototype);
 // focus(), blur(), tabIndex and activeElement; and what the tree does when the focused node leaves it.
 void DefineFocusMembers(Quanta::Context& ctx);
 // document.open(), write(), writeln() and close().

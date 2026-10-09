@@ -41,6 +41,7 @@ enum class RuleKind {
   Scope,
   StartingStyle,
   NestedDeclarations,
+  FontPaletteValues,
 };
 
 // One declaration of a block: its name (lowercased for a known property, as written for a custom one), its
@@ -53,6 +54,7 @@ struct DeclarationEntry {
   // empty, and the shorthand's text is kept here.
   std::string pendingShorthand;
   std::string pendingText;
+  std::string base;  // what a relative url() in the value is taken against, when it is computed
 };
 
 // A CSSStyleDeclaration: the declarations of a style rule, a style attribute, or the computed style of an element.
@@ -77,6 +79,10 @@ struct CssDeclarations : Quanta::DOMObject {
   const DeclarationEntry* Find(const std::string& name) const;
   // A declaration of a property (a shorthand is expanded into its longhands); false if the value is not valid for it.
   bool Apply(const std::string& name, const std::string& text, bool important);
+  // Whether the block is a rule's descriptors (@font-face, @font-palette-values): what it holds are not properties.
+  bool IsDescriptorBlock() const;
+  // The address relative urls in the declarations are taken against.
+  std::string BaseUrl() const;
   // What getPropertyValue and getPropertyPriority answer; a shorthand is answered from its longhands.
   std::string ValueOf(const std::string& name) const;
   std::string PriorityOf(const std::string& name) const;
@@ -145,8 +151,12 @@ struct CssRule : Quanta::DOMObject {
   std::optional<RegisteredProperty> registered;
 
   std::string CssText() const;
+  // (A keyframes rule is indexable by its keyframes once Quanta lets a platform object with indexed access carry properties of its own.)
   void Visit(Quanta::Visitor& visitor);
 };
+
+// A rule taken out of its sheet or its parent rule: nothing holds it any more.
+void DetachRule(CssRule* rule);
 
 struct CssRuleList : Quanta::DOMObject {
   CssStyleSheet* ownerSheet = nullptr;
@@ -193,6 +203,8 @@ struct CssStyleSheet : Quanta::DOMObject {
 // The declarations of a style attribute or of a declaration block's text, expanded into longhands.
 std::vector<DeclarationEntry> ParseDeclarationList(std::string_view text);
 // A declaration added to a list of entries: false if its value is not valid for the property.
+// The base of the sheet being parsed, for the declarations made before their rules know their sheet.
+void SetParsingBase(const std::string& base);
 bool ApplyDeclaration(std::vector<DeclarationEntry>& items, const std::string& name, const std::string& text, bool important);
 
 // ---- Making them ----
@@ -233,6 +245,8 @@ using SheetLoader = std::function<std::optional<std::string>(const std::string& 
 // Loads the style sheets that the @import rules of `sheet` name, and theirs in turn: each rule's styleSheet is the sheet,
 // or null where it could not be had. A sheet that imports one it is already in the middle of is not loaded again.
 void ProcessImports(Quanta::Context& ctx, CssStyleSheet* sheet, const SheetLoader& load, int depth = 0);
+// The loader that an @import inserted with insertRule is fetched with.
+void SetSheetLoader(SheetLoader loader);
 // A sheet for a link element, made of the text at `address`.
 CssStyleSheet* NewLinkedSheet(Quanta::Context& ctx, dom::Element* link, const std::string& address, const std::string& text);
 

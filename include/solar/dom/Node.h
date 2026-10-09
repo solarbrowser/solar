@@ -198,6 +198,7 @@ struct Element : Node {
   Quanta::Object* tokenList = nullptr;
   // A style or link element's sheet, and the CSSStyleDeclaration of the style attribute: both the same object each time.
   Quanta::Object* styleSheet = nullptr;
+  bool linkExplicitlyEnabled = false;  // a link that had its disabled attribute taken off: an alternate sheet it makes is on
   Quanta::Object* inlineStyle = nullptr;
   Quanta::Object* dataset = nullptr;  // HTMLElement.dataset
   // A template element's contents, which are not its children.
@@ -340,6 +341,9 @@ Attr* NewAttr(Quanta::Context& ctx, Document* document, std::string_view namespa
 // A number that changes whenever any tree does, which the live collections check to know whether what
 // they have found is still so.
 uint64_t TreeVersion();
+// The document base URL, which the html module works out (a base element, a frame's parent): the address by default.
+std::string DocumentBaseUri(const Document* document);
+void SetDocumentBaseUriProvider(std::string (*provider)(const Document*));
 void NoteTreeChange();
 
 // The prototype of the interface an HTML element of this name has: HTMLDivElement for "div", HTMLUnknownElement

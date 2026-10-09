@@ -2,6 +2,9 @@
 #include <cctype>
 
 #include "solar/css/Cssom.h"
+#include "solar/url/Parser.h"
+#include "solar/url/Serializer.h"
+#include "solar/css/Descriptors.h"
 #include "solar/css/Properties.h"
 #include "solar/css/Style.h"
 #include "solar/dom/CustomElements.h"
@@ -24,7 +27,7 @@ namespace {
 enum Proto {
   kSheet, kDeclarations, kMediaList, kRuleList, kStyleSheetList, kRuleBase, kStyleRule, kImportRule, kMediaRule, kFontFaceRule, kPageRule,
   kKeyframesRule, kKeyframeRule, kNamespaceRule, kCounterStyleRule, kSupportsRule, kLayerBlockRule, kLayerStatementRule, kPropertyRule,
-  kContainerRule, kScopeRule, kStartingStyleRule, kNestedDeclarationsRule, kProtoCount
+  kContainerRule, kScopeRule, kStartingStyleRule, kNestedDeclarationsRule, kFontPaletteValuesRule, kProtoCount
 };
 
 char g_keys[kProtoCount];
@@ -50,6 +53,7 @@ Proto ProtoOfKind(RuleKind kind) {
     case RuleKind::Scope: return kScopeRule;
     case RuleKind::StartingStyle: return kStartingStyleRule;
     case RuleKind::NestedDeclarations: return kNestedDeclarationsRule;
+    case RuleKind::FontPaletteValues: return kFontPaletteValuesRule;
   }
   return kRuleBase;
 }
@@ -105,7 +109,7 @@ std::string PropertyForIdlName(const std::string& name) {
     if (dashed.starts_with("webkit-")) dashed = "-" + dashed;
   }
   std::string normalized = dashed;
-  if (!NormalizePropertyName(normalized)) return "";
+  if (!NormalizePropertyName(normalized)) return IsAnyDescriptorName(dashed) ? dashed : "";
   // A legacy name is its property's, and has an attribute of its own.
   const PropertyDefinition* property = FindProperty(dashed);
   if (normalized != dashed && !(property && property->name == normalized)) return "";
@@ -720,7 +724,10 @@ Value KeyframesDelete(Context& ctx, Value t, qe::Args args, Value) {
   CssRule* self = ThisRuleOf(ctx, t, RuleKind::Keyframes);
   if (!self || !NeedArgs(ctx, args, 1, "deleteRule")) return qe::Undefined();
   const int index = FindKeyframe(self, NormalizeKey(qe::ToWtf8(ctx, args[0])));
-  if (index >= 0) self->rules.erase(self->rules.begin() + index);
+  if (index >= 0) {
+    DetachRule(self->rules[index]);
+    self->rules.erase(self->rules.begin() + index);
+  }
   return qe::Undefined();
 }
 
@@ -740,6 +747,16 @@ Value LayerNameList(Context& ctx, Value t, qe::Args, Value) {
   }
   return array;
 }
+
+Value PaletteDescriptor(Context& ctx, Value t, const char* name) {
+  CssRule* self = ThisRuleOf(ctx, t, RuleKind::FontPaletteValues);
+  if (!self) return qe::Undefined();
+  const DeclarationEntry* entry = self->style ? self->style->Find(name) : nullptr;
+  return qe::FromWtf8(ctx, entry ? entry->value : "");
+}
+Value PaletteFontFamily(Context& ctx, Value t, qe::Args, Value) { return PaletteDescriptor(ctx, t, "font-family"); }
+Value PaletteBasePalette(Context& ctx, Value t, qe::Args, Value) { return PaletteDescriptor(ctx, t, "base-palette"); }
+Value PaletteOverrideColors(Context& ctx, Value t, qe::Args, Value) { return PaletteDescriptor(ctx, t, "override-colors"); }
 
 Value ContainerName(Context& ctx, Value t, qe::Args, Value) {
   CssRule* self = ThisRuleOf(ctx, t, RuleKind::Container);
@@ -879,8 +896,8 @@ Value SheetDeleteRule(Context& ctx, Value t, qe::Args args, Value) {
 // The legacy addRule(selector, block, index) and removeRule(index).
 Value SheetAddRule(Context& ctx, Value t, qe::Args args, Value) {
   CssStyleSheet* self = This<CssStyleSheet>(ctx, t);
-  if (!self || !NeedArgs(ctx, args, 1, "addRule") || !CheckReadable(ctx, self)) return qe::Undefined();
-  const std::string selector = ArgString(ctx, args, 0);
+  if (!self || !CheckReadable(ctx, self)) return qe::Undefined();
+  const std::string selector = args.empty() || args[0].is_undefined() ? "undefined" : ArgString(ctx, args, 0);
   const std::string block = args.size() > 1 && !args[1].is_undefined() ? qe::ToWtf8(ctx, args[1]) : "";
   const uint32_t index = args.size() > 2 && !args[2].is_undefined() ? qe::ToUint32(ctx, args[2]) : static_cast<uint32_t>(self->rules.size());
   if (qe::HasException(ctx)) return qe::Undefined();
@@ -957,14 +974,25 @@ Value ConstructSheet(Context& ctx, Value, qe::Args args, Value newTarget) {
   sheet->constructed = true;
   sheet->disallowImport = true;
   sheet->constructorDocument = dom::AssociatedDocument(ctx);
-  sheet->baseUrl = sheet->constructorDocument ? sheet->constructorDocument->url : "";
+  sheet->baseUrl = sheet->constructorDocument ? dom::DocumentBaseUri(sheet->constructorDocument) : "";
   if (!args.empty() && !args[0].is_undefined() && !args[0].is_null()) {
     if (!qe::IsObject(args[0])) {
       qe::ThrowTypeError(ctx, "Failed to construct 'CSSStyleSheet': The provided value is not of type 'CSSStyleSheetInit'.");
       return qe::Undefined();
     }
     Value base = qe::Get(ctx, args[0], "baseURL");
-    if (!base.is_undefined()) sheet->baseUrl = qe::ToWtf8(ctx, base);
+    if (!base.is_undefined()) {
+      // Taken against the document's base; one that does not parse is not allowed.
+      const std::string given = qe::ToWtf8(ctx, base);
+      if (qe::HasException(ctx)) return qe::Undefined();
+      const std::optional<url::Url> documentBase = url::Parse(sheet->baseUrl);
+      const std::optional<url::Url> parsed = url::Parse(given, documentBase ? &*documentBase : nullptr);
+      if (!parsed) {
+        web::ThrowDomException(ctx, "Failed to construct 'CSSStyleSheet': Invalid base URL", "NotAllowedError");
+        return qe::Undefined();
+      }
+      sheet->baseUrl = url::Serialize(*parsed);
+    }
     Value media = qe::Get(ctx, args[0], "media");
     if (!media.is_undefined()) {
       if (qe::IsObject(media)) {
@@ -986,6 +1014,7 @@ Value ConstructSheet(Context& ctx, Value, qe::Args args, Value newTarget) {
 void UpdateStyleElement(Context& ctx, dom::Element* element) {
   NoteStyleChange();
   const bool wasLinked = element->styleSheet != nullptr;
+  if (element->styleSheet) static_cast<CssStyleSheet*>(element->styleSheet)->ownerNode = nullptr;
   element->styleSheet = nullptr;
   if (!element->IsHtml("style")) return;
   dom::Node* root = dom::ShadowIncludingRoot(element);
@@ -998,7 +1027,7 @@ void UpdateStyleElement(Context& ctx, dom::Element* element) {
   }
   CssStyleSheet* sheet = NewStyleSheet(ctx);
   sheet->ownerNode = element;
-  sheet->baseUrl = static_cast<dom::Document*>(root)->url;
+  sheet->baseUrl = dom::DocumentBaseUri(static_cast<dom::Document*>(root));
   if (const dom::Attr* media = element->FindAttribute("", "media")) sheet->media->SetText(media->value);
   if (const dom::Attr* title = element->FindAttribute("", "title")) {
     if (!title->value.empty()) {
@@ -1401,6 +1430,11 @@ void DefineCssomClasses(Context& ctx) {
   qe::DefineAccessor(property, "syntax", PropertySyntax, nullptr);
   qe::DefineAccessor(property, "inherits", PropertyInherits, nullptr);
   qe::DefineAccessor(property, "initialValue", PropertyInitialValue, nullptr);
+  Object* palette = DefineRule(ctx, kFontPaletteValuesRule, "CSSFontPaletteValuesRule", ruleBase);
+  qe::DefineAccessor(palette, "name", RuleName, nullptr);
+  qe::DefineAccessor(palette, "fontFamily", PaletteFontFamily, nullptr);
+  qe::DefineAccessor(palette, "basePalette", PaletteBasePalette, nullptr);
+  qe::DefineAccessor(palette, "overrideColors", PaletteOverrideColors, nullptr);
   Object* layerStatement = DefineRule(ctx, kLayerStatementRule, "CSSLayerStatementRule", ruleBase);
   qe::DefineAccessor(layerStatement, "nameList", LayerNameList, nullptr);
 
@@ -1411,7 +1445,7 @@ void DefineCssomClasses(Context& ctx) {
       {"CSSLayerBlockRule", "CSSGroupingRule"}, {"CSSScopeRule", "CSSGroupingRule"}, {"CSSStartingStyleRule", "CSSGroupingRule"}, {"CSSPageRule", "CSSGroupingRule"},
       {"CSSNestedDeclarations", "CSSRule"}, {"CSSImportRule", "CSSRule"}, {"CSSNamespaceRule", "CSSRule"}, {"CSSFontFaceRule", "CSSRule"},
       {"CSSKeyframesRule", "CSSRule"}, {"CSSKeyframeRule", "CSSRule"}, {"CSSCounterStyleRule", "CSSRule"}, {"CSSPropertyRule", "CSSRule"},
-      {"CSSLayerStatementRule", "CSSRule"}};
+      {"CSSLayerStatementRule", "CSSRule"}, {"CSSFontPaletteValuesRule", "CSSRule"}};
   const Value global = qe::FromObject(ctx.get_global_object());
   for (const auto& [child, parent] : inherits) qe::SetPrototypeOf(ctx, qe::Get(ctx, global, child), qe::Get(ctx, global, parent));
 

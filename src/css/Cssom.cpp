@@ -1,4 +1,5 @@
 #include "solar/css/Cssom.h"
+#include "solar/css/Descriptors.h"
 
 #include <functional>
 #include "solar/css/Shorthands.h"
@@ -96,8 +97,17 @@ bool ApplyDeclaration(std::vector<DeclarationEntry>& items, const std::string& n
   }
   std::vector<Longhand> longhands;
   if (!ExpandDeclaration(name, css::Serialize(values), longhands)) return false;
-  for (Longhand& longhand : longhands) AddOrReplace(items, {longhand.name, longhand.value, important, longhand.pendingShorthand, longhand.pendingText});
+  for (Longhand& longhand : longhands) AddOrReplace(items, {longhand.name, longhand.value, important, longhand.pendingShorthand, longhand.pendingText, ValueBaseUrl()});
   return true;
+}
+
+// A bad string or bad url anywhere in a value: the declaration is not valid, whatever the rest is.
+bool HasBadTokens(const ComponentValues& values) {
+  for (const ComponentValue& v : values) {
+    if (v.IsToken(T::BadString) || v.IsToken(T::BadUrl)) return true;
+    if (v.kind != ComponentValue::Kind::Token && HasBadTokens(v.children)) return true;
+  }
+  return false;
 }
 
 std::vector<DeclarationEntry> ParseDeclarationList(std::string_view text) {
@@ -106,13 +116,50 @@ std::vector<DeclarationEntry> ParseDeclarationList(std::string_view text) {
     if (!item.isDeclaration) continue;
     std::string name = item.declaration.name;
     if (!NormalizePropertyName(name)) continue;
+    if (!name.starts_with("--") && HasBadTokens(item.declaration.value)) continue;
     const std::string source = name.starts_with("--") ? item.declaration.originalText : css::Serialize(Trimmed(item.declaration.value));
     ApplyDeclaration(items, name, source, item.declaration.important);
   }
   return items;
 }
 
-bool CssDeclarations::Apply(const std::string& name, const std::string& text, bool important) { return ApplyDeclaration(items, name, text, important); }
+bool CssDeclarations::IsDescriptorBlock() const { return parentRule && (parentRule->kind == RuleKind::FontFace || parentRule->kind == RuleKind::FontPaletteValues); }
+
+namespace {
+DescriptorSet SetOf(const CssRule* rule) { return rule->kind == RuleKind::FontFace ? DescriptorSet::FontFace : DescriptorSet::FontPaletteValues; }
+}  // namespace
+
+namespace {
+thread_local std::string g_parsingBase;  // the base of the sheet being parsed, when there is no rule to ask yet
+}
+
+void SetParsingBase(const std::string& base) { g_parsingBase = base; }
+
+std::string CssDeclarations::BaseUrl() const {
+  if (!g_parsingBase.empty()) return g_parsingBase;
+  for (const CssRule* rule = parentRule; rule; rule = rule->parentRule) {
+    if (rule->parentSheet) return rule->parentSheet->baseUrl;
+  }
+  if (ownerElement && ownerElement->nodeDocument) return dom::DocumentBaseUri(ownerElement->nodeDocument);
+  return "";
+}
+
+bool CssDeclarations::Apply(const std::string& name, const std::string& text, bool important) {
+  SetValueBaseUrl(BaseUrl());
+  struct Reset {
+    ~Reset() { SetValueBaseUrl(""); }
+  } reset;
+  if (IsDescriptorBlock()) {
+    // A descriptor is not important, and takes the whole value or none.
+    const std::optional<std::string> descriptor = DescriptorName(SetOf(parentRule), name);
+    if (!descriptor || important) return false;
+    const std::optional<std::string> value = DescriptorValue(SetOf(parentRule), *descriptor, ParseComponentValues(text));
+    if (!value) return false;
+    AddOrReplace(items, {*descriptor, *value, false, "", ""});
+    return true;
+  }
+  return ApplyDeclaration(items, name, text, important);
+}
 
 namespace {
 
@@ -195,6 +242,11 @@ std::optional<std::pair<std::string, bool>> AllKeyword(const std::vector<Declara
 }  // namespace
 
 std::string CssDeclarations::ValueOf(const std::string& given) const {
+  if (IsDescriptorBlock()) {
+    const std::optional<std::string> descriptor = DescriptorName(SetOf(parentRule), given);
+    const DeclarationEntry* entry = descriptor ? Find(*descriptor) : nullptr;
+    return entry ? entry->value : "";
+  }
   const PropertyDefinition* named = FindProperty(given);
   const std::string name = named ? named->name : given;  // a legacy name is its property
   if (name == "all" && !computedElement) {
@@ -222,6 +274,7 @@ std::string CssDeclarations::ValueOf(const std::string& given) const {
 }
 
 std::string CssDeclarations::PriorityOf(const std::string& given) const {
+  if (IsDescriptorBlock()) return "";
   const PropertyDefinition* named = FindProperty(given);
   const std::string name = named ? named->name : given;
   if (name == "all") {
@@ -244,6 +297,10 @@ std::string CssDeclarations::PriorityOf(const std::string& given) const {
 
 std::string CssDeclarations::Serialize() const {
   std::string out;
+  if (IsDescriptorBlock()) {
+    for (const DeclarationEntry& entry : items) out += (out.empty() ? "" : " ") + entry.name + ": " + entry.value + ";";
+    return out;
+  }
   std::set<std::string> done;
   if (const auto keyword = AllKeyword(items)) {
     out = "all: " + keyword->first + (keyword->second ? " !important" : "") + ";";
@@ -284,6 +341,12 @@ void CssDeclarations::SetText(Context& ctx, std::string_view text) {
 
 bool CssDeclarations::Set(Context& ctx, const std::string& propertyName, const std::string& value, bool important) {
   std::string name = propertyName;
+  if (IsDescriptorBlock()) {
+    const std::optional<std::string> descriptor = DescriptorName(SetOf(parentRule), name);
+    if (!descriptor || !Apply(*descriptor, value, important)) return false;
+    Changed(ctx);
+    return true;
+  }
   if (!NormalizePropertyName(name)) return false;
   if (!Apply(name, value, important)) return false;
   Changed(ctx);
@@ -293,6 +356,18 @@ bool CssDeclarations::Set(Context& ctx, const std::string& propertyName, const s
 std::string CssDeclarations::Remove(Context& ctx, const std::string& propertyName) {
   std::string name = propertyName;
   if (!name.starts_with("--")) name = Lower(name);
+  if (IsDescriptorBlock()) {
+    if (const std::optional<std::string> descriptor = DescriptorName(SetOf(parentRule), name)) name = *descriptor;
+    const std::string removed = ValueOf(name);
+    for (auto it = items.begin(); it != items.end(); ++it) {
+      if (it->name == name) {
+        items.erase(it);
+        Changed(ctx);
+        break;
+      }
+    }
+    return removed;
+  }
   if (const PropertyDefinition* named = FindProperty(name)) name = named->name;
   const std::string old = ValueOf(name);
   const PropertyDefinition* definition = FindProperty(name);
@@ -655,11 +730,20 @@ std::string CssRule::CssText() const {
     case RuleKind::Supports: return "@supports " + supportsText + GroupBody(*this);
     case RuleKind::Namespace: return "@namespace " + (prefix.empty() ? "" : SerializeIdentifier(prefix) + " ") + SerializeUrl(namespaceUri) + ";";
     case RuleKind::FontFace: return "@font-face { " + (style ? style->Serialize() : "") + " }";
+    case RuleKind::FontPaletteValues: {
+      const std::string body = style ? style->Serialize() : "";
+      return "@font-palette-values " + SerializeIdentifier(name) + " {" + (body.empty() ? " }" : " " + body + " }");
+    }
     case RuleKind::Page: {
       std::string body = style ? style->Serialize() : "";
       return "@page " + (selectorText.empty() ? "" : selectorText + " ") + "{" + (body.empty() ? " }" : " " + body + " }");
     }
-    case RuleKind::Keyframes: return "@keyframes " + SerializeIdentifier(name) + GroupBody(*this);
+    case RuleKind::Keyframes: {
+      // A name that is not an identifier, or is one that the syntax reserves, is written as a string.
+      const std::string lower = Lower(name);
+      const bool reserved = lower == "none" || lower == "default" || lower == "initial" || lower == "inherit" || lower == "unset" || lower == "revert" || lower == "revert-layer" || lower == "revert-rule";
+      return "@keyframes " + (reserved ? SerializeString(name) : SerializeIdentifier(name)) + GroupBody(*this);
+    }
     case RuleKind::Keyframe: {
       std::string body = style ? style->Serialize() : "";
       return name + " {" + (body.empty() ? " }" : " " + body + " }");
@@ -734,7 +818,12 @@ CssDeclarations* DeclarationsFrom(Context& ctx, const std::vector<BlockItem>& it
   for (const BlockItem& item : items) {
     if (!item.isDeclaration) continue;
     std::string name = item.declaration.name;
+    if (declarations->IsDescriptorBlock()) {
+      if (const std::optional<std::string> descriptor = DescriptorName(SetOf(owner), name)) declarations->Apply(*descriptor, css::Serialize(Trimmed(item.declaration.value)), item.declaration.important);
+      continue;
+    }
     if (!NormalizePropertyName(name)) continue;
+    if (!name.starts_with("--") && HasBadTokens(item.declaration.value)) continue;
     const std::string source = name.starts_with("--") ? item.declaration.originalText : Serialize(Trimmed(item.declaration.value));
     declarations->Apply(name, source, item.declaration.important);
   }
@@ -915,7 +1004,7 @@ std::optional<std::string> NormalizeKeyText(const std::string& text) {
     std::string item;
     if (trimmed[0].IsIdent() && Lower(trimmed[0].token.value) == "from") item = "0%";
     else if (trimmed[0].IsIdent() && Lower(trimmed[0].token.value) == "to") item = "100%";
-    else if (trimmed[0].IsToken(T::Percentage) && trimmed[0].token.number >= 0 && trimmed[0].token.number <= 100) item = css::Serialize(trimmed[0]);
+    else if (trimmed[0].IsToken(T::Percentage) && trimmed[0].token.number >= 0 && trimmed[0].token.number <= 100) item = FormatNumber(trimmed[0].token.number) + "%";
     else return std::nullopt;
     key += (key.empty() ? "" : ", ") + item;
   }
@@ -1077,6 +1166,12 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
     AddOrReplace(declarations->items, {"inherits", *inherits ? "true" : "false", false, "", ""});
     if (initialText) AddOrReplace(declarations->items, {"initial-value", registration->universal() ? *initialText : *registration->initialValue, false, "", ""});
     rule->style = declarations;
+  } else if (name == "font-palette-values") {
+    const ComponentValues prelude = Trimmed(syntax.prelude);
+    if (!syntax.hasBlock || prelude.size() != 1 || !prelude[0].IsIdent() || !prelude[0].token.value.starts_with("--")) return nullptr;
+    rule = NewRule(ctx, RuleKind::FontPaletteValues);
+    rule->name = prelude[0].token.value;
+    rule->style = DeclarationsFrom(ctx, ParseBlockContents(syntax.block), rule);
   } else if (name == "counter-style") {
     const ComponentValues prelude = Trimmed(syntax.prelude);
     if (!syntax.hasBlock || prelude.size() != 1 || !prelude[0].IsIdent()) return nullptr;
@@ -1163,8 +1258,13 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
 
 void ParseSheetInto(Context& ctx, CssStyleSheet* sheet, std::string_view text) {
   NoteStyleChange();
+  struct ParsingBase {
+    explicit ParsingBase(const std::string& base) { SetParsingBase(base); }
+    ~ParsingBase() { SetParsingBase(""); }
+  } parsingBase(sheet->baseUrl);
+  for (CssRule* old : sheet->rules) DetachRule(old);
   sheet->rules.clear();
-  bool importsAllowed = true, namespacesAllowed = true;
+  bool importsAllowed = !sheet->disallowImport, namespacesAllowed = true;
   for (const Rule& syntax : ParseStylesheetContents(text)) {
     const std::string name = syntax.isAtRule ? Lower(syntax.name) : "";
     // @import comes before every other rule but @layer statements, and @namespace after those and before the rest.
@@ -1196,6 +1296,11 @@ CssRule* ParseRuleText(Context& ctx, std::string_view text, CssStyleSheet* sheet
       }
     }
     error = "SyntaxError";
+    return nullptr;
+  }
+  if (parent && syntax.isAtRule && (Lower(syntax.name) == "import" || Lower(syntax.name) == "namespace")) {
+    // Valid, but not where it is: a different mistake from a bad rule.
+    error = BuildRule(ctx, syntax, sheet, nullptr) ? "HierarchyRequestError" : "SyntaxError";
     return nullptr;
   }
   CssRule* rule = BuildRule(ctx, syntax, sheet, parent);
@@ -1246,17 +1351,40 @@ CssRule* ParseRuleText(Context& ctx, std::string_view text, CssStyleSheet* sheet
   return rule;
 }
 
+namespace {
+SheetLoader g_sheetLoader;
+}
+void SetSheetLoader(SheetLoader loader) { g_sheetLoader = std::move(loader); }
+
 std::string InsertRule(Context& ctx, CssStyleSheet* sheet, CssRule* parent, std::string_view text, uint32_t index, uint32_t& result) {
   std::vector<CssRule*>& list = parent ? parent->rules : sheet->rules;
   if (index > list.size()) return "IndexSizeError";
   std::string error;
+  struct ParsingBase {
+    explicit ParsingBase(const std::string& base) { SetParsingBase(base); }
+    ~ParsingBase() { SetParsingBase(""); }
+  } parsingBase(sheet ? sheet->baseUrl : "");
   CssRule* rule = ParseRuleText(ctx, text, sheet, parent, index, error);
   if (!rule) return error;
   NoteStyleChange();
   list.insert(list.begin() + index, rule);
   (parent ? static_cast<Quanta::DOMObject*>(parent) : static_cast<Quanta::DOMObject*>(sheet))->NoteWrite();
   result = index;
+  if (rule->kind == RuleKind::Import && g_sheetLoader && !sheet->constructed) ProcessImports(ctx, sheet, g_sheetLoader);
   return "";
+}
+
+namespace {
+void ForgetSheet(CssRule* rule) {
+  rule->parentSheet = nullptr;
+  for (CssRule* child : rule->rules) ForgetSheet(child);
+  if (rule->importedSheet) rule->importedSheet->parentSheet = nullptr;
+}
+}  // namespace
+
+void DetachRule(CssRule* rule) {
+  rule->parentRule = nullptr;
+  ForgetSheet(rule);
 }
 
 std::string DeleteRule(Context&, CssStyleSheet* sheet, CssRule* parent, uint32_t index) {
@@ -1269,8 +1397,7 @@ std::string DeleteRule(Context&, CssStyleSheet* sheet, CssRule* parent, uint32_t
     }
   }
   NoteStyleChange();
-  list[index]->parentRule = nullptr;
-  list[index]->parentSheet = nullptr;
+  DetachRule(list[index]);
   list.erase(list.begin() + index);
   return "";
 }
@@ -1380,7 +1507,7 @@ void ProcessImports(Context& ctx, CssStyleSheet* sheet, const SheetLoader& load,
     imported->href = address;
     imported->hasHref = true;
     imported->baseUrl = address;
-    if (rule->media) imported->media->queries = rule->media->queries;
+    if (rule->media) imported->media = rule->media;  // the same list
     ParseSheetInto(ctx, imported, *text);
     rule->importedSheet = imported;
     rule->NoteWrite();

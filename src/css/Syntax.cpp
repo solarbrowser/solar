@@ -545,7 +545,7 @@ std::string SerializeToken(const Token& token) {
       }
       return out + ")";
     }
-    case T::BadUrl: return "url(" + token.value + ")";
+    case T::BadUrl: return "url(" + token.value + "\"\x27)";  // a quote inside makes it a bad url again
     case T::Delim: {
       std::string out;
       AppendUtf8(out, token.delim);

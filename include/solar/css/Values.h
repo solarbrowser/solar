@@ -68,6 +68,10 @@ struct AttrCall {
 };
 bool ParseAttrCall(const ComponentValue& function, AttrCall& out);
 
+// The address that a relative url() in a value being matched is taken against; empty leaves them as written.
+void SetValueBaseUrl(const std::string& base);
+const std::string& ValueBaseUrl();
+
 // The CSS-wide keywords (initial, inherit, unset, revert, revert-layer) a value can be on its own.
 bool IsCssWideKeyword(const ComponentValues& values);
 // Whether a value has a var(), env() or attr() in it, so that it is known only when it is used.

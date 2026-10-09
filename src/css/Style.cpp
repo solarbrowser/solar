@@ -516,7 +516,9 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
   }
   // The style attribute (a pseudo-element has none).
   if (const dom::Attr* attribute = pseudo.empty() ? element->FindAttribute("", "style") : nullptr) {
+    SetValueBaseUrl(element->nodeDocument ? dom::DocumentBaseUri(element->nodeDocument) : "");
     style.storage.push_back(ParseDeclarationList(attribute->value));
+    SetValueBaseUrl("");
     ++gatherer.ruleSerial;
     for (const DeclarationEntry& entry : style.storage.back()) gatherer.Offer(entry, true, true, kUnlayered, Specificity{});
   }
@@ -971,6 +973,14 @@ std::string Resolver::Finish(dom::Element* element, const std::string& property,
   }
 
   ValueMatch match;
+  {
+    // A relative url() is taken against where the declaration came from.
+    const auto source = StyleOf(element, pseudo).cascade.find(property);
+    SetValueBaseUrl(source != StyleOf(element, pseudo).cascade.end() ? source->second.entry->base : "");
+  }
+  struct ResetBase {
+    ~ResetBase() { SetValueBaseUrl(""); }
+  } resetBase;
   if (!MatchPropertyValue(definition, values, match, &context)) {
     // Not a value of the property after all (a var() that made it one that is not): as if unset.
     if (definition.inherited && parent.element) return Compute(parent.element, property, parent.pseudo);

@@ -207,7 +207,7 @@ Value GetBaseUri(Context& ctx, Value t, qe::Args, Value) {
   Node* self = ThisNode(ctx, t);
   if (!self) return qe::Undefined();
   Document* document = DocumentFor(self);
-  return qe::FromWtf8(ctx, document ? document->url : "about:blank");
+  return qe::FromWtf8(ctx, document ? DocumentBaseUri(document) : "about:blank");
 }
 
 Value GetIsConnected(Context& ctx, Value t, qe::Args, Value) {

@@ -88,6 +88,12 @@ uint64_t g_treeVersion = 1;
 }
 
 uint64_t TreeVersion() { return g_treeVersion; }
+
+namespace {
+std::string (*g_baseUriProvider)(const Document*) = nullptr;
+}
+void SetDocumentBaseUriProvider(std::string (*provider)(const Document*)) { g_baseUriProvider = provider; }
+std::string DocumentBaseUri(const Document* document) { return g_baseUriProvider ? g_baseUriProvider(document) : document->url; }
 void NoteTreeChange() { ++g_treeVersion; }
 
 namespace {

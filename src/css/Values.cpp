@@ -1,6 +1,8 @@
 #include "solar/css/Values.h"
 #include "solar/css/Calc.h"
 #include "solar/css/Color.h"
+#include "solar/url/Parser.h"
+#include "solar/url/Serializer.h"
 
 #include <algorithm>
 #include <charconv>
@@ -923,6 +925,7 @@ std::optional<ComponentValues> ComputedPosition(const ComponentValues& canonical
 
 // Properties that keep a combination in the order it was written.
 thread_local bool g_keepWrittenOrder = false;
+thread_local std::string g_valueBase;  // what a relative url() is taken against
 thread_local bool g_numberZero = false;  // border-image-*: a bare 0 is a number, not a length
 
 class Matcher {
@@ -1197,6 +1200,33 @@ class Matcher {
     // A defined type is told to the shorthand expansion, which finds the longhand that takes it.
     return Match(*root, pos, [&, pos](size_t end) {
       const size_t mark = log_.size();
+      if (name == "url" && compute_ && !g_valueBase.empty() && end == pos + 1) {
+        // A relative address is absolute once the base is known.
+        std::string text;
+        bool found = false;
+        if (out_[pos].IsToken(T::Url)) {
+          text = out_[pos].token.value;
+          found = true;
+        } else if (out_[pos].kind == ComponentValue::Kind::Function) {
+          for (const ComponentValue& c : out_[pos].children) {
+            if (c.IsToken(T::String)) {
+              text = c.token.value;
+              found = true;
+              break;
+            }
+          }
+        }
+        if (found && !text.empty() && text[0] != '#') {  // an empty address and a fragment are left alone
+          const std::optional<url::Url> base = url::Parse(g_valueBase);
+          const std::optional<url::Url> parsed = url::Parse(text, base ? &*base : nullptr);
+          if (parsed) {
+            ComponentValue resolved;
+            resolved.token.type = T::Url;
+            resolved.token.value = url::Serialize(*parsed);
+            Set(pos, resolved);
+          }
+        }
+      }
       if ((name == "position" || name == "bg-position") && end > pos) {
         // The position as an x and a y, in one group standing where the matched values were.
         ComponentValues matched(out_.begin() + pos, out_.begin() + end);
@@ -1859,6 +1889,9 @@ bool CanonicalFontValue(const std::string& name, ValueMatch& out, bool computed)
 }
 
 }  // namespace
+
+void SetValueBaseUrl(const std::string& base) { g_valueBase = base; }
+const std::string& ValueBaseUrl() { return g_valueBase; }
 
 bool MatchPropertyValue(const PropertyDefinition& property, const ComponentValues& values, ValueMatch& out, const ComputeContext* compute) {
   static const std::set<std::string> keepOrder = {"image-resolution", "hanging-punctuation", "word-space-transform"};

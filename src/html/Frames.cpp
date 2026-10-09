@@ -1,5 +1,8 @@
 #include "solar/html/Frames.h"
 
+#include <map>
+#include <tuple>
+
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -42,7 +45,30 @@ bool IsIframe(const dom::Node* node) {
 
 // The address that relative ones in a document are made absolute against: its own, or for a document with none of
 // its own (about:srcdoc), the one of the page it is in.
+std::string FallbackBaseOf(const dom::Document* document);
+
+std::string Resolve(const std::string& relative, const std::string& base);
+
+// The document base URL: the href of the first base element that has one, taken against the address (or the parent's base for
+// about:blank), and that address when there is none.
 std::string BaseOf(const dom::Document* document) {
+  static std::map<const dom::Document*, std::tuple<uint64_t, std::string, std::string>> cache;  // tree version, address, base
+  const auto found = cache.find(document);
+  if (found != cache.end() && std::get<0>(found->second) == dom::TreeVersion() && std::get<1>(found->second) == document->url) return std::get<2>(found->second);
+  std::string base = FallbackBaseOf(document);
+  for (dom::Node* node = document->firstChild; node; node = node->NextInTree(const_cast<dom::Document*>(document))) {
+    dom::Element* element = dom::AsElement(node);
+    if (!element || !element->IsHtml("base")) continue;
+    if (const dom::Attr* href = element->FindAttribute("", "href")) {
+      base = Resolve(href->value, base);
+      break;
+    }
+  }
+  cache[document] = {dom::TreeVersion(), document->url, base};
+  return base;
+}
+
+std::string FallbackBaseOf(const dom::Document* document) {
   if (!document->inheritedBase.empty() && document->url.starts_with("about:")) return document->inheritedBase;
   if (document->url.starts_with("about:") && document->frameElement && document->frameElement->nodeDocument && document->frameElement->nodeDocument != document) {
     return BaseOf(document->frameElement->nodeDocument);
@@ -221,16 +247,27 @@ bool RunScript(Quanta::Embed::Realm& realm, dom::Document* document, dom::Elemen
 }
 
 // A frame's page has finished loading, or has given up: the iframe fires load, and what waited for it goes on.
+// What the window's load event waits for: frames, and the sheets of link and style elements that are loading.
+void ResumeLoad(dom::Document* document) {
+  if (document->pendingFrameLoads > 0) --document->pendingFrameLoads;
+  if (document->pendingFrameLoads == 0 && document->whenFramesLoaded) {
+    std::function<void()> next = std::move(document->whenFramesLoaded);
+    document->whenFramesLoaded = nullptr;
+    next();
+  }
+}
+
+bool DelayLoad(dom::Document* document) {
+  if (document->readyState == "complete") return false;
+  ++document->pendingFrameLoads;
+  return true;
+}
+
 void FrameFinished(dom::Element* iframe, bool fire) {
   dom::Document* parent = iframe->nodeDocument;
   if (!parent) return;
   if (fire && parent->context) FireEvent(*parent->context, iframe, "load");
-  if (parent->pendingFrameLoads > 0) --parent->pendingFrameLoads;
-  if (parent->pendingFrameLoads == 0 && parent->whenFramesLoaded) {
-    std::function<void()> next = std::move(parent->whenFramesLoaded);
-    parent->whenFramesLoaded = nullptr;
-    next();
-  }
+  ResumeLoad(parent);
 }
 
 // ---- Nested browsing contexts ----
@@ -369,6 +406,7 @@ bool HasToken(const std::string& list, std::string_view wanted) {
 // "update a style block" for a link element: the sheet at its href, loaded now (the loader answers at once) and its imports
 // with it; load or error follows as a task.
 void UpdateLink(dom::Element* link) {
+  if (link->styleSheet) static_cast<css::CssStyleSheet*>(link->styleSheet)->ownerNode = nullptr;
   link->styleSheet = nullptr;
   dom::Document* document = link->nodeDocument;
   if (!document || !document->context || !g_environment) return;
@@ -377,6 +415,7 @@ void UpdateLink(dom::Element* link) {
   const dom::Attr* rel = link->FindAttribute("", "rel");
   const dom::Attr* href = link->FindAttribute("", "href");
   if (!rel || !HasToken(rel->value, "stylesheet") || !href || href->value.empty()) return;
+  if (link->FindAttribute("", "disabled")) return;  // not fetched until it is enabled
   if (const dom::Attr* type = link->FindAttribute("", "type")) {
     std::string lower = type->value;
     for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -385,24 +424,35 @@ void UpdateLink(dom::Element* link) {
   const std::string address = Resolve(href->value, BaseOf(document));
   const std::optional<url::Url> parsed = url::Parse(address);
   if (!parsed) {
-    QueueTask(document, "link error", link, [link] { FireEvent(*link->nodeDocument->context, link, "error"); });
+    const bool counted = DelayLoad(document);
+    QueueTask(document, "link error", link, [link, document, counted] {
+      FireEvent(*link->nodeDocument->context, link, "error");
+      if (counted) ResumeLoad(document);
+    });
     return;
   }
   const std::optional<std::string> text = LoadResource(address);
   if (!text) {
-    QueueTask(document, "link error", link, [link] { FireEvent(*link->nodeDocument->context, link, "error"); });
+    const bool counted = DelayLoad(document);
+    QueueTask(document, "link error", link, [link, document, counted] {
+      FireEvent(*link->nodeDocument->context, link, "error");
+      if (counted) ResumeLoad(document);
+    });
     return;
   }
   Context& ctx = *document->context;
   css::CssStyleSheet* sheet = css::NewLinkedSheet(ctx, link, address, *text);
   css::ProcessImports(ctx, sheet, [](const std::string& url) { return LoadResource(url); });
   // An alternate style sheet with a title is off until it is chosen.
-  if (HasToken(rel->value, "alternate") && sheet->hasTitle) sheet->disabled = true;
-  if (link->FindAttribute("", "disabled")) sheet->disabled = true;
+  if (HasToken(rel->value, "alternate") && sheet->hasTitle && !link->linkExplicitlyEnabled) sheet->disabled = true;
   link->styleSheet = sheet;
   link->NoteWrite();
   css::NoteStyleChange();
-  QueueTask(document, "link load", link, [link] { FireEvent(*link->nodeDocument->context, link, "load"); });
+  const bool counted = DelayLoad(document);
+  QueueTask(document, "link load", link, [link, sheet, document, counted] {
+    if (link->styleSheet == sheet) FireEvent(*link->nodeDocument->context, link, "load");  // not if it went away meanwhile
+    if (counted) ResumeLoad(document);
+  });
 }
 
 // "update a style block" for a style element: its text parsed, its imports loaded, then load follows as a task.
@@ -418,7 +468,11 @@ void UpdateStyle(dom::Element* style) {
     css::ProcessImports(ctx, sheet, [](const std::string& url) { return LoadResource(url); });
     css::NoteStyleChange();
   }
-  QueueTask(document, "style load", style, [style] { FireEvent(*style->nodeDocument->context, style, "load"); });
+  const bool counted = DelayLoad(document);
+  QueueTask(document, "style load", style, [style, sheet, document, counted] {
+    if (style->styleSheet == sheet) FireEvent(*style->nodeDocument->context, style, "load");
+    if (counted) ResumeLoad(document);
+  });
 }
 
 }  // namespace
@@ -452,6 +506,7 @@ void AfterRemove(dom::Node* node, bool) {
     if (style->nodeDocument && style->nodeDocument->context) UpdateStyle(style);
   }
   for (dom::Element* link : HtmlElementsIn(node, "link")) {
+    if (link->styleSheet) static_cast<css::CssStyleSheet*>(link->styleSheet)->ownerNode = nullptr;
     link->styleSheet = nullptr;
     css::NoteStyleChange();
   }
@@ -478,15 +533,16 @@ void AttributeChanged(dom::Element* element, const std::string& name) {
   if (name.size() > 2 && name.starts_with("on")) ContentHandlerChanged(element, name);
   if (name == "style") css::StyleAttributeChanged(element);
   if (element->IsHtml("link") && (name == "href" || name == "rel" || name == "media" || name == "type" || name == "title" || name == "disabled")) {
-    if (name == "media" || name == "title" || name == "disabled") {
+    if (name == "disabled" && !element->FindAttribute("", "disabled")) element->linkExplicitlyEnabled = true;
+    if (name == "media" || name == "title") {
       if (css::CssStyleSheet* sheet = static_cast<css::CssStyleSheet*>(element->styleSheet)) {
         if (name == "media") sheet->media->SetText(element->FindAttribute("", "media") ? element->FindAttribute("", "media")->value : "");
-        if (name == "disabled") sheet->disabled = element->FindAttribute("", "disabled") != nullptr;
         css::NoteStyleChange();
         return;
       }
     }
-    UpdateLink(element);
+    dom::Node* root = dom::ShadowIncludingRoot(element);
+    if (root && root->IsDocument()) UpdateLink(element);
   }
   if (element->IsHtml("style") && (name == "media" || name == "type" || name == "title") && element->nodeDocument && element->nodeDocument->context) {
     UpdateStyle(element);
@@ -547,7 +603,11 @@ void RunFrameLoad(dom::Element* iframe, uint64_t load) {
 
 }  // namespace
 
-void SetFrameEnvironment(FrameEnvironment* environment) { g_environment = environment; }
+void SetFrameEnvironment(FrameEnvironment* environment) {
+  g_environment = environment;
+  dom::SetDocumentBaseUriProvider(&DocumentBaseUrl);
+  css::SetSheetLoader([](const std::string& url) { return LoadResource(url); });
+}
 
 void RunInRealm(Quanta::Embed::Realm& realm, const std::function<void()>& work) { RunAs(realm, work); }
 
@@ -1044,6 +1104,80 @@ void DefineScriptMembers(Context&, Object* prototype) {
   qe::DefineAccessor(prototype, "integrity", reflect::GetString<kIntegrity>, dom::Reactions<reflect::SetString<kIntegrity>>);
   qe::DefineAccessor(prototype, "fetchPriority", reflect::GetString<kFetchPriority>, dom::Reactions<reflect::SetString<kFetchPriority>>);
   qe::DefineAccessor(prototype, "text", GetScriptText, dom::Reactions<SetScriptText>);
+}
+
+// HTMLStyleElement and HTMLLinkElement: the attributes, and disabled, which is the sheet's for a style element and the attribute's
+// (with a state of its own) for a link.
+constexpr char kMedia[] = "media";
+constexpr char kHref[] = "href";
+constexpr char kRel[] = "rel";
+constexpr char kHreflang[] = "hreflang";
+constexpr char kAs[] = "as";
+constexpr char kImageSrcset[] = "imagesrcset";
+constexpr char kImageSizes[] = "imagesizes";
+constexpr char kReferrerPolicyAttribute[] = "referrerpolicy";
+constexpr char kRev[] = "rev";
+constexpr char kTarget[] = "target";
+constexpr char kDisabledAttribute[] = "disabled";
+
+Value GetStyleDisabled(Context& ctx, Value t, qe::Args, Value) {
+  dom::Element* self = reflect::ThisHtml(ctx, t);
+  if (!self) return qe::Undefined();
+  const css::CssStyleSheet* sheet = static_cast<css::CssStyleSheet*>(self->styleSheet);
+  return qe::FromBool(sheet && sheet->disabled);
+}
+
+Value SetStyleDisabled(Context& ctx, Value t, qe::Args args, Value) {
+  dom::Element* self = reflect::ThisHtml(ctx, t);
+  if (!self || args.empty()) return qe::Undefined();
+  if (css::CssStyleSheet* sheet = static_cast<css::CssStyleSheet*>(self->styleSheet)) {
+    sheet->disabled = args[0].to_boolean();
+    self->NoteWrite();
+    css::NoteStyleChange();
+  }
+  return qe::Undefined();
+}
+
+Value GetLinkDisabled(Context& ctx, Value t, qe::Args, Value) {
+  dom::Element* self = reflect::ThisHtml(ctx, t);
+  return self ? qe::FromBool(self->FindAttribute("", "disabled") != nullptr) : qe::Undefined();
+}
+
+Value SetLinkDisabled(Context& ctx, Value t, qe::Args args, Value) {
+  dom::Element* self = reflect::ThisHtml(ctx, t);
+  if (!self || args.empty()) return qe::Undefined();
+  if (args[0].to_boolean()) {
+    dom::SetAttribute(ctx, self, "disabled", "");
+  } else if (self->FindAttribute("", "disabled")) {
+    // Taking it off is what enables an alternate sheet.
+    self->linkExplicitlyEnabled = true;
+    dom::RemoveAttribute(self, "disabled");
+  }
+  return qe::Undefined();
+}
+
+void DefineStyleMembers(Context&, Object* prototype) {
+  qe::DefineAccessor(prototype, "media", reflect::GetString<kMedia>, dom::Reactions<reflect::SetString<kMedia>>);
+  qe::DefineAccessor(prototype, "type", reflect::GetString<kType>, dom::Reactions<reflect::SetString<kType>>);
+  qe::DefineAccessor(prototype, "disabled", GetStyleDisabled, dom::Reactions<SetStyleDisabled>);
+}
+
+void DefineLinkMembers(Context&, Object* prototype) {
+  qe::DefineAccessor(prototype, "href", reflect::GetUrl<kHref>, dom::Reactions<reflect::SetString<kHref>>);
+  qe::DefineAccessor(prototype, "rel", reflect::GetString<kRel>, dom::Reactions<reflect::SetString<kRel>>);
+  qe::DefineAccessor(prototype, "media", reflect::GetString<kMedia>, dom::Reactions<reflect::SetString<kMedia>>);
+  qe::DefineAccessor(prototype, "hreflang", reflect::GetString<kHreflang>, dom::Reactions<reflect::SetString<kHreflang>>);
+  qe::DefineAccessor(prototype, "type", reflect::GetString<kType>, dom::Reactions<reflect::SetString<kType>>);
+  qe::DefineAccessor(prototype, "as", reflect::GetString<kAs>, dom::Reactions<reflect::SetString<kAs>>);
+  qe::DefineAccessor(prototype, "charset", reflect::GetString<kCharset>, dom::Reactions<reflect::SetString<kCharset>>);
+  qe::DefineAccessor(prototype, "rev", reflect::GetString<kRev>, dom::Reactions<reflect::SetString<kRev>>);
+  qe::DefineAccessor(prototype, "target", reflect::GetString<kTarget>, dom::Reactions<reflect::SetString<kTarget>>);
+  qe::DefineAccessor(prototype, "integrity", reflect::GetString<kIntegrity>, dom::Reactions<reflect::SetString<kIntegrity>>);
+  qe::DefineAccessor(prototype, "imageSrcset", reflect::GetString<kImageSrcset>, dom::Reactions<reflect::SetString<kImageSrcset>>);
+  qe::DefineAccessor(prototype, "imageSizes", reflect::GetString<kImageSizes>, dom::Reactions<reflect::SetString<kImageSizes>>);
+  qe::DefineAccessor(prototype, "referrerPolicy", reflect::GetString<kReferrerPolicyAttribute>, dom::Reactions<reflect::SetString<kReferrerPolicyAttribute>>);
+  qe::DefineAccessor(prototype, "fetchPriority", reflect::GetString<kFetchPriority>, dom::Reactions<reflect::SetString<kFetchPriority>>);
+  qe::DefineAccessor(prototype, "disabled", GetLinkDisabled, dom::Reactions<SetLinkDisabled>);
 }
 
 void DefineIframeMembers(Context& ctx, Object* prototype) {
