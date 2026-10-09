@@ -237,6 +237,7 @@ ifeq ($(PLATFORM),linux)
 	@for t in $(NET_TESTS) FetchBindingsTest; do SOLAR_LOOP_BACKEND=readiness $(BUILD_DIR)/$$t || exit 1; done
 	@$(BUILD_DIR)/WptTest $(wildcard tests/wpt/url/*.any.js) $(WPT_DOM) $(WPT_FETCH) $(WPT_STREAMS)
 	@python3 tools/wptrun.py --check tests/wpt/dom/passing.txt
+	@python3 tools/wptrun.py --check tests/wpt/css/passing.txt
 endif
 
 # The WPT tests and the fetch binding tests again with the collector run at every allocation. Quanta

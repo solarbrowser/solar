@@ -1,0 +1,41 @@
+<!doctype html>
+<title>CSSOM basics</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<style id="s">
+  @import url("x.css");
+  @namespace svg url(http://www.w3.org/2000/svg);
+  div > p, .a:not(.b) { color: red; margin: 0 !important }
+  @media screen and (min-width: 100px) { a { color: blue } }
+</style>
+<body>
+<script>
+test(() => {
+  const sheet = document.getElementById("s").sheet;
+  assert_equals(document.styleSheets.length, 1);
+  assert_equals(document.styleSheets[0], sheet);
+  assert_equals(sheet.cssRules.length, 4);
+  assert_equals(sheet.cssRules[2].selectorText, "div > p, .a:not(.b)");
+  assert_equals(sheet.cssRules[2].style.cssText, "color: red; margin: 0px !important;".replace("0px", "0"));
+  assert_equals(sheet.cssRules[3].media.mediaText, "screen and (min-width: 100px)");
+  assert_equals(sheet.cssRules[3].cssRules[0].cssText, "a { color: blue; }");
+}, "a style element's sheet");
+test(() => {
+  const sheet = new CSSStyleSheet();
+  sheet.replaceSync("a { color: red }");
+  assert_equals(sheet.insertRule("b { top: 1px }", 0), 0);
+  assert_equals(sheet.cssRules[0].cssText, "b { top: 1px; }");
+  assert_throws_dom("SyntaxError", () => sheet.insertRule("}", 0));
+  assert_throws_dom("IndexSizeError", () => sheet.insertRule("c {}", 9));
+  sheet.deleteRule(0);
+  assert_equals(sheet.cssRules.length, 1);
+}, "constructed sheets and insertRule");
+test(() => {
+  const el = document.createElement("div");
+  el.style.color = "red";
+  assert_equals(el.getAttribute("style"), "color: red;");
+  el.setAttribute("style", "top: 1px");
+  assert_equals(el.style.top, "1px");
+  assert_equals(el.style.length, 1);
+}, "element.style follows the attribute");
+</script>

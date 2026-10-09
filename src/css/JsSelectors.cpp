@@ -2,6 +2,7 @@
 #include <vector>
 
 #include "solar/css/CssBindings.h"
+#include "solar/css/Cssom.h"
 #include "solar/css/Selectors.h"
 #include "solar/css/Tokenizer.h"
 #include "solar/dom/NodeBindingsInternal.h"
@@ -14,7 +15,6 @@ using Quanta::DOMObject;
 using Quanta::Object;
 using Quanta::Value;
 
-void DefineStyleDeclaration(Quanta::Context& ctx);
 
 namespace {
 
@@ -100,7 +100,7 @@ Value Escape(Context& ctx, Value, qe::Args args, Value) {
 template <typename Host>
 void Install(Host& host) {
   Context& ctx = host.GetContext();
-  DefineStyleDeclaration(ctx);
+  DefineCssomClasses(ctx);
   for (dom::Interface interface : {dom::Interface::Element, dom::Interface::Document, dom::Interface::DocumentFragment}) {
     Object* prototype = dom::InterfacePrototype(ctx, interface);
     qe::DefineMethod(prototype, "querySelector", QuerySelector, 1);

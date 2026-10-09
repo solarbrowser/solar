@@ -43,6 +43,7 @@ void Document::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(selection);
   visitor.Mark(window);
   visitor.Mark(globalObject);
+  visitor.Mark(styleSheetList);
   visitor.Mark(frameElement);
 }
 
@@ -63,6 +64,8 @@ void Element::Visit(Quanta::Visitor& visitor) {
   for (Attr* attribute : attributes) visitor.Mark(attribute);
   visitor.Mark(attributeMap);
   visitor.Mark(tokenList);
+  visitor.Mark(styleSheet);
+  visitor.Mark(inlineStyle);
   visitor.Mark(templateContents);
   visitor.Mark(shadowRoot);
   for (Node* node : assignedNodes) visitor.Mark(node);
@@ -416,6 +419,7 @@ void RemoveImpl(Node* node, bool suppress) {
     if (g_hooks.afterRemove) g_hooks.afterRemove(node, true);
   }
   if (HasShadowTrees()) ShadowAfterRemove(node, parent, wasAssignedTo);
+  if (g_hooks.childrenChanged && !g_moving) g_hooks.childrenChanged(parent);
   if (observed && !suppress) QueueChildListRecord(parent, {}, {node}, oldPrevious, oldNext);
 }
 
@@ -454,12 +458,17 @@ void InsertImpl(Node* node, Node* parent, Node* child, bool suppress) {
       if (g_hooks.afterInsert) g_hooks.afterInsert(n);
     }
   }
+  if (g_hooks.childrenChanged && !g_moving) g_hooks.childrenChanged(parent);
   if (!suppress && HasMutationObservers()) QueueChildListRecord(parent, nodes, {}, previous, child);
 }
 
 }  // namespace
 
 void SetTreeHooks(const TreeHooks& hooks) { g_hooks = hooks; }
+
+void NotifyChildrenParsed(Node* parent) {
+  if (g_hooks.childrenChanged) g_hooks.childrenChanged(parent);
+}
 
 void NotifyParsedAttribute(Element* element, const std::string& name) {
   if (g_hooks.attributeChanged) g_hooks.attributeChanged(element, name);
@@ -638,6 +647,7 @@ std::optional<DomError> ReplaceData(CharacterData* node, uint32_t offset, uint32
   units.replace(offset, count, inserted);
   node->data = FromUtf16(units);
   if (HasLiveRanges()) RangesReplaceData(node, offset, count, static_cast<uint32_t>(inserted.size()));
+  if (g_hooks.childrenChanged && node->parentNode) g_hooks.childrenChanged(node->parentNode);
   return std::nullopt;
 }
 
@@ -648,6 +658,7 @@ void SetCharacterData(CharacterData* node, std::string data) {
   }
   if (HasMutationObservers()) QueueCharacterDataRecord(node, node->data);
   node->data = std::move(data);
+  if (g_hooks.childrenChanged && node->parentNode) g_hooks.childrenChanged(node->parentNode);
 }
 
 void AppendCharacterData(CharacterData* node, std::string_view data) {

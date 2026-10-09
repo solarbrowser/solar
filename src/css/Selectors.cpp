@@ -1,4 +1,5 @@
 #include "solar/css/Selectors.h"
+#include "solar/css/Syntax.h"
 
 #include <algorithm>
 
@@ -445,7 +446,7 @@ class Parser {
     if (doubleColon) {
       // ::part(), ::slotted(), ::highlight() and the like: valid, and no element of a document is one.
       if (std::find_if(std::begin(kPseudoElements), std::end(kPseudoElements), [&](const char* known) { return name == known; }) == std::end(kPseudoElements)) throw ParseError();
-      SkipFunctionBody();
+      simple.value = SkipFunctionBody();
       simple.kind = SimpleSelector::Kind::PseudoElement;
       return simple;
     }
@@ -512,7 +513,7 @@ class Parser {
     }
     if (name == "host" || name == "host-context" || name == "state" || name == "current" || name == "past" || name == "future") {
       // Valid, and matching nothing in the light tree of a document.
-      SkipFunctionBody();
+      simple.value = SkipFunctionBody();
       simple.kind = SimpleSelector::Kind::Unknown;
       return simple;
     }
@@ -520,14 +521,18 @@ class Parser {
   }
 
   // To the parenthesis that closes the function whose name has been consumed.
-  void SkipFunctionBody() {
+  // Returns what was in it, as text, for the selector to be written back as it was.
+  std::string SkipFunctionBody() {
     int depth = 1;
+    std::vector<Token> body;
     while (depth > 0) {
       const Token& token = Next();
-      if (token.type == Token::Type::EndOfFile) return;
+      if (token.type == Token::Type::EndOfFile) break;
       if (token.type == Token::Type::LeftParen || token.type == Token::Type::Function) ++depth;
-      else if (token.type == Token::Type::RightParen) --depth;
+      else if (token.type == Token::Type::RightParen && --depth == 0) break;
+      body.push_back(token);
     }
+    return SerializeTokens(body);
   }
 
   std::vector<Token> tokens_;
@@ -596,6 +601,93 @@ Specificity SpecificityOf(const ComplexSelector& selector) {
     }
   }
   return result;
+}
+
+namespace {
+
+std::string SerializeAnPlusB(int a, int b) {
+  if (a == 0) return std::to_string(b);
+  std::string out = a == 1 ? "n" : a == -1 ? "-n" : std::to_string(a) + "n";
+  if (b > 0) out += " + " + std::to_string(b);
+  else if (b < 0) out += " - " + std::to_string(-b);
+  return out;
+}
+
+std::string SerializeSimple(const SimpleSelector& simple) {
+  using K = SimpleSelector::Kind;
+  switch (simple.kind) {
+    case K::Type:
+    case K::Universal: {
+      std::string out;
+      if (simple.namespaceName) out += (*simple.namespaceName == "*" ? "*" : SerializeIdentifier(*simple.namespaceName)) + "|";
+      return out + (simple.kind == K::Universal ? "*" : SerializeIdentifier(simple.name));
+    }
+    case K::Class: return "." + SerializeIdentifier(simple.name);
+    case K::Id: return "#" + SerializeIdentifier(simple.name);
+    case K::Attribute: {
+      std::string out = "[";
+      if (simple.namespaceName) out += (*simple.namespaceName == "*" ? "*" : SerializeIdentifier(*simple.namespaceName)) + "|";
+      out += SerializeIdentifier(simple.name);
+      static const char* const kOps[] = {"", "=", "~=", "|=", "^=", "$=", "*="};
+      if (simple.op != AttributeOperator::Exists) {
+        out += kOps[static_cast<int>(simple.op)];
+        out += SerializeString(simple.value);
+        if (simple.caseMode == CaseMode::Insensitive) out += " i";
+        else if (simple.caseMode == CaseMode::Sensitive) out += " s";
+      }
+      return out + "]";
+    }
+    case K::Pseudo: return ":" + simple.name;
+    case K::PseudoElement: return "::" + simple.name + (simple.value.empty() ? "" : "(" + simple.value + ")");
+    case K::Unknown: return ":" + simple.name + (simple.value.empty() ? "" : "(" + simple.value + ")");
+    case K::Not:
+    case K::Is:
+    case K::Where:
+    case K::Has: {
+      const char* name = simple.kind == K::Not ? "not" : simple.kind == K::Where ? "where" : simple.kind == K::Has ? "has" : "is";
+      return std::string(":") + name + "(" + SerializeSelectorList(*simple.list) + ")";
+    }
+    case K::Nth: {
+      const char* name = simple.ofType ? (simple.fromEnd ? "nth-last-of-type" : "nth-of-type") : (simple.fromEnd ? "nth-last-child" : "nth-child");
+      std::string out = std::string(":") + name + "(" + SerializeAnPlusB(simple.a, simple.b);
+      if (simple.list) out += " of " + SerializeSelectorList(*simple.list);
+      return out + ")";
+    }
+    case K::Lang: {
+      std::string out = ":lang(";
+      for (size_t i = 0; i < simple.languages.size(); ++i) out += (i ? ", " : "") + SerializeString(simple.languages[i]);
+      return out + ")";
+    }
+    case K::Dir: return ":dir(" + simple.value + ")";
+  }
+  return "";
+}
+
+const char* CombinatorText(Combinator c) {
+  switch (c) {
+    case Combinator::Child: return " > ";
+    case Combinator::NextSibling: return " + ";
+    case Combinator::SubsequentSibling: return " ~ ";
+    default: return " ";
+  }
+}
+
+}  // namespace
+
+std::string SerializeComplexSelector(const ComplexSelector& selector) {
+  std::string out;
+  if (selector.relative && selector.leading != Combinator::Descendant) out += std::string(CombinatorText(selector.leading)).substr(1);
+  for (size_t i = 0; i < selector.compounds.size(); ++i) {
+    if (i > 0) out += CombinatorText(selector.combinators[i - 1]);
+    for (const SimpleSelector& simple : selector.compounds[i].simples) out += SerializeSimple(simple);
+  }
+  return out;
+}
+
+std::string SerializeSelectorList(const SelectorList& list) {
+  std::string out;
+  for (size_t i = 0; i < list.size(); ++i) out += (i ? ", " : "") + SerializeComplexSelector(list[i]);
+  return out;
 }
 
 }  // namespace solar::css

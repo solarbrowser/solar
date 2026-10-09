@@ -1312,7 +1312,9 @@ void TreeBuilder::TextMode(Token& token) {
   }
   if (token.type == Token::Type::EndOfFile) {
     Error("expected-named-closing-tag-but-got-eof");
+    Element* current = CurrentNode();
     Pop();
+    if (IsHtmlElement(current, "style")) dom::NotifyChildrenParsed(current);
     mode_ = originalMode_;
     Process(token);
     return;
@@ -1321,6 +1323,7 @@ void TreeBuilder::TextMode(Token& token) {
     Element* current = CurrentNode();
     Pop();
     mode_ = originalMode_;
+    if (IsHtmlElement(current, "style")) dom::NotifyChildrenParsed(current);
     // A script's end tag is where the script runs, and the parser waits for it.
     if (token.name == "script" && scriptHandler_ && IsHtmlElement(current, "script")) {
       // While the script runs, what it document.writes goes in the input where the parser is.

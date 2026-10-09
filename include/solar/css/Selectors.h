@@ -86,6 +86,10 @@ using SelectorList = std::vector<ComplexSelector>;
 // is for the lists of :is() and :where(), where what is invalid is dropped.
 std::optional<SelectorList> ParseSelectorList(std::string_view text);
 
+// "serialize a group of selectors" (CSSOM): the text selectorText answers with.
+std::string SerializeSelectorList(const SelectorList& list);
+std::string SerializeComplexSelector(const ComplexSelector& selector);
+
 // (a, b, c): the ids, the classes and attributes and pseudo-classes, and the types and pseudo-elements.
 struct Specificity {
   uint32_t ids = 0;

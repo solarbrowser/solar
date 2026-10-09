@@ -420,15 +420,15 @@ std::string EscapeIdentifier(std::string_view text) {
     const char32_t c = points[i];
     if ((c >= 0x1 && c <= 0x1F) || c == 0x7F) {
       char buffer[16];
-      std::snprintf(buffer, sizeof(buffer), "\\%X ", static_cast<unsigned>(c));
+      std::snprintf(buffer, sizeof(buffer), "\\%x ", static_cast<unsigned>(c));
       out += buffer;
     } else if (i == 0 && IsDigit(c)) {
       char buffer[16];
-      std::snprintf(buffer, sizeof(buffer), "\\%X ", static_cast<unsigned>(c));
+      std::snprintf(buffer, sizeof(buffer), "\\%x ", static_cast<unsigned>(c));
       out += buffer;
     } else if (i == 1 && IsDigit(c) && points[0] == '-') {
       char buffer[16];
-      std::snprintf(buffer, sizeof(buffer), "\\%X ", static_cast<unsigned>(c));
+      std::snprintf(buffer, sizeof(buffer), "\\%x ", static_cast<unsigned>(c));
       out += buffer;
     } else if (i == 0 && c == '-' && points.size() == 1) {
       out += "\\-";

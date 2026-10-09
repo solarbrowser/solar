@@ -15,7 +15,7 @@ SKIP = re.compile(r"/resources/|/support/|-support|-ref\.html|-frame|-iframe|\.p
 
 def run(path):
     try:
-        out = subprocess.run(["bash", "-c", f"ulimit -v 4000000; timeout 60 ./build/WptTest {path}"], capture_output=True, text=True, timeout=90)
+        out = subprocess.run(["bash", "-c", f"ulimit -v 4000000; timeout 60 ./build/WptTest {path}"], capture_output=True, text=True, errors="replace", timeout=90)
         text = out.stdout + out.stderr
         code = out.returncode
     except subprocess.TimeoutExpired:
@@ -46,7 +46,7 @@ def main():
         for root, _, files in os.walk(f"tests/wpt/{d}"):
             for f in files:
                 p = os.path.join(root, f)
-                if (f.endswith((".html", ".htm", ".xhtml", ".svg")) or ((f.endswith(".any.js") or f.endswith(".window.js")) and f != "idlharness.any.js" and any(x in p for x in ("/console/", "/webmessaging/", "/structured-clone/", "/safe-passing-of-structured-data/")))) and not SKIP.search(p):
+                if (f.endswith((".html", ".htm", ".xhtml", ".svg")) or ((f.endswith(".any.js") or f.endswith(".window.js")) and f != "idlharness.any.js" and any(x in p for x in ("/console/", "/webmessaging/", "/structured-clone/", "/safe-passing-of-structured-data/", "/css/cssom/")))) and not SKIP.search(p):
                     pages.append(p)
     pages.sort()
     with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:

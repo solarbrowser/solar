@@ -7,6 +7,7 @@
 #include "solar/dom/NodeBindingsInternal.h"
 #include "solar/html/HtmlBindings.h"
 #include "solar/html/Parser.h"
+#include "solar/css/Cssom.h"
 #include "solar/html/Csp.h"
 #include "solar/html/Errors.h"
 #include "solar/html/Modules.h"
@@ -346,6 +347,9 @@ void AfterInsert(dom::Node* node) {
   if (!node->IsElement() && !node->IsFragment()) return;
   dom::Node* root = dom::ShadowIncludingRoot(node);
   if (!root || !root->IsDocument()) return;
+  for (dom::Element* style : HtmlElementsIn(node, "style")) {
+    if (style->nodeDocument && style->nodeDocument->context) css::UpdateStyleElement(*style->nodeDocument->context, style);
+  }
   for (dom::Element* meta : HtmlElementsIn(node, "meta")) {
     const std::optional<std::string> equiv = dom::GetAttribute(meta, "http-equiv");
     const std::optional<std::string> content = dom::GetAttribute(meta, "content");
@@ -363,6 +367,9 @@ void AfterRemove(dom::Node* node, bool) {
   FocusAfterRemove(node);
   if (!node->IsElement()) return;
   dom::Document* document = node->nodeDocument;
+  for (dom::Element* style : HtmlElementsIn(node, "style")) {
+    if (style->nodeDocument && style->nodeDocument->context) css::UpdateStyleElement(*style->nodeDocument->context, style);
+  }
   const std::vector<dom::Element*> removed = IframesIn(node);
   for (dom::Element* iframe : removed) DiscardContext(iframe);
   if (!removed.empty()) SyncFrames(document);
@@ -384,6 +391,10 @@ void ContentHandlerChanged(dom::Element* element, const std::string& name) {
 
 void AttributeChanged(dom::Element* element, const std::string& name) {
   if (name.size() > 2 && name.starts_with("on")) ContentHandlerChanged(element, name);
+  if (name == "style") css::StyleAttributeChanged(element);
+  if (element->IsHtml("style") && (name == "media" || name == "type" || name == "title") && element->nodeDocument && element->nodeDocument->context) {
+    css::UpdateStyleElement(*element->nodeDocument->context, element);
+  }
   if (!IsIframe(element) || (name != "src" && name != "srcdoc")) return;
   dom::Node* root = dom::ShadowIncludingRoot(element);
   if (!root || !root->IsDocument() || !element->contentDocument) return;
@@ -512,11 +523,18 @@ bool LoadPageIn(Quanta::Embed::Realm& realm, dom::Document* document, const std:
 
 }  // namespace
 
+// The text of a style element changed: its sheet is made again.
+void ChildrenChanged(dom::Node* parent) {
+  dom::Element* element = dom::AsElement(parent);
+  if (element && element->IsHtml("style") && element->nodeDocument && element->nodeDocument->context) css::UpdateStyleElement(*element->nodeDocument->context, element);
+}
+
 void InstallFrameHooks() {
   dom::TreeHooks hooks;
   hooks.afterInsert = AfterInsert;
   hooks.afterRemove = AfterRemove;
   hooks.attributeChanged = AttributeChanged;
+  hooks.childrenChanged = ChildrenChanged;
   dom::SetTreeHooks(hooks);
 }
 

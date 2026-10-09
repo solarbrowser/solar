@@ -195,6 +195,9 @@ struct Element : Node {
   // attributes and classList, which are the same object each time.
   Quanta::Object* attributeMap = nullptr;
   Quanta::Object* tokenList = nullptr;
+  // A style or link element's sheet, and the CSSStyleDeclaration of the style attribute: both the same object each time.
+  Quanta::Object* styleSheet = nullptr;
+  Quanta::Object* inlineStyle = nullptr;
   // A template element's contents, which are not its children.
   DocumentFragment* templateContents = nullptr;
   ShadowRoot* shadowRoot = nullptr;
@@ -253,6 +256,7 @@ struct Document : Node {
   web::JsEventTarget* window = nullptr;
   // The global object of that window, and the iframe this document is the content of, if it is.
   Quanta::Object* globalObject = nullptr;
+  Quanta::Object* styleSheetList = nullptr;  // document.styleSheets
   // For an about: document whose iframe is gone: the address it was resolving against, which is the origin it keeps.
   std::string inheritedBase;
   // The Content-Security-Policy values that apply to the document (the header's, and its meta elements').
@@ -310,10 +314,14 @@ struct TreeHooks {
   void (*afterInsert)(Node* node) = nullptr;
   void (*afterRemove)(Node* node, bool parentWasConnected) = nullptr;
   void (*attributeChanged)(Element* element, const std::string& name) = nullptr;
+  // The children of `parent`, or the text of one of them, changed (a style element's sheet is its text).
+  void (*childrenChanged)(Node* parent) = nullptr;
 };
 void SetTreeHooks(const TreeHooks& hooks);
 // Tells the hooks of an attribute an element was made with, as the parser makes them without going through the changes.
 void NotifyParsedAttribute(Element* element, const std::string& name);
+// The parser has finished the text of an element (a style's), which it appended to a character at a time.
+void NotifyChildrenParsed(Node* parent);
 
 Element* NewElement(Quanta::Context& ctx, Document* document, std::string_view localName, std::string_view namespaceUri = kHtmlNamespace, std::string_view prefix = "");
 CharacterData* NewText(Quanta::Context& ctx, Document* document, std::string data);
