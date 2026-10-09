@@ -867,15 +867,35 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
   } else if (name == "property") {
     const ComponentValues prelude = Trimmed(syntax.prelude);
     if (!syntax.hasBlock || prelude.size() != 1 || !prelude[0].IsIdent() || !prelude[0].token.value.starts_with("--") || prelude[0].token.value.size() < 3) return nullptr;
+    // The descriptors: syntax and inherits are required, and initial-value unless the syntax is universal.
+    std::optional<std::string> syntaxText, initialText;
+    std::optional<bool> inherits;
+    for (const BlockItem& item : ParseBlockContents(syntax.block)) {
+      if (!item.isDeclaration) continue;
+      const std::string descriptor = Lower(item.declaration.name);
+      const ComponentValues value = Trimmed(item.declaration.value);
+      if (descriptor == "syntax") {
+        if (value.size() == 1 && value[0].IsToken(T::String)) syntaxText = value[0].token.value;
+        else syntaxText.reset();
+      } else if (descriptor == "inherits") {
+        if (value.size() == 1 && value[0].IsIdent() && (Lower(value[0].token.value) == "true" || Lower(value[0].token.value) == "false")) inherits = Lower(value[0].token.value) == "true";
+        else inherits.reset();
+      } else if (descriptor == "initial-value") {
+        initialText = css::Serialize(value);
+      }
+    }
+    if (!syntaxText || !inherits) return nullptr;
+    std::string error;
+    std::optional<RegisteredProperty> registration = MakeRegistration(prelude[0].token.value, *syntaxText, *inherits, initialText, error);
+    if (!registration) return nullptr;
     rule = NewRule(ctx, RuleKind::Property);
     rule->name = prelude[0].token.value;
-    rule->style = nullptr;
-    const std::vector<BlockItem> items = ParseBlockContents(syntax.block);
+    rule->registered = registration;
     CssDeclarations* declarations = NewDeclarations(ctx);
     declarations->parentRule = rule;
-    for (const BlockItem& item : items) {
-      if (item.isDeclaration) AddOrReplace(declarations->items, {Lower(item.declaration.name), Serialize(Trimmed(item.declaration.value)), false});
-    }
+    AddOrReplace(declarations->items, {"syntax", SerializeString(*syntaxText), false, "", ""});
+    AddOrReplace(declarations->items, {"inherits", *inherits ? "true" : "false", false, "", ""});
+    if (initialText) AddOrReplace(declarations->items, {"initial-value", registration->universal() ? *initialText : *registration->initialValue, false, "", ""});
     rule->style = declarations;
   } else if (name == "counter-style") {
     const ComponentValues prelude = Trimmed(syntax.prelude);

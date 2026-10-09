@@ -12,6 +12,7 @@
 #include "solar/css/Color.h"
 #include "solar/css/Cssom.h"
 #include "solar/css/MediaQuery.h"
+#include "solar/css/Registry.h"
 #include "solar/css/Selectors.h"
 #include "solar/css/Shorthands.h"
 #include "solar/css/Values.h"
@@ -284,6 +285,7 @@ class Resolver {
   std::string Finish(dom::Element* element, const std::string& property, const PropertyDefinition& definition, const std::string& specified, ComputeContext& context, const std::string& pseudo);
 
   Quanta::Context& ctx_;
+  bool cycleHit_ = false;  // a property was asked for while it was being worked out
 };
 
 void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo) {
@@ -391,6 +393,23 @@ std::optional<std::string> Resolver::Substitute(dom::Element* element, const std
   return Serialize(Trimmed(out));
 }
 
+// The registration of a custom property in the element's document, remembered until style changes.
+std::optional<RegisteredProperty> RegistrationOf(dom::Element* element, const std::string& name) {
+  static std::map<std::pair<dom::Document*, std::string>, std::optional<RegisteredProperty>> cache;
+  static uint64_t cachedVersion = 0;
+  const uint64_t version = dom::TreeVersion() * 1000003 + g_styleVersion;
+  if (version != cachedVersion) {
+    cache.clear();
+    cachedVersion = version;
+  }
+  const auto key = std::make_pair(element->nodeDocument, name);
+  const auto found = cache.find(key);
+  if (found != cache.end()) return found->second;
+  std::optional<RegisteredProperty> registration = LookupRegistered(element->nodeDocument, name);
+  cache[key] = registration;
+  return registration;
+}
+
 // The value of a custom property on an element: its own, or its parent's; nothing for the guaranteed-invalid value.
 std::optional<std::string> Resolver::Custom(dom::Element* element, const std::string& name, const std::string& pseudo) {
   ElementStyle& style = StyleOf(element, pseudo);
@@ -399,32 +418,70 @@ std::optional<std::string> Resolver::Custom(dom::Element* element, const std::st
   if (cached != style.custom.end()) return cached->second;
   if (style.resolving.count(name)) return std::nullopt;  // a cycle
   style.resolving.insert(name);
+  const std::optional<RegisteredProperty> registration = RegistrationOf(element, name);
+  // The computed initial value of a registered property.
+  const auto initialOf = [&]() -> std::optional<std::string> {
+    if (!registration || !registration->initialValue) return std::nullopt;
+    if (registration->universal()) return registration->initialValue;
+    ComputeContext context = ContextFor(element, "--", pseudo);
+    ValueMatch match;
+    if (!MatchSyntax(registration->matcherSyntax, Trimmed(ParseComponentValues(*registration->initialValue)), match, &context)) return std::nullopt;
+    return SerializeValue(match.normalized);
+  };
+  const auto inheritedValue = [&]() -> std::optional<std::string> {
+    if (!pseudo.empty()) return Custom(element, name, "");
+    if (dom::Element* parent = FlatParent(element)) return Custom(parent, name, "");
+    return std::nullopt;
+  };
   std::optional<std::string> result;
   const auto winner = style.cascade.find(name);
-  bool inherit = true;
+  bool inherit = !registration || registration->inherits;  // an unregistered property always inherits
+  bool useInitial = false;
   if (winner != style.cascade.end()) {
     const std::string& value = winner->second.entry->value;
     const ComponentValues parsed = Trimmed(ParseComponentValues(value));
     if (IsCssWideKeyword(parsed)) {
       const std::string keyword = Lower(parsed[0].token.value);
-      inherit = keyword != "initial";
-      if (keyword == "initial") result = std::nullopt;
-      else if (keyword == "unset" || keyword == "inherit" || keyword == "revert" || keyword == "revert-layer") inherit = true;
+      if (keyword == "initial") {
+        useInitial = true;
+        inherit = false;
+      } else if (keyword == "inherit") {
+        inherit = true;
+      }  // unset and the reverts: inherit if the property does
     } else {
-      inherit = false;
+      std::optional<std::string> text;
       if (ContainsSubstitution(parsed)) {
         std::set<std::string> stack{name};
-        result = Substitute(element, pseudo, value, 0, stack);
+        text = Substitute(element, pseudo, value, 0, stack);
       } else {
-        result = value;
+        text = value;
+      }
+      inherit = false;
+      if (text && registration && !registration->universal()) {
+        cycleHit_ = false;
+        ComputeContext context = ContextFor(element, "--", pseudo);
+        ValueMatch match;
+        if (cycleHit_) {
+          // It depends on a value that depends on it.
+          style.resolving.erase(name);
+          style.custom[name] = std::nullopt;
+          return std::nullopt;
+        }
+        if (MatchSyntax(registration->matcherSyntax, Trimmed(ParseComponentValues(*text)), match, &context)) result = SerializeValue(match.normalized);
+        else inherit = registration->inherits, useInitial = !registration->inherits;  // invalid at computed-value time: as unset
+      } else if (text) {
+        result = Serialize(Trimmed(ParseComponentValues(*text)));
+      } else if (registration) {
+        inherit = registration->inherits;
+        useInitial = !registration->inherits;
       }
     }
+  } else if (registration && !registration->inherits) {
+    useInitial = true;
+    inherit = false;
   }
-  if (inherit) {
-    if (!pseudo.empty()) result = Custom(element, name, "");
-    else if (dom::Element* parent = FlatParent(element)) result = Custom(parent, name, "");
-    else result = std::nullopt;
-  }
+  if (useInitial) result = initialOf();
+  else if (inherit) result = (pseudo.empty() && !FlatParent(element)) ? initialOf() : inheritedValue();
   style.resolving.erase(name);
   style.custom[name] = result;
   return result;
@@ -581,7 +638,10 @@ std::string Resolver::Compute(dom::Element* element, const std::string& property
 
   bool valid = true;
   std::string specified = initialOnly ? "initial" : Specified(element, name, *definition, valid, pseudo);
-  if (style.resolving.count("\x02" + name)) return "";
+  if (style.resolving.count("\x02" + name)) {
+    cycleHit_ = true;
+    return "";
+  }
   style.resolving.insert("\x02" + name);
   ComputeContext context = ContextFor(element, name, pseudo);
   std::string result = Finish(element, name, *definition, specified, context, pseudo);
@@ -654,6 +714,7 @@ std::string Resolver::Finish(dom::Element* element, const std::string& property,
 }  // namespace
 
 void NoteStyleChange() { ++g_styleVersion; }
+void NoteStyleChangeForRegistry() { ++g_styleVersion; }
 uint64_t StyleVersion() { return g_styleVersion; }
 
 std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std::string& property, const std::string& pseudo) {

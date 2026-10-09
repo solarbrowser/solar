@@ -423,6 +423,7 @@ bool ExpandValue(const PropertyDefinition& property, const ComponentValues& valu
     return true;
   }
   if (ContainsSubstitution(values)) {
+    if (!ValidSubstitutions(values)) return false;
     const std::string text = Serialize(values);
     if (!shorthand) {
       out.push_back({name, text, "", ""});

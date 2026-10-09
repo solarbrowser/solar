@@ -149,6 +149,7 @@ bool ConsumeDeclaration(Stream& in, bool nested, Declaration& out) {
     return false;
   }
   in.Next();
+  const bool spaceAfterColon = in.Peek().type == T::Whitespace;
   in.SkipWhitespace();
   // The value runs to the ; or, in a block, the }.
   for (;;) {
@@ -178,8 +179,10 @@ bool ConsumeDeclaration(Stream& in, bool nested, Declaration& out) {
     }
   }
   if (IsCustomName(declaration.name)) {
-    // A custom property keeps its value as written, minus the whitespace at either end; an empty one is allowed.
+    // A custom property keeps its value as written, minus the whitespace at either end; an empty one is allowed, and one
+    // of only whitespace is a space.
     declaration.originalText = TextOf(Trimmed(value));
+    if (declaration.originalText.empty() && spaceAfterColon) declaration.originalText = " ";
   } else {
     // A {} block may be the whole value of a property, and nothing else.
     bool block = false, other = false;
@@ -524,7 +527,24 @@ std::string SerializeToken(const Token& token) {
     case T::Hash: return "#" + HashName(token);
     case T::String: return SerializeString(token.value);
     case T::BadString: return "\"" + token.value + "\n";
-    case T::Url: return SerializeUrl(token.value);
+    case T::Url: {
+      // As written: url(address), with what would end the token escaped.
+      std::string out = "url(";
+      for (char c : token.value) {
+        const unsigned char u = static_cast<unsigned char>(c);
+        if (c == '"' || c == '\'' || c == '(' || c == ')' || c == '\\' || c == ' ' || c == '\t' || c == '\n') {
+          out += '\\';
+          out += c;
+        } else if (u < 0x20 || u == 0x7F) {
+          char buffer[16];
+          std::snprintf(buffer, sizeof(buffer), "\\%x ", static_cast<unsigned>(u));
+          out += buffer;
+        } else {
+          out += c;
+        }
+      }
+      return out + ")";
+    }
     case T::BadUrl: return "url(" + token.value + ")";
     case T::Delim: {
       std::string out;

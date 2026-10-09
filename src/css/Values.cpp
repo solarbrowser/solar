@@ -58,7 +58,8 @@ using NodePtr = std::shared_ptr<SyntaxNode>;
 struct SyntaxNode {
   enum class Kind { Keyword, Type, Property, Comma, Slash, Delim, Seq, AllOf, AnyOf, OneOf, Repeat, NonEmpty, Function, ParenBlock, BracketBlock };
   Kind kind = Kind::Keyword;
-  std::string text;      // keyword, type or property name, function name
+  std::string text;      // keyword, type or property name, function name (lowercase)
+  std::string original;  // a function's name as the syntax writes it
   char32_t delim = 0;
   std::vector<NodePtr> children;
   bool hasRange = false;
@@ -270,6 +271,7 @@ class SyntaxParser {
         ++pos_;
         NodePtr function = Make(SyntaxNode::Kind::Function);
         function->text = Lower(name);
+        function->original = name;
         NodePtr inner = Lookahead(")") ? Make(SyntaxNode::Kind::Seq) : ParseOneOf();
         if (!inner || !Accept(")")) return nullptr;
         function->children.push_back(inner);
@@ -641,6 +643,22 @@ bool IsCssWideKeyword(const ComponentValues& values) {
   return trimmed.size() == 1 && trimmed[0].IsIdent() && IsCssWide(Lower(trimmed[0].token.value));
 }
 
+bool ValidSubstitutions(const ComponentValues& values) {
+  for (const ComponentValue& v : values) {
+    if (v.kind == ComponentValue::Kind::Function && Lower(v.name) == "var") {
+      // var( --name [, fallback]? ): after the name there is the end or a comma.
+      size_t i = 0;
+      while (i < v.children.size() && v.children[i].IsWhitespace()) ++i;
+      if (i >= v.children.size() || !v.children[i].IsIdent() || !v.children[i].token.value.starts_with("--") || v.children[i].token.value.size() < 3) return false;
+      ++i;
+      while (i < v.children.size() && v.children[i].IsWhitespace()) ++i;
+      if (i < v.children.size() && !v.children[i].IsToken(T::Comma)) return false;
+    }
+    if (v.kind != ComponentValue::Kind::Token && !ValidSubstitutions(v.children)) return false;
+  }
+  return true;
+}
+
 bool ContainsSubstitution(const ComponentValues& values) {
   for (const ComponentValue& v : values) {
     if (v.kind == ComponentValue::Kind::Function) {
@@ -990,7 +1008,7 @@ class Matcher {
     steps_ = inner.steps_;
     ComponentValue replaced = item;
     replaced.children = inner.out_;
-    if (function) replaced.name = Lower(replaced.name);
+    if (function) replaced.name = node.original.empty() ? Lower(replaced.name) : node.original;
     const size_t mark = log_.size();
     Set(pos, replaced);
     if (k(pos + 1)) return true;
@@ -1294,6 +1312,7 @@ void SerializeOne(const ComponentValue& v, std::string& out) {
         case T::Number: out += FormatNumber(v.token.number); return;
         case T::Percentage: out += FormatNumber(v.token.number) + "%"; return;
         case T::Dimension: out += FormatNumber(v.token.number) + SerializeIdentifier(UnitText(v.token.value)); return;
+        case T::Url: out += SerializeUrl(v.token.value); return;
         default: out += SerializeToken(v.token); return;
       }
     case ComponentValue::Kind::Function:

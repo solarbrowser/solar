@@ -56,5 +56,7 @@ std::string FormatNumber(double number);
 bool IsCssWideKeyword(const ComponentValues& values);
 // Whether a value has a var(), env() or attr() in it, so that it is known only when it is used.
 bool ContainsSubstitution(const ComponentValues& values);
+// Whether the var() functions in a value are well formed: a custom property name, then the end or a comma.
+bool ValidSubstitutions(const ComponentValues& values);
 
 }  // namespace solar::css

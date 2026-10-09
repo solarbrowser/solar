@@ -604,6 +604,22 @@ Value RuleSupportsText(Context& ctx, Value t, qe::Args, Value) {
   return self->supportsText.empty() ? qe::Null() : qe::FromWtf8(ctx, self->supportsText);
 }
 
+Value PropertySyntax(Context& ctx, Value t, qe::Args, Value) {
+  CssRule* self = ThisRuleOf(ctx, t, RuleKind::Property);
+  return self && self->registered ? qe::FromWtf8(ctx, self->registered->syntax) : qe::Undefined();
+}
+
+Value PropertyInherits(Context& ctx, Value t, qe::Args, Value) {
+  CssRule* self = ThisRuleOf(ctx, t, RuleKind::Property);
+  return self && self->registered ? qe::FromBool(self->registered->inherits) : qe::Undefined();
+}
+
+Value PropertyInitialValue(Context& ctx, Value t, qe::Args, Value) {
+  CssRule* self = ThisRuleOf(ctx, t, RuleKind::Property);
+  if (!self || !self->registered) return qe::Undefined();
+  return self->registered->initialValue ? qe::FromWtf8(ctx, *self->registered->initialValue) : qe::Null();
+}
+
 Value RuleNamespaceUri(Context& ctx, Value t, qe::Args, Value) {
   CssRule* self = ThisRuleOf(ctx, t, RuleKind::Namespace);
   return self ? qe::FromWtf8(ctx, self->namespaceUri) : qe::Undefined();
@@ -1144,7 +1160,48 @@ Value CssSupports(Context& ctx, Value, qe::Args args, Value) {
   return qe::FromBool(SupportsCondition({block}));
 }
 
+// CSS.registerProperty({ name, syntax, inherits, initialValue }).
+Value RegisterProperty(Context& ctx, Value, qe::Args args, Value) {
+  if (args.empty() || !qe::IsObject(args[0])) {
+    qe::ThrowTypeError(ctx, "Failed to execute 'registerProperty' on 'CSS': parameter 1 is not of type 'PropertyDefinition'.");
+    return qe::Undefined();
+  }
+  Value nameValue = qe::Get(ctx, args[0], "name");
+  Value syntaxValue = qe::Get(ctx, args[0], "syntax");
+  Value inheritsValue = qe::Get(ctx, args[0], "inherits");
+  Value initialValue = qe::Get(ctx, args[0], "initialValue");
+  if (qe::HasException(ctx)) return qe::Undefined();
+  if (nameValue.is_undefined() || inheritsValue.is_undefined()) {
+    qe::ThrowTypeError(ctx, "Failed to execute 'registerProperty' on 'CSS': required member is undefined.");
+    return qe::Undefined();
+  }
+  const std::string name = qe::ToWtf8(ctx, nameValue);
+  const std::string syntax = syntaxValue.is_undefined() ? "*" : qe::ToWtf8(ctx, syntaxValue);
+  const bool inherits = qe::ToBoolean(inheritsValue);
+  std::optional<std::string> initial;
+  if (!initialValue.is_undefined()) initial = qe::ToWtf8(ctx, initialValue);
+  if (qe::HasException(ctx)) return qe::Undefined();
+  if (name.size() < 3 || name.compare(0, 2, "--") != 0) {
+    web::ThrowDomException(ctx, "The name provided is not a valid custom property name.", "SyntaxError");
+    return qe::Undefined();
+  }
+  std::string error;
+  std::optional<RegisteredProperty> registration = MakeRegistration(name, syntax, inherits, initial, error);
+  if (!registration) {
+    if (error == "TypeError") qe::ThrowTypeError(ctx, "An initial value is required when the syntax is not universal.");
+    else web::ThrowDomException(ctx, "The syntax or the initial value is not valid.", error);
+    return qe::Undefined();
+  }
+  dom::Document* document = dom::AssociatedDocument(ctx);
+  if (!RegisterProperty(document, *registration, error)) {
+    web::ThrowDomException(ctx, "The name has been registered already.", error);
+    return qe::Undefined();
+  }
+  return qe::Undefined();
+}
+
 void InstallCssSupports(Context& ctx) {
+  qe::DefineGlobalFunction(ctx, "__solarCssRegisterProperty", RegisterProperty, 1);
   qe::DefineGlobalFunction(ctx, "__solarCssSupports", CssSupports, 1);
 }
 
@@ -1286,6 +1343,9 @@ void DefineCssomClasses(Context& ctx) {
   qe::DefineAccessor(counter, "name", RuleName, RuleSetName);
   Object* property = DefineRule(ctx, kPropertyRule, "CSSPropertyRule", ruleBase);
   qe::DefineAccessor(property, "name", RuleName, nullptr);
+  qe::DefineAccessor(property, "syntax", PropertySyntax, nullptr);
+  qe::DefineAccessor(property, "inherits", PropertyInherits, nullptr);
+  qe::DefineAccessor(property, "initialValue", PropertyInitialValue, nullptr);
   Object* layerStatement = DefineRule(ctx, kLayerStatementRule, "CSSLayerStatementRule", ruleBase);
   qe::DefineAccessor(layerStatement, "nameList", LayerNameList, nullptr);
 

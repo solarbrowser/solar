@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "quanta/Embed.h"
+#include "solar/css/Registry.h"
 #include "solar/css/Selectors.h"
 #include "solar/css/Syntax.h"
 #include "solar/dom/Node.h"
@@ -137,6 +138,8 @@ struct CssRule : Quanta::DOMObject {
   // The prelude of a rule this module keeps as written (container, scope, page): its serialization.
   std::string prelude;
   bool isNested = false;  // a style rule inside another
+  // A property rule: what it registers, if it is a valid one.
+  std::optional<RegisteredProperty> registered;
 
   std::string CssText() const;
   void Visit(Quanta::Visitor& visitor);

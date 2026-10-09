@@ -115,7 +115,7 @@ void Install(Host& host) {
   qe::DefineGlobalFunction(ctx, "__solarCssEscape", Escape, 1);
   InstallCssSupports(ctx);
   host.Evaluate("for (const name of ['CSSRuleList', 'StyleSheetList', 'MediaList', 'CSSStyleDeclaration']) Object.defineProperty(globalThis[name].prototype, Symbol.iterator, { value: Array.prototype[Symbol.iterator], writable: true, configurable: true });");
-  host.Evaluate("Object.defineProperty(CSS, 'supports', { value: __solarCssSupports, writable: true, enumerable: true, configurable: true }); delete globalThis.__solarCssSupports;");
+  host.Evaluate("Object.defineProperty(CSS, 'supports', { value: __solarCssSupports, writable: true, enumerable: true, configurable: true }); delete globalThis.__solarCssSupports; Object.defineProperty(CSS, 'registerProperty', { value: __solarCssRegisterProperty, writable: true, enumerable: true, configurable: true }); delete globalThis.__solarCssRegisterProperty;");
   host.Evaluate("Object.defineProperty(CSS, 'escape', { value: __solarCssEscape, writable: true, enumerable: true, configurable: true }); delete globalThis.__solarCssEscape;");
 }
 
