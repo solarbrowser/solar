@@ -1,4 +1,6 @@
 #include "solar/css/Cssom.h"
+
+#include <functional>
 #include "solar/css/Shorthands.h"
 #include "solar/css/Style.h"
 #include "solar/url/Parser.h"
@@ -339,21 +341,82 @@ std::string SerializeMediaQuery(const ComponentValues& tokens) {
   const auto condition = [&](const ComponentValue& v) {
     return v.IsBlock(T::LeftParen) || (v.kind == ComponentValue::Kind::Function);
   };
-  const auto serializeCondition = [&](const ComponentValue& v) {
-    std::string text = Serialize(v);
-    // Inside the parentheses, names of features and keywords are lowercase; the spacing is the author's, collapsed.
-    std::string collapsed;
+  // "serialize a media condition": the parentheses of a feature hold `name`, `name: value` or a range with single spaces; a
+  // condition holds not, and, or and the conditions they join; anything else is as written with its spaces collapsed.
+  std::function<std::string(const ComponentValue&)> serializeCondition = [&](const ComponentValue& v) -> std::string {
+    if (!v.IsBlock(T::LeftParen)) {
+      std::string collapsed;
+      bool space = false;
+      for (char c : Serialize(v)) {
+        if (c == ' ' || c == '\n' || c == '\t') {
+          space = true;
+          continue;
+        }
+        if (space && !collapsed.empty() && collapsed.back() != '(') collapsed += ' ';
+        space = false;
+        collapsed += c;
+      }
+      return collapsed;
+    }
+    const ComponentValues inner = Trimmed(v.children);
+    std::vector<ComponentValue> items;
+    for (const ComponentValue& c : inner) {
+      if (!c.IsWhitespace()) items.push_back(c);
+    }
+    const auto isGroup = [](const ComponentValue& c) { return c.IsBlock(T::LeftParen) || c.kind == ComponentValue::Kind::Function; };
+    const bool isCondition = !items.empty() && ((word(items[0]) == "not" && items.size() == 2 && isGroup(items[1])) ||
+                                                (isGroup(items[0]) && (items.size() == 1 || word(items[1]) == "and" || word(items[1]) == "or")));
+    if (isCondition) {
+      std::string out;
+      for (const ComponentValue& c : items) {
+        if (!out.empty()) out += ' ';
+        out += isGroup(c) ? serializeCondition(c) : word(c);
+      }
+      return "(" + out + ")";
+    }
+    std::string out;
     bool space = false;
-    for (char c : text) {
-      if (c == ' ' || c == '\n' || c == '\t') {
+    const auto closed = [&] { return out.empty() || out.back() == ' '; };
+    for (size_t k = 0; k < inner.size(); ++k) {
+      const ComponentValue& c = inner[k];
+      if (c.IsWhitespace()) {
         space = true;
         continue;
       }
-      if (space && !collapsed.empty() && collapsed.back() != '(') collapsed += ' ';
+      if (c.IsToken(T::Colon)) {
+        out += ": ";
+        space = false;
+        continue;
+      }
+      if (c.IsDelim('/')) {
+        // A ratio is written with spaces around the slash.
+        const bool ratio = k > 0 && k + 1 < inner.size() && !out.empty() && std::isdigit(static_cast<unsigned char>(out.back())) && (inner[k + 1].IsToken(T::Number) || (k + 2 < inner.size() && inner[k + 1].IsWhitespace() && inner[k + 2].IsToken(T::Number)));
+        if (ratio) {
+          out += " / ";
+          while (k + 1 < inner.size() && inner[k + 1].IsWhitespace()) ++k;
+        } else {
+          out += "/";
+        }
+        space = false;
+        continue;
+      }
+      if (c.IsDelim('<') || c.IsDelim('>') || c.IsDelim('=')) {
+        std::string op(1, static_cast<char>(c.token.delim));
+        if (op != "=" && k + 1 < inner.size() && inner[k + 1].IsDelim('=')) {
+          op += "=";
+          ++k;
+        }
+        if (!closed()) out += ' ';
+        out += op + " ";
+        space = false;
+        continue;
+      }
+      if (space && !closed()) out += ' ';
       space = false;
-      collapsed += c;
+      out += c.IsIdent() && out.empty() && !c.token.value.starts_with("--") ? SerializeIdentifier(Lower(c.token.value)) : Serialize(c);
     }
-    return collapsed;
+    while (!out.empty() && out.back() == ' ') out.pop_back();
+    return "(" + out + ")";
   };
   skipSpace();
   std::string prefix;
@@ -369,7 +432,7 @@ std::string SerializeMediaQuery(const ComponentValues& tokens) {
     if (type == "and" || type == "or" || type == "not" || type == "only" || type == "layer") return "not all";
     ++i;
     if (!prefix.empty()) out = prefix + " ";
-    out += type;
+    out += SerializeIdentifier(type);
     skipSpace();
     const bool omittable = type == "all" && prefix.empty();
     if (omittable && i < values.size()) out.clear();
@@ -729,8 +792,20 @@ CssRule* BuildImport(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, Css
       continue;
     }
     if (rest.empty() && v.kind == ComponentValue::Kind::Function && IEquals(v.name, "layer")) {
-      rule->layerName = Serialize(Trimmed(v.children));
-      continue;
+      // ident(.ident)*, no whitespace inside; anything else is left to the media query to make what it can of.
+      bool valid = !v.children.empty();
+      bool expectIdent = true;
+      std::string name;
+      for (const ComponentValue& c : v.children) {
+        if (expectIdent && c.IsIdent()) name += SerializeIdentifier(c.token.value);
+        else if (!expectIdent && c.IsDelim('.')) name += ".";
+        else valid = false;
+        expectIdent = !expectIdent;
+      }
+      if (valid && !expectIdent) {
+        rule->layerName = name;
+        continue;
+      }
     }
     if (rest.empty() && v.kind == ComponentValue::Kind::Function && IEquals(v.name, "supports")) {
       rule->supportsText = Serialize(Trimmed(v.children));
@@ -842,6 +917,7 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
     if (!syntax.hasBlock) return nullptr;
     const ComponentValues prelude = Trimmed(syntax.prelude);
     if (prelude.size() != 1 || !(prelude[0].IsIdent() || prelude[0].IsToken(T::String))) return nullptr;
+    if (prelude[0].IsToken(T::String) ? prelude[0].token.value.empty() : (Lower(prelude[0].token.value) == "none" || IsCssWideKeyword(prelude) || Lower(prelude[0].token.value) == "default")) return nullptr;
     rule = NewRule(ctx, RuleKind::Keyframes);
     rule->name = prelude[0].token.value;
     rule->parentRule = parent;
@@ -861,7 +937,7 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
       for (const ComponentValue& v : Trimmed(part)) {
         if (v.IsIdent()) one += SerializeIdentifier(v.token.value);
         else if (v.IsDelim('.')) one += ".";
-        else if (!v.IsWhitespace()) valid = false;
+        else valid = false;  // whitespace inside a name too: A . B is not A.B
       }
       if (one.empty() || one.front() == '.' || one.back() == '.' || one.find("..") != std::string::npos) {
         if (!(prelude.empty() && syntax.hasBlock)) valid = false;

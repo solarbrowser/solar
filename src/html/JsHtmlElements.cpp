@@ -400,6 +400,25 @@ const std::array<qe::NativeFn, kInterfaceCount> kConstructors = MakeConstructors
 
 }  // namespace
 
+// innerText and outerText: without layout every element is "not being rendered", so the text is the text content.
+Value GetInnerText(Context& ctx, Value t, qe::Args, Value) {
+  dom::Element* self = dom::ThisElement(ctx, t);
+  if (!self) return qe::Undefined();
+  return qe::FromWtf8(ctx, self->DescendantText());
+}
+
+Value SetInnerText(Context& ctx, Value t, qe::Args args, Value) {
+  dom::Element* self = dom::ThisElement(ctx, t);
+  if (!self) return qe::Undefined();
+  std::string text;
+  if (!args.empty() && !qe::IsNull(args[0])) {
+    text = qe::ToWtf8(ctx, args[0]);
+    if (qe::HasException(ctx)) return qe::Undefined();
+  }
+  dom::SetTextContent(ctx, self, std::move(text));
+  return qe::Undefined();
+}
+
 void DefineHtmlElementInterfaces(Context& ctx) {
   Object* htmlElement = dom::InterfacePrototype(ctx, dom::Interface::HtmlElement);
 
@@ -408,6 +427,7 @@ void DefineHtmlElementInterfaces(Context& ctx) {
   dom::SetUnknownHtmlElementInterface(ctx, unknown.prototype);
 
   DefineDataset(ctx);
+  qe::DefineAccessor(htmlElement, "innerText", GetInnerText, dom::Reactions<SetInnerText>);
   qe::DefineAccessor(htmlElement, "title", GetPlain<kTitle>, dom::Reactions<SetPlain<kTitle>>);
   qe::DefineAccessor(htmlElement, "lang", GetPlain<kLang>, dom::Reactions<SetPlain<kLang>>);
   qe::DefineAccessor(htmlElement, "dir", GetKeyword<kDir, kLtr, kRtl, kAuto>, dom::Reactions<SetPlain<kDir>>);

@@ -64,6 +64,8 @@ bool LoadPage(Quanta::Embed::Realm& realm, dom::Document* document, std::string_
 // URL's bytes included).
 std::string DocumentBaseUrl(const dom::Document* document);
 std::optional<std::string> LoadResource(const std::string& url);
+// What a data: URL holds.
+std::optional<std::string> DecodeDataUrlText(const std::string& address);
 
 // For the cross-origin view of a window: a document's origin, and the windows of its frames, by index or by name.
 std::string OriginOfDocument(const dom::Document* document);

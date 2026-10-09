@@ -1,3 +1,4 @@
+#include <functional>
 #include "solar/css/Style.h"
 
 #include <algorithm>
@@ -135,17 +136,38 @@ struct Gatherer {
   uint32_t order = 0;
   uint32_t ruleSerial = 0;
   uint32_t proximity = UINT32_MAX;
-  std::map<std::string, int> layers;
-  int nextLayer = 0;
-  const MediaEnvironment& media = CurrentMediaEnvironment();
+  // The cascade layers of the tree, by path ("A.B"; an anonymous layer has a name no one can write). They are ordered by where they
+  // are first named, a layer's sublayers below it: the rank of a path is its place in that order.
+  std::map<std::string, std::vector<std::string>> layerChildren;
+  std::map<std::string, int> layerRank;
+  std::string layerPath;
+  bool collecting = false;  // only finding the layers
+  int anonymousLayers = 0;  // the anonymous layers are numbered as they are met, the same in both passes
+  MediaEnvironment media = EnvironmentFor(element->nodeDocument);
   bool hostScoped = false;  // the rules are of a shadow tree and the element is its host: author rules of the outer tree win
+  int layerBase = 0;        // added to the rank of a layer: a shadow host's rules are below the rules around them
 
-  int LayerId(const std::string& name, bool create) {
-    const auto found = layers.find(name);
-    if (found != layers.end()) return found->second;
-    if (!create) return kUnlayered;
-    layers[name] = nextLayer;
-    return nextLayer++;
+  void RegisterLayer(const std::string& path) {
+    if (path.empty() || layerRank.count(path)) return;
+    layerRank[path] = -1;
+    const size_t dot = path.rfind('.');
+    const std::string parent = dot == std::string::npos ? "" : path.substr(0, dot);
+    RegisterLayer(parent);
+    layerChildren[parent].push_back(path);
+  }
+  void RankLayers() {
+    int counter = 0;
+    anonymousLayers = 0;
+    std::function<void(const std::string&)> visit = [&](const std::string& path) {
+      for (const std::string& child : layerChildren[path]) visit(child);
+      if (!path.empty()) layerRank[path] = counter++;
+    };
+    visit("");
+  }
+  std::string Child(const std::string& name) const { return layerPath.empty() ? name : layerPath + "." + name; }
+  int RankOf(const std::string& path) {
+    const auto found = layerRank.find(path);
+    return layerBase + (found == layerRank.end() ? 0 : found->second);
   }
 
   void Offer(const DeclarationEntry& entry, bool author, bool inlineStyle, int layer, Specificity spec) {
@@ -160,6 +182,7 @@ struct Gatherer {
     // Normal: user agent, author; important: author, user agent. Layers reverse for important declarations.
     candidate.origin = entry.important ? (author ? 2 : 3) : (author ? 1 : 0);
     candidate.layer = entry.important ? (layer == kUnlayered ? -1 : 1000000 - layer) : layer;
+    if (inlineStyle) candidate.layer = INT_MAX;  // element-attached styles come before the layers are looked at
     Winner& slot = winners[entry.name];
     if (Beats(candidate, slot)) {
       candidate.rest = std::move(slot.rest);
@@ -178,6 +201,11 @@ struct Gatherer {
   // apply as it does.
   void Rules(const std::vector<CssRule*>& rules, int layer, const Specificity* outer = nullptr) {
     for (CssRule* rule : rules) {
+      if (collecting && rule->kind == RuleKind::Scope) {
+        Rules(rule->rules, layer, outer);
+        continue;
+      }
+      if (collecting && (rule->kind == RuleKind::Style || rule->kind == RuleKind::NestedDeclarations)) continue;
       switch (rule->kind) {
         case RuleKind::NestedDeclarations:
           if (outer && rule->style) {
@@ -266,26 +294,34 @@ struct Gatherer {
           break;
         case RuleKind::Import: {
           CssStyleSheet* imported = rule->importedSheet;
-          if (!imported || imported->disabled) break;
+          if (imported && imported->disabled) break;
           if (rule->media && !MediaListMatches(rule->media->queries, media)) break;
           if (!rule->supportsText.empty() && !SupportsCondition(ParseComponentValues(rule->supportsText))) break;
+          const std::string savedPath = layerPath;
           int id = layer;
-          if (!rule->layerName.empty()) id = rule->layerName == "\x01" ? LayerId("\x01import" + std::to_string(order) + std::to_string(nextLayer), true) : LayerId(rule->layerName, true);
-          Rules(imported->rules, id);
+          if (!rule->layerName.empty()) {
+            layerPath = Child(rule->layerName == "\x01" ? "\x01" + std::to_string(++anonymousLayers) : rule->layerName);
+            if (collecting) RegisterLayer(layerPath);
+            id = RankOf(layerPath);
+          }
+          if (imported) Rules(imported->rules, id);
+          layerPath = savedPath;
           break;
         }
         case RuleKind::LayerBlock: {
-          const int id = rule->name.empty() ? LayerId("\x01" + std::to_string(order) + std::to_string(nextLayer), true) : LayerId(rule->name, true);
-          Rules(rule->rules, id, outer);
+          const std::string savedPath = layerPath;
+          layerPath = Child(rule->name.empty() ? "\x01" + std::to_string(++anonymousLayers) : rule->name);
+          if (collecting) RegisterLayer(layerPath);
+          Rules(rule->rules, RankOf(layerPath), outer);
+          layerPath = savedPath;
           break;
         }
         case RuleKind::LayerStatement: {
-          // The layers are ordered by where they are first named.
           size_t start = 0;
           const std::string& names = rule->layerName;
           while (start < names.size()) {
             size_t comma = names.find(", ", start);
-            LayerId(names.substr(start, comma == std::string::npos ? std::string::npos : comma - start), true);
+            if (collecting) RegisterLayer(Child(names.substr(start, comma == std::string::npos ? std::string::npos : comma - start)));
             if (comma == std::string::npos) break;
             start = comma + 2;
           }
@@ -444,7 +480,15 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
   while (treeRoot->parentNode) treeRoot = treeRoot->parentNode;
   if (treeRoot && (treeRoot->IsDocument() || treeRoot->IsFragment())) {
     if (treeRoot->IsFragment() && static_cast<dom::DocumentFragment*>(treeRoot)->isShadowRoot) gatherer.matchContext.host = static_cast<dom::DocumentFragment*>(treeRoot)->host;
-    for (CssStyleSheet* sheet : SheetsOfTree(treeRoot, element->nodeDocument ? element->nodeDocument->context : nullptr)) {
+    const std::vector<CssStyleSheet*> sheets = SheetsOfTree(treeRoot, element->nodeDocument ? element->nodeDocument->context : nullptr);
+    gatherer.collecting = true;
+    for (CssStyleSheet* sheet : sheets) {
+      if (sheet->disabled || !MediaListMatches(sheet->media ? sheet->media->queries : std::vector<std::string>(), gatherer.media)) continue;
+      gatherer.Rules(sheet->rules, kUnlayered);
+    }
+    gatherer.RankLayers();
+    gatherer.collecting = false;
+    for (CssStyleSheet* sheet : sheets) {
       if (sheet->disabled || !MediaListMatches(sheet->media ? sheet->media->queries : std::vector<std::string>(), gatherer.media)) continue;
       gatherer.Rules(sheet->rules, kUnlayered);
     }
@@ -455,9 +499,18 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
     inner.matchContext.host = element;
     inner.order = gatherer.order;
     inner.ruleSerial = gatherer.ruleSerial + 1000000;
-    for (CssStyleSheet* sheet : SheetsOfTree(element->shadowRoot, element->nodeDocument ? element->nodeDocument->context : nullptr)) {
+    const std::vector<CssStyleSheet*> sheets = SheetsOfTree(element->shadowRoot, element->nodeDocument ? element->nodeDocument->context : nullptr);
+    inner.hostScoped = true;
+    inner.layerBase = -1000000;
+    inner.collecting = true;
+    for (CssStyleSheet* sheet : sheets) {
       if (sheet->disabled || !MediaListMatches(sheet->media ? sheet->media->queries : std::vector<std::string>(), inner.media)) continue;
-      inner.hostScoped = true;
+      inner.Rules(sheet->rules, -1000);
+    }
+    inner.RankLayers();
+    inner.collecting = false;
+    for (CssStyleSheet* sheet : sheets) {
+      if (sheet->disabled || !MediaListMatches(sheet->media ? sheet->media->queries : std::vector<std::string>(), inner.media)) continue;
       inner.Rules(sheet->rules, -1000);
     }
   }
@@ -963,6 +1016,25 @@ const std::vector<std::string>& ComputedPropertyNames() {
     return list;
   }();
   return names;
+}
+
+MediaEnvironment EnvironmentFor(const dom::Document* document) {
+  MediaEnvironment environment = CurrentMediaEnvironment();
+  dom::Element* frame = document ? document->frameElement : nullptr;
+  if (!frame || !frame->nodeDocument || !frame->nodeDocument->context) return environment;
+  // The size of the frame: its width and height as the style gives them, or the attributes, or 300 by 150.
+  const auto size = [&](const char* property, double fallback) {
+    const std::string value = ComputedValue(*frame->nodeDocument->context, frame, property);
+    if (value.size() > 2 && value.compare(value.size() - 2, 2, "px") == 0) return std::atof(value.c_str());
+    if (const dom::Attr* attribute = frame->FindAttribute("", property)) {
+      const int parsed = std::atoi(attribute->value.c_str());
+      if (parsed > 0) return static_cast<double>(parsed);
+    }
+    return fallback;
+  };
+  environment.width = size("width", 300);
+  environment.height = size("height", 150);
+  return environment;
 }
 
 }  // namespace solar::css

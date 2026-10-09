@@ -153,7 +153,11 @@
       func = descriptionOrFunc;
       description = maybeDescription;
     }
-    const name = legacyNames[type] || type;
+    let name = legacyNames[type] || type;
+    if (typeof type === 'number') {
+      const key = Object.keys(legacyNames).find((k) => DOMException[k] === type);
+      if (key) name = legacyNames[key];
+    }
     try {
       func();
     } catch (e) {
@@ -338,8 +342,8 @@
   globalThis.__wptFinish = () => {
     for (const entry of unfinished) results.push({ name: entry.name, ok: false, message: 'the test never finished' });
     const failures = results.filter((r) => !r.ok);
-    for (const r of failures.slice(0, 15)) console.log('  FAIL ' + r.name + ': ' + r.message);
-    if (failures.length > 15) console.log('  ... and ' + (failures.length - 15) + ' more');
+    for (const r of failures.slice(0, globalThis.__allFailures ? 100000 : 15)) console.log('  FAIL ' + r.name + ': ' + r.message);
+    if (failures.length > (globalThis.__allFailures ? 100000 : 15)) console.log('  ... and ' + (failures.length - 15) + ' more');
     console.log(results.length - failures.length + '/' + results.length + ' passed' + (skipped ? ', ' + skipped + ' skipped' : ''));
     if (failures.length) throw new Error(failures.length + ' tests failed');
   };

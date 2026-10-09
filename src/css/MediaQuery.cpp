@@ -1,5 +1,6 @@
 #include "solar/css/MediaQuery.h"
 
+#include <algorithm>
 #include <cmath>
 #include <optional>
 
@@ -18,115 +19,163 @@ std::string Lower(std::string_view text) {
   return out;
 }
 
-// A feature value: a number, a length in px, a resolution in dppx, a ratio, or a keyword.
-struct Value {
-  enum class Kind { None, Number, Length, Resolution, Ratio, Keyword } kind = Kind::None;
-  double number = 0;
-  std::string keyword;
+// A media condition evaluates to true, false or unknown (css-mediaqueries-4, "evaluating media queries"): what is not understood is
+// unknown, which counts as false at the end but does not turn true by being negated.
+enum class Tri { False, True, Unknown };
+
+Tri Not(Tri t) { return t == Tri::Unknown ? Tri::Unknown : (t == Tri::True ? Tri::False : Tri::True); }
+Tri And(Tri a, Tri b) {
+  if (a == Tri::False || b == Tri::False) return Tri::False;
+  if (a == Tri::Unknown || b == Tri::Unknown) return Tri::Unknown;
+  return Tri::True;
+}
+Tri Or(Tri a, Tri b) {
+  if (a == Tri::True || b == Tri::True) return Tri::True;
+  if (a == Tri::Unknown || b == Tri::Unknown) return Tri::Unknown;
+  return Tri::False;
+}
+
+enum class FeatureType { None, Length, Ratio, Resolution, Integer, Keyword };
+
+struct FeatureInfo {
+  FeatureType type = FeatureType::None;
+  bool range = false;                  // may be compared with <, > and min- and max-
+  double number = 0;                   // the current value of a numeric feature
+  std::string keyword;                 // of a keyword feature
+  std::vector<const char*> keywords;   // the ones it can have
 };
 
-Value ParseValue(const ComponentValues& values) {
-  Value out;
-  const ComponentValues v = Trimmed(values);
-  if (v.empty()) return out;
-  if (v.size() == 1 && v[0].IsIdent()) {
-    out.kind = Value::Kind::Keyword;
-    out.keyword = Lower(v[0].token.value);
-    return out;
+FeatureInfo InfoOf(const std::string& name, const MediaEnvironment& e) {
+  FeatureInfo f;
+  const auto numeric = [&](FeatureType type, double value, bool range = true) {
+    f.type = type;
+    f.number = value;
+    f.range = range;
+  };
+  const auto keyword = [&](const char* current, std::vector<const char*> all) {
+    f.type = FeatureType::Keyword;
+    f.keyword = current;
+    f.keywords = std::move(all);
+  };
+  if (name == "width") numeric(FeatureType::Length, e.width);
+  else if (name == "device-width") numeric(FeatureType::Length, e.deviceWidth);
+  else if (name == "height") numeric(FeatureType::Length, e.height);
+  else if (name == "device-height") numeric(FeatureType::Length, e.deviceHeight);
+  else if (name == "aspect-ratio") numeric(FeatureType::Ratio, e.width / e.height);
+  else if (name == "device-aspect-ratio") numeric(FeatureType::Ratio, e.deviceWidth / e.deviceHeight);
+  else if (name == "resolution") numeric(FeatureType::Resolution, e.resolution);
+  else if (name == "color") numeric(FeatureType::Integer, 8);
+  else if (name == "color-index" || name == "monochrome") numeric(FeatureType::Integer, 0);
+  else if (name == "grid") numeric(FeatureType::Integer, 0, false);
+  else if (name == "scan") keyword("none", {"interlace", "progressive"});
+  else if (name == "orientation") keyword(e.width >= e.height ? "landscape" : "portrait", {"portrait", "landscape"});
+  else if (name == "hover" || name == "any-hover") keyword("hover", {"none", "hover"});
+  else if (name == "pointer" || name == "any-pointer") keyword("fine", {"none", "coarse", "fine"});
+  else if (name == "prefers-color-scheme") keyword(e.colorScheme == "dark" ? "dark" : "light", {"light", "dark"});
+  else if (name == "prefers-reduced-motion") keyword("no-preference", {"no-preference", "reduce"});
+  else if (name == "prefers-contrast") keyword("no-preference", {"no-preference", "more", "less", "custom"});
+  else if (name == "prefers-reduced-transparency") keyword("no-preference", {"no-preference", "reduce"});
+  else if (name == "prefers-reduced-data") keyword("no-preference", {"no-preference", "reduce"});
+  else if (name == "forced-colors") keyword("none", {"none", "active"});
+  else if (name == "inverted-colors") keyword("none", {"none", "inverted"});
+  else if (name == "scripting") keyword("enabled", {"none", "initial-only", "enabled"});
+  else if (name == "update") keyword("fast", {"none", "slow", "fast"});
+  else if (name == "overflow-block") keyword("scroll", {"none", "scroll", "paged"});
+  else if (name == "overflow-inline") keyword("scroll", {"none", "scroll"});
+  else if (name == "display-mode") keyword("browser", {"fullscreen", "standalone", "minimal-ui", "browser", "picture-in-picture", "window-controls-overlay"});
+  else if (name == "dynamic-range" || name == "video-dynamic-range") keyword("standard", {"standard", "high"});
+  else if (name == "color-gamut") keyword("srgb", {"srgb", "p3", "rec2020"});
+  return f;
+}
+
+// A <number>, optionally a calculation.
+std::optional<double> NumberOf(const ComponentValue& c) {
+  if (c.IsToken(T::Number)) return c.token.number;
+  if (c.kind == ComponentValue::Kind::Function && Lower(c.name) == "calc") {
+    const std::optional<MathValue> m = EvaluateNumeric(c);
+    if (m && m->kind == MathKind::Number) return m->value;
   }
-  // A ratio: a / b.
-  size_t slash = v.size();
-  for (size_t i = 0; i < v.size(); ++i) {
-    if (v[i].IsDelim('/')) slash = i;
+  return std::nullopt;
+}
+
+// The value of a feature of this type, in px, dppx or as the number it is; nothing if the text is not one.
+std::optional<double> ParseTyped(const ComponentValues& values, FeatureType type, const MediaEnvironment& e) {
+  std::vector<ComponentValue> v;
+  for (const ComponentValue& c : values) {
+    if (!c.IsWhitespace()) v.push_back(c);
   }
-  if (slash < v.size()) {
-    const std::optional<MathValue> a = EvaluateNumeric(Trimmed(ComponentValues(v.begin(), v.begin() + slash)).empty() ? v[0] : Trimmed(ComponentValues(v.begin(), v.begin() + slash))[0]);
-    const ComponentValues rest(v.begin() + slash + 1, v.end());
-    const ComponentValues rt = Trimmed(rest);
-    if (!a || rt.empty()) return out;
-    const std::optional<MathValue> b = EvaluateNumeric(rt[0]);
-    if (!b) return out;
-    out.kind = Value::Kind::Ratio;
-    out.number = b->value == 0 ? INFINITY : a->value / b->value;
-    return out;
-  }
-  const ComponentValue* first = nullptr;
-  for (const ComponentValue& c : v) {
-    if (!c.IsWhitespace()) { first = &c; break; }
-  }
-  if (!first) return out;
-  // em and rem are 16px here.
-  if (first->kind == ComponentValue::Kind::Token && first->token.type == T::Dimension) {
-    const std::string unit = Lower(first->token.value);
-    if (unit == "em" || unit == "rem") {
-      out.kind = Value::Kind::Length;
-      out.number = first->token.number * 16;
-      return out;
+  if (v.empty()) return std::nullopt;
+  switch (type) {
+    case FeatureType::Integer:
+      if (v.size() == 1 && v[0].IsToken(T::Number) && v[0].token.isInteger) return v[0].token.number;
+      return std::nullopt;
+    case FeatureType::Ratio: {
+      if (v.size() == 1) {
+        const std::optional<double> n = NumberOf(v[0]);
+        if (n && *n >= 0) return *n;
+        return std::nullopt;
+      }
+      if (v.size() == 3 && v[1].IsDelim('/')) {
+        const std::optional<double> a = NumberOf(v[0]), b = NumberOf(v[2]);
+        if (!a || !b || *a < 0 || *b < 0) return std::nullopt;
+        return *b == 0 ? (*a == 0 ? 0 : INFINITY) : *a / *b;
+      }
+      return std::nullopt;
     }
+    case FeatureType::Length: {
+      if (v.size() != 1) return std::nullopt;
+      const ComponentValue& c = v[0];
+      if (c.IsToken(T::Number)) return c.token.number == 0 ? std::optional<double>(0) : std::nullopt;
+      if (c.IsToken(T::Dimension)) {
+        const std::string unit = Lower(c.token.value);
+        const double n = c.token.number;
+        if (unit == "px") return n;
+        if (unit == "em" || unit == "rem") return n * 16;
+        if (unit == "ex" || unit == "ch" || unit == "rex" || unit == "rch") return n * 8;
+        if (unit == "cap" || unit == "rcap") return n * 11.2;
+        if (unit == "ic" || unit == "ric") return n * 16;
+        if (unit == "lh" || unit == "rlh") return n * 18.4;
+        if (unit == "in") return n * 96;
+        if (unit == "cm") return n * 96 / 2.54;
+        if (unit == "mm") return n * 96 / 25.4;
+        if (unit == "q") return n * 96 / 101.6;
+        if (unit == "pt") return n * 96 / 72;
+        if (unit == "pc") return n * 16;
+        if (unit == "vw" || unit == "svw" || unit == "lvw" || unit == "dvw" || unit == "vi") return n * e.width / 100;
+        if (unit == "vh" || unit == "svh" || unit == "lvh" || unit == "dvh" || unit == "vb") return n * e.height / 100;
+        if (unit == "vmin") return n * std::min(e.width, e.height) / 100;
+        if (unit == "vmax") return n * std::max(e.width, e.height) / 100;
+        return std::nullopt;
+      }
+      if (c.kind == ComponentValue::Kind::Function && Lower(c.name) == "calc") {
+        const std::optional<MathValue> m = EvaluateNumeric(c);
+        if (m && m->kind == MathKind::Length) return m->value;
+      }
+      return std::nullopt;
+    }
+    case FeatureType::Resolution: {
+      if (v.size() != 1) return std::nullopt;
+      const ComponentValue& c = v[0];
+      if (c.IsToken(T::Dimension)) {
+        const std::string unit = Lower(c.token.value);
+        const double n = c.token.number;
+        if (n < 0) return std::nullopt;
+        if (unit == "dppx" || unit == "x") return n;
+        if (unit == "dpi") return n / 96;
+        if (unit == "dpcm") return n * 2.54 / 96;
+        return std::nullopt;
+      }
+      if (c.kind == ComponentValue::Kind::Function && Lower(c.name) == "calc") {
+        const std::optional<MathValue> m = EvaluateNumeric(c);
+        if (m && m->kind == MathKind::Resolution) return m->value;
+      }
+      return std::nullopt;
+    }
+    default: return std::nullopt;
   }
-  const std::optional<MathValue> m = EvaluateNumeric(*first);
-  if (!m) return out;
-  switch (m->kind) {
-    case MathKind::Number: out.kind = Value::Kind::Number; break;
-    case MathKind::Length: out.kind = Value::Kind::Length; break;
-    case MathKind::Resolution: out.kind = Value::Kind::Resolution; break;
-    default: return out;
-  }
-  out.number = m->value;
-  return out;
 }
 
-// The value a feature has here; kind None for a feature this engine does not know.
-Value FeatureValue(const std::string& name, const MediaEnvironment& e) {
-  Value v;
-  const auto number = [&](double n) { v.kind = Value::Kind::Number; v.number = n; };
-  const auto length = [&](double n) { v.kind = Value::Kind::Length; v.number = n; };
-  const auto keyword = [&](const char* k) { v.kind = Value::Kind::Keyword; v.keyword = k; };
-  if (name == "width") length(e.width);
-  else if (name == "height") length(e.height);
-  else if (name == "device-width") length(e.width);
-  else if (name == "device-height") length(e.height);
-  else if (name == "aspect-ratio" || name == "device-aspect-ratio") { v.kind = Value::Kind::Ratio; v.number = e.width / e.height; }
-  else if (name == "orientation") keyword(e.width >= e.height ? "landscape" : "portrait");
-  else if (name == "resolution") { v.kind = Value::Kind::Resolution; v.number = e.resolution; }
-  else if (name == "color") number(8);
-  else if (name == "color-index") number(0);
-  else if (name == "monochrome") number(0);
-  else if (name == "grid") number(0);
-  else if (name == "hover" || name == "any-hover") keyword("hover");
-  else if (name == "pointer" || name == "any-pointer") keyword("fine");
-  else if (name == "prefers-color-scheme") keyword(e.colorScheme == "dark" ? "dark" : "light");
-  else if (name == "prefers-reduced-motion") keyword("no-preference");
-  else if (name == "prefers-contrast") keyword("no-preference");
-  else if (name == "prefers-reduced-transparency") keyword("no-preference");
-  else if (name == "prefers-reduced-data") keyword("no-preference");
-  else if (name == "forced-colors") keyword("none");
-  else if (name == "inverted-colors") keyword("none");
-  else if (name == "scripting") keyword("enabled");
-  else if (name == "update") keyword("fast");
-  else if (name == "overflow-block") keyword("scroll");
-  else if (name == "overflow-inline") keyword("scroll");
-  else if (name == "display-mode") keyword("browser");
-  else if (name == "dynamic-range" || name == "video-dynamic-range") keyword("standard");
-  else if (name == "color-gamut") keyword("srgb");
-  return v;
-}
-
-bool IsRangeFeature(const std::string& name) {
-  static const char* const names[] = {"width", "height", "aspect-ratio", "resolution", "color", "color-index", "monochrome", "device-width", "device-height", "device-aspect-ratio", "grid"};
-  for (const char* n : names) {
-    if (name == n) return true;
-  }
-  return false;
-}
-
-// Whether `value` compares to `current` by `op`.
-bool Compare(const Value& current, const std::string& op, const Value& wanted) {
-  if (current.kind == Value::Kind::Keyword) return wanted.kind == Value::Kind::Keyword && op == "=" && current.keyword == wanted.keyword;
-  // A bare zero length is also a number.
-  const bool numeric = (current.kind == wanted.kind) || (current.kind == Value::Kind::Length && wanted.kind == Value::Kind::Number && wanted.number == 0);
-  if (!numeric) return false;
-  const double a = current.number, b = wanted.number;
+bool Compare(double a, const std::string& op, double b) {
   if (op == "=") return a == b;
   if (op == "<") return a < b;
   if (op == "<=") return a <= b;
@@ -143,93 +192,122 @@ std::string Flip(const std::string& op) {
   return op;
 }
 
-// One (feature) in parentheses.
-std::optional<bool> Feature(const ComponentValues& inner, const MediaEnvironment& e) {
-  ComponentValues v = Trimmed(inner);
-  // (name), (name: value), (min-name: value), (a < name <= b), (name >= value).
+// A feature on its own is true unless its value is zero or none.
+Tri BooleanContext(const FeatureInfo& f) {
+  if (f.type == FeatureType::Keyword) return f.keyword != "none" && f.keyword != "no-preference" ? Tri::True : Tri::False;
+  return f.number != 0 ? Tri::True : Tri::False;
+}
+
+// The inside of a pair of parentheses taken as a media feature; whatever it is not, it is "general enclosed": unknown.
+Tri Feature(const ComponentValues& inner, const MediaEnvironment& e) {
+  const ComponentValues raw = Trimmed(inner);
   std::vector<ComponentValue> items;
-  for (const ComponentValue& c : v) {
+  for (const ComponentValue& c : raw) {
     if (!c.IsWhitespace()) items.push_back(c);
   }
-  if (items.empty()) return std::nullopt;
+  if (items.empty()) return Tri::Unknown;
   if (items.size() == 1 && items[0].IsIdent()) {
-    const std::string name = Lower(items[0].token.value);
-    const Value current = FeatureValue(name, e);
-    if (current.kind == Value::Kind::None) return false;
-    if (current.kind == Value::Kind::Keyword) return current.keyword != "none";
-    return current.number != 0;
+    const FeatureInfo f = InfoOf(Lower(items[0].token.value), e);
+    return f.type == FeatureType::None ? Tri::Unknown : BooleanContext(f);
   }
-  // Mapping to comparisons: find operators.
-  std::vector<std::pair<size_t, std::string>> operators;
-  for (size_t i = 0; i < items.size(); ++i) {
-    if (items[i].IsDelim('<') || items[i].IsDelim('>') || items[i].IsDelim('=')) {
-      std::string op(1, static_cast<char>(items[i].token.delim));
-      if (op != "=" && i + 1 < items.size() && items[i + 1].IsDelim('=')) {
-        op += "=";
-        operators.emplace_back(i, op);
+  // name : value
+  if (items.size() >= 3 && items[0].IsIdent() && items[1].IsToken(T::Colon)) {
+    std::string name = Lower(items[0].token.value);
+    std::string op = "=";
+    if (name.starts_with("min-")) {
+      op = ">=";
+      name = name.substr(4);
+    } else if (name.starts_with("max-")) {
+      op = "<=";
+      name = name.substr(4);
+    }
+    const FeatureInfo f = InfoOf(name, e);
+    if (f.type == FeatureType::None || (op != "=" && !f.range)) return Tri::Unknown;
+    const ComponentValues value(items.begin() + 2, items.end());
+    if (f.type == FeatureType::Keyword) {
+      if (value.size() != 1 || !value[0].IsIdent()) return Tri::Unknown;
+      const std::string wanted = Lower(value[0].token.value);
+      for (const char* k : f.keywords) {
+        if (wanted == k) return f.keyword == wanted ? Tri::True : Tri::False;
+      }
+      return Tri::Unknown;
+    }
+    const std::optional<double> wanted = ParseTyped(value, f.type, e);
+    if (!wanted) return Tri::Unknown;
+    if (name == "grid" && *wanted != 0 && *wanted != 1) return Tri::Unknown;
+    return Compare(f.number, op, *wanted) ? Tri::True : Tri::False;
+  }
+  // Range syntax: the operators are < <= > >= = and the two characters of <= and >= are written together.
+  struct Operator {
+    size_t at;  // in raw
+    std::string text;
+  };
+  std::vector<Operator> operators;
+  for (size_t i = 0; i < raw.size(); ++i) {
+    if (raw[i].IsDelim('<') || raw[i].IsDelim('>') || raw[i].IsDelim('=')) {
+      std::string text(1, static_cast<char>(raw[i].token.delim));
+      if (text != "=" && i + 1 < raw.size() && raw[i + 1].IsDelim('=')) {
+        text += "=";
+        operators.push_back({i, text});
         ++i;
       } else {
-        operators.emplace_back(i, op);
+        operators.push_back({i, text});
       }
     }
   }
-  if (operators.empty()) {
-    // name : value
-    if (items.size() < 3 || !items[0].IsIdent() || !items[1].IsToken(T::Colon)) return std::nullopt;
-    std::string name = Lower(items[0].token.value);
-    std::string op = "=";
-    if (name.starts_with("min-")) { op = ">="; name = name.substr(4); }
-    else if (name.starts_with("max-")) { op = "<="; name = name.substr(4); }
-    if (op != "=" && !IsRangeFeature(name)) return false;
-    const Value current = FeatureValue(name, e);
-    if (current.kind == Value::Kind::None) return false;
-    const Value wanted = ParseValue(ComponentValues(items.begin() + 2, items.end()));
-    if (wanted.kind == Value::Kind::None) return false;
-    // A keyword feature compares to a keyword.
-    return Compare(current, op, wanted);
-  }
-  // Range syntax: [value op] name [op value].
-  const auto identAt = [&](size_t i) { return i < items.size() && items[i].IsIdent(); };
+  if (operators.empty() || operators.size() > 2) return Tri::Unknown;
+  const auto section = [&](size_t from, size_t to) {
+    ComponentValues out;
+    for (size_t i = from; i < to; ++i) {
+      if (!raw[i].IsWhitespace()) out.push_back(raw[i]);
+    }
+    return out;
+  };
+  const auto endOf = [&](const Operator& o) { return o.at + o.text.size(); };
+  const auto nameOf = [&](const ComponentValues& v) -> std::optional<FeatureInfo> {
+    if (v.size() != 1 || !v[0].IsIdent()) return std::nullopt;
+    const FeatureInfo f = InfoOf(Lower(v[0].token.value), e);
+    if (f.type == FeatureType::None || !f.range) return std::nullopt;
+    return f;
+  };
   if (operators.size() == 1) {
-    const size_t at = operators[0].first;
-    const size_t opLen = operators[0].second.size();
-    if (at == 1 && identAt(0)) {
-      const Value current = FeatureValue(Lower(items[0].token.value), e);
-      const Value wanted = ParseValue(ComponentValues(items.begin() + 1 + opLen, items.end()));
-      if (current.kind == Value::Kind::None || wanted.kind == Value::Kind::None) return false;
-      return Compare(current, operators[0].second, wanted);
+    const ComponentValues left = section(0, operators[0].at), right = section(endOf(operators[0]), raw.size());
+    if (left.empty() || right.empty()) return Tri::Unknown;
+    if (const std::optional<FeatureInfo> f = nameOf(left)) {
+      const std::optional<double> wanted = ParseTyped(right, f->type, e);
+      return wanted ? (Compare(f->number, operators[0].text, *wanted) ? Tri::True : Tri::False) : Tri::Unknown;
     }
-    if (at + opLen == items.size() - 1 && identAt(at + opLen)) {
-      const Value current = FeatureValue(Lower(items[at + opLen].token.value), e);
-      const Value wanted = ParseValue(ComponentValues(items.begin(), items.begin() + at));
-      if (current.kind == Value::Kind::None || wanted.kind == Value::Kind::None) return false;
-      return Compare(current, Flip(operators[0].second), wanted);
+    if (const std::optional<FeatureInfo> f = nameOf(right)) {
+      const std::optional<double> wanted = ParseTyped(left, f->type, e);
+      return wanted ? (Compare(f->number, Flip(operators[0].text), *wanted) ? Tri::True : Tri::False) : Tri::Unknown;
     }
-    return std::nullopt;
+    return Tri::Unknown;
   }
-  if (operators.size() == 2 && identAt(operators[0].first + operators[0].second.size())) {
-    const size_t nameAt = operators[0].first + operators[0].second.size();
-    const Value current = FeatureValue(Lower(items[nameAt].token.value), e);
-    const Value low = ParseValue(ComponentValues(items.begin(), items.begin() + operators[0].first));
-    const Value high = ParseValue(ComponentValues(items.begin() + operators[1].first + operators[1].second.size(), items.end()));
-    if (current.kind == Value::Kind::None || low.kind == Value::Kind::None || high.kind == Value::Kind::None) return false;
-    return Compare(current, Flip(operators[0].second), low) && Compare(current, operators[1].second, high);
-  }
-  return std::nullopt;
+  // value op name op value: both go the same way, and neither is =.
+  const std::string &a = operators[0].text, &b = operators[1].text;
+  const bool less = (a == "<" || a == "<=") && (b == "<" || b == "<=");
+  const bool greater = (a == ">" || a == ">=") && (b == ">" || b == ">=");
+  if (!less && !greater) return Tri::Unknown;
+  const ComponentValues low = section(0, operators[0].at), middle = section(endOf(operators[0]), operators[1].at), high = section(endOf(operators[1]), raw.size());
+  const std::optional<FeatureInfo> f = nameOf(middle);
+  if (!f) return Tri::Unknown;
+  const std::optional<double> first = ParseTyped(low, f->type, e), second = ParseTyped(high, f->type, e);
+  if (!first || !second) return Tri::Unknown;
+  return Compare(f->number, Flip(a), *first) && Compare(f->number, b, *second) ? Tri::True : Tri::False;
 }
 
-std::optional<bool> Condition(const ComponentValues& values, const MediaEnvironment& e);
+std::optional<Tri> Condition(const ComponentValues& values, const MediaEnvironment& e);
 
-std::optional<bool> InParens(const ComponentValue& v, const MediaEnvironment& e) {
+std::optional<Tri> InParens(const ComponentValue& v, const MediaEnvironment& e) {
   if (v.IsBlock(T::LeftParen)) {
-    if (std::optional<bool> nested = Condition(v.children, e)) return nested;
+    if (std::optional<Tri> nested = Condition(v.children, e)) return nested;
     return Feature(v.children, e);
   }
-  if (v.kind == ComponentValue::Kind::Function) return false;  // general-enclosed
+  if (v.kind == ComponentValue::Kind::Function) return Tri::Unknown;  // general-enclosed
   return std::nullopt;
 }
 
-std::optional<bool> Condition(const ComponentValues& values, const MediaEnvironment& e) {
+std::optional<Tri> Condition(const ComponentValues& values, const MediaEnvironment& e) {
   std::vector<ComponentValue> items;
   for (const ComponentValue& c : values) {
     if (!c.IsWhitespace()) items.push_back(c);
@@ -238,20 +316,20 @@ std::optional<bool> Condition(const ComponentValues& values, const MediaEnvironm
   const auto word = [&](size_t i) { return i < items.size() && items[i].IsIdent() ? Lower(items[i].token.value) : std::string(); };
   if (word(0) == "not") {
     if (items.size() != 2) return std::nullopt;
-    const std::optional<bool> inner = InParens(items[1], e);
+    const std::optional<Tri> inner = InParens(items[1], e);
     if (!inner) return std::nullopt;
-    return !*inner;
+    return Not(*inner);
   }
-  std::optional<bool> result = InParens(items[0], e);
+  std::optional<Tri> result = InParens(items[0], e);
   if (!result) return std::nullopt;
   std::string op;
   for (size_t i = 1; i < items.size(); i += 2) {
     const std::string w = word(i);
     if ((w != "and" && w != "or") || (!op.empty() && op != w) || i + 1 >= items.size()) return std::nullopt;
     op = w;
-    const std::optional<bool> next = InParens(items[i + 1], e);
+    const std::optional<Tri> next = InParens(items[i + 1], e);
     if (!next) return std::nullopt;
-    result = w == "and" ? (*result && *next) : (*result || *next);
+    result = w == "and" ? And(*result, *next) : Or(*result, *next);
   }
   return result;
 }
@@ -286,7 +364,7 @@ bool MediaQueryMatches(const std::string& query, const MediaEnvironment& e) {
       ++i;
     }
   }
-  std::optional<bool> conditionMatches = true;
+  Tri condition = Tri::True;
   if (i < items.size()) {
     ComponentValues rest(items.begin() + i, items.end());
     if (hasType) {
@@ -294,11 +372,13 @@ bool MediaQueryMatches(const std::string& query, const MediaEnvironment& e) {
       if (!items[i].IsIdent() || Lower(items[i].token.value) != "and") return false;
       rest.erase(rest.begin());
     }
-    conditionMatches = Condition(rest, e);
-    if (!conditionMatches) return false;
+    const std::optional<Tri> parsed = Condition(rest, e);
+    if (!parsed) return false;
+    condition = *parsed;
   }
-  const bool matches = typeMatches && *conditionMatches;
-  return negated ? !matches : matches;
+  Tri result = And(typeMatches ? Tri::True : Tri::False, condition);
+  if (negated) result = Not(result);
+  return result == Tri::True;
 }
 
 bool MediaListMatches(const std::vector<std::string>& queries, const MediaEnvironment& e) {

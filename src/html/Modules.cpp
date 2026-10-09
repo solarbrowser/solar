@@ -236,6 +236,11 @@ bool ReadStringMap(Context& ctx, const Value& object, std::vector<std::pair<std:
 
 }  // namespace
 
+std::optional<std::string> DecodeDataUrlText(const std::string& address) {
+  if (auto data = DecodeDataUrl(address)) return std::move(data->first);
+  return std::nullopt;
+}
+
 std::string InlineModuleUrl(dom::Document* document) {
   static uint64_t counter = 0;
   return DocumentBaseUrl(document) + kInlineMarker + std::to_string(++counter);

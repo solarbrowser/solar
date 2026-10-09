@@ -65,6 +65,7 @@ std::optional<std::string> LoadResource(const std::string& url) {
     if (auto blob = web::LookupBlobUrl(url)) return *blob->data;
     return std::nullopt;
   }
+  if (url.starts_with("data:")) return DecodeDataUrlText(url);
   return g_environment ? g_environment->Load(url) : std::nullopt;
 }
 
@@ -404,6 +405,22 @@ void UpdateLink(dom::Element* link) {
   QueueTask(document, "link load", link, [link] { FireEvent(*link->nodeDocument->context, link, "load"); });
 }
 
+// "update a style block" for a style element: its text parsed, its imports loaded, then load follows as a task.
+void UpdateStyle(dom::Element* style) {
+  dom::Document* document = style->nodeDocument;
+  Context& ctx = *document->context;
+  css::UpdateStyleElement(ctx, style);
+  if (!style->styleSheet || !g_environment) return;
+  css::CssStyleSheet* sheet = static_cast<css::CssStyleSheet*>(style->styleSheet);
+  bool imports = false;
+  for (const css::CssRule* rule : sheet->rules) imports = imports || rule->kind == css::RuleKind::Import;
+  if (imports) {
+    css::ProcessImports(ctx, sheet, [](const std::string& url) { return LoadResource(url); });
+    css::NoteStyleChange();
+  }
+  QueueTask(document, "style load", style, [style] { FireEvent(*style->nodeDocument->context, style, "load"); });
+}
+
 }  // namespace
 
 void AfterInsert(dom::Node* node) {
@@ -411,7 +428,7 @@ void AfterInsert(dom::Node* node) {
   dom::Node* root = dom::ShadowIncludingRoot(node);
   if (!root || !root->IsDocument()) return;
   for (dom::Element* style : HtmlElementsIn(node, "style")) {
-    if (style->nodeDocument && style->nodeDocument->context) css::UpdateStyleElement(*style->nodeDocument->context, style);
+    if (style->nodeDocument && style->nodeDocument->context) UpdateStyle(style);
   }
   for (dom::Element* link : HtmlElementsIn(node, "link")) UpdateLink(link);
   for (dom::Element* meta : HtmlElementsIn(node, "meta")) {
@@ -432,7 +449,7 @@ void AfterRemove(dom::Node* node, bool) {
   if (!node->IsElement()) return;
   dom::Document* document = node->nodeDocument;
   for (dom::Element* style : HtmlElementsIn(node, "style")) {
-    if (style->nodeDocument && style->nodeDocument->context) css::UpdateStyleElement(*style->nodeDocument->context, style);
+    if (style->nodeDocument && style->nodeDocument->context) UpdateStyle(style);
   }
   for (dom::Element* link : HtmlElementsIn(node, "link")) {
     link->styleSheet = nullptr;
@@ -472,7 +489,7 @@ void AttributeChanged(dom::Element* element, const std::string& name) {
     UpdateLink(element);
   }
   if (element->IsHtml("style") && (name == "media" || name == "type" || name == "title") && element->nodeDocument && element->nodeDocument->context) {
-    css::UpdateStyleElement(*element->nodeDocument->context, element);
+    UpdateStyle(element);
   }
   if (!IsIframe(element) || (name != "src" && name != "srcdoc")) return;
   dom::Node* root = dom::ShadowIncludingRoot(element);
@@ -605,7 +622,7 @@ bool LoadPageIn(Quanta::Embed::Realm& realm, dom::Document* document, const std:
 // The text of a style element changed: its sheet is made again.
 void ChildrenChanged(dom::Node* parent) {
   dom::Element* element = dom::AsElement(parent);
-  if (element && element->IsHtml("style") && element->nodeDocument && element->nodeDocument->context) css::UpdateStyleElement(*element->nodeDocument->context, element);
+  if (element && element->IsHtml("style") && element->nodeDocument && element->nodeDocument->context) UpdateStyle(element);
 }
 
 void InstallFrameHooks() {
