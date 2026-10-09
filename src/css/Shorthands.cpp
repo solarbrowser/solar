@@ -334,7 +334,239 @@ bool ExpandBorderRadius(const PropertyDefinition& property, const ComponentValue
   return true;
 }
 
+// Whether `text` is a value of the longhand.
+bool ValidFor(const char* longhand, const std::string& text) {
+  const PropertyDefinition* property = FindProperty(longhand);
+  ValueMatch match;
+  return property && MatchPropertyValue(*property, Trimmed(ParseComponentValues(text)), match);
+}
+
+// A line that is one name: an identifier, not auto and not a number.
+bool IsGridName(const std::string& text) {
+  if (text.empty() || text.find(' ') != std::string::npos || text == "auto") return false;
+  const char c = text[0];
+  if (std::isdigit(static_cast<unsigned char>(c))) return false;
+  if ((c == '-' || c == '+') && text.size() > 1 && (std::isdigit(static_cast<unsigned char>(text[1])) || text[1] == '.')) return false;
+  return true;
+}
+
+// ---- grid-template and grid ----
+
+std::vector<ComponentValue> NonSpace(const ComponentValues& values) {
+  std::vector<ComponentValue> out;
+  for (const ComponentValue& v : values) {
+    if (!v.IsWhitespace()) out.push_back(v);
+  }
+  return out;
+}
+
+bool IsNames(const ComponentValue& v) { return v.IsBlock(T::LeftBracket); }
+
+// The names inside a [ ] block, as the words they are.
+std::vector<std::string> NamesIn(const ComponentValue& v) {
+  std::vector<std::string> names;
+  for (const ComponentValue& child : v.children) {
+    if (child.IsIdent()) names.push_back(SerializeIdentifier(child.token.value));
+  }
+  return names;
+}
+
+std::string NamesText(const std::vector<std::string>& names) {
+  if (names.empty()) return "";
+  std::string out = "[";
+  for (size_t i = 0; i < names.size(); ++i) out += (i ? " " : "") + names[i];
+  return out + "]";
+}
+
+struct GridTemplate {
+  std::string rows = "none", columns = "none", areas = "none";
+};
+
+// grid-template: none, rows / columns, or the area strings with their tracks.
+std::optional<GridTemplate> ParseGridTemplate(const ComponentValues& values) {
+  const std::vector<ComponentValue> items = NonSpace(values);
+  GridTemplate result;
+  if (items.size() == 1 && items[0].IsIdent() && Lower(items[0].token.value) == "none") return result;
+  size_t slash = items.size();
+  for (size_t i = 0; i < items.size(); ++i) {
+    if (items[i].IsDelim('/')) {
+      slash = i;
+      break;
+    }
+  }
+  const std::vector<ComponentValue> left(items.begin(), items.begin() + slash);
+  const std::vector<ComponentValue> right = slash < items.size() ? std::vector<ComponentValue>(items.begin() + slash + 1, items.end()) : std::vector<ComponentValue>();
+  bool hasStrings = false;
+  for (const ComponentValue& v : left) hasStrings = hasStrings || v.IsToken(T::String);
+  if (!hasStrings) {
+    if (slash == items.size() || left.empty() || right.empty()) return std::nullopt;
+    result.rows = SerializeValue(left);
+    result.columns = SerializeValue(right);
+    if (!ValidFor("grid-template-rows", result.rows) || !ValidFor("grid-template-columns", result.columns)) return std::nullopt;
+    return result;
+  }
+  // [names]? "string" track? [names]? ... : the rows' tracks keep the names between them.
+  std::string rows, areas;
+  std::vector<std::string> pending;
+  bool first = true;
+  size_t i = 0;
+  const auto flushNames = [&] {
+    if (!pending.empty()) {
+      rows += (rows.empty() ? "" : " ") + NamesText(pending);
+      pending.clear();
+    }
+  };
+  while (i < left.size()) {
+    if (i < left.size() && IsNames(left[i])) {
+      for (const std::string& n : NamesIn(left[i])) pending.push_back(n);
+      ++i;
+    }
+    if (i >= left.size() || !left[i].IsToken(T::String)) return std::nullopt;
+    flushNames();
+    areas += (areas.empty() ? "" : " ") + SerializeString(left[i].token.value);
+    ++i;
+    // The track: auto unless one is written.
+    std::string track = "auto";
+    if (i < left.size() && !IsNames(left[i]) && !left[i].IsToken(T::String)) {
+      track = SerializeValue({left[i]});
+      if (track == "none") return std::nullopt;
+      ++i;
+    }
+    rows += (rows.empty() ? "" : " ") + track;
+    first = false;
+    // Names after the track belong to the line after it; they are held for the next row (or the end).
+    if (i < left.size() && IsNames(left[i])) {
+      for (const std::string& n : NamesIn(left[i])) pending.push_back(n);
+      ++i;
+    }
+  }
+  (void)first;
+  flushNames();
+  result.rows = rows;
+  result.areas = areas;
+  if (!right.empty()) {
+    result.columns = SerializeValue(right);
+    if (result.columns == "none") return std::nullopt;
+  } else if (slash < items.size()) return std::nullopt;
+  if (!ValidFor("grid-template-rows", result.rows) || !ValidFor("grid-template-columns", result.columns) || !ValidFor("grid-template-areas", result.areas)) return std::nullopt;
+  return result;
+}
+
+std::optional<std::string> SerializeGridTemplate(const std::string& rows, const std::string& columns, const std::string& areas) {
+  if (areas == "none") {
+    if (rows == "none" && columns == "none") return std::string("none");
+    return rows + " / " + columns;
+  }
+  // The strings, each with its track and the names around them.
+  std::vector<std::string> strings;
+  for (const ComponentValue& v : ParseComponentValues(areas)) {
+    if (v.IsToken(T::String)) strings.push_back(SerializeString(v.token.value));
+  }
+  std::vector<ComponentValue> tokens = NonSpace(ParseComponentValues(rows));
+  std::vector<std::string> leading, trailing(strings.size() + 1);
+  std::vector<std::string> tracks;
+  std::vector<std::string> names;
+  for (const ComponentValue& v : tokens) {
+    if (IsNames(v)) {
+      for (const std::string& n : NamesIn(v)) names.push_back(n);
+    } else if (v.kind == ComponentValue::Kind::Function && Lower(v.name) == "repeat") {
+      return std::nullopt;
+    } else {
+      if (tracks.empty()) leading = names;
+      else trailing[tracks.size() - 1] = NamesText(names);
+      names.clear();
+      tracks.push_back(SerializeValue({v}));
+    }
+  }
+  if (tracks.size() != strings.size() || (!tracks.empty() && tracks[0] == "none")) return std::nullopt;
+  if (!tracks.empty()) trailing[tracks.size() - 1] = NamesText(names);
+  std::string out;
+  for (size_t i = 0; i < strings.size(); ++i) {
+    std::string row;
+    if (i == 0 && !leading.empty()) row += NamesText(leading) + " ";
+    row += strings[i];
+    if (tracks[i] != "auto") row += " " + tracks[i];
+    if (!trailing[i].empty()) row += " " + trailing[i];
+    out += (out.empty() ? "" : " ") + row;
+  }
+  if (columns != "none") out += " / " + columns;
+  return out;
+}
+
+// grid: a template, or an implicit grid in one direction.
+bool ExpandGrid(const PropertyDefinition& property, const ComponentValues& values, std::vector<Longhand>& out) {
+  const auto emit = [&](const GridTemplate& t, const std::string& autoRows, const std::string& autoColumns, const std::string& flow) {
+    ExpandLonghand("grid-template-rows", t.rows, out);
+    ExpandLonghand("grid-template-columns", t.columns, out);
+    ExpandLonghand("grid-template-areas", t.areas, out);
+    ExpandLonghand("grid-auto-rows", autoRows, out);
+    ExpandLonghand("grid-auto-columns", autoColumns, out);
+    ExpandLonghand("grid-auto-flow", flow, out);
+  };
+  (void)property;
+  if (std::optional<GridTemplate> t = ParseGridTemplate(values)) {
+    emit(*t, "auto", "auto", "row");
+    return true;
+  }
+  const std::vector<ComponentValue> items = NonSpace(values);
+  size_t slash = items.size();
+  for (size_t i = 0; i < items.size(); ++i) {
+    if (items[i].IsDelim('/')) {
+      slash = i;
+      break;
+    }
+  }
+  if (slash == items.size()) return false;
+  std::vector<ComponentValue> left(items.begin(), items.begin() + slash), right(items.begin() + slash + 1, items.end());
+  const auto isWord = [](const ComponentValue& v, const char* word) { return v.IsIdent() && Lower(v.token.value) == word; };
+  // [ auto-flow && dense? ] and what is left of the side.
+  const auto flowSide = [&](const std::vector<ComponentValue>& side, bool& dense, std::string& rest) {
+    bool autoFlow = false;
+    dense = false;
+    std::vector<ComponentValue> remaining;
+    for (const ComponentValue& v : side) {
+      if (isWord(v, "auto-flow") && !autoFlow) autoFlow = true;
+      else if (isWord(v, "dense") && !dense) dense = true;
+      else remaining.push_back(v);
+    }
+    rest = remaining.empty() ? "auto" : SerializeValue(remaining);
+    return autoFlow;
+  };
+  bool dense;
+  std::string rest;
+  if (!right.empty() && flowSide(right, dense, rest)) {
+    // rows / auto-flow dense? auto-columns?
+    GridTemplate t;
+    t.rows = SerializeValue(left);
+    emit(t, "auto", rest, dense ? "column dense" : "column");
+    return !left.empty();
+  }
+  if (!left.empty() && flowSide(left, dense, rest)) {
+    GridTemplate t;
+    t.columns = SerializeValue(right);
+    emit(t, rest, "auto", dense ? "row dense" : "row");
+    return !right.empty();
+  }
+  return false;
+}
+
 bool ExpandShorthand(const PropertyDefinition& property, const ComponentValues& values, std::vector<Longhand>& out) {
+  if (property.name == std::string("grid-template")) {
+    std::optional<GridTemplate> t = ParseGridTemplate(values);
+    if (!t) return false;
+    std::vector<Longhand> mine;
+    ExpandLonghand("grid-template-rows", t->rows, mine);
+    ExpandLonghand("grid-template-columns", t->columns, mine);
+    ExpandLonghand("grid-template-areas", t->areas, mine);
+    for (Longhand& l : mine) out.push_back(std::move(l));
+    return true;
+  }
+  if (property.name == std::string("grid")) {
+    std::vector<Longhand> mine;
+    if (!ExpandGrid(property, values, mine)) return false;
+    for (Longhand& l : mine) out.push_back(std::move(l));
+    return true;
+  }
   ValueMatch match;
   if (!MatchPropertyValue(property, values, match)) return false;
   const ComponentValues& items = match.normalized;
@@ -387,7 +619,7 @@ bool ExpandShorthand(const PropertyDefinition& property, const ComponentValues& 
       const std::string& source = property.longhands[from];
       const auto it = taken.find(source);
       const std::string named = it != taken.end() ? it->second : "";
-      const bool isName = !named.empty() && named.find(' ') == std::string::npos && !std::isdigit(static_cast<unsigned char>(named[0])) && named[0] != '-' && named != "auto";
+      const bool isName = IsGridName(named);
       text = isName ? named : "auto";
     } else if (const PropertyDefinition* l = FindProperty(longhand)) {
       text = InitialValueText(*l);
@@ -601,10 +833,43 @@ std::optional<std::string> SerializeShorthand(const PropertyDefinition& shorthan
         candidate += (l ? ", " : "") + layer;
       }
     }
+  } else if (name == "grid-template") {
+    if (n != 3) return std::nullopt;
+    const std::optional<std::string> text = SerializeGridTemplate(input.values[0], input.values[1], input.values[2]);
+    if (!text) return std::nullopt;
+    candidate = *text;
+  } else if (name == "grid") {
+    if (n != 6) return std::nullopt;
+    // rows, columns, areas, auto-rows, auto-columns, auto-flow
+    const std::string &rows = input.values[0], &columns = input.values[1], &areas = input.values[2], &autoRows = input.values[3], &autoColumns = input.values[4], &flow = input.values[5];
+    std::vector<std::string> tries;
+    if (autoRows == "auto" && autoColumns == "auto" && flow == "row") {
+      if (const auto t = SerializeGridTemplate(rows, columns, areas)) tries.push_back(*t);
+    }
+    if (areas == "none" && columns == "none" && autoRows == "auto" && flow.rfind("column", 0) == 0) {
+      tries.push_back(rows + " / auto-flow" + (flow.find("dense") != std::string::npos ? " dense" : "") + (autoColumns == "auto" ? "" : " " + autoColumns));
+    }
+    if (areas == "none" && rows == "none" && autoColumns == "auto" && (flow == "dense" || flow.rfind("row", 0) == 0)) {
+      tries.push_back(std::string("auto-flow") + (flow.find("dense") != std::string::npos ? " dense" : "") + (autoRows == "auto" ? "" : " " + autoRows) + " / " + columns);
+    }
+    std::map<std::string, std::string> wantedLeaves;
+    for (size_t i = 0; i < n; ++i) {
+      for (const auto& [leaf, value] : LeafMap(shorthand.longhands[i], input.values[i])) wantedLeaves[leaf] = value;
+    }
+    for (const std::string& attempt : tries) {
+      const std::map<std::string, std::string> read = LeafMap(name, attempt);
+      bool same = true;
+      for (const auto& [leaf, value] : wantedLeaves) {
+        const auto found = read.find(leaf);
+        same = same && found != read.end() && found->second == value;
+      }
+      if (same) return attempt;
+    }
+    return std::nullopt;
   } else if (name == "grid-row" || name == "grid-column") {
     if (n != 2) return std::nullopt;
     const std::string start = input.values[0], end = input.values[1];
-    const bool isName = !start.empty() && start.find(' ') == std::string::npos && !std::isdigit(static_cast<unsigned char>(start[0])) && start[0] != '-' && start != "auto";
+    const bool isName = IsGridName(start);
     candidate = start;
     if (!(end == "auto" || (isName && end == start))) candidate += " / " + end;
   } else if (name == "font") {

@@ -791,6 +791,7 @@ ComponentValues CanonicalPosition(const ComponentValues& in) {
 
 // Properties that keep a combination in the order it was written.
 thread_local bool g_keepWrittenOrder = false;
+thread_local bool g_numberZero = false;  // border-image-*: a bare 0 is a number, not a length
 
 class Matcher {
  public:
@@ -1029,6 +1030,13 @@ class Matcher {
           std::optional<ComponentValue> normalized = NormalizeColor(items_[pos]);
           if (!normalized) return false;
           Set(pos, *normalized);
+        } else if (!g_numberZero && (name == "length" || name == "length-percentage") && items_[pos].kind == ComponentValue::Kind::Token && items_[pos].token.type == T::Number && items_[pos].token.number == 0) {
+          // A zero length is written with its unit.
+          ComponentValue zero;
+          zero.token.type = T::Dimension;
+          zero.token.number = 0;
+          zero.token.value = "px";
+          Set(pos, zero);
         } else if ((name == "alpha-value" || name == "opacity-value") && items_[pos].kind == ComponentValue::Kind::Token && items_[pos].token.type == T::Percentage) {
           // A percentage here is the number it stands for.
           ComponentValue number;
@@ -1244,6 +1252,35 @@ bool MatchSyntax(std::string_view syntax, const ComponentValues& values, ValueMa
 
 namespace {
 
+// A track list with the line names run together: adjacent [ ] blocks are one, and an empty one is nothing.
+void CanonicalTrackList(ValueMatch& match) {
+  ComponentValues out;
+  const auto isNames = [](const ComponentValue& v) { return v.IsBlock(T::LeftBracket); };
+  for (size_t i = 0; i < match.normalized.size(); ++i) {
+    const ComponentValue& v = match.normalized[i];
+    if (v.IsWhitespace()) continue;
+    if (!isNames(v)) {
+      out.push_back(v);
+      continue;
+    }
+    ComponentValue merged = v;
+    merged.children.clear();
+    size_t j = i;
+    for (; j < match.normalized.size(); ++j) {
+      const ComponentValue& w = match.normalized[j];
+      if (w.IsWhitespace()) continue;
+      if (!isNames(w)) break;
+      for (const ComponentValue& name : w.children) {
+        if (!name.IsWhitespace()) merged.children.push_back(name);
+      }
+    }
+    i = j - 1;
+    if (!merged.children.empty()) out.push_back(merged);
+  }
+  match.normalized = out;
+  match.assigned.clear();
+}
+
 // The shortest way display is written (css-display-3, "Short display").
 void CanonicalDisplay(ValueMatch& match) {
   std::vector<std::string> words;
@@ -1287,10 +1324,68 @@ void CanonicalDisplay(ValueMatch& match) {
 bool MatchPropertyValue(const PropertyDefinition& property, const ComponentValues& values, ValueMatch& out, const ComputeContext* compute) {
   static const std::set<std::string> keepOrder = {"image-resolution", "hanging-punctuation", "word-space-transform"};
   g_keepWrittenOrder = keepOrder.count(property.name) > 0;
+  g_numberZero = std::string(property.name).rfind("border-image", 0) == 0;
   const bool matched = MatchSyntax(property.syntax, values, out, compute);
   g_keepWrittenOrder = false;
+  g_numberZero = false;
   if (!matched) return false;
   if (std::string(property.name) == "display") CanonicalDisplay(out);
+  if (std::string(property.name) == "grid-template-rows" || std::string(property.name) == "grid-template-columns") CanonicalTrackList(out);
+  {
+    const std::string n = property.name;
+    if (n == "grid-template-rows" || n == "grid-template-columns" || n == "grid-auto-rows" || n == "grid-auto-columns") {
+      // A zero length is written with its unit.
+      std::function<void(ComponentValues&)> fix = [&](ComponentValues& list) {
+        for (ComponentValue& v : list) {
+          if (v.kind == ComponentValue::Kind::Token && v.token.type == T::Number && v.token.number == 0) {
+            v.token.type = T::Dimension;
+            v.token.value = "px";
+          } else {
+            fix(v.children);
+          }
+        }
+      };
+      fix(out.normalized);
+    }
+  }
+  if (std::string(property.name) == "grid-auto-flow") {
+    // "row dense" is "dense".
+    std::vector<std::string> words;
+    for (const ComponentValue& v : out.normalized) {
+      if (v.IsIdent()) words.push_back(Lower(v.token.value));
+    }
+    if (words.size() == 2 && words[0] == "row" && words[1] == "dense") {
+      ComponentValue dense;
+      dense.token.type = T::Ident;
+      dense.token.value = "dense";
+      out.normalized = {dense};
+      out.assigned.clear();
+    }
+  }
+  if (std::string(property.name) == "grid-template-areas") {
+    // The cells of each string alone with single spaces; every row as long as the first.
+    size_t cells = 0;
+    for (ComponentValue& v : out.normalized) {
+      if (!v.IsToken(T::String)) continue;
+      std::string collapsed;
+      size_t count = 0;
+      bool inWord = false;
+      for (char c : v.token.value) {
+        const bool space = c == ' ' || c == '\t' || c == '\n';
+        if (space) {
+          inWord = false;
+        } else {
+          if (!inWord && !collapsed.empty()) collapsed += ' ';
+          if (!inWord) ++count;
+          collapsed += c;
+          inWord = true;
+        }
+      }
+      if (count == 0 || (cells != 0 && count != cells)) return false;
+      cells = count;
+      v.token.value = collapsed;
+    }
+  }
   return true;
 }
 

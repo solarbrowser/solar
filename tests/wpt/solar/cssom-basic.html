@@ -16,7 +16,7 @@ test(() => {
   assert_equals(document.styleSheets[0], sheet);
   assert_equals(sheet.cssRules.length, 4);
   assert_equals(sheet.cssRules[2].selectorText, "div > p, .a:not(.b)");
-  assert_equals(sheet.cssRules[2].style.cssText, "color: red; margin: 0px !important;".replace("0px", "0"));
+  assert_equals(sheet.cssRules[2].style.cssText, "color: red; margin: 0px !important;");
   assert_equals(sheet.cssRules[3].media.mediaText, "screen and (min-width: 100px)");
   assert_equals(sheet.cssRules[3].cssRules[0].cssText, "a { color: blue; }");
 }, "a style element's sheet");
