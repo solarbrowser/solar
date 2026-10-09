@@ -137,6 +137,7 @@ struct CssRule : Quanta::DOMObject {
   std::string name;
   // The prelude of a rule this module keeps as written (container, scope, page): its serialization.
   std::string prelude;
+  std::string containerName, containerQuery;  // a container rule: the name, and the condition, when there is one query
   // Scope rule: <scope-start> and <scope-end> (none: absent).
   std::shared_ptr<SelectorList> scopeStart, scopeEnd;
   bool isNested = false;  // a style rule inside another

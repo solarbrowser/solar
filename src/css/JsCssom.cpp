@@ -740,18 +740,13 @@ Value LayerNameList(Context& ctx, Value t, qe::Args, Value) {
 Value ContainerName(Context& ctx, Value t, qe::Args, Value) {
   CssRule* self = ThisRuleOf(ctx, t, RuleKind::Container);
   if (!self) return qe::Undefined();
-  const ComponentValues values = Trimmed(ParseComponentValues(self->prelude));
-  if (!values.empty() && values[0].IsIdent() && values[0].token.value != "not") return qe::FromWtf8(ctx, values[0].token.value);
-  return qe::FromWtf8(ctx, "");
+  return qe::FromWtf8(ctx, self->containerName);
 }
 
 Value ContainerQuery(Context& ctx, Value t, qe::Args, Value) {
   CssRule* self = ThisRuleOf(ctx, t, RuleKind::Container);
   if (!self) return qe::Undefined();
-  const ComponentValues values = Trimmed(ParseComponentValues(self->prelude));
-  size_t skip = !values.empty() && values[0].IsIdent() && values[0].token.value != "not" ? 1 : 0;
-  while (skip < values.size() && values[skip].IsWhitespace()) ++skip;
-  return qe::FromWtf8(ctx, Serialize(ComponentValues(values.begin() + skip, values.end())));
+  return qe::FromWtf8(ctx, self->containerQuery);
 }
 
 // The (selector) blocks of a scope rule's prelude: before `to`, and after it.

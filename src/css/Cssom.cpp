@@ -326,6 +326,165 @@ void CssDeclarations::Visit(Quanta::Visitor& visitor) {
 
 namespace {
 
+std::string WordOf(const ComponentValue& v) { return v.IsIdent() ? Lower(v.token.value) : std::string(); }
+
+// "serialize a media condition": the parentheses of a feature hold `name`, `name: value` or a range with single spaces; a
+// condition holds not, and, or and the conditions they join; anything else is as written with its spaces collapsed.
+std::string SerializeConditionGroup(const ComponentValue& v) {
+  if (!v.IsBlock(T::LeftParen)) {
+    std::string collapsed;
+    bool space = false;
+    for (char c : Serialize(v)) {
+      if (c == ' ' || c == '\n' || c == '\t') {
+        space = true;
+        continue;
+      }
+      if (space && !collapsed.empty() && collapsed.back() != '(') collapsed += ' ';
+      space = false;
+      collapsed += c;
+    }
+    return collapsed;
+  }
+  const ComponentValues inner = Trimmed(v.children);
+  std::vector<ComponentValue> items;
+  for (const ComponentValue& c : inner) {
+    if (!c.IsWhitespace()) items.push_back(c);
+  }
+  const auto isGroup = [](const ComponentValue& c) { return c.IsBlock(T::LeftParen) || c.kind == ComponentValue::Kind::Function; };
+  const bool isCondition = !items.empty() && ((WordOf(items[0]) == "not" && items.size() == 2 && isGroup(items[1])) ||
+                                              (isGroup(items[0]) && (items.size() == 1 || WordOf(items[1]) == "and" || WordOf(items[1]) == "or")));
+  if (isCondition) {
+    std::string out;
+    for (const ComponentValue& c : items) {
+      if (!out.empty()) out += ' ';
+      out += isGroup(c) ? SerializeConditionGroup(c) : WordOf(c);
+    }
+    return "(" + out + ")";
+  }
+  std::string out;
+  bool space = false;
+  const auto closed = [&] { return out.empty() || out.back() == ' '; };
+  for (size_t k = 0; k < inner.size(); ++k) {
+    const ComponentValue& c = inner[k];
+    if (c.IsWhitespace()) {
+      space = true;
+      continue;
+    }
+    if (c.IsToken(T::Colon)) {
+      out += ": ";
+      space = false;
+      continue;
+    }
+    if (c.IsDelim('/')) {
+      // A ratio is written with spaces around the slash.
+      const bool ratio = k > 0 && k + 1 < inner.size() && !out.empty() && std::isdigit(static_cast<unsigned char>(out.back())) && (inner[k + 1].IsToken(T::Number) || (k + 2 < inner.size() && inner[k + 1].IsWhitespace() && inner[k + 2].IsToken(T::Number)));
+      if (ratio) {
+        out += " / ";
+        while (k + 1 < inner.size() && inner[k + 1].IsWhitespace()) ++k;
+      } else {
+        out += "/";
+      }
+      space = false;
+      continue;
+    }
+    if (c.IsDelim('<') || c.IsDelim('>') || c.IsDelim('=')) {
+      std::string op(1, static_cast<char>(c.token.delim));
+      if (op != "=" && k + 1 < inner.size() && inner[k + 1].IsDelim('=')) {
+        op += "=";
+        ++k;
+      }
+      if (!closed()) out += ' ';
+      out += op + " ";
+      space = false;
+      continue;
+    }
+    if (space && !closed()) out += ' ';
+    space = false;
+    out += c.IsIdent() && !c.token.value.starts_with("--") ? SerializeIdentifier(Lower(c.token.value)) : Serialize(c);
+  }
+  while (!out.empty() && out.back() == ' ') out.pop_back();
+  return "(" + out + ")";
+}
+
+
+// ---- Container queries ----
+
+struct ContainerPrelude {
+  std::string text;       // serialized: the queries, comma-separated
+  std::string name;       // of the first query, when that is the only one
+  std::string condition;  // the same
+};
+
+std::string SerializeContainerGroup(const ComponentValue& v) {
+  if (v.kind == ComponentValue::Kind::Function) {
+    const std::string name = Lower(v.name);
+    std::string inner;
+    bool space = false;
+    for (char c : Serialize(Trimmed(v.children))) {
+      if (c == ' ' || c == '\n' || c == '\t') {
+        space = true;
+        continue;
+      }
+      if (space && !inner.empty()) inner += ' ';
+      space = false;
+      inner += c;
+    }
+    return (name == "style" || name == "scroll-state" ? name : v.name) + "(" + inner + ")";
+  }
+  return SerializeConditionGroup(v);
+}
+
+// <container-condition># : each `<container-name>? <container-query>?` (not both missing); a query is `not (..)`, or groups
+// joined by and, or by or. What is inside a group that is not understood is "general enclosed": valid and unknown.
+std::optional<ContainerPrelude> ParseContainerPrelude(const ComponentValues& prelude) {
+  ContainerPrelude result;
+  const std::vector<ComponentValues> parts = SplitOnCommas(Trimmed(prelude));
+  if (parts.empty()) return std::nullopt;
+  for (const ComponentValues& part : parts) {
+    std::vector<ComponentValue> items;
+    for (const ComponentValue& c : Trimmed(part)) {
+      if (!c.IsWhitespace()) items.push_back(c);
+    }
+    if (items.empty()) return std::nullopt;
+    size_t i = 0;
+    std::string name;
+    const auto isGroup = [](const ComponentValue& c) { return c.IsBlock(T::LeftParen) || c.kind == ComponentValue::Kind::Function; };
+    if (items[0].IsIdent() && WordOf(items[0]) != "not") {
+      const std::string word = WordOf(items[0]);
+      if (word == "and" || word == "or" || word == "none" || word == "default" || IsCssWideKeyword({items[0]})) return std::nullopt;
+      name = SerializeIdentifier(items[0].token.value);
+      i = 1;
+    } else if (!items[0].IsIdent() && !isGroup(items[0])) {
+      return std::nullopt;
+    }
+    std::string condition;
+    if (i < items.size()) {
+      if (WordOf(items[i]) == "not") {
+        if (i + 2 != items.size() || !isGroup(items[i + 1])) return std::nullopt;
+        condition = "not " + SerializeContainerGroup(items[i + 1]);
+      } else {
+        if (!isGroup(items[i])) return std::nullopt;
+        condition = SerializeContainerGroup(items[i]);
+        std::string joiner;
+        for (size_t k = i + 1; k < items.size(); k += 2) {
+          const std::string op = WordOf(items[k]);
+          if ((op != "and" && op != "or") || (!joiner.empty() && joiner != op) || k + 1 >= items.size() || !isGroup(items[k + 1])) return std::nullopt;
+          joiner = op;
+          condition += " " + op + " " + SerializeContainerGroup(items[k + 1]);
+        }
+      }
+    }
+    std::string text = name;
+    if (!condition.empty()) text += (text.empty() ? "" : " ") + condition;
+    result.text += (result.text.empty() ? "" : ", ") + text;
+    if (parts.size() == 1) {
+      result.name = name;
+      result.condition = condition;
+    }
+  }
+  return result;
+}
+
 // "parse a media query list", approximately: each query is a media type with conditions, or conditions alone; one
 // that is not made of those is "not all".
 std::string SerializeMediaQuery(const ComponentValues& tokens) {
@@ -340,83 +499,6 @@ std::string SerializeMediaQuery(const ComponentValues& tokens) {
   };
   const auto condition = [&](const ComponentValue& v) {
     return v.IsBlock(T::LeftParen) || (v.kind == ComponentValue::Kind::Function);
-  };
-  // "serialize a media condition": the parentheses of a feature hold `name`, `name: value` or a range with single spaces; a
-  // condition holds not, and, or and the conditions they join; anything else is as written with its spaces collapsed.
-  std::function<std::string(const ComponentValue&)> serializeCondition = [&](const ComponentValue& v) -> std::string {
-    if (!v.IsBlock(T::LeftParen)) {
-      std::string collapsed;
-      bool space = false;
-      for (char c : Serialize(v)) {
-        if (c == ' ' || c == '\n' || c == '\t') {
-          space = true;
-          continue;
-        }
-        if (space && !collapsed.empty() && collapsed.back() != '(') collapsed += ' ';
-        space = false;
-        collapsed += c;
-      }
-      return collapsed;
-    }
-    const ComponentValues inner = Trimmed(v.children);
-    std::vector<ComponentValue> items;
-    for (const ComponentValue& c : inner) {
-      if (!c.IsWhitespace()) items.push_back(c);
-    }
-    const auto isGroup = [](const ComponentValue& c) { return c.IsBlock(T::LeftParen) || c.kind == ComponentValue::Kind::Function; };
-    const bool isCondition = !items.empty() && ((word(items[0]) == "not" && items.size() == 2 && isGroup(items[1])) ||
-                                                (isGroup(items[0]) && (items.size() == 1 || word(items[1]) == "and" || word(items[1]) == "or")));
-    if (isCondition) {
-      std::string out;
-      for (const ComponentValue& c : items) {
-        if (!out.empty()) out += ' ';
-        out += isGroup(c) ? serializeCondition(c) : word(c);
-      }
-      return "(" + out + ")";
-    }
-    std::string out;
-    bool space = false;
-    const auto closed = [&] { return out.empty() || out.back() == ' '; };
-    for (size_t k = 0; k < inner.size(); ++k) {
-      const ComponentValue& c = inner[k];
-      if (c.IsWhitespace()) {
-        space = true;
-        continue;
-      }
-      if (c.IsToken(T::Colon)) {
-        out += ": ";
-        space = false;
-        continue;
-      }
-      if (c.IsDelim('/')) {
-        // A ratio is written with spaces around the slash.
-        const bool ratio = k > 0 && k + 1 < inner.size() && !out.empty() && std::isdigit(static_cast<unsigned char>(out.back())) && (inner[k + 1].IsToken(T::Number) || (k + 2 < inner.size() && inner[k + 1].IsWhitespace() && inner[k + 2].IsToken(T::Number)));
-        if (ratio) {
-          out += " / ";
-          while (k + 1 < inner.size() && inner[k + 1].IsWhitespace()) ++k;
-        } else {
-          out += "/";
-        }
-        space = false;
-        continue;
-      }
-      if (c.IsDelim('<') || c.IsDelim('>') || c.IsDelim('=')) {
-        std::string op(1, static_cast<char>(c.token.delim));
-        if (op != "=" && k + 1 < inner.size() && inner[k + 1].IsDelim('=')) {
-          op += "=";
-          ++k;
-        }
-        if (!closed()) out += ' ';
-        out += op + " ";
-        space = false;
-        continue;
-      }
-      if (space && !closed()) out += ' ';
-      space = false;
-      out += c.IsIdent() && out.empty() && !c.token.value.starts_with("--") ? SerializeIdentifier(Lower(c.token.value)) : Serialize(c);
-    }
-    while (!out.empty() && out.back() == ' ') out.pop_back();
-    return "(" + out + ")";
   };
   skipSpace();
   std::string prefix;
@@ -441,7 +523,7 @@ std::string SerializeMediaQuery(const ComponentValues& tokens) {
       ++i;
       skipSpace();
       if (i >= values.size() || !condition(values[i])) return "not all";
-      out += (out.empty() ? "" : " and ") + serializeCondition(values[i]);
+      out += (out.empty() ? "" : " and ") + SerializeConditionGroup(values[i]);
       ++i;
       skipSpace();
     }
@@ -451,7 +533,7 @@ std::string SerializeMediaQuery(const ComponentValues& tokens) {
   if (!prefix.empty() && prefix == "only") return "not all";
   if (!prefix.empty()) out = prefix + " ";
   if (i >= values.size() || !condition(values[i])) return "not all";
-  out += serializeCondition(values[i]);
+  out += SerializeConditionGroup(values[i]);
   ++i;
   skipSpace();
   std::string joiner;
@@ -468,7 +550,7 @@ std::string SerializeMediaQuery(const ComponentValues& tokens) {
       ok = false;
       break;
     }
-    out += " " + op + " " + serializeCondition(values[i]);
+    out += " " + op + " " + SerializeConditionGroup(values[i]);
     ++i;
     skipSpace();
   }
@@ -1003,8 +1085,12 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
     rule->style = declarations;
   } else if (name == "container") {
     if (!syntax.hasBlock) return nullptr;
+    const std::optional<ContainerPrelude> container = ParseContainerPrelude(syntax.prelude);
+    if (!container) return nullptr;
     rule = NewRule(ctx, RuleKind::Container);
-    rule->prelude = Serialize(Trimmed(syntax.prelude));
+    rule->prelude = container->text;
+    rule->containerName = container->name;
+    rule->containerQuery = container->condition;
     rule->parentRule = parent;
     rule->parentSheet = sheet;
     FillGroup(ctx, rule, syntax, sheet, InNesting(parent) ? 2 : 0);

@@ -197,6 +197,9 @@ std::map<std::string, std::string> AssignLonghands(const PropertyDefinition& pro
   std::vector<ValueMatch::Assignment> assigned = match.assigned;
   std::stable_sort(assigned.begin(), assigned.end(), [](const auto& a, const auto& b) {
     if ((a.end - a.begin) != (b.end - b.begin)) return (a.end - a.begin) > (b.end - b.begin);
+    // A longhand the syntax names for a span is where it goes: before a type that more than one longhand has.
+    const bool aNamed = !a.property.empty() && a.property[0] != '<', bNamed = !b.property.empty() && b.property[0] != '<';
+    if (aNamed != bNamed) return aNamed;
     return a.begin < b.begin;
   });
   std::vector<bool> claimed(items.size(), false);
@@ -600,6 +603,66 @@ bool ExpandShorthand(const PropertyDefinition& property, const ComponentValues& 
     return true;
   }
 
+  if (name == "font-variant" || name == "font-synthesis") {
+    // Their syntax names no longhand: each keyword (or function) goes to the one that takes it.
+    const auto lower = [&](const ComponentValue& c) { return c.IsIdent() ? Lower(c.token.value) : std::string(); };
+    std::map<std::string, ComponentValues> groups;
+    const bool none = items.size() == 1 && lower(items[0]) == "none";
+    const bool normal = items.size() == 1 && lower(items[0]) == "normal";
+    if (name == "font-synthesis") {
+      for (const char* longhand : property.longhands) add(longhand, "none");
+      if (!none) {
+        mine.clear();
+        for (const char* longhand : property.longhands) {
+          const std::string keyword = std::string(longhand).substr(std::string("font-synthesis-").size());
+          bool listed = false;
+          std::string value = "auto";
+          for (const ComponentValue& c : items) {
+            listed = listed || lower(c) == keyword;
+            if (keyword == "style" && lower(c) == "oblique-only") listed = true, value = "oblique-only";
+          }
+          add(longhand, listed ? value : "none");
+        }
+      }
+      for (Longhand& l : mine) out.push_back(std::move(l));
+      return true;
+    }
+    if (!none && !normal) {
+      for (const ComponentValue& c : items) {
+        bool placed = false;
+        for (const char* longhand : property.longhands) {
+          const PropertyDefinition* leaf = FindProperty(longhand);
+          ValueMatch single;
+          if (leaf && MatchPropertyValue(*leaf, ComponentValues{c}, single)) {
+            groups[longhand].push_back(c);
+            groups[longhand].push_back(ComponentValue());
+            groups[longhand].back().token.type = T::Whitespace;
+            placed = true;
+            break;
+          }
+        }
+        if (!placed) return false;
+      }
+    }
+    for (const char* longhand : property.longhands) {
+      std::string text = std::string(longhand) == "font-variant-ligatures" && none ? "none" : "";
+      if (const auto g = groups.find(longhand); g != groups.end()) {
+        ComponentValues group = Trimmed(g->second);
+        const PropertyDefinition* leaf = FindProperty(longhand);
+        ValueMatch combined;
+        if (!leaf || !MatchPropertyValue(*leaf, group, combined)) return false;
+        text = SerializeValue(combined.normalized);
+      }
+      if (text.empty()) {
+        const PropertyDefinition* leaf = FindProperty(longhand);
+        text = leaf ? InitialValueText(*leaf) : "normal";
+      }
+      add(longhand, text);
+    }
+    for (Longhand& l : mine) out.push_back(std::move(l));
+    return true;
+  }
+
   std::map<std::string, std::string> taken = AssignLonghands(property, match);
   // Omitted: the initial value, except where the specification says otherwise.
   static const std::set<std::string> copyFirst = {"gap", "grid-gap", "place-content", "place-items", "place-self"};
@@ -737,7 +800,12 @@ std::map<std::string, std::string> LeafMap(const std::string& name, const std::s
   std::vector<Longhand> out;
   std::map<std::string, std::string> map;
   if (ExpandDeclaration(name, text, out)) {
-    for (const Longhand& l : out) map[l.name] = l.value;
+    for (const Longhand& l : out) {
+      // initial is the initial value, however that is written
+      const PropertyDefinition* leaf = l.value == "initial" ? FindProperty(l.name) : nullptr;
+      map[l.name] = leaf ? InitialValueText(*leaf) : l.value;
+      if (l.name == "font-weight" && map[l.name] == "normal") map[l.name] = "400";
+    }
   } else {
     map["\x01invalid"] = text;
   }
@@ -872,6 +940,15 @@ std::optional<std::string> SerializeShorthand(const PropertyDefinition& shorthan
     const bool isName = IsGridName(start);
     candidate = start;
     if (!(end == "auto" || (isName && end == start))) candidate += " / " + end;
+  } else if (name == "font-synthesis") {
+    if (n != 4) return std::nullopt;
+    const char* words[4] = {"weight", "style", "small-caps", "position"};
+    for (size_t i = 0; i < 4; ++i) {
+      if (input.values[i] == "auto") candidate += (candidate.empty() ? "" : " ") + std::string(words[i]);
+      else if (input.values[i] == "oblique-only" && i == 1) candidate += (candidate.empty() ? "" : " ") + std::string("oblique-only");
+      else if (input.values[i] != "none") return std::nullopt;
+    }
+    if (candidate.empty()) candidate = "none";
   } else if (name == "font") {
     // [style] [weight] [stretch] size [/ line-height] family, the ones that are not initial.
     const auto value = [&](const char* longhand) {
@@ -884,6 +961,7 @@ std::optional<std::string> SerializeShorthand(const PropertyDefinition& shorthan
     std::string text;
     for (const char* longhand : {"font-style", "font-variant", "font-weight", "font-stretch"}) {
       const std::string v = value(longhand);
+      if (std::string(longhand) == "font-weight" && v == "400") continue;
       if (!omitted(v)) text += (text.empty() ? "" : " ") + v;
     }
     text += (text.empty() ? "" : " ") + value("font-size");

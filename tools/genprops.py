@@ -46,6 +46,12 @@ OVERRIDE = {
     "<paint>": "none | <color> | <url> [ none | <color> ]? | context-fill | context-stroke",
 }
 
+# Properties whose entry in the data is behind what browsers accept (applied after the data is read).
+PROPERTY_PATCH = {
+    "font-stretch": {"initial": "normal", "inherited": "yes"},
+    "font-synthesis": {"value": "none | [ weight || [ style | oblique-only ] || small-caps || position ]", "longhands": ["font-synthesis-weight", "font-synthesis-style", "font-synthesis-small-caps", "font-synthesis-position"]},
+}
+
 props, types, functions = {}, {}, {}
 
 
@@ -86,6 +92,9 @@ for path in sorted(glob.glob(os.path.join(root, "ed/css/*.json"))):
 
 for name, syntax in OVERRIDE.items():
     types[name] = (99, syntax)
+for name, patch in PROPERTY_PATCH.items():
+    if name in props:
+        props[name][1].update(patch)
 
 # <foo-function> is the functions the specification names funcdef-foo-*.
 for name in list(SUPPLEMENT):
