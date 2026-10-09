@@ -25,9 +25,32 @@ const std::unordered_map<std::string_view, const char*>& TypeIndex() {
   return index;
 }
 
+// Legacy names for properties: the same property under another name.
+const std::unordered_map<std::string_view, std::string_view>& Aliases() {
+  static const std::unordered_map<std::string_view, std::string_view> aliases = {
+      {"font-stretch", "font-width"},
+      {"word-wrap", "overflow-wrap"},
+      {"-webkit-align-content", "align-content"},
+      {"-webkit-align-items", "align-items"},
+      {"-webkit-align-self", "align-self"},
+      {"-webkit-appearance", "appearance"},
+      {"-webkit-flex", "flex"},
+      {"-webkit-flex-basis", "flex-basis"},
+      {"-webkit-flex-direction", "flex-direction"},
+      {"-webkit-flex-flow", "flex-flow"},
+      {"-webkit-flex-grow", "flex-grow"},
+      {"-webkit-flex-shrink", "flex-shrink"},
+      {"-webkit-flex-wrap", "flex-wrap"},
+      {"-webkit-justify-content", "justify-content"},
+      {"-webkit-order", "order"},
+  };
+  return aliases;
+}
+
 }  // namespace
 
 const PropertyDefinition* FindProperty(std::string_view name) {
+  if (const auto alias = Aliases().find(name); alias != Aliases().end()) name = alias->second;
   const auto found = PropertyIndex().find(name);
   return found == PropertyIndex().end() ? nullptr : found->second;
 }

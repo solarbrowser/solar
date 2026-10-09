@@ -47,8 +47,8 @@ std::string Trim(const std::string& text) {
 bool NormalizePropertyName(std::string& name) {
   if (name.size() >= 2 && name[0] == '-' && name[1] == '-') return name.size() > 2;
   const std::string lower = Lower(name);
-  if (FindProperty(lower)) {
-    name = lower;
+  if (const PropertyDefinition* property = FindProperty(lower)) {
+    name = property->name;  // a legacy name is its property
     return true;
   }
   // A vendor prefix: the engine does not know what it means, but the property is there for script to set and read.
@@ -194,7 +194,9 @@ std::optional<std::pair<std::string, bool>> AllKeyword(const std::vector<Declara
 
 }  // namespace
 
-std::string CssDeclarations::ValueOf(const std::string& name) const {
+std::string CssDeclarations::ValueOf(const std::string& given) const {
+  const PropertyDefinition* named = FindProperty(given);
+  const std::string name = named ? named->name : given;  // a legacy name is its property
   if (name == "all" && !computedElement) {
     const auto keyword = AllKeyword(items);
     return keyword ? keyword->first : "";
@@ -219,7 +221,9 @@ std::string CssDeclarations::ValueOf(const std::string& name) const {
   return entry ? entry->value : "";
 }
 
-std::string CssDeclarations::PriorityOf(const std::string& name) const {
+std::string CssDeclarations::PriorityOf(const std::string& given) const {
+  const PropertyDefinition* named = FindProperty(given);
+  const std::string name = named ? named->name : given;
   if (name == "all") {
     const auto keyword = AllKeyword(items);
     return keyword && keyword->second ? "important" : "";
@@ -289,6 +293,7 @@ bool CssDeclarations::Set(Context& ctx, const std::string& propertyName, const s
 std::string CssDeclarations::Remove(Context& ctx, const std::string& propertyName) {
   std::string name = propertyName;
   if (!name.starts_with("--")) name = Lower(name);
+  if (const PropertyDefinition* named = FindProperty(name)) name = named->name;
   const std::string old = ValueOf(name);
   const PropertyDefinition* definition = FindProperty(name);
   std::vector<std::string> targets = name == "all" ? AllLonghands() : definition ? LeavesOf(*definition) : std::vector<std::string>{name};

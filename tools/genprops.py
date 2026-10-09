@@ -48,9 +48,11 @@ OVERRIDE = {
 
 # Properties whose entry in the data is behind what browsers accept (applied after the data is read).
 PROPERTY_PATCH = {
-    "font-stretch": {"initial": "normal", "inherited": "yes"},
     "font-synthesis": {"value": "none | [ weight || [ style | oblique-only ] || small-caps || position ]", "longhands": ["font-synthesis-weight", "font-synthesis-style", "font-synthesis-small-caps", "font-synthesis-position"]},
 }
+
+# Legacy names that are aliases (the table in src/css/Properties.cpp): not properties of their own.
+ALIASED = ["font-stretch"]
 
 props, types, functions = {}, {}, {}
 
@@ -92,6 +94,11 @@ for path in sorted(glob.glob(os.path.join(root, "ed/css/*.json"))):
 
 for name, syntax in OVERRIDE.items():
     types[name] = (99, syntax)
+for name in ALIASED:
+    props.pop(name, None)
+for entry in props.values():
+    if "font-stretch" in entry[1].get("longhands", []):
+        entry[1]["longhands"] = ["font-width" if x == "font-stretch" else x for x in entry[1]["longhands"]]
 for name, patch in PROPERTY_PATCH.items():
     if name in props:
         props[name][1].update(patch)

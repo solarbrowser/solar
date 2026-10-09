@@ -2,6 +2,7 @@
 #include <cctype>
 
 #include "solar/css/Cssom.h"
+#include "solar/css/Properties.h"
 #include "solar/css/Style.h"
 #include "solar/dom/CustomElements.h"
 #include "solar/dom/NodeBindingsInternal.h"
@@ -104,7 +105,10 @@ std::string PropertyForIdlName(const std::string& name) {
     if (dashed.starts_with("webkit-")) dashed = "-" + dashed;
   }
   std::string normalized = dashed;
-  if (!NormalizePropertyName(normalized) || normalized != dashed) return "";
+  if (!NormalizePropertyName(normalized)) return "";
+  // A legacy name is its property's, and has an attribute of its own.
+  const PropertyDefinition* property = FindProperty(dashed);
+  if (normalized != dashed && !(property && property->name == normalized)) return "";
   return normalized;
 }
 

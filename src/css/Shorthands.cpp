@@ -157,7 +157,7 @@ bool Overlaps(const std::vector<bool>& claimed, size_t begin, size_t end) {
 
 // The longhands of `shorthand` that can take what the type `<name>` matched, in the order the shorthand lists them.
 std::vector<std::string> LonghandsForType(const PropertyDefinition& shorthand, const std::string& typeName) {
-  static const std::map<std::string, std::string> special = {{"<font-variant-css2>", "font-variant"}, {"<font-width-css3>", "font-stretch"}};
+  static const std::map<std::string, std::string> special = {{"<font-variant-css2>", "font-variant"}, {"<font-width-css3>", "font-width"}};
   std::vector<std::string> found;
   if (const auto s = special.find(typeName); s != special.end()) {
     for (const char* name : shorthand.longhands) {
@@ -805,6 +805,11 @@ std::map<std::string, std::string> LeafMap(const std::string& name, const std::s
       const PropertyDefinition* leaf = l.value == "initial" ? FindProperty(l.name) : nullptr;
       map[l.name] = leaf ? InitialValueText(*leaf) : l.value;
       if (l.name == "font-weight" && map[l.name] == "normal") map[l.name] = "400";
+      if (l.name == "font-width") {
+        static const std::map<std::string, std::string> percents = {{"ultra-condensed", "50%"}, {"extra-condensed", "62.5%"}, {"condensed", "75%"}, {"semi-condensed", "87.5%"}, {"normal", "100%"}, {"semi-expanded", "112.5%"}, {"expanded", "125%"}, {"extra-expanded", "150%"}, {"ultra-expanded", "200%"}};
+        const auto found = percents.find(map[l.name]);
+        if (found != percents.end()) map[l.name] = found->second;
+      }
     }
   } else {
     map["\x01invalid"] = text;
@@ -959,9 +964,18 @@ std::optional<std::string> SerializeShorthand(const PropertyDefinition& shorthan
     };
     const auto omitted = [](const std::string& v) { return v == "normal" || v == "initial"; };
     std::string text;
-    for (const char* longhand : {"font-style", "font-variant", "font-weight", "font-stretch"}) {
+    for (const char* longhand : {"font-style", "font-variant", "font-weight", "font-width"}) {
       const std::string v = value(longhand);
       if (std::string(longhand) == "font-weight" && v == "400") continue;
+      if (std::string(longhand) == "font-width" && v == "100%") continue;
+      if (std::string(longhand) == "font-width" && v.back() == '%') {
+        // The shorthand takes the keywords only.
+        static const std::map<std::string, std::string> keywords = {{"50%", "ultra-condensed"}, {"62.5%", "extra-condensed"}, {"75%", "condensed"}, {"87.5%", "semi-condensed"}, {"112.5%", "semi-expanded"}, {"125%", "expanded"}, {"150%", "extra-expanded"}, {"200%", "ultra-expanded"}};
+        const auto found = keywords.find(v);
+        if (found == keywords.end()) return std::nullopt;
+        text += (text.empty() ? "" : " ") + found->second;
+        continue;
+      }
       if (!omitted(v)) text += (text.empty() ? "" : " ") + v;
     }
     text += (text.empty() ? "" : " ") + value("font-size");

@@ -869,6 +869,58 @@ ComponentValues CanonicalPosition(const ComponentValues& in) {
   return v;
 }
 
+// The computed value of a position: the x and the y, as lengths or percentages (the keywords stand for 0%, 50% and 100%, and an
+// offset from the right or bottom edge is taken from 100%). Nothing if the written form is not understood.
+std::optional<ComponentValues> ComputedPosition(const ComponentValues& canonical) {
+  const auto percent = [](double n) {
+    ComponentValue v;
+    v.token.type = T::Percentage;
+    v.token.number = n;
+    return v;
+  };
+  const auto fromEnd = [&](const ComponentValue& offset) -> std::optional<ComponentValue> {
+    if (offset.IsToken(T::Percentage)) return percent(100 - offset.token.number);
+    std::string text = "calc(100% - " + Serialize(offset) + ")";
+    if (offset.kind == ComponentValue::Kind::Function) text = "calc(100% - " + Serialize(offset) + ")";
+    ComponentValue calc;
+    if (!ParseComponentValue(text, calc)) return std::nullopt;
+    return NormalizeMathFunction(calc);
+  };
+  const auto part = [&](const ComponentValues& p, bool horizontal) -> std::optional<ComponentValue> {
+    if (p.size() == 1) {
+      if (!p[0].IsIdent()) return p[0];
+      const std::string w = Lower(p[0].token.value);
+      if (w == "center") return percent(50);
+      if (w == (horizontal ? "left" : "top") || w == (horizontal ? "x-start" : "y-start")) return percent(0);
+      if (w == (horizontal ? "right" : "bottom") || w == (horizontal ? "x-end" : "y-end")) return percent(100);
+      return std::nullopt;
+    }
+    if (p.size() == 2 && p[0].IsIdent()) {
+      const std::string w = Lower(p[0].token.value);
+      if (w == (horizontal ? "left" : "top") || w == (horizontal ? "x-start" : "y-start")) return p[1];
+      if (w == (horizontal ? "right" : "bottom") || w == (horizontal ? "x-end" : "y-end")) return fromEnd(p[1]);
+    }
+    return std::nullopt;
+  };
+  size_t split;
+  if (canonical.size() == 2) {
+    split = 1;
+  } else {
+    split = canonical.size();
+    for (size_t i = 0; i < canonical.size(); ++i) {
+      if (IsVerticalKeyword(canonical[i])) {
+        split = i;
+        break;
+      }
+    }
+    if (split >= canonical.size() || split == 0) return std::nullopt;
+  }
+  const std::optional<ComponentValue> x = part(ComponentValues(canonical.begin(), canonical.begin() + split), true);
+  const std::optional<ComponentValue> y = part(ComponentValues(canonical.begin() + split, canonical.end()), false);
+  if (!x || !y) return std::nullopt;
+  return ComponentValues{*x, *y};
+}
+
 // Properties that keep a combination in the order it was written.
 thread_local bool g_keepWrittenOrder = false;
 thread_local bool g_numberZero = false;  // border-image-*: a bare 0 is a number, not a length
@@ -1152,6 +1204,9 @@ class Matcher {
         group.kind = ComponentValue::Kind::Function;
         group.name = "\x01";
         group.children = CanonicalPosition(matched);
+        if (compute_) {
+          if (std::optional<ComponentValues> computed = ComputedPosition(group.children)) group.children = *computed;
+        }
         if (end - pos == 1 || true) {
           // Keep the items aligned: the group in the first slot, empty space after it.
           ComponentValue gap;
@@ -1399,6 +1454,410 @@ void CanonicalDisplay(ValueMatch& match) {
   match.assigned.clear();
 }
 
+// A gradient with a color interpolation method: `in <space> [<hue> hue]` is written after the first argument's other part, and
+// left out when it is what the colors would get anyway (srgb for legacy colors, oklab for the rest; shorter hue is always the default).
+void CanonicalGradient(ComponentValue& gradient, bool computed) {
+  std::vector<ComponentValues> args;
+  ComponentValues current;
+  for (const ComponentValue& c : gradient.children) {
+    if (c.IsToken(T::Comma)) {
+      args.push_back(current);
+      current.clear();
+    } else {
+      current.push_back(c);
+    }
+  }
+  args.push_back(current);
+  for (ComponentValues& arg : args) arg = Trimmed(arg);
+  ComponentValues& first = args[0];
+  bool changedFirst = false;
+  {
+    // The groups standing for positions are their values.
+    ComponentValues flat;
+    for (const ComponentValue& c : first) {
+      if (c.kind == ComponentValue::Kind::Function && c.name == "\x01") {
+        for (size_t i = 0; i < c.children.size(); ++i) {
+          if (i) {
+            ComponentValue ws;
+            ws.token.type = T::Whitespace;
+            flat.push_back(ws);
+          }
+          flat.push_back(c.children[i]);
+        }
+      } else {
+        flat.push_back(c);
+      }
+    }
+    first = flat;
+    // ellipse with two sizes and circle with one are what the sizes alone mean.
+    for (size_t i = 0; i < first.size(); ++i) {
+      if (!first[i].IsIdent()) continue;
+      const std::string shape = Lower(first[i].token.value);
+      if (shape != "ellipse" && shape != "circle") continue;
+      size_t sizes = 0;
+      bool keyword = false;
+      for (size_t j = i + 1; j < first.size(); ++j) {
+        if (first[j].IsWhitespace()) continue;
+        if (first[j].IsIdent()) {
+          const std::string w = Lower(first[j].token.value);
+          if (w == "at" || w == "in") break;
+          keyword = true;
+          break;
+        }
+        ++sizes;
+      }
+      for (size_t j = 0; j < i && !keyword; ++j) {
+        if (first[j].IsIdent()) keyword = true;
+      }
+      if (!keyword && ((shape == "ellipse" && sizes == 2) || (shape == "circle" && sizes == 1))) {
+        first.erase(first.begin() + i);
+        first = Trimmed(first);
+        changedFirst = true;
+      }
+      break;
+    }
+  }
+  if (computed) {
+    // A position in the middle is the default.
+    for (size_t i = 0; i < first.size(); ++i) {
+      if (!first[i].IsIdent() || Lower(first[i].token.value) != "at") continue;
+      std::vector<size_t> where;
+      size_t j = i + 1;
+      for (; j < first.size(); ++j) {
+        if (first[j].IsWhitespace()) continue;
+        if (first[j].IsIdent()) break;
+        where.push_back(j);
+      }
+      if (where.size() == 2 && first[where[0]].IsToken(T::Percentage) && first[where[1]].IsToken(T::Percentage) && first[where[0]].token.number == 50 && first[where[1]].token.number == 50) {
+        first.erase(first.begin() + i, first.begin() + j);
+        first = Trimmed(first);
+        changedFirst = true;
+      }
+      break;
+    }
+  }
+  // The method, in the first argument.
+  size_t at = first.size();
+  for (size_t i = 0; i < first.size(); ++i) {
+    if (first[i].IsIdent() && Lower(first[i].token.value) == "in") {
+      at = i;
+      break;
+    }
+  }
+  if (at == first.size()) {
+    if (!changedFirst) return;
+    ComponentValues rebuilt;
+    bool wrote = false;
+    if (!first.empty()) {
+      rebuilt = first;
+      wrote = true;
+    }
+    for (size_t i = 1; i < args.size(); ++i) {
+      if (wrote) {
+        ComponentValue c;
+        c.token.type = T::Comma;
+        rebuilt.push_back(c);
+        ComponentValue ws;
+        ws.token.type = T::Whitespace;
+        rebuilt.push_back(ws);
+      }
+      rebuilt.insert(rebuilt.end(), args[i].begin(), args[i].end());
+      wrote = true;
+    }
+    gradient.children = rebuilt;
+    return;
+  }
+  size_t end = at + 1;
+  while (end < first.size() && first[end].IsWhitespace()) ++end;
+  if (end >= first.size() || !first[end].IsIdent()) return;
+  std::string space = Lower(first[end].token.value);
+  ++end;
+  std::string hue;
+  {
+    size_t k = end;
+    while (k < first.size() && first[k].IsWhitespace()) ++k;
+    if (k < first.size() && first[k].IsIdent()) {
+      const std::string method = Lower(first[k].token.value);
+      size_t h = k + 1;
+      while (h < first.size() && first[h].IsWhitespace()) ++h;
+      if ((method == "shorter" || method == "longer" || method == "increasing" || method == "decreasing") && h < first.size() && first[h].IsIdent() && Lower(first[h].token.value) == "hue") {
+        hue = method;
+        end = h + 1;
+      }
+    }
+  }
+  ComponentValues rest(first.begin(), first.begin() + at);
+  rest.insert(rest.end(), first.begin() + end, first.end());
+  rest = Trimmed(rest);
+  // Whether every color in the stops is written in a legacy syntax.
+  bool legacy = true;
+  const auto nonLegacy = [](const std::string& name) {
+    return name == "color" || name == "lab" || name == "lch" || name == "oklab" || name == "oklch" || name == "hwb" || name == "color-mix" || name == "light-dark" || name == "color-layers" || name == "contrast-color" || name == "device-cmyk";
+  };
+  for (size_t i = rest.empty() ? 0 : 0; i < args.size(); ++i) {
+    if (i == 0) continue;
+    for (const ComponentValue& c : args[i]) {
+      if (c.kind == ComponentValue::Kind::Function && nonLegacy(Lower(c.name))) legacy = false;
+    }
+  }
+  if (space == "xyz") space = "xyz-d65";
+  if (hue == "shorter") hue.clear();
+  bool omit = hue.empty() && ((space == "srgb" && legacy) || (space == "oklab" && !legacy));
+  ComponentValues head = rest;
+  if (!omit) {
+    ComponentValue space1;
+    if (!head.empty()) {
+      ComponentValue ws;
+      ws.token.type = T::Whitespace;
+      head.push_back(ws);
+    }
+    ComponentValue in;
+    in.token.type = T::Ident;
+    in.token.value = "in";
+    head.push_back(in);
+    ComponentValue ws;
+    ws.token.type = T::Whitespace;
+    head.push_back(ws);
+    space1.token.type = T::Ident;
+    space1.token.value = space;
+    head.push_back(space1);
+    if (!hue.empty()) {
+      head.push_back(ws);
+      ComponentValue method;
+      method.token.type = T::Ident;
+      method.token.value = hue;
+      head.push_back(method);
+      head.push_back(ws);
+      ComponentValue word;
+      word.token.type = T::Ident;
+      word.token.value = "hue";
+      head.push_back(word);
+    }
+  }
+  ComponentValues rebuilt;
+  const auto comma = [&] {
+    ComponentValue c;
+    c.token.type = T::Comma;
+    rebuilt.push_back(c);
+    ComponentValue ws;
+    ws.token.type = T::Whitespace;
+    rebuilt.push_back(ws);
+  };
+  bool wrote = false;
+  if (!head.empty()) {
+    rebuilt = head;
+    wrote = true;
+  }
+  for (size_t i = 1; i < args.size(); ++i) {
+    if (wrote) comma();
+    rebuilt.insert(rebuilt.end(), args[i].begin(), args[i].end());
+    wrote = true;
+  }
+  gradient.children = rebuilt;
+}
+
+void CanonicalGradients(ComponentValues& values, bool computed) {
+  for (ComponentValue& v : values) {
+    if (v.kind == ComponentValue::Kind::Function) {
+      const std::string name = Lower(v.name);
+      if (name == "linear-gradient" || name == "radial-gradient" || name == "conic-gradient" || name == "repeating-linear-gradient" || name == "repeating-radial-gradient" || name == "repeating-conic-gradient") CanonicalGradient(v, computed);
+    }
+    if (v.kind != ComponentValue::Kind::Token) CanonicalGradients(v.children, computed);
+  }
+}
+
+
+// ---- Fonts ----
+
+bool IsGenericFamily(const std::string& lower) {
+  static const std::set<std::string> generic = {"serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "ui-serif", "ui-sans-serif", "ui-monospace", "ui-rounded", "math", "emoji", "fangsong"};
+  return generic.count(lower) > 0;
+}
+
+// Whether a string is a sequence of identifiers separated by single spaces that does not need its quotes.
+bool WordsOfIdentifiers(const std::string& text, std::vector<std::string>& words) {
+  words.clear();
+  size_t start = 0;
+  while (true) {
+    const size_t space = text.find(' ', start);
+    const std::string word = text.substr(start, space == std::string::npos ? std::string::npos : space - start);
+    if (word.empty()) return false;
+    const unsigned char first = static_cast<unsigned char>(word[0]);
+    const bool startsOk = std::isalpha(first) || first == '_' || first >= 0x80 || (first == '-' && word.size() > 1 && (std::isalpha(static_cast<unsigned char>(word[1])) || word[1] == '_' || static_cast<unsigned char>(word[1]) >= 0x80 || word[1] == '-'));
+    if (!startsOk) return false;
+    for (unsigned char c : word) {
+      if (!(std::isalnum(c) || c == '_' || c == '-' || c >= 0x80)) return false;
+    }
+    words.push_back(word);
+    if (space == std::string::npos) break;
+    start = space + 1;
+  }
+  return true;
+}
+
+std::vector<ComponentValues> SplitCommas(const ComponentValues& values) {
+  std::vector<ComponentValues> parts(1);
+  for (const ComponentValue& v : values) {
+    if (v.IsWhitespace()) continue;
+    if (v.IsToken(T::Comma)) parts.emplace_back();
+    else parts.back().push_back(v);
+  }
+  return parts;
+}
+
+ComponentValues JoinCommas(const std::vector<ComponentValues>& parts) {
+  ComponentValues out;
+  for (size_t i = 0; i < parts.size(); ++i) {
+    if (i) {
+      ComponentValue comma;
+      comma.token.type = T::Comma;
+      out.push_back(comma);
+    }
+    out.insert(out.end(), parts[i].begin(), parts[i].end());
+  }
+  return out;
+}
+
+// A feature or variation tag: a string of four printable ASCII characters.
+bool ValidTag(const ComponentValue& v) {
+  if (!v.IsToken(T::String) || v.token.value.size() != 4) return false;
+  for (unsigned char c : v.token.value) {
+    if (c < 0x20 || c > 0x7e) return false;
+  }
+  return true;
+}
+
+bool CanonicalFontValue(const std::string& name, ValueMatch& out, bool computed) {
+  ComponentValues& v = out.normalized;
+  if (name == "font-family") {
+    std::vector<ComponentValues> parts = SplitCommas(v);
+    for (ComponentValues& part : parts) {
+      if (part.empty()) return false;
+      if (part.size() == 1 && part[0].IsToken(T::String)) {
+        std::vector<std::string> words;
+        const std::string text = part[0].token.value;
+        if (WordsOfIdentifiers(text, words) && !(words.size() == 1 && (IsGenericFamily(Lower(words[0])) || Lower(words[0]) == "initial" || Lower(words[0]) == "inherit" || Lower(words[0]) == "unset" || Lower(words[0]) == "revert" || Lower(words[0]) == "revert-layer" || Lower(words[0]) == "revert-rule" || Lower(words[0]) == "default"))) {
+          ComponentValues idents;
+          for (const std::string& w : words) {
+            ComponentValue ident;
+            ident.token.type = T::Ident;
+            ident.token.value = w;
+            idents.push_back(ident);
+          }
+          part = idents;
+        }
+        continue;
+      }
+      if (part.size() > 1) {
+        for (const ComponentValue& c : part) {
+          if (c.IsIdent() && IsGenericFamily(Lower(c.token.value))) return false;
+        }
+      } else if (part[0].IsIdent() && IsGenericFamily(Lower(part[0].token.value))) {
+        part[0].token.value = Lower(part[0].token.value);
+      }
+    }
+    v = JoinCommas(parts);
+    return true;
+  }
+  if (name == "font-feature-settings" || name == "font-variation-settings") {
+    if (v.size() == 1 && v[0].IsIdent()) return true;  // normal
+    std::vector<ComponentValues> parts = SplitCommas(v);
+    const bool features = name == "font-feature-settings";
+    for (ComponentValues& part : parts) {
+      if (part.empty() || !ValidTag(part[0])) return false;
+      if (features) {
+        // 1 and on are the default value.
+        if (part.size() == 2 && part[1].IsIdent()) {
+          part[1].token.type = T::Number;
+          part[1].token.number = Lower(part[1].token.value) == "on" ? 1 : 0;
+          part[1].token.isInteger = true;
+          part[1].token.value.clear();
+        }
+        if (part.size() == 2 && part[1].IsToken(T::Number) && part[1].token.number == 1) part.pop_back();
+      } else if (part.size() != 2 || !part[1].IsToken(T::Number)) {
+        // a calculation of numbers is allowed; a length or percentage is not
+        if (part.size() != 2 || part[1].kind != ComponentValue::Kind::Function) return false;
+      }
+    }
+    if (computed) {
+      // Sorted by tag, a repeated tag keeping its last value.
+      std::map<std::string, ComponentValues> byTag;
+      for (const ComponentValues& part : parts) byTag[part[0].token.value] = part;
+      parts.clear();
+      for (auto& [tag, part] : byTag) parts.push_back(part);
+    }
+    v = JoinCommas(parts);
+    return true;
+  }
+  if (name == "font-language-override") {
+    if (v.size() == 1 && v[0].IsToken(T::String)) {
+      std::string text = v[0].token.value;
+      if (text.empty() || text.size() > 4) return false;
+      for (unsigned char c : text) {
+        if (c < 0x20 || c > 0x7e) return false;
+      }
+      while (!text.empty() && text.back() == ' ') text.pop_back();
+      if (text.empty()) return false;
+      v[0].token.value = text;
+    }
+    return true;
+  }
+  if (name == "font-size-adjust") {
+    // ex-height is the basis when none is written.
+    if (v.size() == 2 && v[0].IsIdent() && Lower(v[0].token.value) == "ex-height") v.erase(v.begin());
+    if (computed) {
+      std::string basis;
+      if (v.size() == 2 && v[0].IsIdent()) basis = Lower(v[0].token.value);
+      ComponentValue& value = v.back();
+      if (value.IsIdent() && Lower(value.token.value) == "from-font") {
+        value.token.type = T::Number;
+        value.token.number = (basis.empty() || basis == "cap-height") ? 0.5 : 1;
+        value.token.isInteger = false;
+        value.token.value.clear();
+      } else if (value.IsToken(T::Number) && value.token.number < 0) {
+        value.token.number = 0;
+      }
+    }
+    return true;
+  }
+  if (name == "font-style") {
+    if (v.size() == 2 && v[0].IsIdent() && Lower(v[0].token.value) == "oblique" && v[1].IsToken(T::Dimension) && v[1].token.number == 0) {
+      v.pop_back();
+      v[0].token.value = "normal";
+    }
+    if (computed && v.size() == 2 && v[0].IsIdent() && Lower(v[0].token.value) == "oblique" && v[1].IsToken(T::Dimension)) {
+      if (v[1].token.number > 90) v[1].token.number = 90;
+      if (v[1].token.number < -90) v[1].token.number = -90;
+      if (v[1].token.number == 0) {
+        v.pop_back();
+        v[0].token.value = "normal";
+      }
+    }
+    return true;
+  }
+  if (name == "font-stretch" || name == "font-width") {
+    if (computed && v.size() == 1) {
+      static const std::map<std::string, double> keywords = {{"ultra-condensed", 50}, {"extra-condensed", 62.5}, {"condensed", 75}, {"semi-condensed", 87.5}, {"normal", 100}, {"semi-expanded", 112.5}, {"expanded", 125}, {"extra-expanded", 150}, {"ultra-expanded", 200}};
+      if (v[0].IsIdent()) {
+        const auto found = keywords.find(Lower(v[0].token.value));
+        if (found != keywords.end()) {
+          v[0].token.type = T::Percentage;
+          v[0].token.number = found->second;
+          v[0].token.value.clear();
+        }
+      } else if (v[0].IsToken(T::Percentage) && v[0].token.number < 0) {
+        v[0].token.number = 0;
+      }
+    }
+    return true;
+  }
+  if (name == "font-weight" && computed && v.size() == 1 && v[0].IsToken(T::Number)) {
+    if (v[0].token.number < 1) v[0].token.number = 1;
+    if (v[0].token.number > 1000) v[0].token.number = 1000;
+  }
+  return true;
+}
+
 }  // namespace
 
 bool MatchPropertyValue(const PropertyDefinition& property, const ComponentValues& values, ValueMatch& out, const ComputeContext* compute) {
@@ -1409,6 +1868,8 @@ bool MatchPropertyValue(const PropertyDefinition& property, const ComponentValue
   g_keepWrittenOrder = false;
   g_numberZero = false;
   if (!matched) return false;
+  CanonicalGradients(out.normalized, compute != nullptr);
+  if (!CanonicalFontValue(property.name, out, compute != nullptr)) return false;
   if (std::string(property.name) == "display") CanonicalDisplay(out);
   if (std::string(property.name) == "grid-template-rows" || std::string(property.name) == "grid-template-columns") CanonicalTrackList(out);
   {
