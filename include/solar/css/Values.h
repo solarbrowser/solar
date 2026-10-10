@@ -72,6 +72,9 @@ bool ParseAttrCall(const ComponentValue& function, AttrCall& out);
 void SetValueBaseUrl(const std::string& base);
 const std::string& ValueBaseUrl();
 
+// The keywords a value definition syntax names (through the types it uses, except the ones for names and colors).
+std::vector<std::string> KeywordsOfSyntax(std::string_view syntax);
+
 // The CSS-wide keywords (initial, inherit, unset, revert, revert-layer) a value can be on its own.
 bool IsCssWideKeyword(const ComponentValues& values);
 // Whether a value has a var(), env() or attr() in it, so that it is known only when it is used.

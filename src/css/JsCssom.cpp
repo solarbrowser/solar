@@ -6,6 +6,7 @@
 #include "solar/url/Serializer.h"
 #include "solar/css/Descriptors.h"
 #include "solar/css/Shorthands.h"
+#include "solar/css/Values.h"
 #include "solar/css/Properties.h"
 #include "solar/css/Style.h"
 #include "solar/dom/CustomElements.h"
@@ -1346,6 +1347,11 @@ Value TypedPropertyInfo(Context& ctx, Value, qe::Args args, Value) {
   qe::ArrayPush(ctx, result, qe::FromWtf8(ctx, IsShorthandProperty(*definition) ? "shorthand" : "longhand"));
   qe::ArrayPush(ctx, result, qe::FromWtf8(ctx, definition->syntax));
   qe::ArrayPush(ctx, result, qe::FromWtf8(ctx, definition->name));
+  Value keywords = qe::NewArray(ctx);
+  for (const std::string& keyword : KeywordsOfSyntax(definition->syntax)) qe::ArrayPush(ctx, keywords, qe::FromWtf8(ctx, keyword));
+  // <color> brings currentcolor in with it.
+  if (std::string(definition->syntax).find("<color>") != std::string::npos || std::string(definition->syntax).find("<paint>") != std::string::npos) qe::ArrayPush(ctx, keywords, qe::FromWtf8(ctx, "currentcolor"));
+  qe::ArrayPush(ctx, result, keywords);
   return result;
 }
 

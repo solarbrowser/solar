@@ -341,7 +341,40 @@ NodePtr SyntaxOf(std::string_view syntax) {
   return node;
 }
 
+void CollectKeywords(const SyntaxNode& node, std::set<std::string>& visited, std::vector<std::string>& out) {
+  using Kind = SyntaxNode::Kind;
+  switch (node.kind) {
+    case Kind::Keyword: out.push_back(node.text); return;
+    case Kind::Type: {
+      // Names of colors, of things the author names and the like are not keywords of the property.
+      static const std::set<std::string> skipped = {"custom-ident", "dashed-ident", "named-color", "color-base", "system-color", "deprecated-color", "ident", "family-name", "generic-family", "string", "url"};
+      if (skipped.count(node.text) || !visited.insert(node.text).second) return;
+      if (const char* syntax = FindTypeSyntax("<" + node.text + ">")) {
+        if (NodePtr root = SyntaxOf(syntax)) CollectKeywords(*root, visited, out);
+      }
+      return;
+    }
+    case Kind::Property: {
+      if (!visited.insert("'" + node.text).second) return;
+      if (const PropertyDefinition* property = FindProperty(node.text)) {
+        if (NodePtr root = SyntaxOf(property->syntax)) CollectKeywords(*root, visited, out);
+      }
+      return;
+    }
+    default:
+      for (const NodePtr& child : node.children) CollectKeywords(*child, visited, out);
+  }
+}
+
 }  // namespace
+
+std::vector<std::string> KeywordsOfSyntax(std::string_view syntax) {
+  std::vector<std::string> out;
+  std::set<std::string> visited;
+  if (NodePtr root = SyntaxOf(syntax)) CollectKeywords(*root, visited, out);
+  // currentcolor comes with <color> though its name does not show.
+  return out;
+}
 
 // ---- Units and numeric types ----
 

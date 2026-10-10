@@ -409,12 +409,16 @@
   // ---- Reification ----
 
   const URL_IMAGE = /^url\(/i;
-  const reifyOne = (text) => {
+  const reifyOne = (text, keywords) => {
     const nodes = tokenize(text);
     const items = significant(nodes);
     if (items.length === 1) {
       const item = items[0];
-      if (item.type === 'ident') return new CSSKeywordValue(item.value);
+      if (item.type === 'ident') {
+        const lower = item.value.toLowerCase();
+        if (!keywords || keywords.has(lower) || /^(?:initial|inherit|unset|revert|revert-layer)$/.test(lower)) return new CSSKeywordValue(item.value);
+        return makeGeneric(text.trim());
+      }
       const numeric = numericOf(nodes);
       if (numeric) return numeric;
       if (item.type === 'url') return build(() => {
@@ -480,7 +484,7 @@
     if (Object.getPrototypeOf(value) === CSSStyleValue.prototype) Object.defineProperty(value, ASSOC, { value: property, enumerable: false });
     return value;
   };
-  const reify = (property, text, isList) => {
+  const reify = (property, text, isList, keywords) => {
     if (containsVar(text) || property.startsWith('--')) return [unparsedOf(text.trim())];
     if (property === 'transform') {
       const nodes = tokenize(text);
@@ -489,8 +493,8 @@
         if (transform) return [transform];
       }
     }
-    if (!isList) return [associate(reifyOne(text), property)];
-    return splitTopLevel(text).map((part) => associate(reifyOne(part), property));
+    if (!isList) return [associate(reifyOne(text, keywords), property)];
+    return splitTopLevel(text).map((part) => associate(reifyOne(part, keywords), property));
   };
   const splitTopLevel = (text) => {
     const parts = [];
@@ -523,7 +527,7 @@
   const infoOf = (property) => {
     const info = propertyInfo(property);
     if (info === null) return null;
-    return { kind: info[0], syntax: info[1], name: info[2] || property, list: /#/.test(info[1]) };
+    return { kind: info[0], syntax: info[1], name: info[2] || property, list: /#/.test(info[1]), keywords: info[3] ? new Set(info[3].map((k) => k.toLowerCase())) : null };
   };
   const canonicalName = (property) => {
     if (property.startsWith('--')) return property;
@@ -555,7 +559,7 @@
     const stored = declarations.getPropertyValue(info.name);
     declarations.removeProperty(info.name);
     if (stored === '') throw new TypeError("Failed to execute 'parse' on 'CSSStyleValue': Invalid value for " + property);
-    const values = reify(info.name, containsVar(text) ? text : stored, info.list);
+    const values = reify(info.name, containsVar(text) ? text : stored, info.list, info.keywords);
     return values;
   };
   const parseSingle = (property, text) => {
@@ -592,8 +596,11 @@
       const name = lookup(String(property));
       const text = this[INTERNAL].read(name.name);
       if (text === '') return [];
-      if (name.kind === 'shorthand') return [containsVar(text) ? unparsedOf(text.trim()) : associate(makeGeneric(text), name.name)];
-      return reify(name.name, text, name.list);
+      if (name.kind === 'shorthand') {
+        if (/^(?:initial|inherit|unset|revert|revert-layer)$/i.test(text.trim())) return [new CSSKeywordValue(text.trim())];
+        return [containsVar(text) ? unparsedOf(text.trim()) : associate(makeGeneric(text), name.name)];
+      }
+      return reify(name.name, text, name.list, name.keywords);
     }
     has(property) {
       const name = lookup(String(property));
@@ -615,7 +622,7 @@
   const lookup = (property) => {
     const info = infoOf(property);
     if (info === null) throw new TypeError("Invalid property name: " + property);
-    return { name: info.kind === 'custom' ? property : info.name, kind: info.kind, list: info.list };
+    return { name: info.kind === 'custom' ? property : info.name, kind: info.kind, list: info.list, keywords: info.keywords };
   };
 
   class StylePropertyMap extends StylePropertyMapReadOnly {
@@ -661,7 +668,8 @@
         declarations.removeProperty(info.name);
         return stored !== '';
       };
-      if (info.kind === 'custom' || check(text)) return text;
+      const numberZero = values.length === 1 && values[0] instanceof CSSUnitValue && values[0].unit === 'number' && values[0].value === 0;
+      if (info.kind === 'custom' || (check(text) && (!numberZero || check('calc(0)')))) return text;
       if (values.length === 1 && values[0] instanceof CSSUnitValue && check('calc(' + text + ')')) return 'calc(' + text + ')';
       throw new TypeError('Failed to set the value: it is not valid for ' + info.name);
     }
