@@ -31,6 +31,10 @@ void NoteStyleChange();
 uint64_t StyleVersion();
 // An animation changed the values it gives: computed values are made again, but nothing that was declared is different.
 void NoteAnimatedStyleChange();
+// Something declared animation-* or transition-* was parsed: how many times, so that whatever watches for animations can know
+// whether there is a reason to.
+void NoteAnimationMention();
+uint64_t AnimationMentions();
 // A number that changes with the tree and with what is declared, not with what animations give.
 uint64_t AuthorStyleVersion();
 

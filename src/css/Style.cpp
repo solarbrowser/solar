@@ -475,7 +475,7 @@ ElementStyle& StyleOf(dom::Element* element, const std::string& pseudo = "") {
     Cache().clear();
     cachedVersion = version;
   }
-  ElementStyle& style = Cache()[{element, pseudo}];
+  ElementStyle& style = Cache()[{element, AnimatedValuesSuppressed() ? pseudo + "\x03" : pseudo}];
   style.version = version;
   return style;
 }
@@ -1227,6 +1227,9 @@ std::string Resolver::Finish(dom::Element* element, const std::string& property,
 }  // namespace
 
 uint64_t g_authorVersion = 1;
+uint64_t g_animationMentions = 0;
+void NoteAnimationMention() { ++g_animationMentions; }
+uint64_t AnimationMentions() { return g_animationMentions; }
 void NoteStyleChange() {
   ++g_styleVersion;
   ++g_authorVersion;
@@ -1247,22 +1250,34 @@ std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std
   }
   // What animations give is brought up to date first, when what it depends on has changed.
   static bool flushing = false;
-  if (depth == 0 && !flushing && !StyleFlushSuppressed() && element && element->nodeDocument && element->nodeDocument->styleFlush) {
-    dom::Document* document = element->nodeDocument;
+  dom::Document* document = element ? element->nodeDocument : nullptr;
+  const auto flush = [&]() {
+    if (!document || !document->styleFlush || !document->animationStyleSeen || flushing || StyleFlushSuppressed()) return;
     const uint64_t version = AuthorStyleVersion();
-    if (document->styleFlushedVersion != version) {
-      flushing = true;
-      Quanta::Embed::Call(ctx, Quanta::Embed::FromObject(document->styleFlush), Quanta::Embed::Undefined());
-      flushing = false;
-      document->styleFlushedVersion = AuthorStyleVersion();
-    }
-  }
+    if (document->styleFlushedVersion == version) return;
+    flushing = true;
+    Quanta::Embed::Call(ctx, Quanta::Embed::FromObject(document->styleFlush), Quanta::Embed::Undefined());
+    flushing = false;
+    document->styleFlushedVersion = AuthorStyleVersion();
+  };
+  if (depth == 0) flush();
   struct Depth {
     Depth() { ++depth; }
     ~Depth() { --depth; }
   } guard;
   Resolver resolver(ctx);
-  return resolver.Compute(element, property, pseudo);
+  std::string result = resolver.Compute(element, property, pseudo);
+  if (depth == 1 && document && !document->animationStyleSeen && element) {
+    const ElementStyle& style = StyleOf(element, pseudo);
+    if (style.cascade.count("animation-name") || style.cascade.count("transition-property") || style.cascade.count("transition-duration")) {
+      document->animationStyleSeen = true;
+      document->styleFlushedVersion = 0;
+      depth = 0;
+      flush();
+      depth = 1;
+    }
+  }
+  return result;
 }
 
 namespace {
@@ -1273,8 +1288,14 @@ void SetResolvedValueHook(ResolvedValueHook hook) { g_resolvedHook = hook; }
 
 std::string ResolvedValue(Quanta::Context& ctx, dom::Element* element, const std::string& property, const std::string& pseudo) {
   std::string used;
+  // The computed value is what a transition starts from the next time style changes: it is kept as far as it was read.
+  const std::string computed = ComputedValue(ctx, element, property, pseudo);
+  if (element && !computed.empty() && element->nodeDocument) {
+    const PropertyDefinition* definition = FindProperty(property);
+    if (definition && !IsShorthand(*definition)) element->lastRead[pseudo][property] = computed;
+  }
   if (g_resolvedHook && pseudo.empty() && element && element->nodeDocument && g_resolvedHook(ctx, element, property, pseudo, used)) return used;
-  return ComputedValue(ctx, element, property, pseudo);
+  return computed;
 }
 
 const std::vector<std::string>& ComputedPropertyNames() {

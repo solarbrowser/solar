@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<title>CSS animations</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<style>
+@keyframes slide { from { margin-left: 0px; } to { margin-left: 100px; } }
+</style>
+<div id="box"></div>
+<script>
+promise_test(async t => {
+  box.style.animation = 'slide 100s linear';
+  const anim = box.getAnimations()[0];
+  assert_true(anim instanceof CSSAnimation);
+  assert_equals(anim.animationName, 'slide');
+  let started = false;
+  box.addEventListener('animationstart', () => { started = true; });
+  await anim.ready;
+  anim.currentTime = 50000;
+  assert_equals(getComputedStyle(box).marginLeft, '50px');
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  assert_true(started);
+  box.style.animation = 'none';
+  assert_equals(box.getAnimations().length, 0);
+  assert_equals(getComputedStyle(box).marginLeft, '0px');
+}, 'a CSS animation');
+</script>

@@ -359,7 +359,7 @@
         id: '',
         replaceState: 'active',
         sequence: sequence++,
-        category: 0,
+        category: 2,
       };
       slot.ready = makePromise();
       slot.ready.resolve(this);

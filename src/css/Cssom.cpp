@@ -66,6 +66,10 @@ bool NormalizePropertyName(std::string& name) {
 namespace {
 
 void AddOrReplace(std::vector<DeclarationEntry>& items, DeclarationEntry entry) {
+  if (entry.name.rfind("animation", 0) == 0 || entry.name.rfind("transition", 0) == 0 || entry.name.rfind("-webkit-animation", 0) == 0 ||
+      entry.name.rfind("-webkit-transition", 0) == 0) {
+    NoteAnimationMention();
+  }
   for (DeclarationEntry& existing : items) {
     if (existing.name == entry.name) {
       existing = std::move(entry);

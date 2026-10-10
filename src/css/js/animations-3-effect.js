@@ -17,8 +17,13 @@
     kind: globalThis.__solarAnimPropertyKind,
     version: globalThis.__solarAuthorVersion,
     onFlush: globalThis.__solarAnimOnFlush,
+    read: globalThis.__solarAnimRead,
+    mentions: globalThis.__solarAnimMentions,
+    lastRead: globalThis.__solarAnimLastRead,
+    interpolable: globalThis.__solarAnimInterpolable,
   };
-  for (const name of ['__solarAnimInterpolate', '__solarAnimAdd', '__solarAnimScale', '__solarAnimSet', '__solarAnimComputed', '__solarAnimCompute', '__solarAnimExpand', '__solarAnimPropertyKind', '__solarAuthorVersion', '__solarAnimOnFlush', '__solarAnimInterpolable']) delete globalThis[name];
+  S.natives = natives;
+  for (const name of ['__solarAnimInterpolate', '__solarAnimAdd', '__solarAnimScale', '__solarAnimSet', '__solarAnimComputed', '__solarAnimCompute', '__solarAnimExpand', '__solarAnimPropertyKind', '__solarAuthorVersion', '__solarAnimOnFlush', '__solarAnimRead', '__solarAnimMentions', '__solarAnimLastRead', '__solarAnimInterpolable']) delete globalThis[name];
 
   // ---- Property names ----
 
@@ -382,6 +387,11 @@
 
   const interpolateValues = (property, a, b, t) => {
     if (a === b) return a;
+    if (property === 'display' || property === 'content-visibility') {
+      if (a === 'none' || a === 'hidden') return t > 0 ? b : a;
+      if (b === 'none' || b === 'hidden') return t < 1 ? a : b;
+      return t < 0.5 ? a : b;
+    }
     if (property === 'visibility') {
       if (t <= 0) return a;
       if (t >= 1) return b;
@@ -459,13 +469,50 @@
   };
   S.registry = registry;
 
+  // The order effects are composited in: transitions, then CSS animations, then the others; the first two by the order of their owners
+  // in the tree and then of their place in the style, the others by when they were made.
   const compositeOrder = (a, b) => {
     const as = S.slotOf(a), bs = S.slotOf(b);
-    return as.category - bs.category || (as.order !== undefined && bs.order !== undefined && as.category === bs.category && as.owner === bs.owner ? as.order - bs.order : 0) || S.sequenceOf(as) - S.sequenceOf(bs);
+    if (as.category !== bs.category) return as.category - bs.category;
+    if (as.category !== 2 && as.owner && bs.owner) {
+      if (as.owner !== bs.owner) return as.owner.compareDocumentPosition(bs.owner) & 4 ? -1 : 1;
+      return (as.order || 0) - (bs.order || 0) || S.sequenceOf(as) - S.sequenceOf(bs);
+    }
+    return S.sequenceOf(as) - S.sequenceOf(bs);
   };
   S.compositeOrder = compositeOrder;
 
   const applied = new Map();  // target → pseudo → last record string, to leave out what has not changed
+
+  S.appliedValue = (target, key, css) => {
+    const byKey = applied.get(target);
+    const values = byKey && byKey.get(key);
+    return values ? values.get(css) : undefined;
+  };
+
+  // The value of the property the cascade has for the element with what animations give to it but not what transitions do: the style
+  // transitions compare before and after a change.
+  S.afterChangeValue = (target, pseudo, css) => {
+    let value = natives.base(target, pseudo, css);
+    const set = registry.get(target) && registry.get(target).get(pseudo);
+    if (!set || value === null || value === '') return value;
+    const members = [];
+    for (const effect of set) {
+      const slot = effectSlots.get(effect);
+      if (!slot.animation || S.slotOf(slot.animation).category === 0) continue;
+      const computed = S.effectComputed(slot);
+      if (computed.progress === null) continue;
+      members.push({ slot, computed, animation: slot.animation });
+    }
+    members.sort((x, y) => compositeOrder(x.animation, y.animation));
+    for (const { slot, computed } of members) {
+      const list = computedKeyframes(slot).get(css);
+      if (!list) continue;
+      const next = effectValue(slot, css, list, computed, value);
+      if (next !== undefined) value = next;
+    }
+    return value;
+  };
 
   const refreshPair = (target, pseudo) => {
     if (!target) return;
@@ -532,8 +579,11 @@
     refreshEffect(slot);
   };
 
-  S.styleFlush = () => S.refreshAll();
-  natives.onFlush(() => S.refreshAll());
+  S.styleFlush = () => {
+    if (S.cssFlush) S.cssFlush();
+    S.refreshAll();
+  };
+  natives.onFlush(() => S.styleFlush());
 
   S.refreshAll = () => {
     for (const [target, byPseudo] of [...registry]) {

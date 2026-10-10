@@ -53,6 +53,7 @@ Value Set(Context& ctx, Value, qe::Args args, Value) {
     if (split != std::string::npos && split < end) values[text.substr(at, split - at)] = text.substr(split + 1, end - split - 1);
     at = end + 1;
   }
+  if (!values.empty() && element->nodeDocument) element->nodeDocument->animationStyleSeen = true;
   SetAnimatedValues(element, StringArg(ctx, args, 1), std::move(values));
   return qe::Undefined();
 }
@@ -98,6 +99,34 @@ Value OnFlush(Context& ctx, Value, qe::Args args, Value) {
   return qe::Undefined();
 }
 
+// __solarAnimRead(element, pseudo, property): the computed value of a property that animations do not touch (animation-name, transition-property...).
+Value Read(Context& ctx, Value, qe::Args args, Value) {
+  dom::Element* element = args.size() > 0 ? DOMObject::Cast<dom::Element>(args[0]) : nullptr;
+  if (!element || args.size() < 3) return qe::Null();
+  NoStyleFlush noFlush;
+  return qe::FromWtf8(ctx, ComputedValue(ctx, element, StringArg(ctx, args, 2), StringArg(ctx, args, 1)));
+}
+
+// __solarAnimLastRead(element, pseudo, property): the computed value that script last read, or null.
+Value LastRead(Context& ctx, Value, qe::Args args, Value) {
+  dom::Element* element = args.size() > 0 ? DOMObject::Cast<dom::Element>(args[0]) : nullptr;
+  if (!element || args.size() < 3) return qe::Null();
+  const auto byPseudo = element->lastRead.find(StringArg(ctx, args, 1));
+  if (byPseudo == element->lastRead.end()) return qe::Null();
+  const auto value = byPseudo->second.find(StringArg(ctx, args, 2));
+  return value == byPseudo->second.end() ? qe::Null() : qe::FromWtf8(ctx, value->second);
+}
+
+// __solarAnimMentions(): how many declarations of animation-* and transition-* have been parsed; the document is told that style asks
+// for animations once there has been one.
+Value Mentions(Context& ctx, Value, qe::Args, Value) {
+  const uint64_t count = AnimationMentions();
+  if (count > 0) {
+    if (dom::Document* document = dom::AssociatedDocument(ctx)) document->animationStyleSeen = true;
+  }
+  return qe::FromNumber(static_cast<double>(count));
+}
+
 // __solarAnimExpand(property, text): "longhand \x1f value" records (apart by \x1e) for a shorthand declared with the text; null if it is not
 // one or the text is not its value. A longhand gives itself.
 Value Expand(Context& ctx, Value, qe::Args args, Value) {
@@ -130,6 +159,9 @@ void InstallAnimationNatives(Context& ctx) {
   qe::DefineGlobalFunction(ctx, "__solarAnimExpand", Expand, 2);
   qe::DefineGlobalFunction(ctx, "__solarAnimCompute", Compute, 4);
   qe::DefineGlobalFunction(ctx, "__solarAnimOnFlush", OnFlush, 1);
+  qe::DefineGlobalFunction(ctx, "__solarAnimRead", Read, 3);
+  qe::DefineGlobalFunction(ctx, "__solarAnimMentions", Mentions, 0);
+  qe::DefineGlobalFunction(ctx, "__solarAnimLastRead", LastRead, 3);
   qe::DefineGlobalFunction(ctx, "__solarAuthorVersion", AuthorVersion, 0);
   qe::DefineGlobalFunction(ctx, "__solarAnimPropertyKind", Kind, 1);
 }

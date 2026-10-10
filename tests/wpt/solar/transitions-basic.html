@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<title>CSS transitions</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<div id="box" style="margin-left: 0px"></div>
+<script>
+promise_test(async t => {
+  getComputedStyle(box).marginLeft;
+  box.style.transition = 'margin-left 100s linear';
+  box.style.marginLeft = '100px';
+  const anim = box.getAnimations()[0];
+  assert_true(anim instanceof CSSTransition);
+  assert_equals(anim.transitionProperty, 'margin-left');
+  await anim.ready;
+  anim.currentTime = 50000;
+  assert_equals(getComputedStyle(box).marginLeft, '50px');
+  box.style.marginLeft = '0px';
+  const reversed = box.getAnimations()[0];
+  assert_not_equals(reversed, anim);
+  box.style.transition = 'none';
+  assert_equals(box.getAnimations().length, 0);
+  assert_equals(getComputedStyle(box).marginLeft, '0px');
+}, 'a CSS transition');
+</script>

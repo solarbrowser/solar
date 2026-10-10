@@ -697,9 +697,11 @@ const char* const kWindowScript = R"JS(
     for (const callback of callbacks) {
       try { callback(now); } catch (error) { reportLater(error); }
     }
+    // Whether another frame is wanted is seen at the time of this one: the animations are running or not as of it.
+    const more = frames.size > 0 || (animationFrame.wants && animationFrame.wants());
     if (animationFrame.end) animationFrame.end();
     frameBusy = false;
-    if (frames.size || (animationFrame.wants && animationFrame.wants())) scheduleFrame();
+    if (more) scheduleFrame();
   }
   Object.defineProperty(globalThis, "__solarFrameHook", { value: function (run, end, wants) {
     animationFrame.run = run; animationFrame.end = end; animationFrame.wants = wants;

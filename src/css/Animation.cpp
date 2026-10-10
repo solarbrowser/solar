@@ -264,9 +264,10 @@ const std::string* AnimatedValue(dom::Element* element, const std::string& pseud
 
 void SuppressAnimatedValues(bool suppressed) {
   if (g_suppressed == suppressed) return;
-  g_suppressed = suppressed;
-  if (g_animatedSlots > 0) NoteAnimatedStyleChange();
+  g_suppressed = suppressed;  // the styles it asks for are kept apart from the others, so nothing needs to be made again
 }
+
+bool AnimatedValuesSuppressed() { return g_suppressed; }
 
 // ---- Combining values ----
 

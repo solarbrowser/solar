@@ -232,6 +232,8 @@ struct Element : Node {
 
   // What animations give to properties of the element (pseudo-element name → property → value), which the cascade takes over the declared ones.
   std::map<std::string, std::map<std::string, std::string>> animatedValues;
+  // The computed values script last read (pseudo-element name → property → value): the style from before a change, for transitions.
+  std::map<std::string, std::map<std::string, std::string>> lastRead;
 
   std::string QualifiedName() const { return prefix.empty() ? localName : prefix + ":" + localName; }
   // `name` is compared as the standard does for a name on an HTML element in an HTML document: after
@@ -282,6 +284,8 @@ struct Document : Node {
   // The function (script's, animations') that brings what animations give up to date before a computed style is read, and the style version it last ran for.
   Quanta::Object* styleFlush = nullptr;
   uint64_t styleFlushedVersion = 0;
+  // Whether style has been seen to ask for animations or transitions (or script made animations): only then is the function run.
+  bool animationStyleSeen = false;
   // For an about: document whose iframe is gone: the address it was resolving against, which is the origin it keeps.
   std::string inheritedBase;
   // The Content-Security-Policy values that apply to the document (the header's, and its meta elements').
