@@ -13,6 +13,11 @@ namespace solar::css {
 
 // The request a style makes: the families of font-family (names unquoted, generics lowercased), weight, stretch and style.
 font::Request FontRequestFor(dom::Element* element, const std::string& pseudo = "");
+// The request for a family list as written (font-family's computed text), and the rest as values.
+font::Request MakeFontRequest(const std::string& familyText, double weight, double width, bool italic);
+// The faces for the request in the document: its @font-face fonts first, then the system's; the generic fallbacks last. Never empty
+// if the system has a font at all.
+std::vector<std::shared_ptr<font::Face>> FontsForRequest(dom::Document* document, const font::Request& request);
 // The faces that would do for the element's text, the first family's first: more than one when later families are there for the
 // characters the earlier ones do not have. Never empty: a font is found whatever is asked for, if the system has any.
 std::vector<std::shared_ptr<font::Face>> FontsFor(dom::Element* element, const std::string& pseudo = "");

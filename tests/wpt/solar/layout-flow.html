@@ -1,0 +1,83 @@
+<!doctype html>
+<title>layout: block flow, floats, positioning</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<style>
+body { margin: 0; font: 10px/1 Ahem; }
+.box { width: 100px; height: 50px; background: gray; }
+#c1 { margin-bottom: 30px; } #c2 { margin-top: 20px; }
+#wrap { margin-top: 100px; }
+#child-esc { margin-top: 40px; height: 10px; }
+#fl { float: left; width: 60px; height: 40px; }
+#fr { float: right; width: 30px; height: 20px; }
+#clr { clear: both; height: 5px; }
+#abs { position: absolute; left: 10px; top: 20px; width: 70px; height: 30px; }
+#rel { position: relative; left: 7px; top: 3px; width: 10px; height: 10px; }
+#cb { position: relative; width: 200px; height: 100px; margin-left: 30px; }
+#inabs { position: absolute; right: 10px; bottom: 5px; width: 20px; height: 20px; }
+#ib { display: inline-block; width: 40px; height: 20px; }
+#bfc { overflow: hidden; }
+#auto-margin { width: 100px; margin: 0 auto; height: 5px; }
+</style>
+<div id=c1 class=box></div>
+<div id=c2 class=box></div>
+<div id=wrap><div id=child-esc></div></div>
+<div id=after style="height:1px"></div>
+<div id=floats style="width:200px"><div id=fl></div><div id=fr></div><div id=text>XXXXXXXXXXXX</div><div id=clr></div></div>
+<div id=cb><div id=inabs></div></div>
+<div id=abs-parent style="position:relative"><div id=abs></div><div id=rel></div></div>
+<div id=am-wrap style="width:300px"><div id=auto-margin></div></div>
+<div id=inl style="width:300px">XXX<span id=ib></span>XXX</div>
+<div id=bfc-wrap style="width:200px"><div id=lf style="float:left;width:50px;height:30px"></div><div id=bfc>t</div></div>
+<script>
+const $ = (id) => document.getElementById(id);
+const top_ = (id) => $(id).getBoundingClientRect().top;
+test(() => {
+  assert_equals(top_("c1"), 0);
+  assert_equals(top_("c2"), 50 + 30, "adjacent margins collapse to the larger (30)");
+}, "sibling margin collapsing");
+test(() => {
+  assert_equals(top_("wrap"), 80 + 50 + 100, "wrap's 100 margin vs child 40: collapsed, wrap top = c2 bottom + 100");
+  assert_equals(top_("child-esc"), top_("wrap"), "child margin escapes parent");
+}, "parent-first-child collapsing");
+test(() => {
+  assert_equals($("fl").getBoundingClientRect().left, 0);
+  assert_equals($("fr").getBoundingClientRect().right, 200);
+  const t = $("text").getBoundingClientRect();
+  assert_equals(t.width, 200);
+  // text line beside floats: 12 chars * 10 = 120 > 200-60-30 = 110, so it wraps; first line starts after the left float
+  const r = $("text").getClientRects();
+  assert_equals(r.length, 1);
+}, "floats are placed at their sides");
+test(() => {
+  assert_equals(top_("clr") - top_("floats") >= 40, true, "clear goes below floats");
+}, "clear");
+test(() => {
+  const r = $("inabs").getBoundingClientRect(), p = $("cb").getBoundingClientRect();
+  assert_equals(r.right, p.right - 10);
+  assert_equals(r.bottom, p.bottom - 5);
+  assert_equals(r.width, 20);
+}, "absolute positioning against a positioned ancestor");
+test(() => {
+  const p = $("abs-parent").getBoundingClientRect(), a = $("abs").getBoundingClientRect();
+  assert_equals(a.left, p.left + 10);
+  assert_equals(a.top, p.top + 20);
+  const r = $("rel").getBoundingClientRect();
+  assert_equals(r.left, p.left + 7);
+}, "absolute and relative");
+test(() => {
+  const r = $("auto-margin").getBoundingClientRect();
+  assert_equals(r.left, 100);
+}, "auto margins centre");
+test(() => {
+  const r = $("ib").getBoundingClientRect();
+  assert_equals(r.width, 40);
+  assert_equals(r.left, 30);
+  assert_equals($("inl").offsetHeight, 22, "20 above the baseline, the strut's 2 below");
+}, "inline-block on a line");
+test(() => {
+  const b = $("bfc").getBoundingClientRect(), w = $("bfc-wrap").getBoundingClientRect();
+  assert_equals(b.left, w.left + 50, "a formatting context sits beside the float");
+  assert_equals(b.width, 150);
+}, "block formatting context beside a float");
+</script>

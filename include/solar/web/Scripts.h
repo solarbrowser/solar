@@ -8,5 +8,6 @@ extern const char* const kScriptUiEvents[];
 extern const char* const kScriptXhr[];
 extern const char* const kScriptTypedOm[];
 extern const char* const kScriptFontLoading[];
+extern const char* const kScriptLayout[];
 
 }  // namespace solar::web

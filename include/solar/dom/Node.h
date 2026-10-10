@@ -59,6 +59,11 @@ struct Document;
 struct Element;
 struct CustomDefinition;
 class DamageTracker;
+}  // namespace solar::dom
+namespace solar::layout {
+struct Tree;
+}
+namespace solar::dom {
 
 // An element's custom element state (https://html.spec.whatwg.org/#custom-element-state): Uncustomized is the one of
 // every element that cannot be a custom one.
@@ -249,6 +254,8 @@ struct Document : Node {
   std::string readyState = "complete";
   // What has changed since the page was last put together, once something (layout) has asked for it to be kept.
   std::shared_ptr<DamageTracker> damage;
+  // The boxes the document comes to, once something has asked for them.
+  std::shared_ptr<layout::Tree> layoutTree;
   // The script element that is running, for document.currentScript.
   Element* currentScript = nullptr;
   // The focused area of the document, if an element is: what document.activeElement is, once it is retargeted.

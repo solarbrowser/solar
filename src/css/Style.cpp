@@ -1046,6 +1046,18 @@ std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std
   return resolver.Compute(element, property, pseudo);
 }
 
+namespace {
+ResolvedValueHook g_resolvedHook = nullptr;
+}
+
+void SetResolvedValueHook(ResolvedValueHook hook) { g_resolvedHook = hook; }
+
+std::string ResolvedValue(Quanta::Context& ctx, dom::Element* element, const std::string& property, const std::string& pseudo) {
+  std::string used;
+  if (g_resolvedHook && pseudo.empty() && element && element->nodeDocument && g_resolvedHook(ctx, element, property, pseudo, used)) return used;
+  return ComputedValue(ctx, element, property, pseudo);
+}
+
 const std::vector<std::string>& ComputedPropertyNames() {
   static const std::vector<std::string> names = [] {
     std::vector<std::string> list;

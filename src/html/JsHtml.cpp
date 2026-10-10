@@ -15,6 +15,10 @@
 #include "solar/html/Xml.h"
 #include "solar/web/Scripts.h"
 
+namespace solar::layout {
+void InstallLayoutNatives(Quanta::Context& ctx);
+}
+
 namespace solar::html {
 
 namespace qe = Quanta::Embed;
@@ -897,6 +901,12 @@ void InstallWindowOn(Host& host, dom::Document* document, Quanta::Embed::Realm* 
   typedOm += "\n__solarTypedOm.install(); delete globalThis.__solarTypedOm;\n";
   const auto typedOmResult = host.Evaluate(typedOm, "typedom.js");
   if (!typedOmResult.ok) std::fprintf(stderr, "typedom.js: %s\n", typedOmResult.error.c_str());
+  // The geometry of elements.
+  layout::InstallLayoutNatives(ctx);
+  std::string geometry;
+  for (const char* const* piece = web::kScriptLayout; *piece; ++piece) geometry += *piece;
+  const auto geometryResult = host.Evaluate(geometry, "layout.js");
+  if (!geometryResult.ok) std::fprintf(stderr, "layout.js: %s\n", geometryResult.error.c_str());
   // And the font loading API.
   std::string fontLoading;
   for (const char* const* piece = web::kScriptFontLoading; *piece; ++piece) fontLoading += *piece;

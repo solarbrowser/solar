@@ -259,11 +259,11 @@ std::string CssDeclarations::ValueOf(const std::string& given) const {
     if (!definition) return "";
     if (IsShorthandProperty(*definition)) {
       std::vector<DeclarationEntry> leaves;
-      for (const std::string& leaf : LeavesOf(*definition)) leaves.push_back({leaf, ComputedValue(*computedContext, computedElement, leaf, computedPseudo), false, "", ""});
+      for (const std::string& leaf : LeavesOf(*definition)) leaves.push_back({leaf, ResolvedValue(*computedContext, computedElement, leaf, computedPseudo), false, "", ""});
       std::optional<bool> important;
       return ShorthandValue(leaves, *definition, important).value_or("");
     }
-    return ComputedValue(*computedContext, computedElement, name, computedPseudo);
+    return ResolvedValue(*computedContext, computedElement, name, computedPseudo);
   }
   if (definition && IsShorthandProperty(*definition)) {
     std::optional<bool> important;

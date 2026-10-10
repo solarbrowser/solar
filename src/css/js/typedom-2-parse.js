@@ -5,6 +5,8 @@
   const T = global.__solarTypedOm;
   const { INTERNAL, build, defineInterface, makeGeneric, rectify, makeArray } = T;
   const { CSSStyleValue, CSSKeywordValue, CSSNumericValue, CSSUnitValue, CSSMathSum, CSSMathProduct, CSSMathMin, CSSMathMax, CSSMathNegate, CSSMathInvert, CSSMathClamp } = T;
+  const computedRaw = global.__solarComputedRaw;
+  delete global.__solarComputedRaw;
   const propertyInfo = global.__solarTypedPropertyInfo;
   delete global.__solarTypedPropertyInfo;
 
@@ -725,7 +727,10 @@
       value: function computedStyleMap() {
         const element = this;
         return makeMap('readonly', {
-          read: (name) => getComputedStyle(element).getPropertyValue(name),
+          read: (name) => {
+            const raw = computedRaw(element, name);
+            return raw !== null ? raw : getComputedStyle(element).getPropertyValue(name);
+          },
           names: () => {
             const style = getComputedStyle(element);
             const names = [];

@@ -297,15 +297,27 @@ font::Request FontRequestFor(dom::Element* element, const std::string& pseudo) {
   return request;
 }
 
-std::vector<std::shared_ptr<font::Face>> FontsFor(dom::Element* element, const std::string& pseudo) {
+font::Request MakeFontRequest(const std::string& familyText, double weight, double width, bool italic) {
+  font::Request request;
+  for (const std::string& name : FamilyNames(familyText)) {
+    if (name == "depends on user agent") continue;
+    request.families.push_back(name);
+  }
+  if (request.families.empty()) request.families = {"serif"};
+  request.weight = weight;
+  request.width = width;
+  request.style = italic ? font::SlantStyle::Italic : font::SlantStyle::Normal;
+  return request;
+}
+
+std::vector<std::shared_ptr<font::Face>> FontsForRequest(dom::Document* document, const font::Request& request) {
   std::vector<std::shared_ptr<font::Face>> faces;
-  const font::Request request = FontRequestFor(element, pseudo);
-  font::Database& web = DocumentFonts(element->nodeDocument);
   font::Database& system = font::Database::System();
+  font::Database* web = document ? &DocumentFonts(document) : nullptr;
   for (const std::string& family : request.families) {
     font::Request one = request;
     one.families = {family};
-    std::shared_ptr<font::Face> face = web.Match(one);
+    std::shared_ptr<font::Face> face = web ? web->Match(one) : nullptr;
     if (!face) face = system.Match(one);
     if (face && std::find(faces.begin(), faces.end(), face) == faces.end()) faces.push_back(face);
   }
@@ -315,6 +327,10 @@ std::vector<std::shared_ptr<font::Face>> FontsFor(dom::Element* element, const s
     if (std::shared_ptr<font::Face> face = system.Match(fallback)) faces.push_back(face);
   }
   return faces;
+}
+
+std::vector<std::shared_ptr<font::Face>> FontsFor(dom::Element* element, const std::string& pseudo) {
+  return FontsForRequest(element->nodeDocument, FontRequestFor(element, pseudo));
 }
 
 std::shared_ptr<font::Face> PrimaryFont(dom::Element* element, const std::string& pseudo) {

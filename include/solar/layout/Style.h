@@ -1,0 +1,116 @@
+#pragma once
+
+#include <memory>
+#include <string>
+
+#include "solar/dom/Node.h"
+
+// The computed style of an element as layout reads it: the values parsed out of the text getComputedStyle gives, in the types the
+// algorithms want (lengths in px, keywords as enums).
+namespace solar::layout {
+
+struct Length {
+  enum class Kind : uint8_t { Auto, Px, Percent, Calc, None, MinContent, MaxContent, FitContent };
+  Kind kind = Kind::Auto;
+  double value = 0;
+  std::string calc;  // a calc() that has a percentage in it, as written
+
+  Length() = default;
+  explicit Length(Kind k, double v = 0) : kind(k), value(v) {}
+  static Length Px(double v) { return Length(Kind::Px, v); }
+  static Length Percent(double v) { return Length(Kind::Percent, v); }
+  bool IsAuto() const { return kind == Kind::Auto; }
+  bool IsNone() const { return kind == Kind::None; }
+  // Whether the value depends on the containing block (a percentage).
+  bool IsPercentage() const { return kind == Kind::Percent || kind == Kind::Calc; }
+  bool IsKeyword() const { return kind == Kind::MinContent || kind == Kind::MaxContent || kind == Kind::FitContent; }
+  bool IsFixed() const { return kind == Kind::Px; }
+  // The length in px for a percentage of `basis`; `fallback` for auto, none and the intrinsic keywords.
+  double Resolve(double basis, double fallback = 0) const;
+};
+
+enum class Display : uint8_t {
+  None, Contents, Block, Inline, InlineBlock, ListItem, FlowRoot, InlineFlowRoot, Flex, InlineFlex, Grid, InlineGrid,
+  Table, InlineTable, TableRowGroup, TableHeaderGroup, TableFooterGroup, TableRow, TableCell, TableColumn, TableColumnGroup, TableCaption,
+  Ruby, RubyText, RubyBase, RubyTextContainer, RubyBaseContainer,
+};
+enum class Position : uint8_t { Static, Relative, Absolute, Fixed, Sticky };
+enum class Float : uint8_t { None, Left, Right, InlineStart, InlineEnd };
+enum class Clear : uint8_t { None, Left, Right, Both, InlineStart, InlineEnd };
+enum class BoxSizing : uint8_t { ContentBox, BorderBox };
+enum class Overflow : uint8_t { Visible, Hidden, Clip, Scroll, Auto };
+enum class BorderStyle : uint8_t { None, Hidden, Dotted, Dashed, Solid, Double, Groove, Ridge, Inset, Outset };
+enum class TextAlign : uint8_t { Start, End, Left, Right, Center, Justify, MatchParent };
+enum class WhiteSpaceCollapse : uint8_t { Collapse, Preserve, PreserveBreaks, PreserveSpaces, BreakSpaces };
+enum class VerticalAlign : uint8_t { Baseline, Sub, Super, Top, TextTop, Middle, Bottom, TextBottom, Length };
+enum class Direction : uint8_t { Ltr, Rtl };
+enum class WritingMode : uint8_t { HorizontalTb, VerticalRl, VerticalLr, SidewaysRl, SidewaysLr };
+enum class TextTransform : uint8_t { None, Capitalize, Uppercase, Lowercase };
+enum class Visibility : uint8_t { Visible, Hidden, Collapse };
+enum class OverflowWrap : uint8_t { Normal, BreakWord, Anywhere };
+enum class WordBreak : uint8_t { Normal, BreakAll, KeepAll, BreakWord };
+
+struct BoxStyle {
+  Display display = Display::Inline;
+  Position position = Position::Static;
+  Float floating = Float::None;
+  Clear clear = Clear::None;
+  BoxSizing boxSizing = BoxSizing::ContentBox;
+  Overflow overflowX = Overflow::Visible, overflowY = Overflow::Visible;
+  Visibility visibility = Visibility::Visible;
+  Direction direction = Direction::Ltr;
+  WritingMode writingMode = WritingMode::HorizontalTb;
+
+  Length width, height, minWidth, minHeight, maxWidth{Length::Kind::None}, maxHeight{Length::Kind::None};
+  Length margin[4];   // top, right, bottom, left
+  Length padding[4];
+  Length inset[4];    // top, right, bottom, left
+  double border[4] = {0, 0, 0, 0};
+  BorderStyle borderStyle[4] = {BorderStyle::None, BorderStyle::None, BorderStyle::None, BorderStyle::None};
+  double aspectRatio = 0;  // width / height, 0 for auto
+  bool aspectRatioAuto = false;
+
+  // Text.
+  double fontSize = 16;
+  int fontWeight = 400;
+  bool italic = false;
+  double fontStretch = 100;
+  Length lineHeight;       // Auto: normal; Px: a length or number * font size; the number itself in lineHeightNumber if it was one
+  double lineHeightNumber = -1;
+  VerticalAlign verticalAlign = VerticalAlign::Baseline;
+  Length verticalAlignLength;
+  TextAlign textAlign = TextAlign::Start;
+  TextAlign textAlignLast = TextAlign::Start;
+  bool textAlignLastAuto = true;
+  Length textIndent;
+  bool textIndentHanging = false, textIndentEachLine = false;
+  WhiteSpaceCollapse whiteSpaceCollapse = WhiteSpaceCollapse::Collapse;
+  bool wrap = true;         // text-wrap-mode: wrap
+  double letterSpacing = 0, wordSpacing = 0;
+  TextTransform textTransform = TextTransform::None;
+  OverflowWrap overflowWrap = OverflowWrap::Normal;
+  WordBreak wordBreak = WordBreak::Normal;
+  int tabSize = 8;
+  std::string color = "rgb(0, 0, 0)";
+  std::string backgroundColor = "rgba(0, 0, 0, 0)";
+  std::string fontFamily;
+  std::string zIndex = "auto";
+  std::string content = "normal";
+  // Containment (css-contain): layout and paint containment make a box its own formatting context; size containment lets its contents count for
+  // nothing in the sizes it asks for. content-visibility: hidden skips the contents altogether.
+  bool containLayout = false, containPaint = false, containSizeInline = false, containSizeBlock = false;
+  bool skipContents = false;
+
+  bool IsOutOfFlow() const { return position == Position::Absolute || position == Position::Fixed; }
+  bool IsFloating() const { return floating != Float::None; }
+  bool IsBlockLevel() const;
+  bool CreatesBlockFormattingContext() const;
+};
+
+// The style of the element (or of a pseudo-element of it).
+std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* element, const std::string& pseudo = "");
+
+// A calc() with percentages, with the percentage of `basis`; nothing if it is not one this can work out.
+bool EvaluateCalc(const std::string& text, double basis, double& out);
+
+}  // namespace solar::layout

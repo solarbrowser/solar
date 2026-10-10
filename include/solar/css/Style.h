@@ -13,6 +13,12 @@ namespace solar::css {
 // in a document, or a property that has no such value.
 std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std::string& property, const std::string& pseudo = "");
 
+// What getComputedStyle answers: the used value where the property has one that layout works out (the width of a box, margins in px),
+// the computed value otherwise. Layout installs the hook that knows the used values.
+using ResolvedValueHook = bool (*)(Quanta::Context& ctx, dom::Element* element, const std::string& property, const std::string& pseudo, std::string& out);
+void SetResolvedValueHook(ResolvedValueHook hook);
+std::string ResolvedValue(Quanta::Context& ctx, dom::Element* element, const std::string& property, const std::string& pseudo = "");
+
 // The longhand properties getComputedStyle lists, in the order it lists them.
 const std::vector<std::string>& ComputedPropertyNames();
 

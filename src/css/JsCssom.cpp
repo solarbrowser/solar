@@ -1376,10 +1376,22 @@ Value TypedComputeColor(Context& ctx, Value, qe::Args args, Value) {
   return qe::FromWtf8(ctx, Serialize(*computed));
 }
 
+// The computed value of a longhand, as it is before layout makes a used value of it (what computedStyleMap has); null for what is not one.
+Value ComputedRaw(Context& ctx, Value, qe::Args args, Value) {
+  dom::Element* element = args.size() > 0 ? DOMObject::Cast<dom::Element>(args[0]) : nullptr;
+  if (!element || args.size() < 2) return qe::Null();
+  const std::string name = qe::ToWtf8(ctx, args[1]);
+  if (qe::HasException(ctx)) return qe::Undefined();
+  const PropertyDefinition* definition = FindProperty(name);
+  if (!definition || IsShorthandProperty(*definition)) return qe::Null();
+  return qe::FromWtf8(ctx, ComputedValue(ctx, element, definition->name));
+}
+
 void InstallFontNatives(Context& ctx);
 
 void InstallCssSupports(Context& ctx) {
   InstallFontNatives(ctx);
+  qe::DefineGlobalFunction(ctx, "__solarComputedRaw", ComputedRaw, 2);
   qe::DefineGlobalFunction(ctx, "__solarTypedComputeColor", TypedComputeColor, 1);
   qe::DefineGlobalFunction(ctx, "__solarTypedPropertyInfo", TypedPropertyInfo, 1);
   qe::DefineGlobalFunction(ctx, "__solarCssRegisterProperty", RegisterProperty, 1);
