@@ -342,11 +342,10 @@ Value MediaDelete(Context& ctx, Value t, qe::Args args, Value) {
   MediaList* scratch = NewMediaList(ctx);
   scratch->SetText(text);
   if (scratch->queries.size() == 1) {
-    auto it = std::find(self->queries.begin(), self->queries.end(), scratch->queries[0]);
-    if (it != self->queries.end()) {
-      self->queries.erase(it);
-      return qe::Undefined();
-    }
+    // Every one that matches goes.
+    const size_t before = self->queries.size();
+    self->queries.erase(std::remove(self->queries.begin(), self->queries.end(), scratch->queries[0]), self->queries.end());
+    if (self->queries.size() != before) return qe::Undefined();
   }
   web::ThrowDomException(ctx, "Failed to execute 'deleteMedium' on 'MediaList': The medium provided ('" + text + "') was not found in the list.", "NotFoundError");
   return qe::Undefined();
@@ -1046,6 +1045,13 @@ void UpdateStyleElement(Context& ctx, dom::Element* element) {
     }
   }
   ParseSheetInto(ctx, sheet, element->DescendantText());
+  if (sheet->hasTitle) {
+    dom::Document* document = static_cast<dom::Document*>(root);
+    if (!document->hasPreferredSheetSet) {
+      document->hasPreferredSheetSet = true;
+      document->preferredSheetSet = sheet->title;
+    }
+  }
   element->styleSheet = sheet;
   element->NoteWrite();
 }
@@ -1405,6 +1411,7 @@ void DefineCssomClasses(Context& ctx) {
   qe::DefineMethod(media.prototype, "item", MediaItem, 1);
   qe::DefineMethod(media.prototype, "appendMedium", MediaAppend, 1);
   qe::DefineMethod(media.prototype, "deleteMedium", MediaDelete, 1);
+  qe::DefineMethod(media.prototype, "toString", MediaGetText, 0);
   qe::DefineGlobal(ctx, "MediaList", media.constructor);
 
   // CSSRuleList, StyleSheetList

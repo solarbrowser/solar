@@ -261,6 +261,8 @@ struct Document : Node {
   // The global object of that window, and the iframe this document is the content of, if it is.
   Quanta::Object* globalObject = nullptr;
   Quanta::Object* styleSheetList = nullptr;  // document.styleSheets
+  bool hasPreferredSheetSet = false;         // the first style sheet with a title that is on names the preferred set, for good
+  std::string preferredSheetSet;
   Quanta::Object* adoptedStyleSheets = nullptr;
   // For an about: document whose iframe is gone: the address it was resolving against, which is the origin it keeps.
   std::string inheritedBase;

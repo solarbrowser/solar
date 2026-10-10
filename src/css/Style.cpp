@@ -480,7 +480,12 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
   while (treeRoot->parentNode) treeRoot = treeRoot->parentNode;
   if (treeRoot && (treeRoot->IsDocument() || treeRoot->IsFragment())) {
     if (treeRoot->IsFragment() && static_cast<dom::DocumentFragment*>(treeRoot)->isShadowRoot) gatherer.matchContext.host = static_cast<dom::DocumentFragment*>(treeRoot)->host;
-    const std::vector<CssStyleSheet*> sheets = SheetsOfTree(treeRoot, element->nodeDocument ? element->nodeDocument->context : nullptr);
+    std::vector<CssStyleSheet*> sheets = SheetsOfTree(treeRoot, element->nodeDocument ? element->nodeDocument->context : nullptr);
+    // The preferred set is named by the first sheet with a title that was on; sheets with another title are alternates, and off.
+    if (element->nodeDocument && element->nodeDocument->hasPreferredSheetSet) {
+      const std::string& preferred = element->nodeDocument->preferredSheetSet;
+      sheets.erase(std::remove_if(sheets.begin(), sheets.end(), [&](const CssStyleSheet* sheet) { return sheet->hasTitle && sheet->ownerNode && sheet->title != preferred; }), sheets.end());
+    }
     gatherer.collecting = true;
     for (CssStyleSheet* sheet : sheets) {
       if (sheet->disabled || !MediaListMatches(sheet->media ? sheet->media->queries : std::vector<std::string>(), gatherer.media)) continue;

@@ -445,6 +445,10 @@ void UpdateLink(dom::Element* link) {
   css::ProcessImports(ctx, sheet, [](const std::string& url) { return LoadResource(url); });
   // An alternate style sheet with a title is off until it is chosen.
   if (HasToken(rel->value, "alternate") && sheet->hasTitle && !link->linkExplicitlyEnabled) sheet->disabled = true;
+  if (sheet->hasTitle && !sheet->disabled && !document->hasPreferredSheetSet) {
+    document->hasPreferredSheetSet = true;
+    document->preferredSheetSet = sheet->title;
+  }
   link->styleSheet = sheet;
   link->NoteWrite();
   css::NoteStyleChange();

@@ -755,6 +755,7 @@ tests/wpt/css/css-typed-om/stylevalue-subclasses/cssSkewX.tentative.html
 tests/wpt/css/css-typed-om/stylevalue-subclasses/cssSkewY.tentative.html
 tests/wpt/css/css-typed-om/stylevalue-subclasses/cssTransformComponent-2d-flattening.html
 tests/wpt/css/css-typed-om/stylevalue-subclasses/cssTransformComponent-toMatrix-relative-units.html
+tests/wpt/css/css-typed-om/stylevalue-subclasses/cssTransformComponent-toMatrix.html
 tests/wpt/css/css-typed-om/stylevalue-subclasses/cssTransformValue-toMatrix.html
 tests/wpt/css/css-typed-om/stylevalue-subclasses/cssTranslate.tentative.html
 tests/wpt/css/css-typed-om/stylevalue-subclasses/cssUnparsedValue-empty.any.js
@@ -1149,6 +1150,7 @@ tests/wpt/css/cssom/HTMLLinkElement-load-event-002.html
 tests/wpt/css/cssom/HTMLLinkElement-load-event.html
 tests/wpt/css/cssom/HTMLStyleElement-load-event.html
 tests/wpt/css/cssom/MediaList-parsing.html
+tests/wpt/css/cssom/MediaList.html
 tests/wpt/css/cssom/MediaList2.xhtml
 tests/wpt/css/cssom/StyleSheet-properties.html
 tests/wpt/css/cssom/StyleSheetList-constructable-shadow-with-style-recalc.html
@@ -1234,12 +1236,14 @@ tests/wpt/css/cssom/insertRule-namespace-no-index.html
 tests/wpt/css/cssom/insertRule-no-index.html
 tests/wpt/css/cssom/insertRule-syntax-error-01.html
 tests/wpt/css/cssom/medialist-appendmedium-parse-single-and-dedup.html
+tests/wpt/css/cssom/medialist-deletemedium-parse-and-remove-all.html
 tests/wpt/css/cssom/medialist-interfaces-001.html
 tests/wpt/css/cssom/medialist-interfaces-002.html
 tests/wpt/css/cssom/medialist-interfaces-004.html
 tests/wpt/css/cssom/mediaquery-sort-dedup.html
 tests/wpt/css/cssom/nested-import-namespace-invalid.html
 tests/wpt/css/cssom/overflow-serialization.html
+tests/wpt/css/cssom/preferred-stylesheet-order.html
 tests/wpt/css/cssom/preferred-stylesheet-reversed-order.html
 tests/wpt/css/cssom/property-accessors.html
 tests/wpt/css/cssom/resolved-border-width.html
@@ -1274,6 +1278,7 @@ tests/wpt/css/cssom/style-set-property.html
 tests/wpt/css/cssom/style-sheet-interfaces-002.html
 tests/wpt/css/cssom/style-width-calc-vh-vw.html
 tests/wpt/css/cssom/stylesheet-cross-origin-redirect-quirks.sub.html
+tests/wpt/css/cssom/stylesheet-title.html
 tests/wpt/css/cssom/system-color-inherit.html
 tests/wpt/css/cssom/system-color-lowercase.html
 tests/wpt/css/cssom/ttwf-cssom-document-extension.html
