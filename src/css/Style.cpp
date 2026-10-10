@@ -1031,11 +1031,15 @@ const std::vector<std::string>& ComputedPropertyNames() {
 MediaEnvironment EnvironmentFor(const dom::Document* document) {
   MediaEnvironment environment = CurrentMediaEnvironment();
   dom::Element* frame = document ? document->frameElement : nullptr;
-  if (!frame || !frame->nodeDocument || !frame->nodeDocument->context) return environment;
-  // The size of the frame: its width and height as the style gives them, or the attributes, or 300 by 150.
+  if (!frame || !frame->nodeDocument || !frame->nodeDocument->context || frame->nodeDocument == document) return environment;
+  // The size of the frame: its width and height as its style attribute gives them in px, or its attributes, or 300 by 150.
+  // (Not through the cascade: this is asked while a style is being worked out.)
+  std::vector<DeclarationEntry> inlineStyle;
+  if (const dom::Attr* attribute = frame->FindAttribute("", "style")) inlineStyle = ParseDeclarationList(attribute->value);
   const auto size = [&](const char* property, double fallback) {
-    const std::string value = ComputedValue(*frame->nodeDocument->context, frame, property);
-    if (value.size() > 2 && value.compare(value.size() - 2, 2, "px") == 0) return std::atof(value.c_str());
+    for (const DeclarationEntry& entry : inlineStyle) {
+      if (entry.name == property && entry.value.size() > 2 && entry.value.compare(entry.value.size() - 2, 2, "px") == 0) return std::atof(entry.value.c_str());
+    }
     if (const dom::Attr* attribute = frame->FindAttribute("", property)) {
       const int parsed = std::atoi(attribute->value.c_str());
       if (parsed > 0) return static_cast<double>(parsed);

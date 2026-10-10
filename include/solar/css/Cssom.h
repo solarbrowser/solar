@@ -151,7 +151,9 @@ struct CssRule : Quanta::DOMObject {
   std::optional<RegisteredProperty> registered;
 
   std::string CssText() const;
-  // (A keyframes rule is indexable by its keyframes once Quanta lets a platform object with indexed access carry properties of its own.)
+  // A keyframes rule is indexable by its keyframes.
+  static bool IndexedGetter(Quanta::Context& ctx, CssRule& self, uint32_t index, Quanta::Value& out);
+  static uint32_t IndexedLength(Quanta::Context&, CssRule& self) { return self.kind == RuleKind::Keyframes ? static_cast<uint32_t>(self.rules.size()) : 0; }
   void Visit(Quanta::Visitor& visitor);
 };
 

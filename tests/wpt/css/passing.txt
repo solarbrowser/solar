@@ -857,6 +857,7 @@ tests/wpt/css/cssom/CSSConditionRule-conditionText.html
 tests/wpt/css/cssom/CSSContainerRule.tentative.html
 tests/wpt/css/cssom/CSSCounterStyleRule.html
 tests/wpt/css/cssom/CSSFontFaceRule.html
+tests/wpt/css/cssom/CSSGroupingRule-cssRules.html
 tests/wpt/css/cssom/CSSGroupingRule-insertRule-computed.html
 tests/wpt/css/cssom/CSSGroupingRule-insertRule.html
 tests/wpt/css/cssom/CSSImportRule-insertRule-styleSheet-parentStyleSheet.html
@@ -869,6 +870,8 @@ tests/wpt/css/cssom/CSSKeyframeRule.html
 tests/wpt/css/cssom/CSSKeyframesRule-appendRule-invalid.html
 tests/wpt/css/cssom/CSSKeyframesRule-appendRule-multiple.html
 tests/wpt/css/cssom/CSSKeyframesRule-deleteRule-detach.html
+tests/wpt/css/cssom/CSSKeyframesRule-indexed-getter.html
+tests/wpt/css/cssom/CSSKeyframesRule.html
 tests/wpt/css/cssom/CSSNamespaceRule.html
 tests/wpt/css/cssom/CSSRule-type.html
 tests/wpt/css/cssom/CSSRuleList.html

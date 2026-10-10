@@ -384,6 +384,12 @@ bool MediaList::IndexedGetter(Context& ctx, MediaList& self, uint32_t index, Val
   return true;
 }
 
+bool CssRule::IndexedGetter(Context&, CssRule& self, uint32_t index, Value& out) {
+  if (self.kind != RuleKind::Keyframes || index >= self.rules.size()) return false;
+  out = qe::FromObject(self.rules[index]);
+  return true;
+}
+
 bool CssRuleList::IndexedGetter(Context&, CssRuleList& self, uint32_t index, Value& out) {
   const std::vector<CssRule*>& rules = self.Rules();
   if (index >= rules.size()) return false;
