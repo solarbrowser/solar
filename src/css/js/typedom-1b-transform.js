@@ -222,7 +222,7 @@
       const matrix = new DOMMatrix();
       if (length instanceof CSSKeywordValue) return matrix;
       const px = absolute(length, 'px');
-      matrix.m34 = px === 0 ? 0 : -1 / px;
+      matrix.m34 = -1 / Math.max(1, px);
       return matrixOf(matrix, this[INTERNAL].is2D);
     }
     toString() {
