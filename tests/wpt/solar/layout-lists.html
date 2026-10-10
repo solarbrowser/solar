@@ -1,0 +1,40 @@
+<!doctype html>
+<title>layout: lists, counters, generated content</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<style>
+body { margin: 0; font: 10px/1 Ahem; }
+ol, ul { margin: 0; padding-left: 40px; }
+.n::before { counter-increment: item; content: counter(item) ". "; }
+.n { counter-reset: item; }
+q::before { content: open-quote; } q::after { content: close-quote; }
+#x::after { content: "AB"; }
+</style>
+<ol id=ol><li id=l1>X</li><li id=l2>X</li><li id=l3 value=7>X</li><li id=l4>X</li></ol>
+<ul id=ul style="list-style-type: none"><li id=u1>X</li></ul>
+<div id=n class=n><p id=p1 class=n style="margin:0">X</p></div>
+<div id=x>XX</div>
+<ul style="list-style-position: inside; padding:0"><li id=i1>XX</li></ul>
+<script>
+const r = (id) => document.getElementById(id).getBoundingClientRect();
+test(() => {
+  assert_equals(r("l2").top - r("l1").top, 10);
+  assert_equals(r("l1").left, 40);
+  assert_equals(r("ol").height, 40);
+}, "ordered list items");
+test(() => {
+  assert_equals(r("u1").left, 40);
+}, "list-style-type none");
+test(() => {
+  assert_equals(document.getElementById("p1").getBoundingClientRect().width > 0, true);
+}, "counter content is generated");
+test(() => {
+  assert_equals(r("x").height, 10); assert_equals(r("x").width, 800);
+  const range = document.createRange();
+}, "generated text");
+test(() => {
+  // inside markers take room on the line
+  const li = r("i1");
+  assert_equals(li.height, 10);
+}, "inside markers");
+</script>

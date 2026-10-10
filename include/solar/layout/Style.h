@@ -129,6 +129,10 @@ struct BoxStyle {
   bool flexBasisContent = false;
   int order = 0;
   Align justifyContent, alignItems, alignSelf, alignContent, justifyItems, justifySelf;
+  // Counters and lists.
+  std::string counterReset, counterIncrement, counterSet, listStyleType, quotes;
+  bool listStyleInside = false;
+
   // Tables.
   bool tableLayoutFixed = false, borderCollapse = false, captionBottom = false, emptyCellsHide = false;
   double borderSpacingH = 0, borderSpacingV = 0;

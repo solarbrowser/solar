@@ -174,7 +174,7 @@ void ComputeContentSizes(LayoutContext& lc, Box& box) {
     return;
   }
   for (auto& child : box.children) {
-    if (child->style->IsOutOfFlow()) continue;
+    if (child->style->IsOutOfFlow() || child->outsideMarker) continue;
     ComputeContentSizes(lc, *child);
     const BoxStyle& cs = *child->style;
     ResolveEdges(*child, 0);
@@ -212,6 +212,7 @@ void LayoutBlockChildren(LayoutContext& lc, Box& P, double contentWidth, double 
   const double originX = P.ContentLeft(), originY = P.ContentTop();
   for (auto& childPtr : P.children) {
     Box& child = *childPtr;
+    if (child.outsideMarker) continue;
     if (IsPositionedOutOfFlow(child)) {
       child.staticX = originX;
       child.staticY = originY + y + (atTop && topOpen ? 0 : pending.Sum());
@@ -567,6 +568,19 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
         break;
       }
     }
+  }
+  // A list item's marker sits outside, level with its first line.
+  for (auto& c : box.children) {
+    if (!c->outsideMarker) continue;
+    lc.forceWidth = lc.forceHeight = kNaN;
+    lc.cbX = 0;
+    lc.boxY = 0;
+    LayoutBlockLevel(lc, *c, width, kNaN, true);
+    const double markerBaseline = c->firstBaseline >= 0 ? c->firstBaseline : c->height;
+    const double itemBaseline = box.firstBaseline >= 0 ? box.firstBaseline - 0 : box.ContentTop() + markerBaseline;
+    c->x = box.ContentLeft() - c->width;
+    c->y = itemBaseline - markerBaseline;
+    c->margin = Edges();
   }
   // A box that is its own formatting context holds the floats in it.
   if (establishes && heightIsAuto) contentHeight = std::max(contentHeight, ownBfc.lowest - contentTopBfc);

@@ -1,9 +1,13 @@
 // The box tree: boxes for elements and text (https://www.w3.org/TR/CSS22/visuren.html#box-gen), with the anonymous boxes the model needs.
 #include <cstdlib>
+#include <algorithm>
 #include <functional>
+#include <map>
 
 #include "Internal.h"
 #include "solar/css/Style.h"
+#include "solar/css/Syntax.h"
+#include "solar/css/Tokenizer.h"
 
 namespace solar::layout {
 
@@ -92,10 +96,204 @@ class Builder {
     dom::Element* html = document->DocumentElement();
     if (html) BuildElement(*initial, html);
     Normalize(*initial);
+    AttachMarkers(*initial);
   }
 
  private:
   LayoutContext& lc_;
+
+  // ---- Counters (https://www.w3.org/TR/css-lists-3/#counters) ----
+  std::map<std::string, std::vector<int>> counters_;
+  std::vector<std::vector<std::string>> frames_;
+  int quoteDepth_ = 0;
+
+  static std::vector<std::pair<std::string, int>> ParseCounterList(const std::string& text, int defaultValue) {
+    std::vector<std::pair<std::string, int>> out;
+    if (text == "none" || text.empty()) return out;
+    const solar::css::ComponentValues values = solar::css::ParseComponentValues(text);
+    for (size_t i = 0; i < values.size(); ++i) {
+      if (!values[i].IsIdent()) continue;
+      int value = defaultValue;
+      size_t j = i + 1;
+      while (j < values.size() && values[j].IsWhitespace()) ++j;
+      if (j < values.size() && values[j].IsToken(solar::css::Token::Type::Number)) {
+        value = static_cast<int>(values[j].token.number);
+        i = j;
+      }
+      out.push_back({values[i - (i == j ? 0 : 0)].token.value, value});
+    }
+    return out;
+  }
+
+  void Instantiate(const std::string& name, int value) {
+    if (frames_.empty()) frames_.emplace_back();
+    auto& frame = frames_.back();
+    // Two resets of one name in a scope: the second replaces the first.
+    if (std::find(frame.begin(), frame.end(), name) != frame.end() && !counters_[name].empty()) {
+      counters_[name].back() = value;
+      return;
+    }
+    counters_[name].push_back(value);
+    frame.push_back(name);
+  }
+
+  void ApplyCounters(const BoxStyle& style, bool listItem, dom::Element* element) {
+    for (const auto& [name, value] : ParseCounterList(style.counterReset, 0)) Instantiate(name, value);
+    // HTML: ol, ul and menu reset the list item counter; li may set it.
+    if (element && element->IsHtml()) {
+      const std::string& n = element->localName;
+      if (n == "ol" || n == "ul" || n == "menu" || n == "dir") {
+        int start = 0;
+        if (n == "ol") {
+          if (const dom::Attr* a = element->FindAttribute("start")) start = std::atoi(a->value.c_str()) - 1;
+          if (element->FindAttribute("reversed")) {
+            int count = 0;
+            for (dom::Node* c = element->firstChild; c; c = c->nextSibling) if (c->IsElement() && static_cast<dom::Element*>(c)->IsHtml("li")) ++count;
+            const dom::Attr* a = element->FindAttribute("start");
+            start = (a ? std::atoi(a->value.c_str()) : count) + 1;
+          }
+        }
+        Instantiate("list-item", start);
+      }
+    }
+    bool incrementsListItem = false;
+    for (const auto& [name, value] : ParseCounterList(style.counterIncrement, 1)) {
+      if (counters_[name].empty()) Instantiate(name, 0);
+      counters_[name].back() += value;
+      if (name == "list-item") incrementsListItem = true;
+    }
+    if (listItem && !incrementsListItem) {
+      if (counters_["list-item"].empty()) Instantiate("list-item", 0);
+      const bool reversed = [&] {
+        for (dom::Node* p = element ? element->parentNode : nullptr; p; p = nullptr) return p->IsElement() && static_cast<dom::Element*>(p)->FindAttribute("reversed") != nullptr;
+        return false;
+      }();
+      counters_["list-item"].back() += reversed ? -1 : 1;
+      if (element && element->IsHtml("li")) {
+        if (const dom::Attr* a = element->FindAttribute("value")) counters_["list-item"].back() = std::atoi(a->value.c_str());
+      }
+    }
+    for (const auto& [name, value] : ParseCounterList(style.counterSet, 0)) {
+      if (counters_[name].empty()) Instantiate(name, 0);
+      counters_[name].back() = value;
+    }
+  }
+
+  void PushFrame() { frames_.emplace_back(); }
+  void PopFrame() {
+    if (frames_.empty()) return;
+    for (const std::string& name : frames_.back()) {
+      auto& stack = counters_[name];
+      if (!stack.empty()) stack.pop_back();
+    }
+    frames_.pop_back();
+  }
+
+  static std::string ToRoman(int n, bool upper) {
+    if (n <= 0 || n >= 4000) return std::to_string(n);
+    static const std::pair<int, const char*> table[] = {{1000, "m"}, {900, "cm"}, {500, "d"}, {400, "cd"}, {100, "c"}, {90, "xc"}, {50, "l"}, {40, "xl"}, {10, "x"}, {9, "ix"}, {5, "v"}, {4, "iv"}, {1, "i"}};
+    std::string out;
+    for (const auto& [value, symbol] : table) while (n >= value) { out += symbol; n -= value; }
+    if (upper) for (char& c : out) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    return out;
+  }
+  static std::string Alphabetic(int n, const char32_t* letters, int count) {
+    if (n <= 0) return std::to_string(n);
+    std::string out;
+    while (n > 0) {
+      --n;
+      std::string one;
+      solar::css::AppendUtf8(one, letters[n % count]);
+      out = one + out;
+      n /= count;
+    }
+    return out;
+  }
+
+  // The counter's value in a list-style-type; empty for none.
+  static std::string FormatCounter(int n, const std::string& type) {
+    static const char32_t latin[] = U"abcdefghijklmnopqrstuvwxyz";
+    static const char32_t latinUpper[] = U"ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    static const char32_t greek[] = U"αβγδεζηθικλμνξοπρστυφχψω";
+    if (type == "none") return "";
+    if (type == "decimal" || type.empty()) return std::to_string(n);
+    if (type == "decimal-leading-zero") {
+      const int m = n < 0 ? -n : n;
+      return std::string(n < 0 ? "-" : "") + (m < 10 ? "0" : "") + std::to_string(m);
+    }
+    if (type == "lower-roman") return ToRoman(n, false);
+    if (type == "upper-roman") return ToRoman(n, true);
+    if (type == "lower-alpha" || type == "lower-latin") return Alphabetic(n, latin, 26);
+    if (type == "upper-alpha" || type == "upper-latin") return Alphabetic(n, latinUpper, 26);
+    if (type == "lower-greek") return Alphabetic(n, greek, 24);
+    if (type == "disc") return "\xE2\x80\xA2";
+    if (type == "circle") return "\xE2\x97\xA6";
+    if (type == "square") return "\xE2\x96\xAA";
+    if (type.size() >= 2 && (type[0] == '"' || type[0] == '\'')) return type.substr(1, type.size() - 2);
+    return std::to_string(n);
+  }
+
+  // The text of a content value, with counters worked out now; false if it is not text (none, normal).
+  bool ContentText(const BoxStyle& style, dom::Element* element, std::string& out) {
+    if (style.content == "normal" || style.content == "none" || style.content.empty()) return false;
+    const solar::css::ComponentValues values = solar::css::ParseComponentValues(style.content);
+    for (const solar::css::ComponentValue& v : values) {
+      if (v.IsWhitespace()) continue;
+      if (v.IsToken(solar::css::Token::Type::String)) { out += v.token.value; continue; }
+      if (v.IsIdent()) {
+        const std::string n = v.token.value;
+        const std::vector<std::string> pairs = QuotePairs(style);
+        const auto quote = [&](bool open) {
+          if (pairs.empty()) return;
+          const size_t level = static_cast<size_t>(std::max(0, open ? quoteDepth_ : quoteDepth_ - 1));
+          const size_t index = std::min(level, pairs.size() / 2 - 1);
+          out += pairs[index * 2 + (open ? 0 : 1)];
+        };
+        if (n == "open-quote") { quote(true); ++quoteDepth_; }
+        else if (n == "close-quote") { if (quoteDepth_ > 0) { quote(false); --quoteDepth_; } }
+        else if (n == "no-open-quote") ++quoteDepth_;
+        else if (n == "no-close-quote") { if (quoteDepth_ > 0) --quoteDepth_; }
+        continue;
+      }
+      if (v.kind == solar::css::ComponentValue::Kind::Function) {
+        std::string name = v.name;
+        for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        std::vector<solar::css::ComponentValues> args(1);
+        for (const auto& c : v.children) {
+          if (c.IsToken(solar::css::Token::Type::Comma)) args.emplace_back();
+          else if (!c.IsWhitespace()) args.back().push_back(c);
+        }
+        const auto word = [&](size_t i) -> std::string {
+          if (i >= args.size() || args[i].empty()) return "";
+          return args[i][0].token.value;
+        };
+        if (name == "counter" || name == "counters") {
+          const std::string counter = word(0);
+          const std::string style2 = word(name == "counter" ? 1 : 2);
+          const std::string separator = name == "counters" ? word(1) : "";
+          const auto& stack = counters_[counter];
+          if (name == "counter") out += FormatCounter(stack.empty() ? 0 : stack.back(), style2.empty() ? "decimal" : style2);
+          else {
+            if (stack.empty()) out += FormatCounter(0, style2.empty() ? "decimal" : style2);
+            for (size_t i = 0; i < stack.size(); ++i) out += (i ? separator : "") + FormatCounter(stack[i], style2.empty() ? "decimal" : style2);
+          }
+        } else if (name == "attr") {
+          if (element) if (const dom::Attr* a = element->FindAttribute(word(0))) out += a->value;
+        }
+      }
+    }
+    return true;
+  }
+
+  static std::vector<std::string> QuotePairs(const BoxStyle& style) {
+    std::vector<std::string> pairs;
+    if (style.quotes == "none") return pairs;
+    if (style.quotes != "auto" && !style.quotes.empty()) {
+      for (const solar::css::ComponentValue& v : solar::css::ParseComponentValues(style.quotes)) if (v.IsToken(solar::css::Token::Type::String)) pairs.push_back(v.token.value);
+      if (pairs.size() >= 2) return pairs;
+    }
+    return {"\xE2\x80\x9C", "\xE2\x80\x9D", "\xE2\x80\x98", "\xE2\x80\x99"};
+  }
 
   void Register(Box* box) {
     if (box->node) lc_.tree.boxesOf[box->node].push_back(box);
@@ -119,6 +317,11 @@ class Builder {
   }
 
   void BuildChildren(Box& parent, dom::Node* node, const std::shared_ptr<const BoxStyle>& textStyle) {
+    PushFrame();
+    struct Pop {
+      Builder* b;
+      ~Pop() { b->PopFrame(); }
+    } pop{this};
     for (dom::Node* child : RenderedChildren(node)) {
       if (child->IsElement()) {
         BuildElement(parent, static_cast<dom::Element*>(child));
@@ -138,22 +341,11 @@ class Builder {
 
   void BuildGenerated(Box& parent, dom::Element* element, const char* pseudo) {
     std::shared_ptr<const BoxStyle> style = ReadStyle(lc_.ctx, element, pseudo);
-    if (style->display == Display::None || style->content == "normal" || style->content == "none" || style->content.empty()) return;
-    // A string, or strings, are all of the content that is made here.
+    if (style->display == Display::None) return;
+    // Counters change for the pseudo-element as for any.
+    ApplyCounters(*style, style->display == Display::ListItem, nullptr);
     std::string text;
-    const std::string& c = style->content;
-    for (size_t i = 0; i < c.size();) {
-      if (c[i] == '"' || c[i] == '\'') {
-        const char quote = c[i++];
-        while (i < c.size() && c[i] != quote) {
-          if (c[i] == '\\' && i + 1 < c.size()) ++i;
-          text += c[i++];
-        }
-        ++i;
-      } else {
-        ++i;
-      }
-    }
+    if (!ContentText(*style, element, text)) return;
     auto box = std::make_unique<Box>();
     box->kind = style->display == Display::Inline ? Box::Kind::Inline : Box::Kind::Block;
     box->inlineLevel = style->display == Display::Inline || style->display == Display::InlineBlock;
@@ -166,17 +358,16 @@ class Builder {
       t->kind = Box::Kind::Text;
       t->inlineLevel = true;
       t->style = AnonymousStyle(*style, Display::Inline);
-      const_cast<BoxStyle&>(*t->style).color = style->color;
       t->text = text;
       raw->AddChild(std::move(t));
     }
-    // The generated box belongs to its element for geometry.
-    lc_.tree.boxesOf[element].push_back(raw);
   }
 
   void BuildElement(Box& parent, dom::Element* element) {
     std::shared_ptr<const BoxStyle> style = ReadStyle(lc_.ctx, element);
     if (style->display == Display::None) return;
+    ApplyCounters(*style, style->display == Display::ListItem, element);
+    const int listValue = counters_["list-item"].empty() ? 0 : counters_["list-item"].back();
     if (style->display == Display::Contents) {
       BuildGenerated(parent, element, "::before");
       BuildChildren(parent, element, style);
@@ -198,6 +389,7 @@ class Builder {
       }
       box->style = changed;
     }
+    box->listValue = listValue;
     const BoxStyle& s = *box->style;
     box->inlineLevel = !s.IsBlockLevel() && !s.IsOutOfFlow() && !s.IsFloating() &&
                        (s.display == Display::Inline || s.display == Display::InlineBlock || s.display == Display::InlineFlex || s.display == Display::InlineGrid ||
@@ -343,6 +535,60 @@ class Builder {
     flushRun();
     for (auto& c : container.children) {
       if (c->kind == Box::Kind::Block || c->kind == Box::Kind::Inline) Normalize(*c);
+    }
+  }
+
+  // ---- List markers ----
+  void AttachMarkers(Box& box) {
+    for (size_t i = 0; i < box.children.size(); ++i) AttachMarkers(*box.children[i]);
+    if (box.style->display != Display::ListItem || !box.node || !box.node->IsElement() || box.kind != Box::Kind::Block) return;
+    dom::Element* element = static_cast<dom::Element*>(box.node);
+    const std::string type = box.style->listStyleType;
+    if (type == "none") return;
+    std::shared_ptr<const BoxStyle> markerStyle = ReadStyle(lc_.ctx, element, "::marker");
+    std::string text;
+    if (markerStyle->content != "normal" && markerStyle->content != "none" && !markerStyle->content.empty()) {
+      if (!ContentText(*markerStyle, element, text)) return;
+    } else {
+      const bool symbol = type == "disc" || type == "circle" || type == "square";
+      const bool string = !type.empty() && (type[0] == '"' || type[0] == '\'');
+      text = FormatCounter(box.listValue, type);
+      if (string) {} else if (symbol) text += " ";
+      else text += ". ";
+    }
+    if (text.empty()) return;
+    auto textBox = std::make_unique<Box>();
+    textBox->kind = Box::Kind::Text;
+    textBox->inlineLevel = true;
+    textBox->style = AnonymousStyle(*markerStyle, Display::Inline);
+    textBox->text = text;
+    if (box.style->listStyleInside) {
+      Box* target = nullptr;
+      if (box.hasInlineContent) target = &box;
+      else if (!box.children.empty() && box.children[0]->anonymous && box.children[0]->hasInlineContent) target = box.children[0].get();
+      if (!target) {
+        auto anonymous = std::make_unique<Box>();
+        anonymous->kind = Box::Kind::Block;
+        anonymous->anonymous = true;
+        anonymous->hasInlineContent = true;
+        anonymous->style = AnonymousStyle(*box.style, Display::Block);
+        target = anonymous.get();
+        anonymous->parent = &box;
+        box.children.insert(box.children.begin(), std::move(anonymous));
+        box.hasInlineContent = false;
+      }
+      textBox->parent = target;
+      target->children.insert(target->children.begin(), std::move(textBox));
+    } else {
+      auto marker = std::make_unique<Box>();
+      marker->kind = Box::Kind::Block;
+      marker->anonymous = true;
+      marker->outsideMarker = true;
+      marker->forceBfc = true;
+      marker->hasInlineContent = true;
+      marker->style = AnonymousStyle(*markerStyle, Display::Block);
+      marker->AddChild(std::move(textBox));
+      box.AddChild(std::move(marker));
     }
   }
 

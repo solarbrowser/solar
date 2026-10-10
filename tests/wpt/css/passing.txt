@@ -1560,5 +1560,6 @@ tests/wpt/solar/font-loading.html
 tests/wpt/solar/layout-flex.html
 tests/wpt/solar/layout-flow.html
 tests/wpt/solar/layout-grid.html
+tests/wpt/solar/layout-lists.html
 tests/wpt/solar/layout-table.html
 tests/wpt/solar/link-sheet.html

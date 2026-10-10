@@ -273,6 +273,7 @@ struct Collector {
   void Collect(Box& parent) {
     for (auto& childPtr : parent.children) {
       Box& child = *childPtr;
+      if (child.outsideMarker) continue;
       if (child.IsOutOfFlow()) {
         Atom a;
         a.kind = Atom::Kind::OutOfFlow;

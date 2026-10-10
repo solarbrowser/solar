@@ -65,6 +65,8 @@ struct Box {
 
   std::string text;           // Text: the characters of the node
   std::string processed;      // Text: after white space and text-transform, as shaped
+  int listValue = 0;           // a list item's counter
+  bool outsideMarker = false;  // a list item's marker, outside its principal box
   std::string pseudo;         // "::before", "::after", "::marker" for generated content
 
   // Replaced boxes: the natural size, negative where there is none.

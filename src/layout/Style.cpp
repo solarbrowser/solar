@@ -300,6 +300,12 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
       const std::string v = get(property);
       return v == "normal" ? Length() : ParseLength(v);
     };
+    s.counterReset = get("counter-reset");
+    s.counterIncrement = get("counter-increment");
+    s.counterSet = get("counter-set");
+    s.listStyleType = get("list-style-type");
+    s.listStyleInside = get("list-style-position") == "inside";
+    s.quotes = get("quotes");
     s.tableLayoutFixed = get("table-layout") == "fixed";
     s.borderCollapse = get("border-collapse") == "collapse";
     s.captionBottom = get("caption-side") == "bottom";
