@@ -151,12 +151,14 @@ Metrics MetricsFor(const font::Face* face, double size) {
 
 struct Run {
   size_t begin, end;  // byte range in the text box's processed text
+  bool rtl = false;   // shaped right to left
   std::shared_ptr<font::Face> face;
   std::vector<font::Glyph> glyphs;  // clusters relative to the processed text
 };
 
 struct TextData {
   Box* box = nullptr;
+  std::vector<uint8_t> levels;  // the bidi level of each byte of the processed text; empty when the paragraph has no bidirectional text
   std::vector<Run> runs;
   double size = 16;
   double letterSpacing = 0, wordSpacing = 0;
@@ -184,6 +186,8 @@ struct Atom {
   size_t trailingBytes = 0;
   bool breakAfter = false;    // a line may end after it
   bool forced = false;        // a line must end after it
+  uint8_t level = 0;          // its bidi level (for a text atom: see its TextData)
+  bool controlled = false;    // (Open/Close) the box has bidi controls of its own, and so is a boundary of runs
   double leading = 0;         // (Open/Close) the edges
 };
 
@@ -204,6 +208,8 @@ struct Collector {
   struct Mark { size_t atomIndex; size_t offset; };
   std::vector<size_t> atomStart;   // offset in `all` of each atom's start
   std::vector<Box*> floatsAndOthers;
+  bool bidiActive = false;         // the paragraph has text of both directions, or explicit directions
+  uint8_t paragraphLevel = 0;
 
   Collector(LayoutContext& l, Box& c) : lc(l), container(c) {}
 
@@ -326,7 +332,6 @@ struct Collector {
     data->size = box.style->fontSize;
     data->letterSpacing = box.style->letterSpacing;
     data->wordSpacing = box.style->wordSpacing;
-    Shape(*data);
     // One atom for the whole text for now; it is split at break opportunities once those are known.
     Atom a;
     a.kind = Atom::Kind::Text;
@@ -340,6 +345,135 @@ struct Collector {
     texts.push_back(std::move(data));
   }
 
+  // What the paragraph's text is once the whole of it has been collected: its bidi levels, and then the shapes.
+  void Finish() {
+    AnalyzeBidi();
+    for (auto& text : texts) Shape(*text);
+  }
+
+  // The control characters of UAX #9 that a box with this unicode-bidi stands for at its start and its end.
+  static void BoxControls(const BoxStyle& s, std::u32string& open, std::u32string& close) {
+    const bool rtl = s.direction == Direction::Rtl;
+    switch (s.unicodeBidi) {
+      case UnicodeBidi::Normal: break;
+      case UnicodeBidi::Embed: open += rtl ? U'\u202B' : U'\u202A'; close += U'\u202C'; break;
+      case UnicodeBidi::Isolate: open += rtl ? U'\u2067' : U'\u2066'; close += U'\u2069'; break;
+      case UnicodeBidi::BidiOverride: open += rtl ? U'\u202E' : U'\u202D'; close += U'\u202C'; break;
+      case UnicodeBidi::IsolateOverride:
+        open += rtl ? U'\u2067' : U'\u2066';
+        open += rtl ? U'\u202E' : U'\u202D';
+        close += U'\u202C';
+        close += U'\u2069';
+        break;
+      case UnicodeBidi::Plaintext: open += U'\u2068'; close += U'\u2069'; break;
+    }
+  }
+
+  void AnalyzeBidi() {
+    const BoxStyle& cs = *container.style;
+    bool need = cs.direction == Direction::Rtl || cs.unicodeBidi != UnicodeBidi::Normal;
+    for (size_t i = 0; i < atoms.size() && !need; ++i) {
+      const Atom& a = atoms[i];
+      if (a.kind == Atom::Kind::Open && a.box->style->unicodeBidi != UnicodeBidi::Normal) need = true;
+      if (a.kind != Atom::Kind::Text) continue;
+      const std::string& t = a.box->processed;
+      for (size_t k = 0; k < t.size() && !need;) {
+        if (static_cast<unsigned char>(t[k]) < 0x80) {
+          ++k;
+          continue;
+        }
+        const char32_t cp = DecodeAt(t, k);
+        const text::BidiClass c = text::BidiClassOf(cp);
+        if (c == text::BidiClass::R || c == text::BidiClass::AL || c == text::BidiClass::AN || (c >= text::BidiClass::LRE && c <= text::BidiClass::PDI && c != text::BidiClass::BN)) need = true;
+      }
+    }
+    if (!need) return;
+    // The paragraph as code points, with the controls the boxes stand for.
+    std::u32string paragraph;
+    struct Source {
+      int atom;
+      size_t byte;
+      size_t length;
+    };
+    std::vector<Source> source;
+    const auto push = [&](char32_t c, int atom, size_t byte, size_t length) {
+      paragraph += c;
+      source.push_back({atom, byte, length});
+    };
+    std::vector<long> firstControl(atoms.size(), -1), lastControl(atoms.size(), -1), nextChar(atoms.size(), -1);
+    const bool containerRtl = cs.direction == Direction::Rtl;
+    if (cs.unicodeBidi == UnicodeBidi::BidiOverride || cs.unicodeBidi == UnicodeBidi::IsolateOverride) push(containerRtl ? U'\u202E' : U'\u202D', -1, 0, 0);
+    for (size_t i = 0; i < atoms.size(); ++i) {
+      const Atom& a = atoms[i];
+      nextChar[i] = static_cast<long>(paragraph.size());
+      switch (a.kind) {
+        case Atom::Kind::Open: {
+          std::u32string open, close;
+          BoxControls(*a.box->style, open, close);
+          for (size_t c = 0; c < open.size(); ++c) {
+            if (c == 0) firstControl[i] = static_cast<long>(paragraph.size());
+            push(open[c], -1, 0, 0);
+          }
+          break;
+        }
+        case Atom::Kind::Close: {
+          std::u32string open, close;
+          BoxControls(*a.box->style, open, close);
+          for (size_t c = 0; c < close.size(); ++c) {
+            if (c == 0) firstControl[i] = static_cast<long>(paragraph.size());
+            push(close[c], -1, 0, 0);
+            lastControl[i] = static_cast<long>(paragraph.size()) - 1;
+          }
+          break;
+        }
+        case Atom::Kind::Text: {
+          const std::string& t = a.box->processed;
+          for (size_t k = 0; k < t.size();) {
+            const size_t start = k;
+            const char32_t cp = DecodeAt(t, k);
+            push(cp, static_cast<int>(i), start, k - start);
+          }
+          break;
+        }
+        case Atom::Kind::Atomic: push(0xFFFC, static_cast<int>(i), 0, 0); break;
+        case Atom::Kind::Break: push(0x2028, static_cast<int>(i), 0, 0); break;
+        case Atom::Kind::OutOfFlow: break;
+      }
+    }
+    if (paragraph.empty()) return;
+    const int base = cs.unicodeBidi == UnicodeBidi::Plaintext ? 2 : containerRtl ? 1 : 0;
+    const text::BidiResult resolved = text::ResolveBidi(paragraph, base);
+    bidiActive = true;
+    paragraphLevel = resolved.paragraphLevel;
+    for (auto& text : texts) text->levels.assign(text->box->processed.size(), resolved.paragraphLevel);
+    std::unordered_map<const Box*, TextData*> dataOf;
+    for (auto& text : texts) dataOf[text->box] = text.get();
+    for (size_t j = 0; j < source.size(); ++j) {
+      const Source& src = source[j];
+      if (src.atom < 0) continue;
+      Atom& a = atoms[static_cast<size_t>(src.atom)];
+      if (a.kind == Atom::Kind::Text) {
+        TextData* data = a.data;
+        for (size_t b = 0; b < src.length && src.byte + b < data->levels.size(); ++b) data->levels[src.byte + b] = resolved.levels[j];
+      } else {
+        a.level = resolved.levels[j];
+      }
+    }
+    // The edges of a box are at the embedding level it is in.
+    for (size_t i = 0; i < atoms.size(); ++i) {
+      Atom& a = atoms[i];
+      if (a.kind != Atom::Kind::Open && a.kind != Atom::Kind::Close) continue;
+      long at = -1;
+      if (a.kind == Atom::Kind::Open) at = firstControl[i] >= 0 ? firstControl[i] : (nextChar[i] < static_cast<long>(paragraph.size()) ? nextChar[i] : -1);
+      else at = lastControl[i] >= 0 ? lastControl[i] : (nextChar[i] > 0 ? nextChar[i] - 1 : -1);
+      a.level = at >= 0 ? resolved.explicitLevels[static_cast<size_t>(at)] : resolved.paragraphLevel;
+      a.controlled = a.kind == Atom::Kind::Open ? firstControl[i] >= 0 : lastControl[i] >= 0;
+      // A control stands for the box itself: the level outside it.
+      if (a.kind == Atom::Kind::Close && lastControl[i] >= 0) a.level = resolved.levels[static_cast<size_t>(lastControl[i])];
+      if (a.kind == Atom::Kind::Open && firstControl[i] >= 0) a.level = resolved.levels[static_cast<size_t>(firstControl[i])];
+    }
+  }
+
   void Shape(TextData& data) {
     Box& box = *data.box;
     const FontSet& set = FontsOf(lc, *box.style);
@@ -347,13 +481,16 @@ struct Collector {
     // Split into runs by the face that has the character.
     size_t runBegin = 0;
     std::shared_ptr<font::Face> runFace;
+    bool runRtl = false;
     const auto flush = [&](size_t end) {
       if (end <= runBegin || !runFace) return;
       font::ShapeOptions options;
       options.kerning = true;
+      options.rightToLeft = runRtl;
       Run run;
       run.begin = runBegin;
       run.end = end;
+      run.rtl = runRtl;
       run.face = runFace;
       std::string slice = text.substr(runBegin, end - runBegin);
       run.glyphs = runFace->Shape(slice, options);
@@ -374,10 +511,12 @@ struct Collector {
       }
       // Combining marks and joiners stay with the face of the character before them.
       if (IsCombining(cp) && runFace) face = runFace;
-      if (face != runFace) {
+      const bool rtl = !data.levels.empty() && start < data.levels.size() && (data.levels[start] & 1);
+      if (face != runFace || (runFace && rtl != runRtl)) {
         flush(start);
         runBegin = start;
         runFace = face;
+        runRtl = rtl;
       }
     }
     flush(text.size());
@@ -523,6 +662,7 @@ double LayoutInlineContent(LayoutContext& lc, Box& container, double width, doub
   Collector collector(lc, container);
   collector.Collect(container);
   if (collector.atoms.empty()) return 0;
+  collector.Finish();
   std::vector<char> breaks;
   FindBreaks(collector.all, *container.style, breaks);
 
@@ -540,11 +680,15 @@ double LayoutInlineContent(LayoutContext& lc, Box& container, double width, doub
         if (!atCharEnd) continue;
         const bool brk = breaks[base + (k + 1 - a.begin)];
         const bool newline = t[k] == '\n';
-        if (brk || newline) {
+        // Where the direction changes a piece ends too: the pieces of a line are put in order by their direction.
+        const std::vector<uint8_t>& levels = a.data->levels;
+        const bool levelChange = !levels.empty() && k + 1 < a.end && levels[k + 1] != levels[k];
+        if (brk || newline || levelChange) {
           Atom piece = a;
           piece.begin = from;
           piece.end = k + 1;
           piece.breakAfter = brk;
+          if (!levels.empty()) piece.level = levels[from];
           // a newline in preserved text is a forced break, not a glyph
           if (newline) {
             piece.end = k;
@@ -560,6 +704,7 @@ double LayoutInlineContent(LayoutContext& lc, Box& container, double width, doub
         piece.begin = from;
         piece.end = a.end;
         piece.breakAfter = false;
+        if (!a.data->levels.empty()) piece.level = a.data->levels[from];
         atoms.push_back(piece);
       }
     } else {
@@ -816,6 +961,47 @@ double LayoutInlineContent(LayoutContext& lc, Box& container, double width, doub
         trimming = false;
       }
     }
+    // Bidirectional text: the atoms go left to right in the order they are seen in, and the edge a box has first is the one of the side it is
+    // on there.
+    std::vector<size_t> visualOrder(placed.size());
+    for (size_t k = 0; k < placed.size(); ++k) visualOrder[k] = k;
+    if (collector.bidiActive) {
+      std::vector<uint8_t> levels(placed.size(), collector.paragraphLevel);
+      uint8_t carry = collector.paragraphLevel;
+      const auto isContent = [&](size_t k) { return placed[k].atom.kind == Atom::Kind::Text || placed[k].atom.kind == Atom::Kind::Atomic; };
+      for (size_t k = 0; k < placed.size(); ++k) {
+        Placed& p = placed[k];
+        switch (p.atom.kind) {
+          case Atom::Kind::Break: levels[k] = collector.paragraphLevel; break;
+          case Atom::Kind::OutOfFlow: levels[k] = carry; break;
+          case Atom::Kind::Open: case Atom::Kind::Close: {
+            levels[k] = p.atom.level;
+            if (!p.atom.controlled) {
+              // The edges of a box do not part the runs of the text in it: they go with what is next to them.
+              const bool open = p.atom.kind == Atom::Kind::Open;
+              bool found = false;
+              if (open) {
+                for (size_t j = k + 1; j < placed.size() && !found; ++j) if (isContent(j)) { levels[k] = placed[j].atom.level; found = true; }
+                for (size_t j = k; j-- > 0 && !found;) if (isContent(j)) { levels[k] = placed[j].atom.level; found = true; }
+              } else {
+                for (size_t j = k; j-- > 0 && !found;) if (isContent(j)) { levels[k] = placed[j].atom.level; found = true; }
+                for (size_t j = k + 1; j < placed.size() && !found; ++j) if (isContent(j)) { levels[k] = placed[j].atom.level; found = true; }
+              }
+            }
+            carry = levels[k];
+            break;
+          }
+          default: levels[k] = p.atom.level; carry = levels[k]; break;
+        }
+        if ((levels[k] & 1) && (p.atom.kind == Atom::Kind::Open || p.atom.kind == Atom::Kind::Close)) {
+          const Box& b = *p.atom.box;
+          const double left = b.margin.left + b.border.left + b.padding.left, right = b.margin.right + b.border.right + b.padding.right;
+          p.width = p.atom.kind == Atom::Kind::Open ? right : left;
+          p.atom.width = p.width;
+        }
+      }
+      visualOrder = text::VisualOrder(levels);
+    }
     // Is anything on the line?
     bool significant = forced;
     for (const Placed& p : placed) {
@@ -847,6 +1033,14 @@ double LayoutInlineContent(LayoutContext& lc, Box& container, double width, doub
     else if (align == TextAlign::Center) offset = freeSpace / 2;
     // With indentation in rtl the indent is from the right.
     double startX = lineOffsetX + (rtl ? 0 : indentHere) + offset;
+    std::vector<double> atomX(placed.size(), 0);
+    {
+      double run = 0;
+      for (size_t index : visualOrder) {
+        atomX[index] = run;
+        run += placed[index].width;
+      }
+    }
     double justifyExtra = 0;
     if (align == TextAlign::Justify && significant) {
       int spaces = 0;
@@ -870,6 +1064,7 @@ double LayoutInlineContent(LayoutContext& lc, Box& container, double width, doub
     struct BoxExtent {
       Box* box;
       double xStart, xEnd;
+      double lo = 1e300, hi = -1e300;  // the extent of everything of it on the line, as laid out left to right
       double shift;
       double above, below;  // of the inline box (line-height)
       double contentAscent, contentDescent;
@@ -941,8 +1136,16 @@ double LayoutInlineContent(LayoutContext& lc, Box& container, double width, doub
     const auto markUsed = [&] {
       for (OpenBox& o : open) extents[o.extentIndex].used = true;
     };
-    for (Placed& p : placed) {
+    const auto touch = [&](double left, double right) {
+      for (OpenBox& o : open) {
+        extents[o.extentIndex].lo = std::min(extents[o.extentIndex].lo, left);
+        extents[o.extentIndex].hi = std::max(extents[o.extentIndex].hi, right);
+      }
+    };
+    for (size_t placedIndex = 0; placedIndex < placed.size(); ++placedIndex) {
+      Placed& p = placed[placedIndex];
       const Atom& a = p.atom;
+      x = startX + atomX[placedIndex];
       switch (a.kind) {
         case Atom::Kind::Open: {
           BoxExtent be;
@@ -962,10 +1165,14 @@ double LayoutInlineContent(LayoutContext& lc, Box& container, double width, doub
           be.used = p.width != 0 || a.box->border.Horizontal() > 0 || a.box->padding.Horizontal() > 0;
           extents.push_back(be);
           open.push_back({a.box, extents.size() - 1, be.shift});
+          extents.back().lo = x;
+          extents.back().hi = x + p.width;
+          touch(x, x + p.width);
           x += p.width;
           break;
         }
         case Atom::Kind::Close: {
+          touch(x, x + p.width);
           x += p.width;
           if (!open.empty() && open.back().box == a.box) {
             BoxExtent& be = extents[open.back().extentIndex];
@@ -1016,6 +1223,7 @@ double LayoutInlineContent(LayoutContext& lc, Box& container, double width, doub
             w += spaces * justifyExtra;
           }
           tp.width = w;
+          touch(x, x + w);
           piece.item.rect = {x, 0, w, 0};
           piece.inlineParent = parentBox;
           piece.shift = shift;
@@ -1035,6 +1243,7 @@ double LayoutInlineContent(LayoutContext& lc, Box& container, double width, doub
           piece.item.kind = LineItem::Kind::Atomic;
           piece.item.box = &b;
           const double ml = b.margin.left;
+          touch(x, x + p.width);
           piece.item.rect = {x + ml, 0, b.width, b.height};
           piece.inlineParent = open.empty() ? &container : open.back().box;
           const double parentShift = open.empty() ? rootShift : open.back().shift;
@@ -1085,6 +1294,12 @@ double LayoutInlineContent(LayoutContext& lc, Box& container, double width, doub
     for (OpenBox& o : open) {
       extents[o.extentIndex].xEnd = x;
       stack.push_back({o.box, 0, false, true});
+    }
+    for (BoxExtent& be : extents) {
+      if (be.lo <= be.hi) {
+        be.xStart = be.lo;
+        be.xEnd = be.hi;
+      }
     }
     // When a line was trimmed, the pieces end where the last one does.
     const double endX = x;
@@ -1187,6 +1402,7 @@ double LayoutInlineContent(LayoutContext& lc, Box& container, double width, doub
 void InlineContentSizes(LayoutContext& lc, Box& container, double& minContent, double& maxContent) {
   Collector collector(lc, container);
   collector.Collect(container);
+  collector.Finish();
   minContent = maxContent = 0;
   if (collector.atoms.empty()) return;
   std::vector<char> breaks;

@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<title>Bidirectional text in lines</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<style>
+body { margin: 0; }
+div { font: 20px/1 Ahem; width: 400px; }
+.rev { direction: rtl; unicode-bidi: bidi-override; }
+</style>
+<div id="a"><span class="rev"><b id="p">A</b><b id="q">B</b></span></div>
+<div id="b" dir="rtl"><span id="c">A</span><span id="d">B</span></div>
+<div id="e"><span class="rev"><b id="f">A</b><b id="g">B</b></span> <span id="h">C</span></div>
+<div id="i" dir="rtl"><span class="rev" style="direction: ltr"><b id="j">A</b><b id="k">B</b></span></div>
+<div id="l">&#x202E;<span id="m">A</span><span id="n">B</span>&#x202C;C</div>
+<script>
+const left = id => document.getElementById(id).getBoundingClientRect().left;
+test(() => {
+  assert_equals(left('q'), 0);
+  assert_equals(left('p'), 20);
+}, 'bidi-override with right to left shows the boxes in reverse order');
+
+test(() => {
+  assert_equals(left('c'), 360);
+  assert_equals(left('d'), 380);
+}, 'a right to left paragraph starts its line at the right, left to right text staying in order');
+
+test(() => {
+  assert_equals(left('g'), 0);
+  assert_equals(left('f'), 20);
+  assert_equals(left('h'), 60);
+}, 'text after the override goes on');
+
+test(() => {
+  assert_equals(left('j'), 360);
+  assert_equals(left('k'), 380);
+}, 'left to right override in a right to left paragraph');
+
+test(() => {
+  assert_equals(left('n'), 0);
+  assert_equals(left('m'), 20);
+}, 'control characters in the text');
+</script>

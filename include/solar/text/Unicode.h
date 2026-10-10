@@ -125,12 +125,16 @@ std::vector<char> FindLineBreaks(std::string_view text, const LineBreakOptions& 
 // ---- Bidirectional text ----
 
 struct BidiResult {
-  std::vector<uint8_t> levels;       // the embedding level of each code point
+  std::vector<uint8_t> levels;          // the embedding level of each code point
+  std::vector<uint8_t> explicitLevels;  // the level the explicit embeddings, overrides and isolates give it, before the implicit rules
+  std::vector<uint8_t> classes;         // its Bidi_Class, as BidiClass
   uint8_t paragraphLevel = 0;
 };
 // Resolves the levels of a paragraph (by code points). `baseLevel` is 0 or 1 to force the direction, 2 to find it from the text (the
 // first strong character).
 BidiResult ResolveBidi(const std::u32string& text, int baseLevel);
+// The levels of [from, to), a line of the paragraph, with rule L1 applied (trailing white space and separators at the paragraph level).
+std::vector<uint8_t> LineLevels(const BidiResult& paragraph, size_t from, size_t to);
 // The visual order of a line given by levels, as indices (UAX #9 rule L2): runs of the same level are reversed as the algorithm says.
 std::vector<size_t> VisualOrder(const std::vector<uint8_t>& levels);
 

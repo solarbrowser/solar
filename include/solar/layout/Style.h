@@ -44,6 +44,8 @@ enum class TextAlign : uint8_t { Start, End, Left, Right, Center, Justify, Match
 enum class WhiteSpaceCollapse : uint8_t { Collapse, Preserve, PreserveBreaks, PreserveSpaces, BreakSpaces };
 enum class VerticalAlign : uint8_t { Baseline, Sub, Super, Top, TextTop, Middle, Bottom, TextBottom, Length };
 enum class Direction : uint8_t { Ltr, Rtl };
+enum class BreakKind : uint8_t { Auto, Avoid, Column, Always };  // break-before/after/inside: Avoid also stands for avoid-column and avoid-page, Always for page, left, ...
+enum class UnicodeBidi : uint8_t { Normal, Embed, Isolate, BidiOverride, IsolateOverride, Plaintext };
 enum class WritingMode : uint8_t { HorizontalTb, VerticalRl, VerticalLr, SidewaysRl, SidewaysLr };
 enum class TextTransform : uint8_t { None, Capitalize, Uppercase, Lowercase };
 enum class Visibility : uint8_t { Visible, Hidden, Collapse };
@@ -72,6 +74,7 @@ struct BoxStyle {
   Overflow overflowX = Overflow::Visible, overflowY = Overflow::Visible;
   Visibility visibility = Visibility::Visible;
   Direction direction = Direction::Ltr;
+  UnicodeBidi unicodeBidi = UnicodeBidi::Normal;
   WritingMode writingMode = WritingMode::HorizontalTb;
 
   Length width, height, minWidth, minHeight, maxWidth{Length::Kind::None}, maxHeight{Length::Kind::None};
@@ -149,6 +152,14 @@ struct BoxStyle {
   std::string gridTemplateColumns, gridTemplateRows, gridTemplateAreas, gridAutoFlow, gridAutoColumns, gridAutoRows;
   std::string gridColumnStart, gridColumnEnd, gridRowStart, gridRowEnd;
   Length rowGap, columnGap;  // Auto: normal (0 in flex, the default in grid)
+  // Multiple columns (css-multicol) and fragmentation (css-break).
+  int columnCount = 0;        // 0: auto
+  double columnWidth = -1;    // negative: auto
+  bool columnFillAuto = false;
+  bool columnSpanAll = false;
+  BreakKind breakBefore = BreakKind::Auto, breakAfter = BreakKind::Auto, breakInside = BreakKind::Auto;
+  int orphans = 2, widows = 2;
+  bool IsMulticol() const { return columnCount > 0 || columnWidth >= 0; }
 
   // For a style in the logical frame of its writing mode (see Logicalize): the style as written, with the physical properties.
   std::shared_ptr<const BoxStyle> physicalStyle;

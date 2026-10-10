@@ -2079,6 +2079,8 @@ tests/wpt/css/selectors/selector-specificity.html
 tests/wpt/css/selectors/selectors-attr-many-2.html
 tests/wpt/css/selectors/selectors-case-sensitive-001.html
 tests/wpt/css/selectors/x-pseudo-element.html
+tests/wpt/solar/animations-basic.html
+tests/wpt/solar/animations-css.html
 tests/wpt/solar/computed-basic.html
 tests/wpt/solar/csp-eval.html
 tests/wpt/solar/csp-inline.html
@@ -2086,6 +2088,7 @@ tests/wpt/solar/css-values.html
 tests/wpt/solar/cssom-basic.html
 tests/wpt/solar/dataset.html
 tests/wpt/solar/font-loading.html
+tests/wpt/solar/layout-bidi.html
 tests/wpt/solar/layout-flex.html
 tests/wpt/solar/layout-flow.html
 tests/wpt/solar/layout-grid.html
@@ -2094,3 +2097,4 @@ tests/wpt/solar/layout-table.html
 tests/wpt/solar/layout-transform.html
 tests/wpt/solar/layout-vertical.html
 tests/wpt/solar/link-sheet.html
+tests/wpt/solar/transitions-basic.html

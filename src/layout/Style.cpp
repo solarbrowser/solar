@@ -172,6 +172,7 @@ bool BoxStyle::CreatesBlockFormattingContext() const {
     default: break;
   }
   if (containLayout || containPaint) return true;
+  if (IsMulticol() && display != Display::Inline) return true;
   return (overflowX != Overflow::Visible && overflowX != Overflow::Clip) || (overflowY != Overflow::Visible && overflowY != Overflow::Clip);
 }
 
@@ -291,6 +292,11 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
   s.overflowY = overflow(get("overflow-y"));
   s.visibility = Pick<Visibility>(get("visibility"), {{"hidden", Visibility::Hidden}, {"collapse", Visibility::Collapse}}, Visibility::Visible);
   s.direction = get("direction") == "rtl" ? Direction::Rtl : Direction::Ltr;
+  {
+    const std::string bidi = get("unicode-bidi");
+    s.unicodeBidi = bidi == "embed" ? UnicodeBidi::Embed : bidi == "isolate" ? UnicodeBidi::Isolate : bidi == "bidi-override" ? UnicodeBidi::BidiOverride :
+                    bidi == "isolate-override" ? UnicodeBidi::IsolateOverride : bidi == "plaintext" ? UnicodeBidi::Plaintext : UnicodeBidi::Normal;
+  }
   s.writingMode = Pick<WritingMode>(get("writing-mode"), {{"vertical-rl", WritingMode::VerticalRl}, {"vertical-lr", WritingMode::VerticalLr}, {"sideways-rl", WritingMode::SidewaysRl}, {"sideways-lr", WritingMode::SidewaysLr}}, WritingMode::HorizontalTb);
 
   s.width = ParseLength(get("width"));
@@ -391,6 +397,25 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
     s.gridRowEnd = get("grid-row-end");
     s.rowGap = gap("row-gap");
     s.columnGap = gap("column-gap");
+  }
+  {
+    const std::string count = get("column-count"), width = get("column-width");
+    s.columnCount = count == "auto" || count.empty() ? 0 : std::max(0, static_cast<int>(Number(count, 0)));
+    s.columnWidth = width == "auto" || width.empty() ? -1 : Number(width, -1);
+    s.columnFillAuto = get("column-fill") == "auto";
+    s.columnSpanAll = get("column-span") == "all";
+    const auto breakKind = [&](const char* property) {
+      const std::string v = get(property);
+      if (v == "avoid" || v == "avoid-column" || v == "avoid-page") return BreakKind::Avoid;
+      if (v == "column") return BreakKind::Column;
+      if (v == "page" || v == "left" || v == "right" || v == "recto" || v == "verso" || v == "region" || v == "always") return BreakKind::Always;
+      return BreakKind::Auto;
+    };
+    s.breakBefore = breakKind("break-before");
+    s.breakAfter = breakKind("break-after");
+    s.breakInside = breakKind("break-inside");
+    s.orphans = std::max(1, static_cast<int>(Number(get("orphans"), 2)));
+    s.widows = std::max(1, static_cast<int>(Number(get("widows"), 2)));
   }
   s.fontSize = Number(get("font-size"), 16);
   s.fontWeight = static_cast<int>(Number(get("font-weight"), 400));

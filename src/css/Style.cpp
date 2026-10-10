@@ -77,6 +77,11 @@ td, th { padding: 1px; } th { text-align: center; }
 caption { text-align: center; }
 img { }
 button, input, select, textarea { text-indent: initial; }
+[dir]:dir(ltr), bdi:dir(ltr), input[type=tel i]:dir(ltr) { direction: ltr; }
+[dir]:dir(rtl), bdi:dir(rtl) { direction: rtl; }
+address, blockquote, center, dialog, div, figure, figcaption, footer, form, header, hr, legend, listing, main, p, plaintext, pre, search, xmp, bdi, output { unicode-bidi: isolate; }
+bdo, bdo[dir] { unicode-bidi: isolate-override; }
+textarea[dir=auto i], pre[dir=auto i] { unicode-bidi: plaintext; }
 )CSS";
 
 struct UserAgentRule {

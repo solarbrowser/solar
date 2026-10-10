@@ -749,6 +749,7 @@ tests/wpt/shadow-dom/untriaged/user-interaction/ranges-and-selections/test-001.h
 tests/wpt/shadow-dom/user-agent-shadow-root-crash.html
 tests/wpt/solar/csp-eval.html
 tests/wpt/solar/csp-inline.html
+tests/wpt/solar/shadow-retarget-window.html
 tests/wpt/web-animations/animation-model/animation-types/discrete.html
 tests/wpt/web-animations/animation-model/animation-types/display.tentative.html
 tests/wpt/web-animations/animation-model/animation-types/scrollbar-interpolation.html

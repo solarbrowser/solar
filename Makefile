@@ -229,6 +229,10 @@ $(BUILD_DIR)/CssValuesTest: $(OBJ_DIR)/tests/CssValuesTest.o $(OBJ_DIR)/src/css/
 	@$(CXX) $(CXXFLAGS) -o $@ $^
 
 # The font reader needs HarfBuzz and zlib, nothing else.
+$(BUILD_DIR)/BidiTest: $(OBJ_DIR)/tests/BidiTest.o $(TEXT_OBJECTS)
+	@echo "[LINK] $@"
+	@$(CXX) $(CXXFLAGS) -o $@ $^
+
 $(BUILD_DIR)/FontTest: $(OBJ_DIR)/tests/FontTest.o $(FONT_OBJECTS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^ $(HARFBUZZ_LIBS)
@@ -265,7 +269,7 @@ WPT_STREAMS = $(wildcard tests/wpt/streams/*.any.js tests/wpt/streams/piping/*.a
 WPT_PAGES = $(shell cat tests/wpt/dom/passing.txt)
 WPT_DOM = $(wildcard tests/dom/*.any.js tests/wpt/dom/abort/*.any.js tests/wpt/dom/events/*.any.js tests/wpt/webidl/*.any.js tests/wpt/encoding/*.any.js tests/wpt/encoding/streams/*.any.js tests/wpt/FileAPI/blob/*.any.js tests/wpt/FileAPI/file/*.any.js tests/wpt/xhr/formdata/*.any.js)
 
-PORTABLE_TESTS = FontTest CssValuesTest HtmlTokenizerTest UrlTest SearchParamsTest ValidationErrorTest NormalizerTest PublicSuffixTest CookiesTest HttpCacheTest FetchHeadersTest CorsTest Http1ParserTest ContentDecoderTest AddressRaceTest HstsTest
+PORTABLE_TESTS = FontTest BidiTest CssValuesTest HtmlTokenizerTest UrlTest SearchParamsTest ValidationErrorTest NormalizerTest PublicSuffixTest CookiesTest HttpCacheTest FetchHeadersTest CorsTest Http1ParserTest ContentDecoderTest AddressRaceTest HstsTest
 NET_TESTS = LoopTest ResolverTest NetTest HttpClientTest TlsTest Http2Test
 QUANTA_TESTS = UrlBindingsTest UrlRealmsTest FetchBindingsTest DomTest HtmlTreeTest
 ifeq ($(PLATFORM),linux)
