@@ -1060,6 +1060,10 @@ const std::vector<std::string>& ComputedPropertyNames() {
   return names;
 }
 
+std::vector<CssStyleSheet*> SheetsOfTreeRoot(dom::Node* root) {
+  return SheetsOfTree(root, root->IsDocument() ? static_cast<dom::Document*>(root)->context : nullptr);
+}
+
 MediaEnvironment EnvironmentFor(const dom::Document* document) {
   MediaEnvironment environment = CurrentMediaEnvironment();
   dom::Element* frame = document ? document->frameElement : nullptr;

@@ -1,0 +1,27 @@
+#pragma once
+
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "solar/dom/Node.h"
+#include "solar/font/Database.h"
+
+// The fonts of a style: what font-family and the rest ask for, matched against the @font-face rules of the document and then
+// the fonts installed on the system.
+namespace solar::css {
+
+// The request a style makes: the families of font-family (names unquoted, generics lowercased), weight, stretch and style.
+font::Request FontRequestFor(dom::Element* element, const std::string& pseudo = "");
+// The faces that would do for the element's text, the first family's first: more than one when later families are there for the
+// characters the earlier ones do not have. Never empty: a font is found whatever is asked for, if the system has any.
+std::vector<std::shared_ptr<font::Face>> FontsFor(dom::Element* element, const std::string& pseudo = "");
+// The first of them: the font whose metrics the element's line boxes are made of.
+std::shared_ptr<font::Face> PrimaryFont(dom::Element* element, const std::string& pseudo = "");
+// A font with the character, for when none of the element's fonts has it.
+std::shared_ptr<font::Face> FallbackFont(dom::Element* element, char32_t codePoint, const std::string& pseudo = "");
+
+// The @font-face fonts of the document, loaded the first time one is wanted.
+font::Database& DocumentFonts(dom::Document* document);
+
+}  // namespace solar::css

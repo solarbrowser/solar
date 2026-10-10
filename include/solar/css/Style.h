@@ -16,6 +16,10 @@ std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std
 // The longhand properties getComputedStyle lists, in the order it lists them.
 const std::vector<std::string>& ComputedPropertyNames();
 
+// The style sheets that apply to the tree the node is the root of (a document or a shadow root), in the order of the cascade.
+struct CssStyleSheet;
+std::vector<CssStyleSheet*> SheetsOfTreeRoot(dom::Node* root);
+
 // Something a style depends on changed (a sheet, a declaration): computed values are made again.
 void NoteStyleChange();
 uint64_t StyleVersion();

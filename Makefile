@@ -1,5 +1,5 @@
 CXX = clang++
-CXXFLAGS = -std=c++20 -Wall -Wextra -O2 -pthread -Iinclude -Itests -isystem third_party/quanta/include -MD -MP
+CXXFLAGS = -std=c++20 -Wall -Wextra -O2 -pthread -Iinclude -Itests -isystem third_party/quanta/include $(HARFBUZZ_CFLAGS) -MD -MP
 
 BUILD_DIR = build
 OBJ_DIR = $(BUILD_DIR)/obj
@@ -11,6 +11,11 @@ NET_OBJECTS = $(NET_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
 # CSS: the tokenizer and, built on it, selectors (and later style sheets).
 CSS_SOURCES = $(wildcard src/css/*.cpp)
 CSS_OBJECTS = $(CSS_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
+# Fonts: the files are read and the text is shaped with HarfBuzz, which pkg-config finds as it does OpenSSL.
+FONT_SOURCES = $(wildcard src/font/*.cpp)
+FONT_OBJECTS = $(FONT_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
+HARFBUZZ_CFLAGS = $(shell pkg-config --cflags harfbuzz 2>/dev/null)
+HARFBUZZ_LIBS = $(shell pkg-config --libs harfbuzz 2>/dev/null)
 # The HTML parser: the tokenizer and the tree builder, which make a DOM tree out of markup.
 HTML_SOURCES = $(wildcard src/html/*.cpp)
 HTML_OBJECTS = $(HTML_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
@@ -106,9 +111,9 @@ quanta:
 
 $(QUANTA_LIBS): | quanta
 
-solar: $(OBJ_DIR)/src/main.o $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
+solar: $(OBJ_DIR)/src/main.o $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
-	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
+	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS)
 
 $(BUILD_DIR)/UrlTest: $(OBJ_DIR)/tests/UrlTest.o $(URL_OBJECTS)
 	@echo "[LINK] $@"
@@ -199,22 +204,27 @@ $(BUILD_DIR)/CssValuesTest: $(OBJ_DIR)/tests/CssValuesTest.o $(OBJ_DIR)/src/css/
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^
 
+# The font reader needs HarfBuzz and zlib, nothing else.
+$(BUILD_DIR)/FontTest: $(OBJ_DIR)/tests/FontTest.o $(FONT_OBJECTS)
+	@echo "[LINK] $@"
+	@$(CXX) $(CXXFLAGS) -o $@ $^ $(HARFBUZZ_LIBS) -lz
+
 # The tokenizer does not need the DOM, and its test runs without Quanta.
 $(BUILD_DIR)/HtmlTokenizerTest: $(OBJ_DIR)/tests/HtmlTokenizerTest.o $(OBJ_DIR)/src/html/Tokenizer.o $(OBJ_DIR)/src/html/Entities.o $(OBJ_DIR)/src/html/EntityTables.o $(URL_OBJECTS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^
 
-$(BUILD_DIR)/HtmlTreeTest: $(OBJ_DIR)/tests/HtmlTreeTest.o $(HTML_OBJECTS) $(DOM_OBJECTS) $(URL_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
+$(BUILD_DIR)/HtmlTreeTest: $(OBJ_DIR)/tests/HtmlTreeTest.o $(HTML_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(URL_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
-	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
+	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS)
 
 $(BUILD_DIR)/DomTest: $(OBJ_DIR)/tests/DomTest.o $(URL_OBJECTS) $(DOM_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
 
-$(BUILD_DIR)/WptTest: $(OBJ_DIR)/tests/WptTest.o $(URL_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
+$(BUILD_DIR)/WptTest: $(OBJ_DIR)/tests/WptTest.o $(URL_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
-	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
+	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS)
 
 $(BUILD_DIR)/FetchBindingsTest: $(OBJ_DIR)/tests/FetchBindingsTest.o $(OBJ_DIR)/tests/support/TestServer.o $(URL_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
@@ -231,7 +241,7 @@ WPT_STREAMS = $(wildcard tests/wpt/streams/*.any.js tests/wpt/streams/piping/*.a
 WPT_PAGES = $(shell cat tests/wpt/dom/passing.txt)
 WPT_DOM = $(wildcard tests/dom/*.any.js tests/wpt/dom/abort/*.any.js tests/wpt/dom/events/*.any.js tests/wpt/webidl/*.any.js tests/wpt/encoding/*.any.js tests/wpt/encoding/streams/*.any.js tests/wpt/FileAPI/blob/*.any.js tests/wpt/FileAPI/file/*.any.js tests/wpt/xhr/formdata/*.any.js)
 
-PORTABLE_TESTS = CssValuesTest HtmlTokenizerTest UrlTest SearchParamsTest ValidationErrorTest NormalizerTest PublicSuffixTest CookiesTest HttpCacheTest FetchHeadersTest CorsTest Http1ParserTest ContentDecoderTest AddressRaceTest HstsTest
+PORTABLE_TESTS = FontTest CssValuesTest HtmlTokenizerTest UrlTest SearchParamsTest ValidationErrorTest NormalizerTest PublicSuffixTest CookiesTest HttpCacheTest FetchHeadersTest CorsTest Http1ParserTest ContentDecoderTest AddressRaceTest HstsTest
 NET_TESTS = LoopTest ResolverTest NetTest HttpClientTest TlsTest Http2Test
 QUANTA_TESTS = UrlBindingsTest UrlRealmsTest FetchBindingsTest DomTest HtmlTreeTest
 ifeq ($(PLATFORM),linux)

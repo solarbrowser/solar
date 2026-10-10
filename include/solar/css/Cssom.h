@@ -249,6 +249,8 @@ using SheetLoader = std::function<std::optional<std::string>(const std::string& 
 void ProcessImports(Quanta::Context& ctx, CssStyleSheet* sheet, const SheetLoader& load, int depth = 0);
 // The loader that an @import inserted with insertRule is fetched with.
 void SetSheetLoader(SheetLoader loader);
+// Whatever was set, for what else needs to fetch (font files).
+const SheetLoader& GetSheetLoader();
 // A sheet for a link element, made of the text at `address`.
 CssStyleSheet* NewLinkedSheet(Quanta::Context& ctx, dom::Element* link, const std::string& address, const std::string& text);
 

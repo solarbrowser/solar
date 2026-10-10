@@ -1355,6 +1355,7 @@ namespace {
 SheetLoader g_sheetLoader;
 }
 void SetSheetLoader(SheetLoader loader) { g_sheetLoader = std::move(loader); }
+const SheetLoader& GetSheetLoader() { return g_sheetLoader; }
 
 std::string InsertRule(Context& ctx, CssStyleSheet* sheet, CssRule* parent, std::string_view text, uint32_t index, uint32_t& result) {
   std::vector<CssRule*>& list = parent ? parent->rules : sheet->rules;
