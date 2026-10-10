@@ -136,6 +136,7 @@ class Builder {
   explicit Builder(LayoutContext& lc) : lc_(lc) {}
 
   void Build(dom::Document* document) {
+    styles_ = std::make_unique<CounterStyles>(document);
     auto root = std::make_unique<Box>();
     root->kind = Box::Kind::Block;
     root->anonymous = true;
@@ -151,6 +152,7 @@ class Builder {
 
  private:
   LayoutContext& lc_;
+  std::unique_ptr<CounterStyles> styles_;
 
   // ---- Counters (https://www.w3.org/TR/css-lists-3/#counters) ----
   std::map<std::string, std::vector<int>> counters_;
@@ -261,7 +263,12 @@ class Builder {
   }
 
   // The counter's value in a list-style-type; empty for none.
-  static std::string FormatCounter(int n, const std::string& type) {
+  std::string FormatCounter(int n, const std::string& type) {
+    if (type == "none") return "";
+    if (!type.empty() && (type[0] == '"' || type[0] == '\'')) return type.substr(1, type.size() - 2);
+    return styles_->Format(type.empty() ? "decimal" : type, n);
+  }
+  static std::string OldFormatCounter(int n, const std::string& type) {
     static const char32_t latin[] = U"abcdefghijklmnopqrstuvwxyz";
     static const char32_t latinUpper[] = U"ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     static const char32_t greek[] = U"αβγδεζηθικλμνξοπρστυφχψω";
@@ -419,9 +426,9 @@ class Builder {
     ApplyCounters(*style, style->display == Display::ListItem, element);
     const int listValue = counters_["list-item"].empty() ? 0 : counters_["list-item"].back();
     if (style->display == Display::Contents) {
-      BuildGenerated(parent, element, "::before");
+      BuildGenerated(parent, element, "before");
       BuildChildren(parent, element, style);
-      BuildGenerated(parent, element, "::after");
+      BuildGenerated(parent, element, "after");
       return;
     }
     auto box = std::make_unique<Box>();
@@ -464,9 +471,9 @@ class Builder {
     Box* raw = parent.AddChild(std::move(box));
     Register(raw);
     if (raw->kind == Box::Kind::LineBreak) return;
-    BuildGenerated(*raw, element, "::before");
+    BuildGenerated(*raw, element, "before");
     BuildChildren(*raw, element, raw->style);
-    BuildGenerated(*raw, element, "::after");
+    BuildGenerated(*raw, element, "after");
   }
 
   // ---- Anonymous boxes ----
@@ -592,16 +599,14 @@ class Builder {
     dom::Element* element = static_cast<dom::Element*>(box.node);
     const std::string type = box.style->listStyleType;
     if (type == "none") return;
-    std::shared_ptr<const BoxStyle> markerStyle = Logicalize(ReadStyle(lc_.ctx, element, "::marker"));
+    std::shared_ptr<const BoxStyle> markerStyle = Logicalize(ReadStyle(lc_.ctx, element, "marker"));
     std::string text;
     if (markerStyle->content != "normal" && markerStyle->content != "none" && !markerStyle->content.empty()) {
       if (!ContentText(*markerStyle, element, text)) return;
     } else {
-      const bool symbol = type == "disc" || type == "circle" || type == "square";
       const bool string = !type.empty() && (type[0] == '"' || type[0] == '\'');
       text = FormatCounter(box.listValue, type);
-      if (string) {} else if (symbol) text += " ";
-      else text += ". ";
+      if (!string) text = styles_->Prefix(type.empty() ? "decimal" : type) + text + styles_->Suffix(type.empty() ? "decimal" : type);
     }
     if (text.empty()) return;
     auto textBox = std::make_unique<Box>();

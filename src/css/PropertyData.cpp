@@ -918,7 +918,7 @@ const TypeDefinition kTypeDefinitions[] = {
     {"<container-query>", "not <query-in-parens> | <query-in-parens> [ [ and <query-in-parens> ]* | [ or <query-in-parens> ]* ]"},
     {"<content-distribution>", "space-between | space-around | space-evenly | stretch"},
     {"<content-level>", "element | content | text | <attr()> | <counter>"},
-    {"<content-list>", "[ <string> | <counter()> | <counters()> | <content()> | <attr()> ]+"},
+    {"<content-list>", "[ <string> | <image> | <attr()> | contents | <quote> | <counter> | <content()> ]+"},
     {"<content-position>", "center | start | end | flex-start | flex-end"},
     {"<content-replacement>", "<image>"},
     {"<contextual-alt-values>", "[ contextual | no-contextual ]"},

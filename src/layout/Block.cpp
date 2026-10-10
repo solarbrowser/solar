@@ -1,13 +1,54 @@
 // Block layout (https://www.w3.org/TR/CSS22/visudet.html, https://www.w3.org/TR/CSS22/box.html#collapsing-margins), floats
 // (https://www.w3.org/TR/CSS22/visuren.html#floats) and absolute positioning (https://www.w3.org/TR/CSS22/visuren.html#absolute-positioning).
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cmath>
 
 #include "Internal.h"
 
 namespace solar::layout {
 
+void ShiftContents(Box& box, double dy) {
+  for (auto& c : box.children) {
+    if (c->kind == Box::Kind::Block && c->style->IsOutOfFlow() && !c->style->IsFloating()) continue;
+    c->y += dy;
+  }
+  for (Line& line : box.lines) {
+    line.rect.y += dy;
+    for (LineItem& item : line.items) {
+      item.rect.y += dy;
+      if (item.kind == LineItem::Kind::Atomic && item.box) {}
+    }
+  }
+  for (auto& c : box.children) {
+    if (c->kind == Box::Kind::Inline || c->kind == Box::Kind::Text) {
+      for (Rect& r : c->fragments) r.y += dy;
+      // inline boxes' children too
+      std::function<void(Box&)> deep = [&](Box& b) {
+        for (auto& g : b.children) {
+          if (g->kind == Box::Kind::Inline || g->kind == Box::Kind::Text) for (Rect& r : g->fragments) r.y += dy;
+          if (g->kind == Box::Kind::Inline) deep(*g);
+        }
+      };
+      deep(*c);
+    }
+  }
+}
+
+
 namespace {
+
+// Physical directions of the axes of a writing mode: (1,0) is rightwards, (0,1) downwards.
+struct DirP {
+  int x, y;
+};
+DirP FrameXP(WritingMode m) { return m == WritingMode::HorizontalTb ? DirP{1, 0} : m == WritingMode::SidewaysLr ? DirP{0, -1} : DirP{0, 1}; }
+DirP InlineStartDirP(WritingMode m, Direction d) {
+  const DirP a = FrameXP(m);
+  return d == Direction::Ltr ? a : DirP{-a.x, -a.y};
+}
+int DotP(DirP a, DirP b) { return a.x * b.x + a.y * b.y; }
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 constexpr double kEps = 0.0005;
@@ -57,11 +98,18 @@ double ExtrasVertical(const Box& b) { return b.border.Vertical() + b.padding.Ver
 
 bool IsRootBox(const Box& box) { return box.parent && box.parent->parent == nullptr; }
 
+// The direction of the box a box is in: what start and end mean for its margins, floats and clearance.
+Direction CbDirection(const Box& b) {
+  const Box* p = b.parent;
+  while (p && p->kind != Box::Kind::Block) p = p->parent;
+  return p ? p->style->direction : Direction::Ltr;
+}
+
 bool IsFloat(const Box& b) { return b.style->IsFloating() && !b.style->IsOutOfFlow(); }
 bool IsPositionedOutOfFlow(const Box& b) { return b.style->IsOutOfFlow(); }
 
-bool FloatsLeft(const BoxStyle& s) {
-  const bool rtl = s.direction == Direction::Rtl;
+bool FloatsLeft(const BoxStyle& s, Direction cb) {
+  const bool rtl = cb == Direction::Rtl;
   return s.floating == Float::Left || (s.floating == Float::InlineStart && !rtl) || (s.floating == Float::InlineEnd && rtl);
 }
 
@@ -107,7 +155,7 @@ FloatRecord PlaceFloat(LayoutContext& lc, Box& box, double cbLeft, double cbWidt
   lc.cbX = savedCbX;
   const double mw = box.margin.left + box.width + box.margin.right;
   const double mh = box.margin.top + box.height + box.margin.bottom;
-  const bool isLeft = FloatsLeft(*box.style);
+  const bool isLeft = FloatsLeft(*box.style, CbDirection(box));
   double y = minY;
   for (const FloatRecord& f : lc.bfc->floats) y = std::max(y, f.top);
   double bandLeft = cbLeft, bandRight = cbLeft + cbWidth;
@@ -202,7 +250,7 @@ void ComputeContentSizes(LayoutContext& lc, Box& box) {
     box.minContent = box.maxContent = w;
     return;
   }
-  if (s.containSizeInline) {  // its contents count for nothing
+  if (s.containSizeInline && !IsGridDisplay(s.display)) {  // its contents count for nothing
     box.minContent = box.maxContent = s.containIntrinsicWidthSet ? s.containIntrinsicWidth.value : 0;
     return;
   }
@@ -279,7 +327,7 @@ void LayoutBlockChildren(LayoutContext& lc, Box& P, double contentWidth, double 
     double estimateTop = (atTop && topOpen) ? py : py + y + pending.Sum() + QuickMarginTop(child, contentWidth);
     bool cleared = false;
     if (cs.clear != Clear::None && !lc.bfc->floats.empty()) {
-      const bool rtl = cs.direction == Direction::Rtl;
+      const bool rtl = P.style->direction == Direction::Rtl;
       const bool left = cs.clear == Clear::Left || cs.clear == Clear::Both || (cs.clear == Clear::InlineStart && !rtl) || (cs.clear == Clear::InlineEnd && rtl);
       const bool right = cs.clear == Clear::Right || cs.clear == Clear::Both || (cs.clear == Clear::InlineStart && rtl) || (cs.clear == Clear::InlineEnd && !rtl);
       const double clearY = lc.bfc->ClearY(left, right);
@@ -320,10 +368,16 @@ void LayoutBlockChildren(LayoutContext& lc, Box& P, double contentWidth, double 
     // Lay out at the estimated place; if the real place is another and floats mattered, lay out again there.
     const size_t floatCount = lc.bfc->floats.size();
     const uint64_t events = lc.floatEvents;
+    // justify-self other than normal fits the box to its content and puts it where it says (unless a margin is auto).
+    const Align::Kind justify = cs.justifySelf.kind;
+    bool justified = justify != Align::Kind::Auto && justify != Align::Kind::Normal && justify != Align::Kind::Stretch && !cs.margin[1].IsAuto() && !cs.margin[3].IsAuto() &&
+                     !Orthogonal(P.Mode(), child.Mode()) && !child.replaced && !establishes;
+    if (Orthogonal(P.Mode(), child.Mode())) justified = justify != Align::Kind::Auto && justify != Align::Kind::Normal && justify != Align::Kind::Stretch && !cs.margin[1].IsAuto() && !cs.margin[3].IsAuto();
+    if (justified && !Orthogonal(P.Mode(), child.Mode()) && child.replaced) justified = true;
     lc.cbX = px + shiftX;
     lc.boxY = estimateTop;
     lc.availOverride = availOverride;
-    LayoutBlockLevel(lc, child, contentWidth, heightBasis);
+    LayoutBlockLevel(lc, child, contentWidth, heightBasis, justified);
     MarginSet top{child.topPositive, child.topNegative};
     MarginSet bottom{child.bottomPositive, child.bottomNegative};
     const bool throughNow = child.collapsedThrough;
@@ -344,7 +398,7 @@ void LayoutBlockChildren(LayoutContext& lc, Box& P, double contentWidth, double 
       lc.cbX = px + shiftX;
       lc.boxY = actualTop;
       lc.availOverride = availOverride;
-      LayoutBlockLevel(lc, child, contentWidth, heightBasis);
+      LayoutBlockLevel(lc, child, contentWidth, heightBasis, justified);
       top = {child.topPositive, child.topNegative};
       bottom = {child.bottomPositive, child.bottomNegative};
     }
@@ -376,6 +430,33 @@ void LayoutBlockChildren(LayoutContext& lc, Box& P, double contentWidth, double 
     pending = bottom;
     if (child.baseline >= 0) lastBaseline = child.y - relativeY - originY + child.baseline;
     child.x += originX + shiftX + relativeX;
+    if (justified) {
+      // Aligned in the room the containing block has along its lines.
+      const double free = contentWidth - shiftX - (child.margin.left + child.width + child.margin.right);
+      const WritingMode pm = P.Mode();
+      const DirP startToEnd = [&] {
+        switch (justify) {
+          case Align::Kind::SelfStart: case Align::Kind::SelfEnd: return InlineStartDirP(child.Mode(), cs.direction);
+          case Align::Kind::Left: case Align::Kind::Right: return FrameXP(pm);
+          default: return InlineStartDirP(pm, P.style->direction);
+        }
+      }();
+      const bool wantStart = justify == Align::Kind::Start || justify == Align::Kind::SelfStart || justify == Align::Kind::Left || justify == Align::Kind::FlexStart ||
+                             justify == Align::Kind::Baseline;
+      const bool center = justify == Align::Kind::Center;
+      const int d = DotP(startToEnd, FrameXP(pm));
+      const bool low = d == 0 ? true : ((d > 0) == wantStart);
+      double offset = 0;
+      if (free < 0 && !cs.justifySelf.unsafe) {
+        // does not fit: from its start
+        offset = (DotP(InlineStartDirP(pm, P.style->direction), FrameXP(pm)) > 0) ? 0 : free;
+      } else if (center) {
+        offset = free / 2;
+      } else if (!low) {
+        offset = free;
+      }
+      child.x += offset;
+    }
   }
   P.baseline = lastBaseline >= 0 ? lastBaseline + originY : -1;
   if (!placedAny && topOpen) {
@@ -496,7 +577,7 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
         if (autoLeft && autoRight) { ml = rest / 2; mr = rest / 2; if (rest < 0) { ml = 0; mr = rest; } }
         else if (autoLeft) ml = rest;
         else mr = rest;
-      } else if (rest != 0 && !autoLeft && !autoRight && s.direction == Direction::Rtl) {
+      } else if (rest != 0 && !autoLeft && !autoRight && CbDirection(box) == Direction::Rtl) {
         ml += rest;
       } else if (rest != 0 && !autoLeft && !autoRight) {
         mr += rest;
@@ -508,14 +589,14 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
       const double rest = availableWidth - width - extrasH - ml - mr;
       if (autoLeft && autoRight) {
         if (rest >= 0) { ml = rest / 2; mr = rest / 2; }
-        else if (s.direction == Direction::Rtl) { ml = rest; mr = 0; }
+        else if (CbDirection(box) == Direction::Rtl) { ml = rest; mr = 0; }
         else { ml = 0; mr = rest; }
       } else if (autoLeft) {
         ml = rest;
       } else if (autoRight) {
         mr = rest;
       } else {
-        if (s.direction == Direction::Rtl) ml += rest;
+        if (CbDirection(box) == Direction::Rtl) ml += rest;
         else mr += rest;
       }
     }
@@ -552,7 +633,10 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
   box.collapsedThrough = false;
   box.baseline = -1;
   double contentHeight = 0;
-  const bool establishes = s.CreatesBlockFormattingContext() || IsRootBox(box) || box.forceBfc;
+  // align-content other than normal puts the contents of a block container in the room it has, and makes it a formatting context.
+  const bool plainBlock = !box.replaced && !IsFlexDisplay(s.display) && !IsGridDisplay(s.display) && !IsTableDisplay(s.display) && s.display != Display::TableCell;
+  const bool contentAligned = plainBlock && s.alignContent.kind != Align::Kind::Normal && s.alignContent.kind != Align::Kind::Stretch && s.alignContent.kind != Align::Kind::Auto;
+  const bool establishes = s.CreatesBlockFormattingContext() || IsRootBox(box) || box.forceBfc || contentAligned || s.display == Display::TableCell;
   const bool heightIsAuto = !Known(specifiedHeight) && !Known(ratioHeight);
   const double minH = [&] {
     const double v = ResolveSize(s.minHeight, cbHeight);
@@ -640,7 +724,7 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
   double usedHeight;
   if (Known(specifiedHeight)) usedHeight = specifiedHeight;
   else if (Known(ratioHeight)) usedHeight = ratioHeight;
-  else usedHeight = s.containSizeBlock ? (s.containIntrinsicHeightSet ? s.containIntrinsicHeight.value : 0) : contentHeight;
+  else usedHeight = s.containSizeBlock && !IsGridDisplay(s.display) ? (s.containIntrinsicHeightSet ? s.containIntrinsicHeight.value : 0) : contentHeight;
   if (!Known(forceHeight)) {
     const double maxH = ResolveSize(s.maxHeight, cbHeight);
     if (Known(maxH)) usedHeight = std::min(usedHeight, borderBox ? std::max(0.0, maxH - extrasV) : maxH);
@@ -648,6 +732,17 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
   }
   usedHeight = std::max(0.0, usedHeight);
   box.height = usedHeight + extrasV;
+  if (contentAligned || (s.display == Display::TableCell && false)) {
+    const double free = usedHeight - contentHeight;
+    double offset = 0;
+    switch (s.alignContent.kind) {
+      case Align::Kind::End: case Align::Kind::FlexEnd: case Align::Kind::LastBaseline: offset = free; break;
+      case Align::Kind::Center: case Align::Kind::SpaceAround: case Align::Kind::SpaceEvenly: offset = free / 2; break;
+      default: break;
+    }
+    if (free < 0 && !s.alignContent.unsafe) offset = 0;
+    if (offset != 0) ShiftContents(box, offset);
+  }
 
   // Empty: the margins collapse through it.
   box.collapsedThrough = !establishes && !box.replaced && heightIsAuto && usedHeight == 0 && box.border.Vertical() == 0 && box.padding.Vertical() == 0 && minH == 0 && !hasContent;
@@ -665,7 +760,7 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
     const double top = ResolveSize(s.inset[0], cbHeight), bottom = ResolveSize(s.inset[2], cbHeight);
     if (Known(left)) box.shiftX = left;
     else if (Known(right)) box.shiftX = -right;
-    if (s.direction == Direction::Rtl && Known(left) && Known(right)) box.shiftX = -right;
+    if (CbDirection(box) == Direction::Rtl && Known(left) && Known(right)) box.shiftX = -right;
     if (Known(top)) box.shiftY = top;
     else if (Known(bottom)) box.shiftY = -bottom;
   }
@@ -689,6 +784,7 @@ namespace {
 
 struct CbRect {
   double x, y, width, height;
+  const Box* box = nullptr;  // the box it is the padding box of, when it is one
 };
 
 bool IsPositioned(const Box& b) { return b.style->position != Position::Static; }
@@ -700,7 +796,7 @@ CbRect ContainingBlockOf(LayoutContext& lc, const Box& box) {
     if (!(fixed ? p->style->containsPositioned : (IsPositioned(*p) || p->style->containsPositioned))) continue;
     if (p->kind == Box::Kind::Block) {
       const Rect r = AbsoluteBorderBox(*p);
-      return {r.x + p->border.left, r.y + p->border.top, r.width - p->border.Horizontal(), r.height - p->border.Vertical()};
+      return {r.x + p->border.left, r.y + p->border.top, r.width - p->border.Horizontal(), r.height - p->border.Vertical(), p};
     }
     // An inline box: the box around its fragments.
     const Box* container = p->parent;
@@ -716,13 +812,136 @@ CbRect ContainingBlockOf(LayoutContext& lc, const Box& box) {
     }
     return {origin.x + l + p->border.left, origin.y + t + p->border.top, r - l - p->border.Horizontal(), b - t - p->border.Vertical()};
   }
-  return {0, 0, lc.viewportWidth, lc.viewportHeight};
+  return {0, 0, lc.viewportWidth, lc.viewportHeight, nullptr};
+}
+
+// ---- Alignment of positioned boxes (css-align-3 §5.3, css-flexbox-1 §4.1, css-grid-1 §9) ----
+
+// Physical directions of the axes of a writing mode: (1,0) is rightwards, (0,1) downwards.
+struct Dir {
+  int x, y;
+};
+Dir Negate(Dir d) { return {-d.x, -d.y}; }
+int Dot(Dir a, Dir b) { return a.x * b.x + a.y * b.y; }
+// The way x (the lines, left to right) and y (block-start to block-end) of a frame run.
+Dir FrameX(WritingMode m) { return m == WritingMode::HorizontalTb ? Dir{1, 0} : m == WritingMode::SidewaysLr ? Dir{0, -1} : Dir{0, 1}; }
+Dir FrameY(WritingMode m) {
+  switch (m) {
+    case WritingMode::HorizontalTb: return {0, 1};
+    case WritingMode::VerticalRl: case WritingMode::SidewaysRl: return {-1, 0};
+    default: return {1, 0};
+  }
+}
+Dir InlineStartDir(WritingMode m, Direction d) { return d == Direction::Ltr ? FrameX(m) : Negate(FrameX(m)); }
+
+enum class Side { None, Start, Center, End };
+
+Side SideOf(Align::Kind kind, bool inlineAxis, Direction direction, Direction own = Direction::Ltr) {
+  switch (kind) {
+    case Align::Kind::Auto: case Align::Kind::Normal: case Align::Kind::Stretch: return Side::None;
+    case Align::Kind::Start: return inlineAxis && direction == Direction::Rtl ? Side::End : Side::Start;
+    case Align::Kind::SelfStart: return inlineAxis && own == Direction::Rtl ? Side::End : Side::Start;
+    case Align::Kind::End: return inlineAxis && direction == Direction::Rtl ? Side::Start : Side::End;
+    case Align::Kind::SelfEnd: return inlineAxis && own == Direction::Rtl ? Side::Start : Side::End;
+    case Align::Kind::FlexStart: case Align::Kind::Baseline: case Align::Kind::SpaceBetween: return Side::Start;
+    case Align::Kind::LastBaseline: return Side::End;
+    case Align::Kind::FlexEnd: return Side::End;
+    case Align::Kind::Center: case Align::Kind::SpaceAround: case Align::Kind::SpaceEvenly: return Side::Center;
+    case Align::Kind::Left: return inlineAxis ? Side::Start : Side::None;
+    case Align::Kind::Right: return inlineAxis ? Side::End : Side::None;
+  }
+  return Side::None;
+}
+
+// Where in its static-position rectangle (or inset-modified containing block) the box goes along one axis. A flex container's
+// children are aligned as if each were the only item.
+Side StaticSide(const Box& a, const Box* parent, bool inlineAxis, WritingMode cbMode, Direction cbDirection, bool orthogonalToCb) {
+  if (!parent || (parent->Mode() != a.Mode() && !orthogonalToCb)) {
+    if (!parent) return Side::None;
+  }
+  const BoxStyle& ps = *parent->style;
+  const BoxStyle& s = *a.style;
+  if (IsFlexDisplay(ps.display)) {
+    const bool row = ps.flexDirection == FlexDirection::Row || ps.flexDirection == FlexDirection::RowReverse;
+    bool reversed = ps.flexDirection == FlexDirection::RowReverse || ps.flexDirection == FlexDirection::ColumnReverse;
+    if (row && ps.direction == Direction::Rtl) reversed = !reversed;
+    if (inlineAxis == row) {  // the main axis
+      const Align::Kind k = ps.justifyContent.kind;
+      switch (k) {
+        case Align::Kind::Normal: case Align::Kind::Stretch: case Align::Kind::FlexStart: case Align::Kind::SpaceBetween: return reversed ? Side::End : Side::Start;
+        case Align::Kind::FlexEnd: return reversed ? Side::Start : Side::End;
+        default: {
+          const Side side = SideOf(k, inlineAxis, ps.direction);
+          return side == Side::None ? Side::Start : side;
+        }
+      }
+    }
+    Align::Kind k = s.alignSelf.kind == Align::Kind::Auto ? ps.alignItems.kind : s.alignSelf.kind;
+    // (The cross axis of a column is the inline axis, whose start is on the right in rtl.)
+    const bool wrapReverse = (ps.flexWrap == FlexWrap::WrapReverse) != (!row && ps.direction == Direction::Rtl);
+    if (k == Align::Kind::Normal || k == Align::Kind::Stretch || k == Align::Kind::Auto) k = Align::Kind::FlexStart;
+    if (k == Align::Kind::FlexStart) return wrapReverse ? Side::End : Side::Start;
+    if (k == Align::Kind::FlexEnd) return wrapReverse ? Side::Start : Side::End;
+    const Side side = SideOf(k, inlineAxis, ps.direction);
+    return side == Side::None ? Side::Start : side;
+  }
+  // (justify-self is about the lines of the containing block, which are this box's block axis when the two are orthogonal.)
+  const bool cbInline = inlineAxis != orthogonalToCb;
+  Align self = cbInline ? s.justifySelf : s.alignSelf;
+  if (self.kind == Align::Kind::Auto && IsGridDisplay(ps.display)) self = cbInline ? ps.justifyItems : ps.alignItems;
+  const Align::Kind kind = self.kind;
+  if (kind == Align::Kind::Auto || kind == Align::Kind::Normal || kind == Align::Kind::Stretch) return Side::None;
+  if (kind == Align::Kind::Center || kind == Align::Kind::SpaceAround || kind == Align::Kind::SpaceEvenly) return Side::Center;
+  const WritingMode own = a.Mode();
+  const Dir axis = inlineAxis ? FrameX(own) : FrameY(own);
+  // Which end of the containing block's axis (or of the box's own) the box hugs, and which way that axis runs.
+  Dir startToEnd = cbInline ? InlineStartDir(cbMode, cbDirection) : FrameY(cbMode);
+  bool wantStart = true;
+  switch (kind) {
+    case Align::Kind::End: case Align::Kind::FlexEnd: case Align::Kind::LastBaseline: wantStart = false; break;
+    case Align::Kind::SelfStart: startToEnd = inlineAxis ? InlineStartDir(own, s.direction) : FrameY(own); break;
+    case Align::Kind::SelfEnd: startToEnd = inlineAxis ? InlineStartDir(own, s.direction) : FrameY(own); wantStart = false; break;
+    case Align::Kind::Left: startToEnd = FrameX(cbMode); break;
+    case Align::Kind::Right: startToEnd = FrameX(cbMode); wantStart = false; break;
+    default: break;
+  }
+  const int d = Dot(startToEnd, axis);
+  if (d == 0) return Side::Start;
+  return ((d > 0) == wantStart) ? Side::Start : Side::End;
+}
+
+double Place(Side side, double start, double end, double outer, double cbSize, bool mirrored, bool safe, bool unsafe) {
+  if (mirrored) {
+    const Side flipped = side == Side::Start ? Side::End : side == Side::End ? Side::Start : side;
+    return cbSize - Place(flipped, cbSize - end, cbSize - start, outer, cbSize, false, safe, unsafe) - outer;
+  }
+  const double free = (end - start) - outer;
+  double pos = start;
+  if (side == Side::Center) pos = start + free / 2;
+  else if (side == Side::End) pos = start + free;
+  if (free < 0 && safe) return start;
+  if (unsafe) return pos;
+  const double lo = std::min(start, 0.0), hi = std::max(end, cbSize);
+  if (outer > hi - lo) return lo;
+  return std::max(lo, std::min(pos, hi - outer));
 }
 
 void PlaceOne(LayoutContext& lc, Box& a) {
   const BoxStyle& s = *a.style;
   const WritingMode mode = a.Mode();
-  const CbRect cbPhys = ContainingBlockOf(lc, a);
+  CbRect cbPhys = ContainingBlockOf(lc, a);
+  // Inside a grid container, the grid-placement properties name the area that is the containing block.
+  if (cbPhys.box && IsGridDisplay(cbPhys.box->style->display) && cbPhys.box->gridLines) {
+    const Box& g = *cbPhys.box;
+    const Edges own = EdgesToFrame(g.Mode(), g.border);
+    const double paddingW = g.ownWidth - own.left - own.right, paddingH = g.ownHeight - own.top - own.bottom;
+    Rect area;
+    if (GridAreaOf(g, a.style->Physical().writingMode == mode ? *a.style : *a.style, paddingW, paddingH, area)) {
+      Rect physical;
+      FrameToPhysical(g.Mode(), paddingW, paddingH, area.x, area.y, area.width, area.height, physical);
+      cbPhys = {cbPhys.x + physical.x, cbPhys.y + physical.y, physical.width, physical.height, nullptr};
+    }
+  }
   // The containing block in the box's own frame: its inline size is the physical extent along the box's lines.
   const bool vertical = IsVertical(mode);
   const double cw = vertical ? cbPhys.height : cbPhys.width, ch = vertical ? cbPhys.width : cbPhys.height;
@@ -736,6 +955,7 @@ void PlaceOne(LayoutContext& lc, Box& a) {
   const double top = ResolveSize(s.inset[0], ch), bottom = ResolveSize(s.inset[2], ch);
   lc.keepOwnFrame = true;
   LayoutBlockLevel(lc, a, cw, ch, true);
+  if (getenv("SOLAR_DEBUG")) std::fprintf(stderr, "PlaceOne trial: width %g height %g inline %d children %zu min %g max %g cw %g lines %zu\n", a.width, a.height, (int)a.hasInlineContent, a.children.size(), a.minContent, a.maxContent, cw, a.lines.size());
   const double extrasH = ExtrasHorizontal(a), extrasV = ExtrasVertical(a);
   const bool autoMl = s.margin[3].IsAuto(), autoMr = s.margin[1].IsAuto(), autoMt = s.margin[0].IsAuto(), autoMb = s.margin[2].IsAuto();
   double ml = autoMl ? 0 : s.margin[3].Resolve(cw), mr = autoMr ? 0 : s.margin[1].Resolve(cw);
@@ -752,6 +972,25 @@ void PlaceOne(LayoutContext& lc, Box& a) {
     double w2, h2;
     PhysicalToFrame(mode, cw, ch, physical, staticLeft, staticTop, w2, h2);
   }
+
+  // The static-position rectangle: the content box of a flex or grid container parent, else a point.
+  const Box* staticParent = a.parent;
+  while (staticParent && staticParent->kind != Box::Kind::Block) staticParent = staticParent->parent;
+  double spL = staticLeft, spR = staticLeft, spT = staticTop, spB = staticTop;
+  if (staticParent && (IsFlexDisplay(staticParent->style->display) || IsGridDisplay(staticParent->style->display)) && staticParent->Mode() == mode) {
+    const Rect pr = AbsoluteBorderBox(*staticParent);
+    const Rect content = {pr.x + staticParent->border.left + staticParent->padding.left - cbPhys.x, pr.y + staticParent->border.top + staticParent->padding.top - cbPhys.y,
+                          pr.width - staticParent->border.Horizontal() - staticParent->padding.Horizontal(), pr.height - staticParent->border.Vertical() - staticParent->padding.Vertical()};
+    double rx, ry, rw, rh;
+    PhysicalToFrame(mode, cw, ch, content, rx, ry, rw, rh);
+    spL = rx; spR = rx + rw; spT = ry; spB = ry + rh;
+  }
+  const WritingMode cbMode = cbPhys.box ? cbPhys.box->Mode() : lc.tree.root->Mode();
+  const bool orthogonalToCb = Orthogonal(cbMode, mode);
+  const Direction cbDirection = cbPhys.box ? cbPhys.box->style->direction : lc.tree.root->style->direction;
+  const Side inlineSide = StaticSide(a, staticParent, true, cbMode, cbDirection, orthogonalToCb), blockSide = StaticSide(a, staticParent, false, cbMode, cbDirection, orthogonalToCb);
+  const Align& inlineSelf = orthogonalToCb ? s.alignSelf : s.justifySelf;
+  const Align& blockSelf = orthogonalToCb ? s.justifySelf : s.alignSelf;
 
   // ---- inline axis ----
   double W = kNaN;
@@ -783,6 +1022,8 @@ void PlaceOne(LayoutContext& lc, Box& a) {
         W = shrink(cw - R - ml - mr - extrasH);
       } else if (!Known(R)) {
         W = shrink(cw - L - ml - mr - extrasH);
+      } else if (inlineSide != Side::None) {
+        W = shrink(cw - L - R - ml - mr - extrasH);  // aligned, so not stretched
       } else {
         W = std::max(0.0, cw - L - R - ml - mr - extrasH);
       }
@@ -805,6 +1046,11 @@ void PlaceOne(LayoutContext& lc, Box& a) {
     }
   };
   solveH();
+  if (inlineSide != Side::None) {
+    // Aligned in the space between the insets (a missing one being the static rectangle's edge).
+    const double i0 = Known(left) ? left : spL, i1 = Known(right) ? cw - right : spR;
+    L = Place(inlineSide, i0, i1, W + extrasH + ml + mr, cw, Dot(orthogonalToCb ? FrameY(cbMode) : InlineStartDir(cbMode, cbDirection), FrameX(mode)) < 0, inlineSelf.safe, inlineSelf.unsafe);
+  }
 
   // Lay out at the width, for the height the contents have.
   lc.forceWidth = W;
@@ -825,6 +1071,7 @@ void PlaceOne(LayoutContext& lc, Box& a) {
     if (!Known(T) && !Known(B)) { H = contentH; T = staticTop; }
     else if (!Known(T)) H = contentH;
     else if (!Known(B)) H = contentH;
+    else if (blockSide != Side::None) H = contentH;  // aligned, so not stretched
     else H = std::max(0.0, ch - T - B - mt - mb - extrasV);
   }
   {
@@ -841,6 +1088,10 @@ void PlaceOne(LayoutContext& lc, Box& a) {
     if (autoMt && autoMb) { mt += rest / 2; mb += rest / 2; }
     else if (autoMt) mt += rest;
     else if (autoMb) mb += rest;
+  }
+  if (blockSide != Side::None) {
+    const double i0 = Known(top) ? top : spT, i1 = Known(bottom) ? ch - bottom : spB;
+    T = Place(blockSide, i0, i1, H + extrasV + mt + mb, ch, Dot(orthogonalToCb ? InlineStartDir(cbMode, cbDirection) : FrameY(cbMode), FrameY(mode)) < 0, blockSelf.safe, blockSelf.unsafe);
   }
   lc.forceWidth = W;
   lc.forceHeight = H;

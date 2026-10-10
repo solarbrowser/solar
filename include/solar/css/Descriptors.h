@@ -8,7 +8,7 @@
 // The descriptors of the at-rules that have them (@font-face, @font-palette-values): their names, and what values they take.
 namespace solar::css {
 
-enum class DescriptorSet { FontFace, FontPaletteValues };
+enum class DescriptorSet { FontFace, FontPaletteValues, CounterStyle };
 
 // The name a descriptor goes by in its rule (font-width is font-stretch there), lowercased; nothing if the rule has no such descriptor.
 std::optional<std::string> DescriptorName(DescriptorSet set, const std::string& name);

@@ -1939,6 +1939,48 @@ bool MatchPropertyValue(const PropertyDefinition& property, const ComponentValue
   CanonicalGradients(out.normalized, compute != nullptr);
   if (!CanonicalFontValue(property.name, out, compute != nullptr)) return false;
   if (std::string(property.name) == "display") CanonicalDisplay(out);
+  if (std::string(property.name) == "counter-reset" || std::string(property.name) == "counter-set" || std::string(property.name) == "counter-increment") {
+    // A counter without a number has the property's default; none stands alone; the names are real names.
+    const std::string defaultNumber = std::string(property.name) == "counter-increment" ? "1" : "0";
+    ComponentValues result;
+    bool alone = false, others = false;
+    const ComponentValues& v = out.normalized;
+    const auto reserved = [&](const std::string& name) {
+      const std::string l = Lower(name);
+      return l == "none" || l == "default" || l == "initial" || l == "inherit" || l == "unset" || l == "revert" || l == "revert-layer";
+    };
+    for (size_t i = 0; i < v.size(); ++i) {
+      if (v[i].IsWhitespace()) { result.push_back(v[i]); continue; }
+      if (v[i].IsIdent() && Lower(v[i].token.value) == "none") { alone = true; result.push_back(v[i]); continue; }
+      if (!v[i].IsIdent() && v[i].kind != ComponentValue::Kind::Function) { result.push_back(v[i]); continue; }  // a number
+      if (v[i].kind == ComponentValue::Kind::Function && Lower(v[i].name) != "reversed") { result.push_back(v[i]); continue; }  // a calc()
+      others = true;
+      const bool reversed = v[i].kind == ComponentValue::Kind::Function && Lower(v[i].name) == "reversed";
+      if (reversed) {
+        for (const ComponentValue& c : v[i].children) if (c.IsIdent() && reserved(c.token.value)) return false;
+      } else if (v[i].IsIdent() && reserved(v[i].token.value)) {
+        return false;
+      }
+      result.push_back(v[i]);
+      // a following number (or calc) is its value
+      size_t j = i + 1;
+      while (j < v.size() && v[j].IsWhitespace()) ++j;
+      const bool numbered = j < v.size() && (v[j].IsToken(T::Number) || (v[j].kind == ComponentValue::Kind::Function && !reversed && Lower(v[j].name) != "reversed"));
+      if (!numbered && !reversed) {
+        ComponentValue space;
+        space.token.type = T::Whitespace;
+        result.push_back(space);
+        ComponentValue number;
+        number.token.type = T::Number;
+        number.token.number = std::atof(defaultNumber.c_str());
+        number.token.isInteger = true;
+        number.token.representation = defaultNumber;
+        result.push_back(number);
+      }
+    }
+    if (alone && others) return false;
+    out.normalized = result;
+  }
   if (compute && std::string(property.name) == "contain") {
     // The computed value is the shorthand keyword when the longhand ones add up to it.
     std::set<std::string> words;

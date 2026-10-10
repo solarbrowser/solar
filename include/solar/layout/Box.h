@@ -27,6 +27,14 @@ struct Edges {
 
 struct Box;
 
+// Where a grid container's lines are, for the positioned boxes whose containing block is one of its areas.
+struct GridLines {
+  std::vector<double> start[2], end[2];                 // [0] rows, [1] columns: each track's edges, in the container's padding box
+  int explicitCount[2] = {0, 0};
+  int implicitBefore[2] = {0, 0};
+  std::vector<std::vector<std::string>> names[2];       // the names of each line
+};
+
 // A piece of text on a line, shaped.
 struct TextPiece {
   Box* box = nullptr;           // the text box it is of
@@ -87,6 +95,7 @@ struct Box {
   // Block containers with inline content: the lines, in the container's border box.
   std::vector<Line> lines;
   bool hasInlineContent = false;  // the children are all inline-level
+  std::shared_ptr<GridLines> gridLines;  // a grid container's, once laid out
   // Margin collapsing: the margins that go out through the top and bottom of the box as sums of the largest positive and most negative.
   double topPositive = 0, topNegative = 0, bottomPositive = 0, bottomNegative = 0;
   bool collapsedThrough = false;
@@ -110,7 +119,8 @@ struct Box {
     return children.back().get();
   }
   bool IsBlockLevel() const { return !inlineLevel; }
-  bool IsOutOfFlow() const { return style && (style->IsOutOfFlow() || style->IsFloating()); }
+  // (Text takes the style of its parent, which may be floating or positioned: that is not the text.)
+  bool IsOutOfFlow() const { return kind == Kind::Block && style && (style->IsOutOfFlow() || style->IsFloating()); }
   dom::Element* element() const { return node && node->IsElement() ? static_cast<dom::Element*>(node) : nullptr; }
   double ContentLeft() const { return border.left + padding.left; }
   double ContentTop() const { return border.top + padding.top; }

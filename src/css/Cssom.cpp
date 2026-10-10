@@ -123,10 +123,12 @@ std::vector<DeclarationEntry> ParseDeclarationList(std::string_view text) {
   return items;
 }
 
-bool CssDeclarations::IsDescriptorBlock() const { return parentRule && (parentRule->kind == RuleKind::FontFace || parentRule->kind == RuleKind::FontPaletteValues); }
+bool CssDeclarations::IsDescriptorBlock() const { return parentRule && (parentRule->kind == RuleKind::FontFace || parentRule->kind == RuleKind::FontPaletteValues || parentRule->kind == RuleKind::CounterStyle); }
 
 namespace {
-DescriptorSet SetOf(const CssRule* rule) { return rule->kind == RuleKind::FontFace ? DescriptorSet::FontFace : DescriptorSet::FontPaletteValues; }
+DescriptorSet SetOf(const CssRule* rule) {
+  return rule->kind == RuleKind::FontFace ? DescriptorSet::FontFace : rule->kind == RuleKind::CounterStyle ? DescriptorSet::CounterStyle : DescriptorSet::FontPaletteValues;
+}
 }  // namespace
 
 namespace {
@@ -1175,14 +1177,11 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
   } else if (name == "counter-style") {
     const ComponentValues prelude = Trimmed(syntax.prelude);
     if (!syntax.hasBlock || prelude.size() != 1 || !prelude[0].IsIdent()) return nullptr;
+    static const std::set<std::string> reserved = {"none", "initial", "inherit", "unset", "default", "revert", "revert-layer", "decimal", "disc", "square", "circle", "disclosure-open", "disclosure-closed"};
+    if (reserved.count(Lower(prelude[0].token.value))) return nullptr;
     rule = NewRule(ctx, RuleKind::CounterStyle);
     rule->name = prelude[0].token.value;
-    CssDeclarations* declarations = NewDeclarations(ctx);
-    declarations->parentRule = rule;
-    for (const BlockItem& item : ParseBlockContents(syntax.block)) {
-      if (item.isDeclaration) AddOrReplace(declarations->items, {Lower(item.declaration.name), Serialize(Trimmed(item.declaration.value)), false});
-    }
-    rule->style = declarations;
+    rule->style = DeclarationsFrom(ctx, ParseBlockContents(syntax.block), rule);
   } else if (name == "container") {
     if (!syntax.hasBlock) return nullptr;
     const std::optional<ContainerPrelude> container = ParseContainerPrelude(syntax.prelude);

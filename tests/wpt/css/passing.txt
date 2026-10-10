@@ -433,6 +433,12 @@ tests/wpt/css/css-lists/li-counter-increment-computed-style.html
 tests/wpt/css/css-lists/list-and-block-textarea-001.html
 tests/wpt/css/css-lists/list-and-margin-collapse-001.html
 tests/wpt/css/css-lists/list-and-writing-mode-001.html
+tests/wpt/css/css-lists/parsing/counter-increment-invalid.html
+tests/wpt/css/css-lists/parsing/counter-increment-valid.html
+tests/wpt/css/css-lists/parsing/counter-reset-invalid.html
+tests/wpt/css/css-lists/parsing/counter-reset-valid.html
+tests/wpt/css/css-lists/parsing/counter-set-invalid.html
+tests/wpt/css/css-lists/parsing/counter-set-valid.html
 tests/wpt/css/css-lists/parsing/list-style-image-invalid.html
 tests/wpt/css/css-lists/parsing/list-style-image-valid.html
 tests/wpt/css/css-lists/parsing/list-style-position-computed.html
@@ -592,6 +598,7 @@ tests/wpt/css/css-overflow/scrollbar-gutter-propagation-005.html
 tests/wpt/css/css-overflow/scrollbar-gutter-propagation-006.html
 tests/wpt/css/css-overflow/shrink-to-fit-auto-overflow-relayout-crash.html
 tests/wpt/css/css-overflow/shrink-to-fit-overflow-auto-scrollbar-width.html
+tests/wpt/css/css-overflow/text-overflow-023.html
 tests/wpt/css/css-overflow/text-overflow-ellipsis-abspos-in-inline-block-crash-001.html
 tests/wpt/css/css-overflow/text-overflow-ellipsis-hyphen.html
 tests/wpt/css/css-overflow/text-overflow-ellipsis-self-painting.html
@@ -672,6 +679,7 @@ tests/wpt/css/css-pseudo/first-line-first-letter-insert-crash.html
 tests/wpt/css/css-pseudo/highlight-cascade/highlight-cascade-009.html
 tests/wpt/css/css-pseudo/highlight-cascade/highlight-cascade-011.html
 tests/wpt/css/css-pseudo/marker-computed-content.html
+tests/wpt/css/css-pseudo/marker-intrinsic-contribution-001.html
 tests/wpt/css/css-pseudo/marker-reverted-styles.html
 tests/wpt/css/css-pseudo/marker-variable-computed-style.html
 tests/wpt/css/css-pseudo/placeholder-inherit.html

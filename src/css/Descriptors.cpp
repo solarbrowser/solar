@@ -252,10 +252,128 @@ bool ContextualColor(const ComponentValues& values) {
   return false;
 }
 
+// ---- @counter-style ----
+
+bool CounterStyleNameOk(const std::string& name) {
+  const std::string lower = Lower(name);
+  return lower != "none" && lower != "initial" && lower != "inherit" && lower != "unset" && lower != "default" && lower != "revert" && lower != "revert-layer";
+}
+
+// A <symbol>: a string or an identifier, serialized.
+std::optional<std::string> Symbol(const ComponentValue& v) {
+  if (v.IsToken(T::String)) return SerializeString(v.token.value);
+  if (v.IsIdent() && !IsCssWideKeyword({v}) && Lower(v.token.value) != "default") return SerializeIdentifier(v.token.value);
+  if (v.kind == ComponentValue::Kind::Function || v.IsToken(T::Url)) return Matched("<image>", ComponentValues{v});
+  return std::nullopt;
+}
+
+std::optional<std::string> CounterStyleDescriptor(const std::string& name, const ComponentValues& value) {
+  const ComponentValues w = Words(value);
+  if (w.empty()) return std::nullopt;
+  if (name == "system") {
+    if (!w[0].IsIdent()) return std::nullopt;
+    const std::string k = Lower(w[0].token.value);
+    if (k == "cyclic" || k == "numeric" || k == "alphabetic" || k == "symbolic" || k == "additive") return w.size() == 1 ? std::optional<std::string>(k) : std::nullopt;
+    if (k == "fixed") {
+      if (w.size() == 1) return std::string("fixed");
+      if (w.size() == 2 && w[1].IsToken(T::Number) && w[1].token.isInteger) return "fixed " + std::to_string(static_cast<long long>(w[1].token.number));
+      return std::nullopt;
+    }
+    if (k == "extends") {
+      if (w.size() == 2 && w[1].IsIdent() && CounterStyleNameOk(w[1].token.value)) return "extends " + SerializeIdentifier(w[1].token.value);
+    }
+    return std::nullopt;
+  }
+  if (name == "negative") {
+    if (w.size() > 2) return std::nullopt;
+    std::string out;
+    for (const ComponentValue& v : w) {
+      const std::optional<std::string> s = Symbol(v);
+      if (!s) return std::nullopt;
+      out += (out.empty() ? "" : " ") + *s;
+    }
+    return out;
+  }
+  if (name == "prefix" || name == "suffix") {
+    if (w.size() != 1) return std::nullopt;
+    return Symbol(w[0]);
+  }
+  if (name == "symbols") {
+    std::string out;
+    for (const ComponentValue& v : w) {
+      const std::optional<std::string> s = Symbol(v);
+      if (!s) return std::nullopt;
+      out += (out.empty() ? "" : " ") + *s;
+    }
+    return out;
+  }
+  if (name == "fallback") {
+    if (w.size() != 1 || !w[0].IsIdent() || !CounterStyleNameOk(w[0].token.value)) return std::nullopt;
+    return SerializeIdentifier(w[0].token.value);
+  }
+  if (name == "pad") {
+    if (w.size() != 2) return std::nullopt;
+    const ComponentValue* number = w[0].IsToken(T::Number) ? &w[0] : w[1].IsToken(T::Number) ? &w[1] : nullptr;
+    const ComponentValue* symbol = number == &w[0] ? &w[1] : &w[0];
+    if (!number || !number->token.isInteger || number->token.number < 0) return std::nullopt;
+    const std::optional<std::string> s = Symbol(*symbol);
+    if (!s) return std::nullopt;
+    return std::to_string(static_cast<long long>(number->token.number)) + " " + *s;
+  }
+  if (name == "range") {
+    if (w.size() == 1 && w[0].IsIdent() && Lower(w[0].token.value) == "auto") return std::string("auto");
+    std::string out;
+    for (const ComponentValues& part : SplitOnCommas(value)) {
+      const ComponentValues p = Words(part);
+      if (p.size() != 2) return std::nullopt;
+      double bounds[2];
+      std::string text[2];
+      for (int i = 0; i < 2; ++i) {
+        if (p[i].IsToken(T::Number) && p[i].token.isInteger) { bounds[i] = p[i].token.number; text[i] = std::to_string(static_cast<long long>(p[i].token.number)); }
+        else if (p[i].IsIdent() && Lower(p[i].token.value) == "infinite") { bounds[i] = i == 0 ? -INFINITY : INFINITY; text[i] = "infinite"; }
+        else return std::nullopt;
+      }
+      if (bounds[0] > bounds[1]) return std::nullopt;
+      out += (out.empty() ? "" : ", ") + text[0] + " " + text[1];
+    }
+    return out.empty() ? std::nullopt : std::optional<std::string>(out);
+  }
+  if (name == "additive-symbols") {
+    std::string out;
+    double previous = INFINITY;
+    for (const ComponentValues& part : SplitOnCommas(value)) {
+      const ComponentValues p = Words(part);
+      if (p.size() != 2) return std::nullopt;
+      const ComponentValue* number = p[0].IsToken(T::Number) ? &p[0] : p[1].IsToken(T::Number) ? &p[1] : nullptr;
+      const ComponentValue* symbol = number == &p[0] ? &p[1] : &p[0];
+      if (!number || !number->token.isInteger || number->token.number < 0) return std::nullopt;
+      if (number->token.number >= previous) return std::nullopt;
+      previous = number->token.number;
+      const std::optional<std::string> s = Symbol(*symbol);
+      if (!s) return std::nullopt;
+      out += (out.empty() ? "" : ", ") + std::to_string(static_cast<long long>(number->token.number)) + " " + *s;
+    }
+    return out.empty() ? std::nullopt : std::optional<std::string>(out);
+  }
+  if (name == "speak-as") {
+    if (w.size() != 1 || !w[0].IsIdent()) return std::nullopt;
+    const std::string k = Lower(w[0].token.value);
+    if (k == "auto" || k == "bullets" || k == "numbers" || k == "words" || k == "spell-out") return k;
+    if (!CounterStyleNameOk(w[0].token.value)) return std::nullopt;
+    return SerializeIdentifier(w[0].token.value);
+  }
+  return std::nullopt;
+}
+
 }  // namespace
 
 std::optional<std::string> DescriptorName(DescriptorSet set, const std::string& given) {
   const std::string name = Lower(given);
+  if (set == DescriptorSet::CounterStyle) {
+    static const std::set<std::string> names = {"system", "negative", "prefix", "suffix", "range", "pad", "fallback", "symbols", "additive-symbols", "speak-as"};
+    if (names.count(name)) return name;
+    return std::nullopt;
+  }
   if (set == DescriptorSet::FontFace) {
     static const std::set<std::string> names = {"ascent-override", "descent-override", "line-gap-override", "font-display", "font-family", "font-feature-settings", "font-language-override",
                                                "font-named-instance", "font-style", "font-variation-settings", "font-weight", "font-stretch", "size-adjust", "src", "unicode-range"};
@@ -268,13 +386,14 @@ std::optional<std::string> DescriptorName(DescriptorSet set, const std::string& 
 }
 
 bool IsAnyDescriptorName(const std::string& name) {
-  return DescriptorName(DescriptorSet::FontFace, name) || DescriptorName(DescriptorSet::FontPaletteValues, name);
+  return DescriptorName(DescriptorSet::FontFace, name) || DescriptorName(DescriptorSet::FontPaletteValues, name) || DescriptorName(DescriptorSet::CounterStyle, name);
 }
 
 std::optional<std::string> DescriptorValue(DescriptorSet set, const std::string& name, const ComponentValues& given) {
   const ComponentValues value = Trimmed(given);
   if (value.empty()) return std::nullopt;
   if (IsCssWideKeyword(value)) return std::nullopt;
+  if (set == DescriptorSet::CounterStyle) return CounterStyleDescriptor(name, value);
   if (set == DescriptorSet::FontPaletteValues) {
     if (name == "font-family") {
       // Several families, but not the generic ones.

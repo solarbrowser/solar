@@ -648,6 +648,10 @@ struct Grid {
   void ColumnContributions(GridItem& it, double columnBasis) {
     Box& b = *it.box;
     const BoxStyle& s = *b.style;
+    if (style.containSizeInline) {  // size containment: the items count for nothing in the sizes of the tracks
+      it.minContribution = it.minContentContribution = it.maxContentContribution = 0;
+      return;
+    }
     ComputeContentSizes(lc, b);
     double mn = b.minContent, mx = b.maxContent;
     const double specified = SpecifiedSize(it, 1, columnBasis);
@@ -676,6 +680,10 @@ struct Grid {
   void RowContributions(GridItem& it, double areaWidth) {
     Box& b = *it.box;
     const BoxStyle& s = *b.style;
+    if (style.containSizeBlock) {
+      it.minContribution = it.minContentContribution = it.maxContentContribution = 0;
+      return;
+    }
     const double extras = it.padBorder[0] + it.marginStart[0] + it.marginEnd[0];
     double height;
     const double specified = SpecifiedSize(it, 0, heightBasis);
@@ -1109,6 +1117,75 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
   }
   container.firstBaseline = firstBaseline >= 0 ? firstBaseline + originY : -1;
   container.baseline = container.firstBaseline;
+  auto lines = std::make_shared<GridLines>();
+  for (int a = 0; a < 2; ++a) {
+    // (positions relative to the container's padding box)
+    const double offset = a == 0 ? container.border.top * 0 + container.padding.top : container.padding.left;
+    for (const Track& t : grid.tracks[a]) {
+      lines->start[a].push_back(t.position + offset);
+      lines->end[a].push_back(t.position + t.base + offset);
+    }
+    lines->explicitCount[a] = grid.explicitCount[a];
+    lines->implicitBefore[a] = grid.implicitBefore[a];
+    lines->names[a] = grid.lineNames[a];
+  }
+  container.gridLines = lines;
+}
+
+// The area a positioned box's grid-placement properties name in the grid, as a rectangle of the grid container's padding box (in the
+// container's own frame); auto lines are the padding edges.
+bool GridAreaOf(const Box& grid, const BoxStyle& absStyle, double paddingWidth, double paddingHeight, Rect& out) {
+  if (!grid.gridLines) return false;
+  const GridLines& g = *grid.gridLines;
+  const std::string* starts[2] = {&absStyle.gridRowStart, &absStyle.gridColumnStart};
+  const std::string* ends[2] = {&absStyle.gridRowEnd, &absStyle.gridColumnEnd};
+  double edges[2][2];  // [axis][start, end]
+  for (int axis = 0; axis < 2; ++axis) {
+    const LineSpec a = ParseLine(*starts[axis]), b = ParseLine(*ends[axis]);
+    const int count = static_cast<int>(g.start[axis].size());
+    const int explicitLines = g.explicitCount[axis] + 1;
+    const auto lineIndex = [&](const LineSpec& spec, bool isEnd) -> int {
+      // 0-based line index among all the lines (implicit included), or -1 for auto
+      if (spec.k != LineSpec::K::Line) return -1;
+      int found = 0;
+      if (!spec.name.empty()) {
+        const auto search = [&](const std::string& wanted) {
+          int seen = 0;
+          const int want = spec.n > 0 ? spec.n : -spec.n;
+          if (spec.n > 0) {
+            for (size_t i = 0; i < g.names[axis].size(); ++i) for (const std::string& x : g.names[axis][i]) if (x == wanted && ++seen == want) return static_cast<int>(i) + 1;
+          } else {
+            for (size_t i = g.names[axis].size(); i-- > 0;) for (const std::string& x : g.names[axis][i]) if (x == wanted && ++seen == want) return static_cast<int>(i) + 1;
+          }
+          return 0;
+        };
+        found = search(spec.name);
+        if (!found) found = search(spec.name + (isEnd ? "-end" : "-start"));
+        if (!found) found = spec.n > 0 ? explicitLines + spec.n : 1 + spec.n;
+      } else {
+        found = spec.n > 0 ? spec.n : explicitLines + 1 + spec.n;
+      }
+      return found - 1 + g.implicitBefore[axis];
+    };
+    int s = lineIndex(a, false), e = lineIndex(b, true);
+    if (a.k == LineSpec::K::Span && e >= 0) s = e - std::max(1, a.n);
+    if (b.k == LineSpec::K::Span && s >= 0) e = s + std::max(1, b.n);
+    const double total = axis == 0 ? paddingHeight : paddingWidth;
+    const auto position = [&](int index, bool isEnd) {
+      (void)isEnd;
+      if (index < 0) return isEnd ? total : 0.0;
+      if (count == 0) return total;
+      if (index == 0) return g.start[axis][0];
+      if (index >= count) return g.end[axis][count - 1];
+      return (g.end[axis][index - 1] + g.start[axis][index]) / 2;  // a line is in the middle of the gap
+    };
+    edges[axis][0] = position(s, false);
+    edges[axis][1] = position(e, true);
+    if (edges[axis][1] < edges[axis][0]) std::swap(edges[axis][0], edges[axis][1]);
+  }
+  // rows are the block axis, columns the inline
+  out = {edges[1][0], edges[0][0], edges[1][1] - edges[1][0], edges[0][1] - edges[0][0]};
+  return true;
 }
 
 void GridContentSizes(LayoutContext& lc, Box& container, double& minContent, double& maxContent) {

@@ -1,6 +1,10 @@
 #pragma once
 
+#include <climits>
 #include <limits>
+#include <map>
+#include <string>
+#include <vector>
 
 #include "solar/layout/Layout.h"
 
@@ -66,6 +70,8 @@ void LayoutFlex(LayoutContext& lc, Box& container, double contentWidth, double h
 void FlexContentSizes(LayoutContext& lc, Box& container, double& minContent, double& maxContent);
 inline bool IsFlexDisplay(Display d) { return d == Display::Flex || d == Display::InlineFlex; }
 
+bool GridAreaOf(const Box& grid, const BoxStyle& absStyle, double paddingWidth, double paddingHeight, Rect& out);
+
 // Table.cpp
 void LayoutTable(LayoutContext& lc, Box& table, double contentWidth, double heightBasis, double& contentHeight);
 void TableContentSizes(LayoutContext& lc, Box& table, double& minContent, double& maxContent);
@@ -86,6 +92,43 @@ bool ImageMetricsOf(const std::string& address, const std::string& base, double&
 
 // The content size a replaced box comes to in a containing block of that size (NaN height: not known).
 void ReplacedContentSize(const Box& box, double cbWidth, double cbHeight, double& width, double& height);
+
+// Moves what a box holds (children, lines, fragments) down by dy: for aligning it in a space bigger than it.
+void ShiftContents(Box& box, double dy);
+
+// CounterStyle.cpp: the counter styles of a document (those the standard defines and its @counter-style rules).
+struct CounterStyleDef {
+  std::string system = "symbolic";   // cyclic fixed symbolic alphabetic numeric additive extends
+  std::string extends;               // for system: extends
+  int fixedFirst = 1;
+  std::vector<std::string> symbols;
+  std::vector<std::pair<int, std::string>> additive;
+  std::string negativePrefix = "-", negativeSuffix;
+  std::string prefix, suffix = ". ";
+  int rangeLo = INT_MIN, rangeHi = INT_MAX;
+  bool rangeAuto = true;
+  std::vector<std::pair<long long, long long>> ranges;
+  int padLength = 0;
+  std::string padSymbol;
+  std::string fallback = "decimal";
+  bool hasSystem = false;
+};
+
+
+class CounterStyles {
+ public:
+  explicit CounterStyles(dom::Document* document);
+  // The representation of a value in a style; unknown styles are decimal.
+  std::string Format(const std::string& styleName, long long value) const;
+  bool Known(const std::string& name) const;
+  std::string Prefix(const std::string& name) const;
+  std::string Suffix(const std::string& name) const;
+
+ private:
+  const CounterStyleDef* Find(const std::string& name) const;
+  bool Represent(const std::string& styleName, long long value, std::string& out, int depth) const;
+  std::map<std::string, CounterStyleDef> defs_;
+};
 
 // Frame.cpp: writing modes.
 bool Orthogonal(WritingMode a, WritingMode b);

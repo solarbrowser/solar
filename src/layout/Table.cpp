@@ -210,33 +210,6 @@ EdgeBorder EdgeOf(const BoxStyle& s, int side, int rank) {
   return e;
 }
 
-void ShiftContents(Box& box, double dy) {
-  for (auto& c : box.children) {
-    if (c->style->IsOutOfFlow() && !c->style->IsFloating()) continue;
-    c->y += dy;
-  }
-  for (Line& line : box.lines) {
-    line.rect.y += dy;
-    for (LineItem& item : line.items) {
-      item.rect.y += dy;
-      if (item.kind == LineItem::Kind::Atomic && item.box) {}
-    }
-  }
-  for (auto& c : box.children) {
-    if (c->kind == Box::Kind::Inline || c->kind == Box::Kind::Text) {
-      for (Rect& r : c->fragments) r.y += dy;
-      // inline boxes' children too
-      std::function<void(Box&)> deep = [&](Box& b) {
-        for (auto& g : b.children) {
-          if (g->kind == Box::Kind::Inline || g->kind == Box::Kind::Text) for (Rect& r : g->fragments) r.y += dy;
-          if (g->kind == Box::Kind::Inline) deep(*g);
-        }
-      };
-      deep(*c);
-    }
-  }
-}
-
 }  // namespace
 
 void TableContentSizes(LayoutContext& lc, Box& table, double& minContent, double& maxContent) {
