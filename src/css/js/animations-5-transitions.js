@@ -13,7 +13,11 @@
         propertyName: dict.propertyName === undefined ? '' : String(dict.propertyName),
         elapsedTime: dict.elapsedTime === undefined ? 0 : Number(dict.elapsedTime),
         pseudoElement: dict.pseudoElement === undefined ? '' : String(dict.pseudoElement),
+        animation: dict.animation === undefined ? null : dict.animation,
       });
+    }
+    get animation() {
+      return slots.get(this).animation;
     }
     get propertyName() {
       return slots.get(this).propertyName;
@@ -179,7 +183,9 @@
   const pseudoCandidates = ['', 'before', 'after', 'marker'];
 
   S.transitionsUpdate = (el, pseudo) => {
-    const params = el.isConnected ? readTransitions(el, pseudo) : new Map();
+    let params = el.isConnected ? readTransitions(el, pseudo) : new Map();
+    // An element with no box has no transitions, but for the one of display that takes the box away.
+    if (params.size && !params.has('display') && !S.rendered(el)) params = new Map();
     if (!params.size && !(running.has(el) && running.get(el).has(pseudo))) return;
     const runMap = mapIn(running, el, pseudo);
     const seenMap = mapIn(seen, el, pseudo);

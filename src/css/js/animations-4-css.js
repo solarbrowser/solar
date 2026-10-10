@@ -382,6 +382,8 @@
     return true;
   };
 
+  S.rendered = rendered;
+
   const elementsOf = (root, out) => {
     for (const el of root.querySelectorAll('*')) {
       out.push(el);
@@ -499,7 +501,7 @@
     const target = effectSlot.target;
     let event;
     if (aslot.cssKind === 'transition') {
-      event = new TransitionEvent(type, { bubbles: true, cancelable: false, propertyName: aslot.transitionProperty, elapsedTime: elapsed / 1000, pseudoElement: effectSlot.pseudo || '' });
+      event = new TransitionEvent(type, { bubbles: true, cancelable: false, animation, propertyName: aslot.transitionProperty, elapsedTime: elapsed / 1000, pseudoElement: effectSlot.pseudo || '' });
     } else {
       event = new AnimationEvent(type, { bubbles: true, cancelable: false, animation, animationName: aslot.cssName, elapsedTime: elapsed / 1000, pseudoElement: effectSlot.pseudo || '' });
     }

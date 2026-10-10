@@ -48,11 +48,14 @@ OVERRIDE = {
 
 # Properties whose entry in the data is behind what browsers accept (applied after the data is read).
 PROPERTY_PATCH = {
+    # box-shadow is a longhand in every browser; the newest draft makes a shorthand of it.
+    "box-shadow": {"value": "none | <shadow>#", "longhands": []},
+    "-webkit-box-shadow": {"value": "none | <shadow>#", "longhands": []},
     "font-synthesis": {"value": "none | [ weight || [ style | oblique-only ] || small-caps || position ]", "longhands": ["font-synthesis-weight", "font-synthesis-style", "font-synthesis-small-caps", "font-synthesis-position"]},
 }
 
 # Legacy names that are aliases (the table in src/css/Properties.cpp): not properties of their own.
-ALIASED = ["font-stretch"]
+ALIASED = ["font-stretch", "box-shadow-color", "box-shadow-offset", "box-shadow-blur", "box-shadow-spread", "box-shadow-position"]
 
 props, types, functions = {}, {}, {}
 

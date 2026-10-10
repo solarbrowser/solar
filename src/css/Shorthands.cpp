@@ -996,6 +996,9 @@ std::optional<std::string> SerializeShorthand(const PropertyDefinition& shorthan
                                                               {"collapse nowrap", "nowrap"}, {"break-spaces wrap", "break-spaces"}};
     const auto found = names.find(collapse + " " + wrap);
     candidate = found != names.end() ? found->second : (wrap == "wrap" ? collapse : collapse + " " + wrap);
+  } else if (name == "gap" || name == "grid-gap") {
+    if (n != 2) return std::nullopt;
+    candidate = input.values[0] == input.values[1] ? input.values[0] : input.values[0] + " " + input.values[1];
   } else if (name == "grid-row" || name == "grid-column") {
     if (n != 2) return std::nullopt;
     const std::string start = input.values[0], end = input.values[1];

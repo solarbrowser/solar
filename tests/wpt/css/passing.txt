@@ -1196,6 +1196,8 @@ tests/wpt/css/css-transitions/events-003.html
 tests/wpt/css/css-transitions/events-004.html
 tests/wpt/css/css-transitions/events-005.html
 tests/wpt/css/css-transitions/events-006.html
+tests/wpt/css/css-transitions/events-007.html
+tests/wpt/css/css-transitions/events-008.html
 tests/wpt/css/css-transitions/historical.html
 tests/wpt/css/css-transitions/inheritance.html
 tests/wpt/css/css-transitions/no-transition-for-unchanged-pointer-valued-properties.html

@@ -962,7 +962,8 @@ ComputeContext Resolver::ContextFor(dom::Element* element, const std::string& pr
   std::string lowered = text;
   for (char& ch : lowered) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
   const bool needsLineHeight = lowered.find("lh") != std::string::npos;
-  const bool needsColor = lowered.find("currentcolor") != std::string::npos;
+  // (A shadow with no color is of the current color too.)
+  const bool needsColor = lowered.find("currentcolor") != std::string::npos || property == "box-shadow" || property == "text-shadow" || property == "-webkit-box-shadow";
   const bool needsSizes = hasDigit || property == "font-size";
   const Parent parent = ParentOf(element, pseudo);
   const MediaEnvironment& media = CurrentMediaEnvironment();
@@ -1155,6 +1156,32 @@ std::string Resolver::Compute(dom::Element* element, const std::string& property
   return result;
 }
 
+// The computed value of a shadow list: each shadow as color, offsets, blur (and spread, for a box), then inset, nothing left out.
+std::string NormalizeShadows(const std::string& text, size_t lengths, const std::string& currentColor) {
+  const ComponentValues values = Trimmed(ParseComponentValues(text));
+  if (values.size() == 1 && values[0].IsIdent()) return text;
+  std::string out;
+  for (const ComponentValues& layer : SplitOnCommas(values)) {
+    std::string color;
+    std::vector<std::string> parts;
+    bool inset = false;
+    for (const ComponentValue& v : layer) {
+      if (v.IsWhitespace()) continue;
+      if (v.IsIdent() && Lower(v.token.value) == "inset") inset = true;
+      else if (v.kind == ComponentValue::Kind::Token && (v.token.type == T::Dimension || v.token.type == T::Number)) parts.push_back(Serialize({v}));
+      else if (v.IsIdent() && Lower(v.token.value) == "currentcolor") color = currentColor;
+      else color = Serialize({v});
+    }
+    if (color.empty()) color = currentColor;
+    while (parts.size() < lengths) parts.push_back("0px");
+    std::string piece = color;
+    for (const std::string& part : parts) piece += " " + part;
+    if (inset) piece += " inset";
+    out += (out.empty() ? "" : ", ") + piece;
+  }
+  return out;
+}
+
 std::string Resolver::Finish(dom::Element* element, const std::string& property, const PropertyDefinition& definition, const std::string& specified, ComputeContext& context, const std::string& pseudo) {
   std::string text = specified;
   if (text == "initial") text = InitialValueText(definition);
@@ -1221,6 +1248,8 @@ std::string Resolver::Finish(dom::Element* element, const std::string& property,
   if (opacities.count(property) && match.normalized.size() == 1 && match.normalized[0].kind == Cv::Kind::Token && match.normalized[0].token.type == T::Number) {
     match.normalized[0].token.number = std::max(0.0, std::min(1.0, match.normalized[0].token.number));
   }
+  if (property == "box-shadow" || property == "-webkit-box-shadow") return NormalizeShadows(TextOfComputed(match), 4, context.currentColor);
+  if (property == "text-shadow") return NormalizeShadows(TextOfComputed(match), 3, context.currentColor);
   return TextOfComputed(match);
 }
 
