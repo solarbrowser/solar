@@ -10,6 +10,8 @@
 
 namespace solar::font {
 
+std::string UnwrapWoff2(const std::string& woff);
+
 namespace {
 
 uint32_t Be32(const std::string& s, size_t at) {
@@ -125,6 +127,7 @@ unsigned Face::CountIn(const std::string& data) {
 
 std::shared_ptr<Face> Face::Open(std::string data, unsigned index) {
   if (data.size() >= 4 && data.compare(0, 4, "wOFF") == 0) data = UnwrapWoff(data);
+  else if (data.size() >= 4 && data.compare(0, 4, "wOF2") == 0) data = UnwrapWoff2(data);
   if (data.size() < 12) return nullptr;
   std::shared_ptr<Face> result(new Face());
   result->data_ = std::move(data);

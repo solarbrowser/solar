@@ -19,6 +19,7 @@
 #include "solar/css/CssBindings.h"
 #include "solar/dom/NodeBindings.h"
 #include "solar/dom/NodeBindingsInternal.h"
+#include "solar/font/Database.h"
 #include "solar/html/Csp.h"
 #include "solar/html/Errors.h"
 #include "solar/html/Frames.h"
@@ -324,6 +325,9 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "cannot open tests/wpt/harness.js\n");
     return 2;
   }
+
+  // Ahem, the font the layout tests are written for, is installed as if the machine had it.
+  solar::font::Database::System().AddDirectory("tests/wpt/fonts");
 
   std::string resources = LoadResources("tests/data");
 

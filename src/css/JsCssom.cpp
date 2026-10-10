@@ -1376,7 +1376,10 @@ Value TypedComputeColor(Context& ctx, Value, qe::Args args, Value) {
   return qe::FromWtf8(ctx, Serialize(*computed));
 }
 
+void InstallFontNatives(Context& ctx);
+
 void InstallCssSupports(Context& ctx) {
+  InstallFontNatives(ctx);
   qe::DefineGlobalFunction(ctx, "__solarTypedComputeColor", TypedComputeColor, 1);
   qe::DefineGlobalFunction(ctx, "__solarTypedPropertyInfo", TypedPropertyInfo, 1);
   qe::DefineGlobalFunction(ctx, "__solarCssRegisterProperty", RegisterProperty, 1);

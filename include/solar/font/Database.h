@@ -56,6 +56,10 @@ class Database {
 
   // A face by its full name or PostScript name, which local() in a src names.
   std::shared_ptr<Face> FindLocal(const std::string& name);
+  // The sources by the order they were added in: how many, whether one has been loaded (0 not yet, 1 with a face, 2 and failed), and loading it.
+  size_t Count();
+  int State(size_t index);
+  bool Load(size_t index);
   // The names of the families, for tests.
   std::vector<std::string> Families();
   // The generic family's candidates, best first.
@@ -67,6 +71,7 @@ class Database {
  private:
   struct Entry {
     Source source;
+    std::string fullName, postScriptName;  // for local()
     std::shared_ptr<Face> face;
     bool loaded = false;
   };

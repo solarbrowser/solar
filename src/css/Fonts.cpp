@@ -51,7 +51,15 @@ struct FaceRule {
   std::string src;
   std::string weight, style, stretch, unicodeRange;
   std::string base;
+  std::shared_ptr<font::Face> face;  // a script's font, already made
+  FaceRuleInfo info;
 };
+
+std::map<dom::Document*, std::vector<ScriptFace>>& ScriptFaces() {
+  static std::map<dom::Document*, std::vector<ScriptFace>> faces;
+  return faces;
+}
+uint64_t g_scriptVersion = 0;
 
 void CollectFaceRules(const std::vector<CssRule*>& rules, const std::string& base, std::vector<FaceRule>& out, int depth) {
   if (depth > 8) return;
@@ -71,6 +79,7 @@ void CollectFaceRules(const std::vector<CssRule*>& rules, const std::string& bas
         f.stretch = get("font-stretch");
         f.unicodeRange = get("unicode-range");
         f.base = base;
+        f.info = {f.family, f.src, f.weight, f.style, f.stretch, f.unicodeRange, get("font-variant"), get("font-feature-settings"), get("font-variation-settings"), get("font-display"), get("ascent-override"), get("descent-override"), get("line-gap-override")};
         if (!f.family.empty() && !f.src.empty()) out.push_back(std::move(f));
         break;
       }
@@ -231,14 +240,19 @@ struct DocumentEntry {
   uint64_t version = 0;
   std::string url;
   std::unique_ptr<font::Database> database;
+  size_t ruleCount = 0;
 };
+
+std::map<dom::Document*, DocumentEntry>& Cache() {
+  static std::map<dom::Document*, DocumentEntry> cache;
+  return cache;
+}
 
 }  // namespace
 
 font::Database& DocumentFonts(dom::Document* document) {
-  static std::map<dom::Document*, DocumentEntry> cache;
-  DocumentEntry& entry = cache[document];
-  const uint64_t version = StyleVersion() * 1000003 + dom::TreeVersion();
+  DocumentEntry& entry = Cache()[document];
+  const uint64_t version = (StyleVersion() * 1000003 + dom::TreeVersion()) * 1000003 + g_scriptVersion;
   if (entry.database && entry.version == version && entry.url == document->url) return *entry.database;
   entry.version = version;
   entry.url = document->url;
@@ -251,6 +265,17 @@ font::Database& DocumentFonts(dom::Document* document) {
     const std::vector<std::string> names = FamilyNames(rule.family);
     if (names.empty()) continue;
     entry.database->Add({names[0], CoverageOf(rule), LoaderOf(rule)});
+  }
+  entry.ruleCount = entry.database->Count();
+  for (const ScriptFace& script : ScriptFaces()[document]) {
+    if (!script.face) continue;
+    FaceRule rule;
+    rule.weight = script.weight;
+    rule.style = script.style;
+    rule.stretch = script.stretch;
+    rule.unicodeRange = script.unicodeRange;
+    const std::shared_ptr<font::Face> face = script.face;
+    entry.database->Add({script.family, CoverageOf(rule), [face] { return face; }});
   }
   return *entry.database;
 }
@@ -299,6 +324,37 @@ std::shared_ptr<font::Face> PrimaryFont(dom::Element* element, const std::string
 
 std::shared_ptr<font::Face> FallbackFont(dom::Element* element, char32_t codePoint, const std::string& pseudo) {
   return font::Database::System().Fallback(codePoint, FontRequestFor(element, pseudo));
+}
+
+}  // namespace solar::css
+
+namespace solar::css {
+
+std::vector<FaceRuleInfo> DocumentFaceRules(dom::Document* document) {
+  std::vector<FaceRule> rules;
+  for (const CssStyleSheet* sheet : SheetsOfTreeRoot(document)) {
+    if (!sheet->disabled) CollectFaceRules(sheet->rules, sheet->baseUrl, rules, 0);
+  }
+  std::vector<FaceRuleInfo> out;
+  for (const FaceRule& rule : rules) {
+    if (!FamilyNames(rule.family).empty()) out.push_back(rule.info);
+  }
+  return out;
+}
+
+bool LoadDocumentFace(dom::Document* document, size_t index) {
+  font::Database& database = DocumentFonts(document);
+  return index < Cache()[document].ruleCount && database.Load(index);
+}
+
+int DocumentFaceState(dom::Document* document, size_t index) {
+  font::Database& database = DocumentFonts(document);
+  return index < Cache()[document].ruleCount ? database.State(index) : 0;
+}
+
+void SetScriptFaces(dom::Document* document, std::vector<ScriptFace> faces) {
+  ScriptFaces()[document] = std::move(faces);
+  ++g_scriptVersion;
 }
 
 }  // namespace solar::css

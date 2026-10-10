@@ -39,6 +39,24 @@ int main() {
   Check(glyphs.size() == 2 && glyphs[1].cluster == 1, "two glyphs, the second from byte 1");
   Check(!face->Outline(face->GlyphFor('X')).empty(), "X has an outline");
   Check(solar::font::Face::Open("not a font at all, really not") == nullptr, "text is not a font");
+  // WOFF2: Red Hat Text (SIL Open Font License), with glyf and hmtx stored transformed.
+  {
+    std::string data;
+    if (FILE* file = std::fopen("tests/wpt/fonts/RedHatText-Regular.woff2", "rb")) {
+      char buffer[4096];
+      size_t n;
+      while ((n = std::fread(buffer, 1, sizeof buffer, file)) > 0) data.append(buffer, n);
+      std::fclose(file);
+    }
+    const auto web = solar::font::Face::Open(data);
+    Check(web != nullptr, "the WOFF2 file opens");
+    if (web) {
+      Check(web->description().family == "Red Hat Text", "WOFF2 family");
+      Check(web->HasGlyph('H') && web->Advance('H') > 0.5 && web->Advance('H') < 0.9, "WOFF2 H has a sensible advance");
+      Check(!web->Outline(web->GlyphFor('g')).empty(), "WOFF2 g has an outline");
+      Check(web->Measure("Hello") > 2 && web->Measure("Hello") < 4, "WOFF2 shapes text");
+    }
+  }
   // A database of Ahem and the system: Ahem is found by its name, and a generic family finds something.
   solar::font::Database database;
   database.Add({"Ahem", {}, [face] { return face; }});

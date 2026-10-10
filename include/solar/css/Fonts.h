@@ -21,6 +21,23 @@ std::shared_ptr<font::Face> PrimaryFont(dom::Element* element, const std::string
 // A font with the character, for when none of the element's fonts has it.
 std::shared_ptr<font::Face> FallbackFont(dom::Element* element, char32_t codePoint, const std::string& pseudo = "");
 
+// What a document's @font-face rule says, as the text of its descriptors (those not written are the initial ones).
+struct FaceRuleInfo {
+  std::string family, src, weight, style, stretch, unicodeRange, variant, featureSettings, variationSettings, display, ascentOverride, descentOverride, lineGapOverride;
+};
+// The @font-face rules of the document that have a family and sources, in the order DocumentFonts has them.
+std::vector<FaceRuleInfo> DocumentFaceRules(dom::Document* document);
+// Loads the font of the nth of them; whether it came. (State: 0 not tried, 1 loaded, 2 failed.)
+bool LoadDocumentFace(dom::Document* document, size_t index);
+int DocumentFaceState(dom::Document* document, size_t index);
+
+// A font a script made with FontFace and added to document.fonts: used for its family once it has loaded.
+struct ScriptFace {
+  std::string family, weight, style, stretch, unicodeRange;
+  std::shared_ptr<font::Face> face;
+};
+void SetScriptFaces(dom::Document* document, std::vector<ScriptFace> faces);
+
 // The @font-face fonts of the document, loaded the first time one is wanted.
 font::Database& DocumentFonts(dom::Document* document);
 

@@ -897,6 +897,11 @@ void InstallWindowOn(Host& host, dom::Document* document, Quanta::Embed::Realm* 
   typedOm += "\n__solarTypedOm.install(); delete globalThis.__solarTypedOm;\n";
   const auto typedOmResult = host.Evaluate(typedOm, "typedom.js");
   if (!typedOmResult.ok) std::fprintf(stderr, "typedom.js: %s\n", typedOmResult.error.c_str());
+  // And the font loading API.
+  std::string fontLoading;
+  for (const char* const* piece = web::kScriptFontLoading; *piece; ++piece) fontLoading += *piece;
+  const auto fontLoadingResult = host.Evaluate(fontLoading, "fontloading.js");
+  if (!fontLoadingResult.ok) std::fprintf(stderr, "fontloading.js: %s\n", fontLoadingResult.error.c_str());
 }
 
 void InstallWindow(Quanta::Embed::Runtime& runtime, dom::Document* document) { InstallWindowOn(runtime, document, nullptr, nullptr); }

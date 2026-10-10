@@ -1,0 +1,92 @@
+<!doctype html>
+<title>font loading</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<style>
+@font-face { font-family: "Sheet Face"; src: url("../fonts/Ahem.ttf"); font-weight: 700; }
+@font-face { font-family: "Missing Face"; src: url("../fonts/none.ttf"); }
+</style>
+<script>
+test(() => {
+  assert_equals(typeof FontFace, "function");
+  assert_equals(typeof FontFaceSet, "function");
+  assert_true(document.fonts instanceof FontFaceSet);
+  assert_equals(document.fonts, document.fonts);
+  assert_equals(document.fonts.status, "loaded");
+}, "the interfaces");
+
+test(() => {
+  const face = new FontFace("Test", "url(x.ttf)");
+  assert_equals(face.family, "Test");
+  assert_equals(face.style, "normal");
+  assert_equals(face.weight, "normal");
+  assert_equals(face.stretch, "normal");
+  assert_equals(face.unicodeRange, "U+0-10FFFF");
+  assert_equals(face.display, "auto");
+  assert_equals(face.status, "unloaded");
+  face.weight = "700";
+  assert_equals(face.weight, "700");
+  assert_throws_dom("SyntaxError", () => { face.weight = "bogus"; });
+  assert_throws_dom("SyntaxError", () => new FontFace("", "url(x.ttf)"));
+  assert_throws_dom("SyntaxError", () => new FontFace("A", "url(x.ttf)", { style: "wrong" }));
+  assert_throws_js(TypeError, () => new FontFace("A"));
+}, "FontFace descriptors");
+
+promise_test(async (t) => {
+  const face = new FontFace("Bad Source", "this is not a source");
+  assert_equals(face.status, "error");
+  await promise_rejects_dom(t, "SyntaxError", face.loaded);
+}, "an unparsable source is an error");
+
+promise_test(async (t) => {
+  const face = new FontFace("Bytes", new Uint8Array([1, 2, 3, 4]));
+  assert_equals(face.status, "loading");
+  await promise_rejects_dom(t, "SyntaxError", face.loaded);
+  assert_equals(face.status, "error");
+}, "bytes that are not a font");
+
+promise_test(async () => {
+  const face = new FontFace("Url Ahem", "url('../fonts/Ahem.ttf')");
+  document.fonts.add(face);
+  assert_false(document.fonts.check("16px 'Url Ahem'"));
+  const events = [];
+  document.fonts.onloading = () => events.push("loading");
+  document.fonts.addEventListener("loadingdone", (e) => events.push("done:" + e.fontfaces.length));
+  const loaded = await face.load();
+  assert_equals(loaded, face);
+  assert_equals(face.status, "loaded");
+  await document.fonts.ready;
+  assert_equals(document.fonts.status, "loaded");
+  assert_array_equals(events, ["loading", "done:1"]);
+  assert_true(document.fonts.check("16px 'Url Ahem'"));
+  document.fonts.onloading = null;
+  document.fonts.delete(face);
+}, "a font from a url, and the events");
+
+promise_test(async (t) => {
+  const face = new FontFace("Gone", "url('../fonts/none.ttf')");
+  document.fonts.add(face);
+  await promise_rejects_dom(t, "NetworkError", face.load());
+  assert_equals(face.status, "error");
+  document.fonts.clear();
+}, "a font that is not there");
+
+promise_test(async () => {
+  const faces = [...document.fonts].map((f) => f.family);
+  assert_array_equals(faces, ["Sheet Face", "Missing Face"]);
+  assert_equals(document.fonts.size, 2);
+  const [sheet, missing] = [...document.fonts];
+  assert_equals(sheet.status, "unloaded");
+  assert_equals(sheet.weight, "700");
+  const loaded = await document.fonts.load("bold 16px 'Sheet Face'");
+  assert_array_equals(loaded, [sheet]);
+  assert_equals(sheet.status, "loaded");
+  assert_true(document.fonts.check("bold 16px 'Sheet Face'"));
+  assert_equals([...document.fonts][0], sheet);
+}, "the faces of @font-face rules");
+
+test(() => {
+  assert_throws_dom("SyntaxError", () => document.fonts.check("nonsense"));
+  assert_true(document.fonts.check("16px Nobody Has This"));
+}, "check");
+</script>

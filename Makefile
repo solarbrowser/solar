@@ -15,7 +15,7 @@ CSS_OBJECTS = $(CSS_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
 FONT_SOURCES = $(wildcard src/font/*.cpp)
 FONT_OBJECTS = $(FONT_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
 HARFBUZZ_CFLAGS = $(shell pkg-config --cflags harfbuzz 2>/dev/null)
-HARFBUZZ_LIBS = $(shell pkg-config --libs harfbuzz 2>/dev/null)
+HARFBUZZ_LIBS = $(shell pkg-config --libs harfbuzz libbrotlidec zlib 2>/dev/null)
 # The HTML parser: the tokenizer and the tree builder, which make a DOM tree out of markup.
 HTML_SOURCES = $(wildcard src/html/*.cpp)
 HTML_OBJECTS = $(HTML_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
@@ -54,7 +54,7 @@ endif
 CXXFLAGS += $(OPENSSL_CFLAGS) $(COMPRESSION_CFLAGS) $(HTTP2_CFLAGS)
 
 WEB_SOURCES = $(wildcard src/web/*.cpp)
-WEB_OBJECTS = $(WEB_SOURCES:%.cpp=$(OBJ_DIR)/%.o) $(OBJ_DIR)/$(GEN_DIR)/StreamsScript.o $(OBJ_DIR)/$(GEN_DIR)/UiEventsScript.o $(OBJ_DIR)/$(GEN_DIR)/XhrScript.o $(OBJ_DIR)/$(GEN_DIR)/TypedOmScript.o
+WEB_OBJECTS = $(WEB_SOURCES:%.cpp=$(OBJ_DIR)/%.o) $(OBJ_DIR)/$(GEN_DIR)/StreamsScript.o $(OBJ_DIR)/$(GEN_DIR)/UiEventsScript.o $(OBJ_DIR)/$(GEN_DIR)/XhrScript.o $(OBJ_DIR)/$(GEN_DIR)/TypedOmScript.o $(OBJ_DIR)/$(GEN_DIR)/FontLoadingScript.o
 
 # The scripts in src/web/js are compiled into the program as C++ sources made from them.
 GEN_DIR = build/gen
@@ -81,6 +81,12 @@ $(GEN_DIR)/TypedOmScript.cpp: $(TYPED_OM_JS) $(BUILD_DIR)/EmbedScripts
 	@mkdir -p $(GEN_DIR)
 	@echo "[EMBED] $@"
 	@$(BUILD_DIR)/EmbedScripts TypedOm $(TYPED_OM_JS) > $@
+
+FONT_LOADING_JS = $(sort $(wildcard src/css/js/fontloading-*.js))
+$(GEN_DIR)/FontLoadingScript.cpp: $(FONT_LOADING_JS) $(BUILD_DIR)/EmbedScripts
+	@mkdir -p $(GEN_DIR)
+	@echo "[EMBED] $@"
+	@$(BUILD_DIR)/EmbedScripts FontLoading $(FONT_LOADING_JS) > $@
 
 $(BUILD_DIR)/EmbedScripts: tools/EmbedScripts.cpp
 	@mkdir -p $(BUILD_DIR)
@@ -207,7 +213,7 @@ $(BUILD_DIR)/CssValuesTest: $(OBJ_DIR)/tests/CssValuesTest.o $(OBJ_DIR)/src/css/
 # The font reader needs HarfBuzz and zlib, nothing else.
 $(BUILD_DIR)/FontTest: $(OBJ_DIR)/tests/FontTest.o $(FONT_OBJECTS)
 	@echo "[LINK] $@"
-	@$(CXX) $(CXXFLAGS) -o $@ $^ $(HARFBUZZ_LIBS) -lz
+	@$(CXX) $(CXXFLAGS) -o $@ $^ $(HARFBUZZ_LIBS)
 
 # The tokenizer does not need the DOM, and its test runs without Quanta.
 $(BUILD_DIR)/HtmlTokenizerTest: $(OBJ_DIR)/tests/HtmlTokenizerTest.o $(OBJ_DIR)/src/html/Tokenizer.o $(OBJ_DIR)/src/html/Entities.o $(OBJ_DIR)/src/html/EntityTables.o $(URL_OBJECTS)
