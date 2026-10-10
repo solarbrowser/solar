@@ -73,6 +73,7 @@ struct Box {
 
   std::string text;           // Text: the characters of the node
   std::string processed;      // Text: after white space and text-transform, as shaped
+  std::vector<uint32_t> processedSource;  // Text: for each byte of `processed` the byte of `text` it came from (one more at the end)
   int listValue = 0;           // a list item's counter
   bool outsideMarker = false;  // a list item's marker, outside its principal box
   std::string pseudo;         // "::before", "::after", "::marker" for generated content

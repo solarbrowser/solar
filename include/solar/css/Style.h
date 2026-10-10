@@ -34,6 +34,9 @@ void NoteAnimatedStyleChange();
 // Keeps the computed values the element has now (of the properties that can be animated), as the style that a change of style that
 // follows is compared with, which a transition starts from.
 void SnapshotComputedValues(Quanta::Context& ctx, dom::Element* element);
+// Layout, for the styles that depend on it (container queries): called before a computed style is read when the sizes of containers may have changed.
+using LayoutHook = void (*)(Quanta::Context& ctx, dom::Document* document);
+void SetLayoutHook(LayoutHook hook);
 // Something declared animation-* or transition-* was parsed: how many times, so that whatever watches for animations can know
 // whether there is a reason to.
 void NoteAnimationMention();

@@ -10,6 +10,9 @@
   delete global.__solarLayoutOffsetParent;
   const scrollNative = global.__solarLayoutScroll;
   const elementsAt = global.__solarLayoutElementsAt;
+  global.__solarLayoutShared = { scrollNative, rangeRects: global.__solarLayoutRangeRects, processedText: global.__solarLayoutProcessedText };
+  delete global.__solarLayoutRangeRects;
+  delete global.__solarLayoutProcessedText;
   delete global.__solarLayoutScroll;
   delete global.__solarLayoutElementsAt;
 

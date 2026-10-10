@@ -814,8 +814,16 @@ ComponentValue Canonical(const ComponentValue& v, const ComputeContext& c, bool&
     // viewport units: 1% of the viewport, whichever flavor (small, large, dynamic), and container units as the viewport's
     std::string base = unit;
     if (base.size() > 2 && (base[0] == 's' || base[0] == 'l' || base[0] == 'd') && base[1] == 'v') base = base.substr(1);
-    if (base.size() > 2 && base.starts_with("cq")) base = "v" + base.substr(2);
-    const double w = c.viewportWidth / 100, h = c.viewportHeight / 100;
+    double w = c.viewportWidth / 100, h = c.viewportHeight / 100;
+    if (base.size() > 2 && base.starts_with("cq")) {
+      base = "v" + base.substr(2);
+      // The size of the container, when there is one.
+      if (c.containerWidth >= 0 && c.containerHeight >= 0) {
+        w = c.containerWidth / 100;
+        h = c.containerHeight / 100;
+        if (c.containerVertical && (base == "vi" || base == "vb")) std::swap(w, h);
+      }
+    }
     if (base == "vw" || base == "vi") px = n * w;
     else if (base == "vh" || base == "vb") px = n * h;
     else if (base == "vmin") px = n * std::min(w, h);

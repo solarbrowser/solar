@@ -232,6 +232,8 @@ struct Element : Node {
 
   // What animations give to properties of the element (pseudo-element name → property → value), which the cascade takes over the declared ones.
   std::map<std::string, std::map<std::string, std::string>> animatedValues;
+  // The content box of an element that is a size container, as layout found it (negative: not known), for container queries.
+  double containerWidth = -1, containerHeight = -1;
   // The computed values script last read (pseudo-element name → property → value): the style from before a change, for transitions.
   std::map<std::string, std::map<std::string, std::string>> lastRead;
 
@@ -286,6 +288,8 @@ struct Document : Node {
   uint64_t styleFlushedVersion = 0;
   // Whether style has been seen to ask for animations or transitions (or script made animations): only then is the function run.
   bool animationStyleSeen = false;
+  // Whether a style has asked for the size of a container: only then is layout done before a computed style is read.
+  bool containerQueriesSeen = false;
   // The function that asks for a frame, which parsing something that declares animations or transitions calls.
   Quanta::Object* animationWake = nullptr;
   // For an about: document whose iframe is gone: the address it was resolving against, which is the origin it keeps.

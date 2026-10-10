@@ -3,6 +3,7 @@
 #include <cmath>
 #include <algorithm>
 #include <functional>
+#include <set>
 #include <sstream>
 
 #include "Internal.h"
@@ -11,6 +12,30 @@
 #include "solar/css/Style.h"
 
 namespace solar::layout {
+
+namespace {
+
+// The content boxes of the containers, for the container queries. True if one is not what style was made with.
+bool UpdateContainerSizes(Tree& tree) {
+  bool changed = false;
+  const auto walk = [&](auto&& self, const Box& box) -> void {
+    if (box.kind == Box::Kind::Block && box.node && box.node->IsElement() && box.style && box.style->sizeContainer) {
+      dom::Element* element = static_cast<dom::Element*>(box.node);
+      const double w = std::max(0.0, box.width - box.border.Horizontal() - box.padding.Horizontal());
+      const double h = std::max(0.0, box.height - box.border.Vertical() - box.padding.Vertical());
+      if (std::fabs(element->containerWidth - w) > 0.005 || std::fabs(element->containerHeight - h) > 0.005) {
+        element->containerWidth = w;
+        element->containerHeight = h;
+        changed = true;
+      }
+    }
+    for (const auto& child : box.children) self(self, *child);
+  };
+  if (tree.root) walk(walk, *tree.root);
+  return changed;
+}
+
+}  // namespace
 
 Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
   css::MediaEnvironment environment = css::EnvironmentFor(document);
@@ -29,14 +54,26 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
       }
     }
   }
-  const uint64_t version = (dom::TreeVersion() * 1000003 + css::StyleVersion()) * 1000003 + static_cast<uint64_t>(environment.width * 7 + environment.height);
-  if (document->layoutTree && document->layoutTree->builtFor == version && document->layoutTree->root) return document->layoutTree.get();
-  auto tree = std::make_shared<Tree>();
-  tree->viewportWidth = environment.width;
-  tree->viewportHeight = environment.height;
-  LayoutContext lc{ctx, *tree, environment.width, environment.height};
-  BuildTree(lc, document);
-  LayoutRoot(lc);
+  const auto versionNow = [&] { return (dom::TreeVersion() * 1000003 + css::StyleVersion()) * 1000003 + static_cast<uint64_t>(environment.width * 7 + environment.height); };
+  if (document->layoutTree && document->layoutTree->builtFor == versionNow() && document->layoutTree->root) return document->layoutTree.get();
+  static std::set<const dom::Document*> inside;
+  // (Asked for again while it is being made, from a style that needs the size of a container: what is there is answered.)
+  if (inside.count(document)) return document->layoutTree ? document->layoutTree.get() : nullptr;
+  inside.insert(document);
+  std::shared_ptr<Tree> tree;
+  // The styles that depend on the size of containers are made from the sizes of the last pass; layout is done again until they stop changing.
+  for (int pass = 0; pass < 5; ++pass) {
+    tree = std::make_shared<Tree>();
+    tree->viewportWidth = environment.width;
+    tree->viewportHeight = environment.height;
+    LayoutContext lc{ctx, *tree, environment.width, environment.height};
+    BuildTree(lc, document);
+    LayoutRoot(lc);
+    if (!document->containerQueriesSeen || !UpdateContainerSizes(*tree)) break;
+    css::NoteStyleChange();
+  }
+  inside.erase(document);
+  const uint64_t version = versionNow();
   tree->builtFor = version;
   if (document->layoutTree) {
     for (const auto& entry : document->layoutTree->scroll) {
@@ -336,7 +373,12 @@ bool ResolvedHook(Quanta::Context& ctx, dom::Element* element, const std::string
   return tree && UsedValue(*tree, element, property, out);
 }
 
-void InstallResolvedHook() { css::SetResolvedValueHook(ResolvedHook); }
+void LayoutForStyle(Quanta::Context& ctx, dom::Document* document) { UpdateLayout(ctx, document); }
+
+void InstallResolvedHook() {
+  css::SetResolvedValueHook(ResolvedHook);
+  css::SetLayoutHook(LayoutForStyle);
+}
 
 }  // namespace solar::layout
 

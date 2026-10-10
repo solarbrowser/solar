@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<title>Container queries</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<style>
+#c { container-type: inline-size; width: 300px; }
+#e { color: rgb(255, 0, 0); width: 10cqw; }
+@container (min-width: 200px) { #e { color: rgb(0, 128, 0); } }
+@container (width < 100px) { #e { color: rgb(0, 0, 255); } }
+.named { container: card / size; width: 400px; height: 200px; }
+@container card (height > 150px) and (width >= 400px) { #f { color: rgb(1, 2, 3); } }
+@container nomatch (width > 0px) { #f { color: rgb(9, 9, 9); } }
+</style>
+<div id="c"><div id="e"></div></div>
+<div class="named"><div id="f"></div></div>
+<script>
+test(() => {
+  assert_equals(getComputedStyle(e).color, 'rgb(0, 128, 0)');
+  assert_equals(getComputedStyle(e).width, '30px');
+}, 'a query on the width of the container');
+test(() => {
+  c.style.width = '80px';
+  assert_equals(getComputedStyle(e).color, 'rgb(0, 0, 255)');
+  assert_equals(getComputedStyle(e).width, '8px');
+  c.style.width = '300px';
+  assert_equals(getComputedStyle(e).color, 'rgb(0, 128, 0)');
+}, 'the style follows the size of the container');
+test(() => {
+  assert_equals(getComputedStyle(f).color, 'rgb(1, 2, 3)');
+}, 'a named size container, and a condition with and');
+</script>

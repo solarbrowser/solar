@@ -483,6 +483,7 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
     s.containSizeInline = strict || has("size") || has("inline-size");
     s.containSizeBlock = strict || has("size");
     const std::string type = get("container-type");
+    s.sizeContainer = type.find("size") != std::string::npos;
     if (type == "size") { s.containLayout = true; s.containSizeInline = s.containSizeBlock = true; }
     else if (type == "inline-size") { s.containLayout = true; s.containSizeInline = true; }
     const auto none = [&](const char* property) { const std::string v = get(property); return v.empty() || v == "none"; };

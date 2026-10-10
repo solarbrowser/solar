@@ -15,6 +15,7 @@
 
 #include "solar/css/Calc.h"
 #include "solar/css/Color.h"
+#include "solar/css/Container.h"
 #include "solar/css/Cssom.h"
 #include "solar/css/MediaQuery.h"
 #include "solar/css/Registry.h"
@@ -36,6 +37,8 @@ std::string Lower(std::string_view text) {
 }
 
 uint64_t g_styleVersion = 1;
+LayoutHook g_layoutHook = nullptr;
+Quanta::Context* g_activeContext = nullptr;  // the realm a style is being worked out in, for what a rule's condition needs of other elements
 
 // ---- The user agent style sheet ----
 
@@ -316,6 +319,10 @@ struct Gatherer {
           break;
         case RuleKind::Supports:
           if (SupportsCondition(ParseComponentValues(rule->supportsText))) Rules(rule->rules, layer, outer);
+          break;
+        case RuleKind::Container:
+          if (element->nodeDocument) element->nodeDocument->containerQueriesSeen = true;
+          if (g_activeContext && ContainerRuleMatches(*g_activeContext, const_cast<dom::Element*>(element), matchContext.pseudoElement != nullptr, rule->prelude)) Rules(rule->rules, layer, outer);
           break;
         case RuleKind::Import: {
           CssStyleSheet* imported = rule->importedSheet;
@@ -1030,6 +1037,16 @@ ComputeContext Resolver::ContextFor(dom::Element* element, const std::string& pr
       if (v.size() == 1 && v[0].kind == Cv::Kind::Token && v[0].token.type == T::Number) c.lineHeight = v[0].token.number * c.fontSize;
     }
   }
+  // The container query units are against the nearest container.
+  if (text.find("cq") != std::string::npos) {
+    double w, h;
+    bool vertical = false;
+    if (NearestContainerSize(ctx_, element, !pseudo.empty(), w, h, vertical)) {
+      c.containerWidth = w;
+      c.containerHeight = h;
+      c.containerVertical = vertical;
+    }
+  }
   // currentcolor: the element's color, and for color itself the parent's.
   if (!needsColor) {
     c.currentColor = "rgb(0, 0, 0)";
@@ -1260,6 +1277,7 @@ std::string Resolver::Finish(dom::Element* element, const std::string& property,
 
 }  // namespace
 
+void SetLayoutHook(LayoutHook hook) { g_layoutHook = hook; }
 uint64_t g_authorVersion = 1;
 uint64_t g_animationMentions = 0;
 void SnapshotComputedValues(Quanta::Context& ctx, dom::Element* element) {
@@ -1327,8 +1345,30 @@ std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std
     Depth() { ++depth; }
     ~Depth() { --depth; }
   } guard;
+  struct Active {
+    Quanta::Context* saved;
+    explicit Active(Quanta::Context& c) : saved(g_activeContext) { g_activeContext = &c; }
+    ~Active() { g_activeContext = saved; }
+  } active(ctx);
+  // A style that depends on the size of a container is made from the sizes layout found: layout is brought up to date first.
+  static bool inLayoutHook = false;
+  const auto bringLayout = [&]() {
+    if (!document || !document->containerQueriesSeen || !g_layoutHook || inLayoutHook || depth != 1) return;
+    inLayoutHook = true;
+    g_layoutHook(ctx, document);
+    inLayoutHook = false;
+  };
+  bringLayout();
   Resolver resolver(ctx);
   std::string result = resolver.Compute(element, property, pseudo);
+  if (document && document->containerQueriesSeen && g_layoutHook && !inLayoutHook && depth == 1) {
+    // (The first time a rule asks for a container's size, the size is not known yet: layout finds it and the style is made again.)
+    static std::set<const dom::Document*> asked;
+    if (asked.insert(document).second) {
+      bringLayout();
+      result = resolver.Compute(element, property, pseudo);
+    }
+  }
   if (depth == 1 && document && !document->animationStyleSeen && element) {
     const ElementStyle& style = StyleOf(element, pseudo);
     if (style.cascade.count("animation-name") || style.cascade.count("transition-property") || style.cascade.count("transition-duration")) {

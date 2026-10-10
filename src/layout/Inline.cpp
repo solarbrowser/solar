@@ -218,12 +218,17 @@ struct Collector {
     const BoxStyle& s = *text.style;
     std::string in = Transform(text.text, s.textTransform, s.lang);
     std::string out;
+    std::vector<uint32_t>& source = text.processedSource;
+    source.clear();
     switch (s.whiteSpaceCollapse) {
       case WhiteSpaceCollapse::Collapse:
         for (size_t i = 0; i < in.size();) {
           const char c = in[i];
           if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f') {
-            if (!lastWasSpace) out += ' ';
+            if (!lastWasSpace) {
+              out += ' ';
+              source.push_back(static_cast<uint32_t>(i));
+            }
             lastWasSpace = true;
             ++i;
           } else {
@@ -231,6 +236,7 @@ struct Collector {
             const char32_t cp = DecodeAt(in, j);
             (void)cp;
             out.append(in, i, j - i);
+            for (size_t k = i; k < j; ++k) source.push_back(static_cast<uint32_t>(k));
             i = j;
             lastWasSpace = false;
           }
@@ -240,32 +246,48 @@ struct Collector {
         for (size_t i = 0; i < in.size();) {
           const char c = in[i];
           if (c == '\n') {
-            while (!out.empty() && out.back() == ' ') out.pop_back();
+            while (!out.empty() && out.back() == ' ') {
+              out.pop_back();
+              source.pop_back();
+            }
             out += '\n';
+            source.push_back(static_cast<uint32_t>(i));
             lastWasSpace = true;
             ++i;
           } else if (c == ' ' || c == '\t' || c == '\r' || c == '\f') {
-            if (!lastWasSpace) out += ' ';
+            if (!lastWasSpace) {
+              out += ' ';
+              source.push_back(static_cast<uint32_t>(i));
+            }
             lastWasSpace = true;
             ++i;
           } else {
             size_t j = i;
             DecodeAt(in, j);
             out.append(in, i, j - i);
+            for (size_t k = i; k < j; ++k) source.push_back(static_cast<uint32_t>(k));
             i = j;
             lastWasSpace = false;
           }
         }
         break;
       case WhiteSpaceCollapse::PreserveSpaces:
-        for (char c : in) out += (c == '\n' || c == '\r') ? ' ' : c;
+        for (size_t k = 0; k < in.size(); ++k) {
+          out += (in[k] == '\n' || in[k] == '\r') ? ' ' : in[k];
+          source.push_back(static_cast<uint32_t>(k));
+        }
         lastWasSpace = false;
         break;
       default:
-        for (char c : in) if (c != '\r') out += c;
+        for (size_t k = 0; k < in.size(); ++k) {
+          if (in[k] == '\r') continue;
+          out += in[k];
+          source.push_back(static_cast<uint32_t>(k));
+        }
         lastWasSpace = false;
         break;
     }
+    source.push_back(static_cast<uint32_t>(in.size()));
     return out;
   }
 

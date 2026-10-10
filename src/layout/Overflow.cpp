@@ -212,7 +212,7 @@ Rect ScrollableOverflow(Tree& tree, const Box& scroller, dom::Element* rootEleme
   }
   const bool vertical = IsVertical(styleBox->writingMode);
   const bool rtl = styleBox->direction == Direction::Rtl;
-  const bool startRight = vertical ? styleBox->writingMode == WritingMode::VerticalRl : rtl;
+  const bool startRight = vertical ? (styleBox->writingMode == WritingMode::VerticalRl || styleBox->writingMode == WritingMode::SidewaysRl) : rtl;
   const bool startBottom = vertical ? (styleBox->writingMode == WritingMode::SidewaysLr ? !rtl : rtl) : false;
 
   Collector collector{tree, scroller, padding};

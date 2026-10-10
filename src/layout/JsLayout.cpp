@@ -193,9 +193,84 @@ Value Dump(Context& ctx, Value, qe::Args args, Value) {
   return qe::FromWtf8(ctx, DumpTree(*tree));
 }
 
+// The byte of the UTF-8 text at a UTF-16 offset.
+size_t ByteOfUnit(const std::string& text, uint32_t unit) {
+  size_t byte = 0;
+  uint32_t units = 0;
+  while (byte < text.size() && units < unit) {
+    const unsigned char c = static_cast<unsigned char>(text[byte]);
+    const size_t length = c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
+    units += length == 4 ? 2 : 1;
+    byte += length;
+  }
+  return std::min(byte, text.size());
+}
+
+// __solarLayoutProcessedText(textNode): the text of the node as the lines show it (white space processed, case transformed), or null if it has no box.
+Value ProcessedText(Context& ctx, Value, qe::Args args, Value) {
+  dom::Node* node = args.empty() ? nullptr : dom::ThisNode(ctx, args[0]);
+  if (!node || !node->nodeDocument) return qe::Null();
+  Tree* tree = UpdateLayout(ctx, node->nodeDocument);
+  std::string out;
+  bool any = false;
+  for (Box* box : BoxesOf(*tree, node)) {
+    if (box->kind != Box::Kind::Text) continue;
+    out += box->processed;
+    any = true;
+  }
+  return any ? qe::FromWtf8(ctx, out) : qe::Null();
+}
+
+// __solarLayoutRangeRects(textNode, startUnit, endUnit): [x, y, w, h...] of the characters [start, end) of the text node, as the lines show them.
+Value RangeRects(Context& ctx, Value, qe::Args args, Value) {
+  Value out = qe::NewArray(ctx);
+  dom::Node* node = args.empty() ? nullptr : dom::ThisNode(ctx, args[0]);
+  if (!node || !node->nodeDocument || args.size() < 3) return out;
+  const dom::CharacterData* text = static_cast<const dom::CharacterData*>(node);
+  Tree* tree = UpdateLayout(ctx, node->nodeDocument);
+  const size_t from = ByteOfUnit(text->data, static_cast<uint32_t>(qe::ToNumber(ctx, args[1])));
+  const size_t to = ByteOfUnit(text->data, static_cast<uint32_t>(qe::ToNumber(ctx, args[2])));
+  if (to <= from) return out;
+  for (Box* box : BoxesOf(*tree, node)) {
+    if (box->kind != Box::Kind::Text) continue;
+    const Box* container = box->parent;
+    while (container && container->kind != Box::Kind::Block) container = container->parent;
+    if (!container) continue;
+    const Rect origin = AbsoluteBorderBox(*container);
+    for (const Line& line : container->lines) {
+      for (const LineItem& item : line.items) {
+        if (item.kind != LineItem::Kind::Text || item.box != box) continue;
+        // The glyphs whose characters are in the range, along the piece.
+        double pen = 0, low = 0, high = 0;
+        bool any = false;
+        for (const font::Glyph& g : item.text.glyphs) {
+          const size_t processed = item.text.begin + g.cluster;
+          const double width = g.advance * item.text.fontSize;
+          const size_t source = processed < box->processedSource.size() ? box->processedSource[processed] : box->text.size();
+          if (source >= from && source < to) {
+            if (!any) low = pen;
+            any = true;
+            high = pen + width;
+            low = std::min(low, pen);
+          }
+          pen += width;
+        }
+        if (!any) continue;
+        const double x = origin.x + item.rect.x + low;
+        qe::ArrayPush(ctx, out, qe::FromNumber(x));
+        qe::ArrayPush(ctx, out, qe::FromNumber(origin.y + item.rect.y));
+        qe::ArrayPush(ctx, out, qe::FromNumber(high - low));
+        qe::ArrayPush(ctx, out, qe::FromNumber(item.rect.height));
+      }
+    }
+  }
+  return out;
+}
+
 }  // namespace
 
 void InstallResolvedHook();
+
 
 void InstallLayoutNatives(Context& ctx) {
   InstallResolvedHook();
@@ -205,6 +280,8 @@ void InstallLayoutNatives(Context& ctx) {
   qe::DefineGlobalFunction(ctx, "__solarLayoutScroll", Scroll, 4);
   qe::DefineGlobalFunction(ctx, "__solarLayoutElementsAt", ElementsAt, 2);
   qe::DefineGlobalFunction(ctx, "__solarLayoutDump", Dump, 0);
+  qe::DefineGlobalFunction(ctx, "__solarLayoutRangeRects", RangeRects, 3);
+  qe::DefineGlobalFunction(ctx, "__solarLayoutProcessedText", ProcessedText, 1);
 }
 
 }  // namespace solar::layout

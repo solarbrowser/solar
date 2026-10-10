@@ -117,6 +117,7 @@ struct BoxStyle {
   // Containment (css-contain): layout and paint containment make a box its own formatting context; size containment lets its contents count for
   // nothing in the sizes it asks for. content-visibility: hidden skips the contents altogether.
   bool containLayout = false, containPaint = false, containSizeInline = false, containSizeBlock = false;
+  bool sizeContainer = false;  // container-type: size or inline-size: container queries look at its size
   bool skipContents = false;
   Length containIntrinsicWidth, containIntrinsicHeight;  // px, or none (Auto kind with value 0)
   bool containIntrinsicWidthSet = false, containIntrinsicHeightSet = false;

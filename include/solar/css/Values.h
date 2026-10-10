@@ -23,6 +23,10 @@ struct ComputeContext {
   double rootExHeight = -1, rootChWidth = -1, rootCapHeight = -1, rootIcWidth = -1;
   double viewportWidth = 800;
   double viewportHeight = 600;
+  // The nearest size container, for the container query units (negative where there is none: they are then the small viewport's).
+  double containerWidth = -1;
+  double containerHeight = -1;
+  bool containerVertical = false;
   std::string currentColor = "rgb(0, 0, 0)";  // what currentcolor stands for
   std::string colorScheme = "light";
 };
