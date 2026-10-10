@@ -112,22 +112,35 @@ Value ClientRectsNative(Context& ctx, Value, qe::Args args, Value) {
   return out;
 }
 
+// The parent in the flat tree: the slot a slottable is assigned to, the host of a shadow root.
+dom::Node* FlatParentOf(dom::Node* node) {
+  if (node->IsElement() && static_cast<dom::Element*>(node)->assignedSlot) return static_cast<dom::Element*>(node)->assignedSlot;
+  dom::Node* p = node->parentNode;
+  if (p && p->IsFragment() && static_cast<dom::DocumentFragment*>(p)->isShadowRoot) return static_cast<dom::DocumentFragment*>(p)->host;
+  return p;
+}
+
 // The element offsetTop and the others are relative to, or null.
 Value OffsetParent(Context& ctx, Value, qe::Args args, Value) {
   dom::Element* element = ElementArg(args);
   Tree* tree = TreeFor(ctx, element);
   Box* box = tree ? PrincipalBox(*tree, element) : nullptr;
   if (!box) return qe::Null();
-  if (box->style->position == Position::Fixed) return qe::Null();
   dom::Document* document = element->nodeDocument;
   if (document->DocumentElement() == element) return qe::Null();
-  for (dom::Node* n = element->parentNode; n; n = n->parentNode) {
+  if (element->IsHtml("body")) return qe::Null();
+  const bool fixed = box->style->position == Position::Fixed;
+  for (dom::Node* n = FlatParentOf(element); n; n = FlatParentOf(n)) {
     if (!n->IsElement()) continue;
     dom::Element* e = static_cast<dom::Element*>(n);
-    if (e->IsHtml("body")) return dom::NodeValue(e);
     Box* b = PrincipalBox(*tree, e);
+    if (fixed) {
+      if (b && b->style->containsPositioned) return dom::NodeValue(e);
+      continue;
+    }
+    if (e->IsHtml("body")) return dom::NodeValue(e);
     if (!b) continue;
-    if (b->style->position != Position::Static) return dom::NodeValue(e);
+    if (b->style->position != Position::Static || b->style->containsPositioned) return dom::NodeValue(e);
     if (e->IsHtml("td") || e->IsHtml("th") || e->IsHtml("table")) return dom::NodeValue(e);
   }
   return qe::Null();

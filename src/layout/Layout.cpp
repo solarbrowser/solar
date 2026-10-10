@@ -401,7 +401,12 @@ std::vector<dom::Element*> ElementsAtPoint(Tree& tree, double x, double y) {
   std::vector<const Box*> order;
   PaintOrder(*tree.root, order);
   const auto add = [&](dom::Node* node) {
-    while (node && !node->IsElement()) node = node->parentNode;
+    // (a text node directly in a shadow root is stood for by the host)
+    while (node && !node->IsElement()) {
+      dom::Node* up = node->parentNode;
+      if (up && up->IsFragment() && static_cast<dom::DocumentFragment*>(up)->isShadowRoot) up = static_cast<dom::DocumentFragment*>(up)->host;
+      node = up;
+    }
     if (!node) return;
     dom::Element* element = static_cast<dom::Element*>(node);
     if (std::find(hits.begin(), hits.end(), element) == hits.end()) hits.push_back(element);

@@ -129,21 +129,40 @@
   define(Document.prototype, 'scrollingElement', {
     get() { return this.compatMode === 'BackCompat' ? this.body : this.documentElement; },
   });
-  define(Document.prototype, 'elementFromPoint', {
-    value: function elementFromPoint(x, y) {
-      if (arguments.length < 2) throw new TypeError("Failed to execute 'elementFromPoint' on 'Document': 2 arguments required, but only " + arguments.length + ' present.');
-      const list = elementsAt(Number(x), Number(y));
-      return list.length ? list[0] : null;
-    },
-    writable: true,
-  });
-  define(Document.prototype, 'elementsFromPoint', {
-    value: function elementsFromPoint(x, y) {
-      if (arguments.length < 2) throw new TypeError("Failed to execute 'elementsFromPoint' on 'Document': 2 arguments required, but only " + arguments.length + ' present.');
-      return elementsAt(Number(x), Number(y));
-    },
-    writable: true,
-  });
+  // What is under a point, as seen from a tree: nodes in other trees are stood for by their hosts there.
+  const seenFrom = (scope, x, y) => {
+    const out = [];
+    // A node is seen as it is when its tree is the scope's or one around it, and by the host of its tree otherwise.
+    const around = (root) => {
+      for (let r = scope; r; r = r instanceof ShadowRoot ? r.host.getRootNode() : null) if (r === root) return true;
+      return false;
+    };
+    for (let node of elementsAt(Number(x), Number(y))) {
+      while (node && !around(node.getRootNode())) {
+        const root = node.getRootNode();
+        node = root instanceof ShadowRoot ? root.host : null;
+      }
+      if (node && !out.includes(node)) out.push(node);
+    }
+    return out;
+  };
+  for (const [prototype, name] of [[Document.prototype, 'Document'], [ShadowRoot.prototype, 'ShadowRoot']]) {
+    define(prototype, 'elementFromPoint', {
+      value: function elementFromPoint(x, y) {
+        if (arguments.length < 2) throw new TypeError("Failed to execute 'elementFromPoint' on '" + name + "': 2 arguments required, but only " + arguments.length + ' present.');
+        const list = seenFrom(this, x, y);
+        return list.length ? list[0] : null;
+      },
+      writable: true,
+    });
+    define(prototype, 'elementsFromPoint', {
+      value: function elementsFromPoint(x, y) {
+        if (arguments.length < 2) throw new TypeError("Failed to execute 'elementsFromPoint' on '" + name + "': 2 arguments required, but only " + arguments.length + ' present.');
+        return seenFrom(this, x, y);
+      },
+      writable: true,
+    });
+  }
 
   const html = HTMLElement.prototype;
   getter(html, 'offsetWidth', 8, integer);
