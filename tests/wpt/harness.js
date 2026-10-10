@@ -334,19 +334,18 @@
     let recordedEvents = null;
     const fail = (message) => { throw new Error(message); };
     const eventHandler = test.step_func(function (evt) {
-      if (!waitingFor.current) fail('Unexpected event ' + evt.type + ' (expected: nothing)');
-      if (recordedEvents !== null) recordedEvents.push(evt);
-      if (waitingFor.current.types.length === 0) return;
-      const expected = waitingFor.current.types[0];
-      if (evt.type !== expected) fail('Unexpected event ' + evt.type + ' (expected: ' + expected + ')');
-      waitingFor.current.types.shift();
-      if (waitingFor.current.types.length === 0) {
-        const resolve = waitingFor.current.resolve;
-        waitingFor.current = null;
-        const result = recordedEvents;
-        recordedEvents = null;
-        resolve(result);
+      assert_true(!!waitingFor.current, 'Not expecting event, but got ' + evt.type + ' event');
+      assert_equals(evt.type, waitingFor.current.types[0], 'Expected ' + waitingFor.current.types[0] + ' event, but got ' + evt.type + ' event instead');
+      if (Array.isArray(recordedEvents)) recordedEvents.push(evt);
+      if (waitingFor.current.types.length > 1) {
+        waitingFor.current.types.shift();
+        return;
       }
+      const resolveFunc = waitingFor.current.resolve;
+      waitingFor.current = null;
+      const result = recordedEvents || evt;
+      recordedEvents = null;
+      resolveFunc(result);
     });
     for (const type of eventTypes) watchedNode.addEventListener(type, eventHandler, false);
     this.wait_for = function (types, options) {

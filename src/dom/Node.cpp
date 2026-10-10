@@ -47,6 +47,7 @@ void Document::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(styleSheetList);
   visitor.Mark(adoptedStyleSheets);
   visitor.Mark(styleFlush);
+  visitor.Mark(animationWake);
   visitor.Mark(frameElement);
 }
 

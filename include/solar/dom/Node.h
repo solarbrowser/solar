@@ -286,6 +286,8 @@ struct Document : Node {
   uint64_t styleFlushedVersion = 0;
   // Whether style has been seen to ask for animations or transitions (or script made animations): only then is the function run.
   bool animationStyleSeen = false;
+  // The function that asks for a frame, which parsing something that declares animations or transitions calls.
+  Quanta::Object* animationWake = nullptr;
   // For an about: document whose iframe is gone: the address it was resolving against, which is the origin it keeps.
   std::string inheritedBase;
   // The Content-Security-Policy values that apply to the document (the header's, and its meta elements').

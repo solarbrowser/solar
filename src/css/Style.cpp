@@ -1228,7 +1228,35 @@ std::string Resolver::Finish(dom::Element* element, const std::string& property,
 
 uint64_t g_authorVersion = 1;
 uint64_t g_animationMentions = 0;
-void NoteAnimationMention() { ++g_animationMentions; }
+void SnapshotComputedValues(Quanta::Context& ctx, dom::Element* element) {
+  if (!element || !element->nodeDocument || !dom::ShadowIncludingRoot(element)->IsDocument()) return;
+  for (size_t i = 0; i < kPropertyDefinitionCount; ++i) {
+    const PropertyDefinition& definition = kPropertyDefinitions[i];
+    if (IsShorthand(definition)) continue;
+    const std::string name = definition.name;
+    if (name.rfind("transition", 0) == 0 || name.rfind("animation", 0) == 0 || name.rfind("-webkit-", 0) == 0) continue;
+    const std::string value = ComputedValue(ctx, element, name);
+    if (!value.empty()) element->lastRead[""][name] = value;
+  }
+}
+namespace {
+Quanta::Context* g_wakeContext = nullptr;
+dom::Document* g_wakeDocument = nullptr;
+bool g_inWake = false;
+}  // namespace
+void SetAnimationWake(Quanta::Context& ctx, dom::Document* document) {
+  g_wakeContext = &ctx;
+  g_wakeDocument = document;
+}
+void NoteAnimationMention() {
+  ++g_animationMentions;
+  // The frame that starts what is declared has to be asked for, as nothing else tells that there is something to start.
+  if (g_wakeDocument && g_wakeDocument->animationWake && g_wakeContext && !g_inWake) {
+    g_inWake = true;
+    Quanta::Embed::Call(*g_wakeContext, Quanta::Embed::FromObject(g_wakeDocument->animationWake), Quanta::Embed::Undefined());
+    g_inWake = false;
+  }
+}
 uint64_t AnimationMentions() { return g_animationMentions; }
 void NoteStyleChange() {
   ++g_styleVersion;

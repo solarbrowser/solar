@@ -341,6 +341,7 @@ std::string CssDeclarations::Serialize() const {
 }
 
 void CssDeclarations::SetText(Context& ctx, std::string_view text) {
+  if (ownerElement && (text.find("transition") != std::string_view::npos || text.find("animation") != std::string_view::npos)) SnapshotComputedValues(ctx, ownerElement);
   items = ParseDeclarationList(text);
   Changed(ctx);
 }
@@ -354,6 +355,7 @@ bool CssDeclarations::Set(Context& ctx, const std::string& propertyName, const s
     return true;
   }
   if (!NormalizePropertyName(name)) return false;
+  if (ownerElement && (name.rfind("transition", 0) == 0 || name.rfind("animation", 0) == 0)) SnapshotComputedValues(ctx, ownerElement);
   if (!Apply(name, value, important)) return false;
   Changed(ctx);
   return true;

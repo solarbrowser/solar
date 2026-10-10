@@ -117,6 +117,62 @@ Value LastRead(Context& ctx, Value, qe::Args args, Value) {
   return value == byPseudo->second.end() ? qe::Null() : qe::FromWtf8(ctx, value->second);
 }
 
+bool NonZeroTime(const std::string& text) {
+  for (char c : text) {
+    if (c >= '1' && c <= '9') return true;
+  }
+  return false;
+}
+
+// What of an element (and its pseudo-elements, with `pseudos`) asks for animations or transitions: a bit for each (1 the element, 2 ::before,
+// 4 ::after, 8 ::marker).
+int AnimationMask(Context& ctx, dom::Element* element, bool pseudos) {
+  int mask = 0;
+  const char* names[] = {"", "before", "after", "marker"};
+  for (int i = 0; i < (pseudos ? 4 : 1); ++i) {
+    const std::string pseudo = names[i];
+    const std::string name = ComputedValue(ctx, element, "animation-name", pseudo);
+    if ((!name.empty() && name != "none") || NonZeroTime(ComputedValue(ctx, element, "transition-duration", pseudo)) ||
+        NonZeroTime(ComputedValue(ctx, element, "transition-delay", pseudo))) {
+      mask |= 1 << i;
+    }
+  }
+  return mask;
+}
+
+void CollectCandidates(Context& ctx, dom::Node* node, bool pseudos, Value& out) {
+  for (dom::Node* child = node->firstChild; child; child = child->nextSibling) {
+    if (!child->IsElement()) continue;
+    dom::Element* element = static_cast<dom::Element*>(child);
+    const int mask = AnimationMask(ctx, element, pseudos);
+    if (mask) {
+      qe::ArrayPush(ctx, out, qe::FromObject(element));
+      qe::ArrayPush(ctx, out, qe::FromInt32(mask));
+    }
+    if (element->shadowRoot) CollectCandidates(ctx, element->shadowRoot, pseudos, out);
+    CollectCandidates(ctx, element, pseudos, out);
+  }
+}
+
+// __solarAnimCandidates(pseudos): [element, mask, element, mask...] of the elements of the document with something to start.
+Value Candidates(Context& ctx, Value, qe::Args args, Value) {
+  Value out = qe::NewArray(ctx);
+  dom::Document* document = dom::AssociatedDocument(ctx);
+  if (!document) return out;
+  NoStyleFlush noFlush;
+  CollectCandidates(ctx, document, args.size() > 0 && qe::ToBoolean(args[0]), out);
+  return out;
+}
+
+// __solarAnimOnWake(function): the function to call when something is declared that asks for animations or transitions.
+Value OnWake(Context& ctx, Value, qe::Args args, Value) {
+  dom::Document* document = dom::AssociatedDocument(ctx);
+  if (!document || args.empty()) return qe::Undefined();
+  document->animationWake = qe::IsObject(args[0]) ? args[0].as_object() : nullptr;
+  SetAnimationWake(ctx, document);
+  return qe::Undefined();
+}
+
 // __solarAnimMentions(): how many declarations of animation-* and transition-* have been parsed; the document is told that style asks
 // for animations once there has been one.
 Value Mentions(Context& ctx, Value, qe::Args, Value) {
@@ -161,6 +217,8 @@ void InstallAnimationNatives(Context& ctx) {
   qe::DefineGlobalFunction(ctx, "__solarAnimOnFlush", OnFlush, 1);
   qe::DefineGlobalFunction(ctx, "__solarAnimRead", Read, 3);
   qe::DefineGlobalFunction(ctx, "__solarAnimMentions", Mentions, 0);
+  qe::DefineGlobalFunction(ctx, "__solarAnimOnWake", OnWake, 1);
+  qe::DefineGlobalFunction(ctx, "__solarAnimCandidates", Candidates, 1);
   qe::DefineGlobalFunction(ctx, "__solarAnimLastRead", LastRead, 3);
   qe::DefineGlobalFunction(ctx, "__solarAuthorVersion", AuthorVersion, 0);
   qe::DefineGlobalFunction(ctx, "__solarAnimPropertyKind", Kind, 1);

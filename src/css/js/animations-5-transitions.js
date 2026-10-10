@@ -54,6 +54,8 @@
     if (allNames) return allNames;
     allNames = [...getComputedStyle(document.documentElement)].filter((name) => {
       if (name.startsWith('transition') || name.startsWith('animation') || name.startsWith('--')) return false;
+      // A logical property is another name for a physical one, which is what changes.
+      if (/(^|-)(inline|block)(-|$)/.test(name) || /^border-(start|end)-/.test(name)) return false;
       return N.kind(name) === 1;
     });
     return allNames;
@@ -229,7 +231,7 @@
     for (const property of [...seenMap.keys()]) if (!params.has(property)) seenMap.delete(property);
   };
 
-  S.transitionsPseudos = () => pseudoCandidates;
+  S.transitionElements = () => new Set([...running.keys(), ...seen.keys()]);
 
   // Elements that have gone lose their transitions.
   S.transitionsCleanup = (liveElements) => {

@@ -408,21 +408,32 @@
   };
 
   let scannedVersion = -1;
-  // Anything that changes the tree or what is declared may start or end an animation: a frame is asked for when something has
-  // been declared that asks for animations.
-  let mentions = 0;
-  const watch = () => {
-    if (typeof MutationObserver !== 'function') return;
-    const observer = new MutationObserver(() => {
-      const now = N.mentions();
-      if (now > 0 || tracked.size) {
-        mentions = now;
-        S.wake();
-      }
-    });
-    observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+  // Something declared that asks for animations or transitions calls for a frame, and while something has been, the style is looked at now
+  // and then for as long as it is changing.
+  let pollTimer = null;
+  let idleSince = 0;
+  let lastSeen = { version: -1, mentions: -1 };
+  const poll = () => {
+    pollTimer = null;
+    const version = N.version(), mentions = N.mentions();
+    const now = performance.now();
+    if (version !== lastSeen.version || mentions !== lastSeen.mentions) {
+      lastSeen = { version, mentions };
+      idleSince = now;
+      S.cssForce = false;
+      S.wake();
+    }
+    if (mentions > 0 && now - idleSince < 2000) pollTimer = setTimeout(poll, 25);
   };
-  watch();
+  const pollStart = () => {
+    idleSince = performance.now();
+    if (pollTimer === null && N.mentions() > 0) pollTimer = setTimeout(poll, 25);
+  };
+  S.pollStart = pollStart;
+  N.onWake(() => {
+    pollStart();
+    S.wake();
+  });
 
   let lastVersion = -1;
   S.cssUpdate = () => {
@@ -430,13 +441,19 @@
     // Nothing starts or ends but with a change of style, and the animations and transitions there are were seen to by the last.
     if (version === lastVersion && !S.cssForce) return;
     lastVersion = version;
-    const elements = elementsOf(document, []);
-    if (document.documentElement) elements.unshift(document.documentElement);
     if (scannedVersion !== version) pseudoTexts();
     scannedVersion = version;
+    // What is looked at is what asks for animations or transitions, and what has some.
+    const work = new Map();
+    const add = (el, mask) => work.set(el, (work.get(el) || 0) | mask);
+    const candidates = N.candidates(pseudoPossible);
+    for (let i = 0; i < candidates.length; i += 2) add(candidates[i], candidates[i + 1]);
+    for (const el of tracked.keys()) add(el, 15);
+    if (S.transitionElements) for (const el of S.transitionElements()) add(el, 15);
     const live = new Set();
-    for (const el of elements) {
-      for (const pseudo of pseudoPossible ? ['', 'before', 'after', 'marker'] : ['']) {
+    for (const [el, mask] of work) {
+      for (const [bit, pseudo] of [[1, ''], [2, 'before'], [4, 'after'], [8, 'marker']]) {
+        if (!(mask & bit)) continue;
         const entries = readAnimations(el, pseudo, true);
         let byPseudo = tracked.get(el);
         const existing = byPseudo && byPseudo.get(pseudo) ? byPseudo.get(pseudo) : [];
