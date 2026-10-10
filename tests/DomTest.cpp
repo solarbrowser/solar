@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <string>
 
+#include "solar/dom/Damage.h"
 #include "solar/dom/Node.h"
 
 namespace {
@@ -182,6 +183,37 @@ void TestPosition(Quanta::Context& ctx) {
 
 }  // namespace
 
+void TestDamage(Quanta::Context& ctx) {
+  Document* document = NewDocument(ctx, true);
+  Element* html = NewElement(ctx, document, "html");
+  Element* body = NewElement(ctx, document, "body");
+  AppendChild(document, html);
+  AppendChild(html, body);
+  Check(DamageOf(body) == nullptr, "nothing is kept until asked for");
+  DamageTracker& damage = EnableDamage(document);
+  Element* div = NewElement(ctx, document, "div");
+  AppendChild(body, div);
+  CharacterData* text = NewText(ctx, document, "a");
+  AppendChild(div, text);
+  // A hundred changes to the same node are one entry.
+  for (int i = 0; i < 100; ++i) SetCharacterData(text, std::to_string(i));
+  Check(damage.NotedCount() >= 102, "every change is noted");
+  Check(damage.PendingCount() == 3, "the two parents and the text, once each");
+  Check(damage.Commit(document) && damage.Committed().size() == 3, "committed takes what was pending");
+  Check(damage.PendingCount() == 0, "pending is empty after");
+  // Changes during the work go to pending, and committing again waits for the work to be done.
+  SetCharacterData(text, "later");
+  Check(damage.PendingCount() == 1 && damage.Committed().size() == 3, "script goes on writing while committed is worked on");
+  Check(damage.Commit(document) && damage.Committed().size() == 3 && damage.PendingCount() == 1, "no second commit before the first is finished");
+  damage.Finish();
+  Check(damage.Commit(document) && damage.Committed().size() == 1 && damage.Committed()[0].node == text, "then pending is committed");
+  damage.Finish();
+  // A node that leaves the tree is not worked on.
+  SetCharacterData(text, "gone");
+  RemoveChild(body, div);
+  Check(!damage.Commit(document) || (damage.Committed().size() == 1 && damage.Committed()[0].node == body), "removed subtrees are forgotten");
+}
+
 int main() {
   auto runtime = Runtime::Create();
   Quanta::Context& ctx = runtime->GetContext();
@@ -192,6 +224,7 @@ int main() {
   TestAttributes(ctx);
   TestCloneAndEquality(ctx);
   TestPosition(ctx);
+  TestDamage(ctx);
   std::printf("%d/%d passed\n", g_passed, g_passed + g_failed);
   return g_failed == 0 ? 0 : 1;
 }

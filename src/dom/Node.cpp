@@ -1,4 +1,5 @@
 #include "solar/dom/Node.h"
+#include "solar/dom/Damage.h"
 #include "solar/dom/CustomElements.h"
 
 #include "solar/dom/Mutation.h"
@@ -346,6 +347,7 @@ std::optional<DomError> Validate(Node* node, Node* parent, Node* child, bool rep
 
 void Unlink(Node* node) {
   NoteTreeChange();
+  NoteDamage(node->parentNode, kDamageChildren);
   Node* parent = node->parentNode;
   if (node->previousSibling) {
     node->previousSibling->nextSibling = node->nextSibling;
@@ -364,10 +366,12 @@ void Unlink(Node* node) {
   node->previousSibling = nullptr;
   node->nextSibling = nullptr;
   node->NoteWrite();
+  ForgetDamage(node);
 }
 
 void Link(Node* node, Node* parent, Node* child) {
   NoteTreeChange();
+  NoteDamage(parent, kDamageChildren);
   node->parentNode = parent;
   node->previousSibling = child ? child->previousSibling : parent->lastChild;
   node->nextSibling = child;
@@ -481,6 +485,7 @@ void NotifyChildrenParsed(Node* parent) {
 }
 
 void NotifyParsedAttribute(Element* element, const std::string& name) {
+  NoteDamage(element, kDamageAttributes);
   if (g_hooks.attributeChanged) g_hooks.attributeChanged(element, name);
 }
 
@@ -656,6 +661,7 @@ std::optional<DomError> ReplaceData(CharacterData* node, uint32_t offset, uint32
   if (HasMutationObservers()) QueueCharacterDataRecord(node, node->data);
   units.replace(offset, count, inserted);
   node->data = FromUtf16(units);
+  NoteDamage(node, kDamageText);
   if (HasLiveRanges()) RangesReplaceData(node, offset, count, static_cast<uint32_t>(inserted.size()));
   if (g_hooks.childrenChanged && node->parentNode) g_hooks.childrenChanged(node->parentNode);
   return std::nullopt;
@@ -668,6 +674,7 @@ void SetCharacterData(CharacterData* node, std::string data) {
   }
   if (HasMutationObservers()) QueueCharacterDataRecord(node, node->data);
   node->data = std::move(data);
+  NoteDamage(node, kDamageText);
   if (g_hooks.childrenChanged && node->parentNode) g_hooks.childrenChanged(node->parentNode);
 }
 
@@ -678,6 +685,7 @@ void AppendCharacterData(CharacterData* node, std::string_view data) {
   }
   if (HasMutationObservers()) QueueCharacterDataRecord(node, node->data);
   node->data += data;
+  NoteDamage(node, kDamageText);
 }
 
 void SetAttrValue(Attr* attribute, std::string value) {
@@ -689,6 +697,7 @@ void SetAttrValue(Attr* attribute, std::string value) {
   if (owner && HasShadowTrees()) ShadowAttributeChanged(owner, attribute->localName, attribute->namespaceUri, old, attribute->value);
   if (owner) {
     CustomAttributeChanged(owner, attribute->localName, attribute->namespaceUri, old, attribute->value);
+    NoteDamage(owner, kDamageAttributes);
     if (g_hooks.attributeChanged) g_hooks.attributeChanged(owner, attribute->localName);
   }
 }
@@ -703,6 +712,7 @@ void AppendAttr(Element* element, Attr* attribute) {
   if (HasMutationObservers()) QueueAttributeRecord(element, attribute->localName, attribute->namespaceUri, std::nullopt);
   if (HasShadowTrees()) ShadowAttributeChanged(element, attribute->localName, attribute->namespaceUri, std::nullopt, attribute->value);
   CustomAttributeChanged(element, attribute->localName, attribute->namespaceUri, std::nullopt, attribute->value);
+  NoteDamage(element, kDamageAttributes);
   if (g_hooks.attributeChanged) g_hooks.attributeChanged(element, attribute->localName);
 }
 
@@ -1016,6 +1026,7 @@ std::optional<DomError> SetAttributeNode(Element* element, Attr* attribute, Attr
     if (HasMutationObservers()) QueueAttributeRecord(element, attribute->localName, attribute->namespaceUri, old->value);
     if (HasShadowTrees()) ShadowAttributeChanged(element, attribute->localName, attribute->namespaceUri, old->value, attribute->value);
     CustomAttributeChanged(element, attribute->localName, attribute->namespaceUri, old->value, attribute->value);
+    NoteDamage(element, kDamageAttributes);
     if (g_hooks.attributeChanged) g_hooks.attributeChanged(element, attribute->localName);
   } else {
     AppendAttr(element, attribute);
@@ -1032,6 +1043,7 @@ void RemoveAttributeNode(Element* element, Attr* attribute) {
   NoteTreeChange();
   if (HasShadowTrees()) ShadowAttributeChanged(element, attribute->localName, attribute->namespaceUri, attribute->value, std::nullopt);
   CustomAttributeChanged(element, attribute->localName, attribute->namespaceUri, attribute->value, std::nullopt);
+  NoteDamage(element, kDamageAttributes);
   if (g_hooks.attributeChanged) g_hooks.attributeChanged(element, attribute->localName);
 }
 

@@ -58,6 +58,7 @@ struct Node;
 struct Document;
 struct Element;
 struct CustomDefinition;
+class DamageTracker;
 
 // An element's custom element state (https://html.spec.whatwg.org/#custom-element-state): Uncustomized is the one of
 // every element that cannot be a custom one.
@@ -246,6 +247,8 @@ struct Document : Node {
   Document* templateContentsOwner = nullptr;
   // document.readyState, which the page loader moves along; a document made by script is complete.
   std::string readyState = "complete";
+  // What has changed since the page was last put together, once something (layout) has asked for it to be kept.
+  std::shared_ptr<DamageTracker> damage;
   // The script element that is running, for document.currentScript.
   Element* currentScript = nullptr;
   // The focused area of the document, if an element is: what document.activeElement is, once it is retargeted.
