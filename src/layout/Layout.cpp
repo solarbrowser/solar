@@ -375,7 +375,7 @@ void PaintOrder(const Box& root, std::vector<const Box*>& out) {
 bool Clipped(Tree& tree, const Box& box, double x, double y) {
   for (const Box* p = box.parent; p; p = p->parent) {
     if (!p->style || p->kind != Box::Kind::Block) continue;
-    if (p->style->overflowX == Overflow::Visible && p->style->overflowY == Overflow::Visible) continue;
+    if (p->style->Physical().overflowX == Overflow::Visible && p->style->Physical().overflowY == Overflow::Visible) continue;
     Rect r = AbsoluteBorderBox(*p);
     double dx = 0, dy = 0;
     for (const Box* q = p->parent; q; q = q->parent) {
@@ -387,8 +387,8 @@ bool Clipped(Tree& tree, const Box& box, double x, double y) {
     r.y += p->border.top - dy;
     r.width -= p->border.Horizontal();
     r.height -= p->border.Vertical();
-    if (p->style->overflowX != Overflow::Visible && (x < r.x || x >= r.x + r.width)) return true;
-    if (p->style->overflowY != Overflow::Visible && (y < r.y || y >= r.y + r.height)) return true;
+    if (p->style->Physical().overflowX != Overflow::Visible && (x < r.x || x >= r.x + r.width)) return true;
+    if (p->style->Physical().overflowY != Overflow::Visible && (y < r.y || y >= r.y + r.height)) return true;
   }
   return false;
 }
@@ -497,7 +497,7 @@ void ScrollRange(Tree& tree, dom::Element* element, double& maxX, double& maxY) 
   const std::vector<Box*>& boxes = BoxesOf(tree, element);
   const Box* box = nullptr;
   for (const Box* b : boxes) if (b->kind == Box::Kind::Block) { box = b; break; }
-  if (!box || (box->style->overflowX == Overflow::Visible && box->style->overflowY == Overflow::Visible) || box->style->overflowX == Overflow::Clip) return;
+  if (!box || (box->style->Physical().overflowX == Overflow::Visible && box->style->Physical().overflowY == Overflow::Visible) || box->style->Physical().overflowX == Overflow::Clip) return;
   const Rect abs = AbsoluteBorderBox(*box);
   double right = 0, bottom = 0;
   bool any = false;
@@ -505,8 +505,8 @@ void ScrollRange(Tree& tree, dom::Element* element, double& maxX, double& maxY) 
   const double clientW = box->width - box->border.Horizontal(), clientH = box->height - box->border.Vertical();
   maxX = std::max(0.0, right - box->border.left - clientW);
   maxY = std::max(0.0, bottom - box->border.top - clientH);
-  if (box->style->overflowX == Overflow::Visible) maxX = 0;
-  if (box->style->overflowY == Overflow::Visible) maxY = 0;
+  if (box->style->Physical().overflowX == Overflow::Visible) maxX = 0;
+  if (box->style->Physical().overflowY == Overflow::Visible) maxY = 0;
 }
 
 }  // namespace solar::layout

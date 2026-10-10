@@ -148,6 +148,10 @@ struct BoxStyle {
   std::string gridColumnStart, gridColumnEnd, gridRowStart, gridRowEnd;
   Length rowGap, columnGap;  // Auto: normal (0 in flex, the default in grid)
 
+  // For a style in the logical frame of its writing mode (see Logicalize): the style as written, with the physical properties.
+  std::shared_ptr<const BoxStyle> physicalStyle;
+  const BoxStyle& Physical() const { return physicalStyle ? *physicalStyle : *this; }
+
   bool IsOutOfFlow() const { return position == Position::Absolute || position == Position::Fixed; }
   bool IsFloating() const { return floating != Float::None; }
   bool IsBlockLevel() const;
@@ -156,6 +160,17 @@ struct BoxStyle {
 
 // The style of the element (or of a pseudo-element of it).
 std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* element, const std::string& pseudo = "");
+
+// The writing modes: whether the block axis is horizontal, and the way the lines and blocks run.
+inline bool IsVertical(WritingMode m) { return m != WritingMode::HorizontalTb; }
+// Which physical side (0 top, 1 right, 2 bottom, 3 left) each logical side (0 block-start, 1 line-right, 2 block-end, 3 line-left) is, in a writing mode.
+int PhysicalSideOf(WritingMode mode, int logicalSide);
+int LogicalSideOf(WritingMode mode, int physicalSide);
+
+// The style with its physical properties (width, margin-left...) turned into the logical frame of its writing mode, in which x runs
+// along the lines, left to right, and y from block-start to block-end: all the layout algorithms are written for that frame. A horizontal
+// style comes back as it is.
+std::shared_ptr<const BoxStyle> Logicalize(const std::shared_ptr<const BoxStyle>& physical);
 
 // A calc() with percentages, with the percentage of `basis`; nothing if it is not one this can work out.
 bool EvaluateCalc(const std::string& text, double basis, double& out);

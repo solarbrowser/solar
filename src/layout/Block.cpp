@@ -139,17 +139,66 @@ FloatRecord PlaceFloat(LayoutContext& lc, Box& box, double cbLeft, double cbWidt
   return record;
 }
 
+
+// ---- Replaced boxes ----
+
+void ReplacedContentSize(const Box& box, double cbWidth, double cbHeight, double& w, double& h) {
+  const BoxStyle& s = *box.style;
+  const bool borderBox = s.boxSizing == BoxSizing::BorderBox;
+  const double extrasH = ExtrasHorizontal(box), extrasV = ExtrasVertical(box);
+  double cssW = ResolveSize(s.width, cbWidth), cssH = ResolveSize(s.height, cbHeight);
+  if (Known(cssW) && borderBox) cssW = std::max(0.0, cssW - extrasH);
+  if (Known(cssH) && borderBox) cssH = std::max(0.0, cssH - extrasV);
+  if (!Known(cssW) && s.width.IsAuto() && box.attrWidth >= 0) cssW = box.attrWidth;
+  if (!Known(cssH) && s.height.IsAuto() && box.attrHeight >= 0) cssH = box.attrHeight;
+  double ratio = box.naturalRatio;
+  if (ratio <= 0 && box.naturalWidth > 0 && box.naturalHeight > 0) ratio = box.naturalWidth / box.naturalHeight;
+  if (ratio <= 0 && box.attrWidth > 0 && box.attrHeight > 0) ratio = box.attrWidth / box.attrHeight;
+  if (s.aspectRatio > 0 && !s.aspectRatioAuto) ratio = s.aspectRatio;
+  const bool widthAuto = !Known(cssW), heightAuto = !Known(cssH);
+  w = cssW;
+  h = cssH;
+  if (widthAuto && heightAuto) {
+    if (box.naturalWidth >= 0 && box.naturalHeight >= 0) { w = box.naturalWidth; h = box.naturalHeight; }
+    else if (box.naturalWidth >= 0) { w = box.naturalWidth; h = ratio > 0 ? w / ratio : 150; }
+    else if (box.naturalHeight >= 0) { h = box.naturalHeight; w = ratio > 0 ? h * ratio : 300; }
+    else if (ratio > 0) { w = Known(cbWidth) ? std::min(cbWidth, 300.0) : 300; h = w / ratio; }
+    else { w = 300; h = 150; }
+    if (s.aspectRatio > 0 && !s.aspectRatioAuto && box.naturalWidth >= 0) h = w / ratio;
+  } else if (widthAuto) {
+    w = ratio > 0 ? h * ratio : (box.naturalWidth >= 0 ? box.naturalWidth : 300);
+  } else if (heightAuto) {
+    h = ratio > 0 ? w / ratio : (box.naturalHeight >= 0 ? box.naturalHeight : 150);
+  }
+  // min and max keep the ratio of what was automatic.
+  const auto content = [&](const Length& l, double basis) {
+    double v = ResolveSize(l, basis);
+    if (Known(v) && borderBox) v = std::max(0.0, v - extrasH);
+    return v;
+  };
+  const auto contentV = [&](const Length& l, double basis) {
+    double v = ResolveSize(l, basis);
+    if (Known(v) && borderBox) v = std::max(0.0, v - extrasV);
+    return v;
+  };
+  const double maxW = content(s.maxWidth, cbWidth), minW = content(s.minWidth, cbWidth);
+  const double maxH = contentV(s.maxHeight, cbHeight), minH = contentV(s.minHeight, cbHeight);
+  for (int pass = 0; pass < 2; ++pass) {
+    if (Known(maxW) && w > maxW) { w = maxW; if (heightAuto && ratio > 0) h = w / ratio; }
+    if (Known(minW) && w < minW) { w = minW; if (heightAuto && ratio > 0) h = w / ratio; }
+    if (Known(maxH) && h > maxH) { h = maxH; if (widthAuto && ratio > 0) w = h * ratio; }
+    if (Known(minH) && h < minH) { h = minH; if (widthAuto && ratio > 0) w = h * ratio; }
+  }
+}
+
 void ComputeContentSizes(LayoutContext& lc, Box& box) {
   if (box.minContent >= 0) return;
   box.minContent = box.maxContent = 0;
   const BoxStyle& s = *box.style;
   if (box.replaced) {
-    double w = ResolveSize(s.width, kNaN);
-    if (!Known(w)) {
-      const double h = ResolveSize(s.height, kNaN);
-      if (Known(h) && box.naturalWidth >= 0 && box.naturalHeight > 0) w = h * box.naturalWidth / box.naturalHeight;
-      else w = box.naturalWidth >= 0 ? box.naturalWidth : 0;
-    }
+    ResolveEdges(box, 0);
+    double w, h;
+    ReplacedContentSize(box, kNaN, kNaN, w, h);
     box.minContent = box.maxContent = w;
     return;
   }
@@ -353,8 +402,23 @@ void LayoutBlockChildren(LayoutContext& lc, Box& P, double contentWidth, double 
 
 void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeight, bool shrinkToFit) {
   const BoxStyle& s = *box.style;
-  const double forceWidth = lc.forceWidth, forceHeight = lc.forceHeight, availOverride = lc.availOverride;
+  double forceWidth = lc.forceWidth, forceHeight = lc.forceHeight, availOverride = lc.availOverride;
   lc.forceWidth = lc.forceHeight = lc.availOverride = kNaN;
+  const bool keepOwnFrame = lc.keepOwnFrame;
+  lc.keepOwnFrame = false;
+  // A box in another writing mode than the one it is in is laid out in its own: what it is given is turned round.
+  if (!keepOwnFrame) {
+    const Box* frameBox = box.parent;
+    while (frameBox && frameBox->kind != Box::Kind::Block) frameBox = frameBox->parent;
+    const WritingMode parentMode = frameBox ? frameBox->Mode() : WritingMode::HorizontalTb;
+    if (Orthogonal(parentMode, s.writingMode)) {
+      const double inlineSize = Known(cbHeight) ? cbHeight : (IsVertical(parentMode) ? lc.viewportWidth : lc.viewportHeight);
+      cbHeight = cbWidth;
+      cbWidth = inlineSize;
+      std::swap(forceWidth, forceHeight);
+      availOverride = kNaN;
+    }
+  }
   Bfc* const savedBfc = lc.bfc;
   const double savedCbX = lc.cbX, savedBoxY = lc.boxY;
   const double savedContainerX = lc.containerX, savedContainerY = lc.containerY;
@@ -378,24 +442,10 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
     width = forceWidth;
     widthAuto = false;
   } else if (box.replaced) {
-    width = ResolveSize(s.width, cbWidth);
-    if (Known(width)) {
-      width = contentFromSpecified(width);
-      widthAuto = false;
-    } else {
-      double h = ResolveSize(s.height, cbHeight);
-      if (Known(h) && box.naturalWidth >= 0 && box.naturalHeight > 0) {
-        h = borderBox ? std::max(0.0, h - extrasV) : h;
-        width = h * box.naturalWidth / box.naturalHeight;
-      } else if (box.naturalWidth >= 0) {
-        width = box.naturalWidth;
-      } else if (s.aspectRatio > 0 && Known(h)) {
-        width = h * s.aspectRatio;
-      } else {
-        width = 300;
-      }
-      widthAuto = false;
-    }
+    double rw, rh;
+    ReplacedContentSize(box, cbWidth, cbHeight, rw, rh);
+    width = rw;
+    widthAuto = false;
   } else if (s.width.kind == Length::Kind::MinContent || s.width.kind == Length::Kind::MaxContent || s.width.kind == Length::Kind::FitContent) {
     ComputeContentSizes(lc, box);
     if (s.width.kind == Length::Kind::MinContent) width = box.minContent;
@@ -482,16 +532,19 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
   // aspect-ratio gives a height from the width.
   double ratioHeight = kNaN;
   if (!box.replaced && s.aspectRatio > 0 && !Known(specifiedHeight) && !s.aspectRatioAuto) ratioHeight = width / s.aspectRatio;
-  if (box.replaced && !Known(specifiedHeight)) {
-    if (box.naturalWidth > 0 && box.naturalHeight >= 0 && !Known(ResolveSize(s.width, cbWidth))) {
-      specifiedHeight = box.naturalHeight;
-    } else if (box.naturalWidth > 0 && box.naturalHeight >= 0) {
-      specifiedHeight = width * box.naturalHeight / box.naturalWidth;
-    } else if (box.naturalHeight >= 0) {
-      specifiedHeight = box.naturalHeight;
-    } else {
-      specifiedHeight = width > 0 && box.naturalWidth > 0 ? width : 150;
+  if (box.replaced && !Known(forceHeight)) {
+    double rw, rh;
+    ReplacedContentSize(box, cbWidth, cbHeight, rw, rh);
+    // (when the width was forced the height follows the ratio)
+    if (Known(forceWidth)) {
+      double ratio = box.naturalRatio;
+      if (ratio <= 0 && box.naturalWidth > 0 && box.naturalHeight > 0) ratio = box.naturalWidth / box.naturalHeight;
+      if (ratio <= 0 && box.attrWidth > 0 && box.attrHeight > 0) ratio = box.attrWidth / box.attrHeight;
+      if (s.aspectRatio > 0 && !s.aspectRatioAuto) ratio = s.aspectRatio;
+      const bool heightFixed = !s.height.IsAuto() || box.attrHeight >= 0;
+      if (!heightFixed && ratio > 0) rh = width / ratio;
     }
+    specifiedHeight = rh;
   }
   const double heightForChildren = Known(specifiedHeight) ? specifiedHeight : (Known(ratioHeight) ? ratioHeight : kNaN);
 
@@ -617,6 +670,12 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
     else if (Known(bottom)) box.shiftY = -bottom;
   }
 
+  if (keepOwnFrame) {
+    box.ownWidth = box.width;
+    box.ownHeight = box.height;
+  } else {
+    AdaptToParentFrame(box);
+  }
   lc.bfc = savedBfc;
   lc.cbX = savedCbX;
   lc.boxY = savedBoxY;
@@ -662,35 +721,42 @@ CbRect ContainingBlockOf(LayoutContext& lc, const Box& box) {
 
 void PlaceOne(LayoutContext& lc, Box& a) {
   const BoxStyle& s = *a.style;
-  const CbRect cb = ContainingBlockOf(lc, a);
+  const WritingMode mode = a.Mode();
+  const CbRect cbPhys = ContainingBlockOf(lc, a);
+  // The containing block in the box's own frame: its inline size is the physical extent along the box's lines.
+  const bool vertical = IsVertical(mode);
+  const double cw = vertical ? cbPhys.height : cbPhys.width, ch = vertical ? cbPhys.width : cbPhys.height;
   // Trial layout, for the width the contents want and the box's edges.
   Bfc scratch;
   lc.bfc = &scratch;
   lc.cbX = 0;
   lc.boxY = 0;
   lc.forceWidth = lc.forceHeight = lc.availOverride = kNaN;
-  const double left = ResolveSize(s.inset[3], cb.width), right = ResolveSize(s.inset[1], cb.width);
-  const double top = ResolveSize(s.inset[0], cb.height), bottom = ResolveSize(s.inset[2], cb.height);
-  // Percent insets and margins refer to the containing block.
-  LayoutBlockLevel(lc, a, cb.width, cb.height, true);
+  const double left = ResolveSize(s.inset[3], cw), right = ResolveSize(s.inset[1], cw);
+  const double top = ResolveSize(s.inset[0], ch), bottom = ResolveSize(s.inset[2], ch);
+  lc.keepOwnFrame = true;
+  LayoutBlockLevel(lc, a, cw, ch, true);
   const double extrasH = ExtrasHorizontal(a), extrasV = ExtrasVertical(a);
   const bool autoMl = s.margin[3].IsAuto(), autoMr = s.margin[1].IsAuto(), autoMt = s.margin[0].IsAuto(), autoMb = s.margin[2].IsAuto();
-  double ml = autoMl ? 0 : s.margin[3].Resolve(cb.width), mr = autoMr ? 0 : s.margin[1].Resolve(cb.width);
-  double mt = autoMt ? 0 : s.margin[0].Resolve(cb.width), mb = autoMb ? 0 : s.margin[2].Resolve(cb.width);
+  double ml = autoMl ? 0 : s.margin[3].Resolve(cw), mr = autoMr ? 0 : s.margin[1].Resolve(cw);
+  double mt = autoMt ? 0 : s.margin[0].Resolve(cw), mb = autoMb ? 0 : s.margin[2].Resolve(cw);
   const bool borderBox = s.boxSizing == BoxSizing::BorderBox;
 
-  // The static position, in the containing block.
-  const Rect parentBox = [&] {
+  // The static position: the box's parent's physical corner and where in that the box would be, in the containing block's frame.
+  double staticLeft = 0, staticTop = 0;
+  {
     const Box* p = a.parent;
     while (p && p->kind != Box::Kind::Block) p = p->parent;
-    return p ? AbsoluteBorderBox(*p) : Rect{0, 0, 0, 0};
-  }();
-  const double staticLeft = parentBox.x + a.staticX - cb.x, staticTop = parentBox.y + a.staticY - cb.y;
+    const Rect parentBox = p ? AbsoluteBorderBox(*p) : Rect{0, 0, 0, 0};
+    const Rect physical = {parentBox.x + a.staticX - cbPhys.x, parentBox.y + a.staticY - cbPhys.y, 0, 0};
+    double w2, h2;
+    PhysicalToFrame(mode, cw, ch, physical, staticLeft, staticTop, w2, h2);
+  }
 
-  // ---- horizontal ----
+  // ---- inline axis ----
   double W = kNaN;
   if (s.width.kind == Length::Kind::Px || s.width.IsPercentage()) {
-    const double w = ResolveSize(s.width, cb.width);
+    const double w = ResolveSize(s.width, cw);
     if (Known(w)) W = borderBox ? std::max(0.0, w - extrasH) : w;
   } else if (a.replaced) {
     W = a.width - extrasH;
@@ -702,31 +768,31 @@ void PlaceOne(LayoutContext& lc, Box& a) {
     return std::min(std::max(a.minContent, std::max(0.0, avail)), a.maxContent);
   };
   const auto clampW = [&](double w) {
-    const double maxW = ResolveSize(s.maxWidth, cb.width);
+    const double maxW = ResolveSize(s.maxWidth, cw);
     if (Known(maxW)) w = std::min(w, borderBox ? std::max(0.0, maxW - extrasH) : maxW);
-    const double minW = ResolveSize(s.minWidth, cb.width);
+    const double minW = ResolveSize(s.minWidth, cw);
     if (Known(minW)) w = std::max(w, borderBox ? std::max(0.0, minW - extrasH) : minW);
     return w;
   };
   const auto solveH = [&]() {
     if (widthAuto) {
       if (!Known(L) && !Known(R)) {
-        W = shrink(cb.width - staticLeft - ml - mr - extrasH);
+        W = shrink(cw - staticLeft - ml - mr - extrasH);
         L = staticLeft;
       } else if (!Known(L)) {
-        W = shrink(cb.width - R - ml - mr - extrasH);
+        W = shrink(cw - R - ml - mr - extrasH);
       } else if (!Known(R)) {
-        W = shrink(cb.width - L - ml - mr - extrasH);
+        W = shrink(cw - L - ml - mr - extrasH);
       } else {
-        W = std::max(0.0, cb.width - L - R - ml - mr - extrasH);
+        W = std::max(0.0, cw - L - R - ml - mr - extrasH);
       }
     }
     W = clampW(W);
     if (!Known(L) && !Known(R)) L = staticLeft;
-    if (!Known(L)) L = cb.width - R - W - extrasH - ml - mr;
-    else if (!Known(R)) R = cb.width - L - W - extrasH - ml - mr;
+    if (!Known(L)) L = cw - R - W - extrasH - ml - mr;
+    else if (!Known(R)) R = cw - L - W - extrasH - ml - mr;
     else {
-      const double rest = cb.width - L - R - W - extrasH - ml - mr;
+      const double rest = cw - L - R - W - extrasH - ml - mr;
       if (autoMl && autoMr) {
         if (rest >= 0) { ml += rest / 2; mr += rest / 2; }
         else { ml += 0; mr += rest; }
@@ -742,11 +808,12 @@ void PlaceOne(LayoutContext& lc, Box& a) {
 
   // Lay out at the width, for the height the contents have.
   lc.forceWidth = W;
-  LayoutBlockLevel(lc, a, cb.width, cb.height, false);
-  // ---- vertical ----
+  lc.keepOwnFrame = true;
+  LayoutBlockLevel(lc, a, cw, ch, false);
+  // ---- block axis ----
   double H = kNaN;
   if (s.height.kind == Length::Kind::Px || s.height.IsPercentage()) {
-    const double h = ResolveSize(s.height, cb.height);
+    const double h = ResolveSize(s.height, ch);
     if (Known(h)) H = borderBox ? std::max(0.0, h - extrasV) : h;
   } else if (a.replaced) {
     H = a.height - extrasV;
@@ -758,37 +825,44 @@ void PlaceOne(LayoutContext& lc, Box& a) {
     if (!Known(T) && !Known(B)) { H = contentH; T = staticTop; }
     else if (!Known(T)) H = contentH;
     else if (!Known(B)) H = contentH;
-    else H = std::max(0.0, cb.height - T - B - mt - mb - extrasV);
+    else H = std::max(0.0, ch - T - B - mt - mb - extrasV);
   }
   {
-    const double maxH = ResolveSize(s.maxHeight, cb.height);
+    const double maxH = ResolveSize(s.maxHeight, ch);
     if (Known(maxH)) H = std::min(H, borderBox ? std::max(0.0, maxH - extrasV) : maxH);
-    const double minH = ResolveSize(s.minHeight, cb.height);
+    const double minH = ResolveSize(s.minHeight, ch);
     if (Known(minH)) H = std::max(H, borderBox ? std::max(0.0, minH - extrasV) : minH);
   }
   if (!Known(T) && !Known(B)) T = staticTop;
-  if (!Known(T)) T = cb.height - B - H - extrasV - mt - mb;
-  else if (!Known(B)) B = cb.height - T - H - extrasV - mt - mb;
+  if (!Known(T)) T = ch - B - H - extrasV - mt - mb;
+  else if (!Known(B)) B = ch - T - H - extrasV - mt - mb;
   else {
-    const double rest = cb.height - T - B - H - extrasV - mt - mb;
+    const double rest = ch - T - B - H - extrasV - mt - mb;
     if (autoMt && autoMb) { mt += rest / 2; mb += rest / 2; }
     else if (autoMt) mt += rest;
     else if (autoMb) mb += rest;
   }
   lc.forceWidth = W;
   lc.forceHeight = H;
-  LayoutBlockLevel(lc, a, cb.width, cb.height, false);
+  lc.keepOwnFrame = true;
+  LayoutBlockLevel(lc, a, cw, ch, false);
   a.margin.left = ml;
   a.margin.right = mr;
   a.margin.top = mt;
   a.margin.bottom = mb;
-  // Where it goes: the margin box's corner at the offsets, in the containing block.
-  const double absX = cb.x + L + ml, absY = cb.y + T + mt;
+  // The border box in the containing block's own-frame coordinates, then physical, then relative to the parent.
+  Rect inFrame = {L + ml, T + mt, a.width, a.height};
+  Rect physical;
+  FrameToPhysical(mode, cw, ch, inFrame.x, inFrame.y, inFrame.width, inFrame.height, physical);
   const Box* coordinateParent = a.parent;
   while (coordinateParent && coordinateParent->kind != Box::Kind::Block) coordinateParent = coordinateParent->parent;
   const Rect origin = coordinateParent ? AbsoluteBorderBox(*coordinateParent) : Rect{0, 0, 0, 0};
-  a.x = absX - origin.x;
-  a.y = absY - origin.y;
+  // Make a's fields physical: its own frame's size becomes the physical one, and its contents are converted.
+  a.ownWidth = a.width;
+  a.ownHeight = a.height;
+  ConvertPlaced(a, mode, cw, ch, inFrame);
+  a.x = cbPhys.x + physical.x - origin.x;
+  a.y = cbPhys.y + physical.y - origin.y;
 }
 
 void Walk(LayoutContext& lc, Box& box) {
@@ -807,8 +881,17 @@ void PlacePositioned(LayoutContext& lc) {
 
 void LayoutRoot(LayoutContext& lc) {
   Box& icb = *lc.tree.root;
+  // The root element's writing mode is the viewport's.
+  if (!icb.children.empty()) {
+    auto style = std::make_shared<BoxStyle>(*icb.style);
+    style->writingMode = icb.children[0]->style->writingMode;
+    style->direction = icb.children[0]->style->direction;
+    icb.style = style;
+  }
+  const bool vertical = IsVertical(icb.Mode());
+  const double inlineSize = vertical ? lc.viewportHeight : lc.viewportWidth, blockSize = vertical ? lc.viewportWidth : lc.viewportHeight;
   icb.x = icb.y = 0;
-  icb.width = lc.viewportWidth;
+  icb.width = inlineSize;
   double bottom = 0;
   Bfc rootBfc;
   lc.bfc = &rootBfc;
@@ -816,14 +899,17 @@ void LayoutRoot(LayoutContext& lc) {
     if (child->style->IsOutOfFlow()) continue;
     lc.cbX = 0;
     lc.boxY = 0;
-    LayoutBlockLevel(lc, *child, lc.viewportWidth, lc.viewportHeight);
+    LayoutBlockLevel(lc, *child, inlineSize, blockSize);
     child->x = child->margin.left + child->shiftX;
     child->y = child->margin.top + child->shiftY;
     bottom = std::max(bottom, child->y + child->height + child->margin.bottom);
   }
-  icb.height = std::max(lc.viewportHeight, bottom);
-  PlacePositioned(lc);
+  icb.ownWidth = inlineSize;
+  icb.ownHeight = std::max(blockSize, bottom);
+  icb.height = icb.ownHeight;
   lc.bfc = nullptr;
+  ConvertTree(lc.tree);
+  PlacePositioned(lc);
 }
 
 }  // namespace solar::layout

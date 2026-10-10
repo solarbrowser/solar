@@ -36,6 +36,7 @@ struct LayoutContext {
   // One-shot overrides for the box laid out next (positioned boxes whose sizes their offsets give).
   double forceWidth = std::numeric_limits<double>::quiet_NaN();   // content width
   double forceHeight = std::numeric_limits<double>::quiet_NaN();  // content height
+  bool keepOwnFrame = false;  // positioned boxes: left in their own frame, placed by PlaceOne
   // The width an auto-width box has to fit in when it is not the containing block's (beside floats).
   double availOverride = std::numeric_limits<double>::quiet_NaN();
   // For the lines of an inline formatting context: where the container's content box is in the block formatting context.
@@ -78,6 +79,26 @@ inline bool IsGridDisplay(Display d) { return d == Display::Grid || d == Display
 // Inline.cpp: the lines of a block container with inline content, in a content box `width` wide. Sets the box's content height.
 double LayoutInlineContent(LayoutContext& lc, Box& container, double width, double& baseline);
 void InlineContentSizes(LayoutContext& lc, Box& container, double& minContent, double& maxContent);
+
+// Image.cpp: the size an image file says it has (width and height negative where it gives none, the ratio 0 where it has none).
+bool ReadImageMetrics(const std::string& data, double& width, double& height, double& ratio);
+bool ImageMetricsOf(const std::string& address, const std::string& base, double& width, double& height, double& ratio);
+
+// The content size a replaced box comes to in a containing block of that size (NaN height: not known).
+void ReplacedContentSize(const Box& box, double cbWidth, double cbHeight, double& width, double& height);
+
+// Frame.cpp: writing modes.
+bool Orthogonal(WritingMode a, WritingMode b);
+void FrameToPhysical(WritingMode mode, double frameWidth, double frameHeight, double x, double y, double w, double h, Rect& out);
+void PhysicalToFrame(WritingMode mode, double frameWidth, double frameHeight, const Rect& physical, double& x, double& y, double& w, double& h);
+void VectorToPhysical(WritingMode mode, double x, double y, double& px, double& py);
+void VectorToFrame(WritingMode mode, double px, double py, double& x, double& y);
+Edges EdgesToPhysical(WritingMode mode, const Edges& e);
+Edges EdgesToFrame(WritingMode mode, const Edges& e);
+// At the end of a box's layout: its size and edges in its parent's frame (own sizes kept in ownWidth and ownHeight).
+void AdaptToParentFrame(Box& box);
+void ConvertTree(Tree& tree);
+void ConvertPlaced(Box& b, WritingMode frameMode, double fw, double fh, const Rect& rectInFrame);
 
 // Fonts of a box's style.
 std::shared_ptr<font::Face> PrimaryFace(LayoutContext& lc, const Box& box);

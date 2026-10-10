@@ -175,6 +175,57 @@ bool BoxStyle::CreatesBlockFormattingContext() const {
   return (overflowX != Overflow::Visible && overflowX != Overflow::Clip) || (overflowY != Overflow::Visible && overflowY != Overflow::Clip);
 }
 
+int PhysicalSideOf(WritingMode mode, int logical) {
+  // logical: 0 block-start, 1 line-right, 2 block-end, 3 line-left
+  switch (mode) {
+    case WritingMode::HorizontalTb: return logical;
+    case WritingMode::VerticalRl: case WritingMode::SidewaysRl: {
+      static const int map[4] = {1, 2, 3, 0};
+      return map[logical];
+    }
+    case WritingMode::VerticalLr: {
+      static const int map[4] = {3, 2, 1, 0};
+      return map[logical];
+    }
+    case WritingMode::SidewaysLr: {
+      static const int map[4] = {3, 0, 1, 2};
+      return map[logical];
+    }
+  }
+  return logical;
+}
+
+int LogicalSideOf(WritingMode mode, int physical) {
+  for (int l = 0; l < 4; ++l) if (PhysicalSideOf(mode, l) == physical) return l;
+  return physical;
+}
+
+std::shared_ptr<const BoxStyle> Logicalize(const std::shared_ptr<const BoxStyle>& physical) {
+  const WritingMode mode = physical->writingMode;
+  if (mode == WritingMode::HorizontalTb) return physical;
+  auto l = std::make_shared<BoxStyle>(*physical);
+  std::swap(l->width, l->height);
+  std::swap(l->minWidth, l->minHeight);
+  std::swap(l->maxWidth, l->maxHeight);
+  std::swap(l->overflowX, l->overflowY);
+  std::swap(l->containSizeInline, l->containSizeBlock);
+  std::swap(l->containIntrinsicWidth, l->containIntrinsicHeight);
+  std::swap(l->containIntrinsicWidthSet, l->containIntrinsicHeightSet);
+  if (l->aspectRatio > 0) l->aspectRatio = 1 / l->aspectRatio;
+  for (int i = 0; i < 4; ++i) {
+    const int from = PhysicalSideOf(mode, i);
+    l->margin[i] = physical->margin[from];
+    l->padding[i] = physical->padding[from];
+    l->inset[i] = physical->inset[from];
+    l->border[i] = physical->border[from];
+    l->borderStyle[i] = physical->borderStyle[from];
+    l->borderStyleRaw[i] = physical->borderStyleRaw[from];
+    l->borderWidthRaw[i] = physical->borderWidthRaw[from];
+  }
+  l->physicalStyle = physical;
+  return l;
+}
+
 namespace {
 
 Length ParseLength(const std::string& text) {

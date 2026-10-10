@@ -1,5 +1,6 @@
 // The box tree: boxes for elements and text (https://www.w3.org/TR/CSS22/visuren.html#box-gen), with the anonymous boxes the model needs.
 #include <cstdlib>
+#include "solar/dom/Node.h"
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -48,34 +49,83 @@ bool OnlyCollapsibleSpace(const Box& text) {
   return true;
 }
 
-// The natural size of the elements that are replaced by something that is not in the document.
-bool ReplacedSize(dom::Element* element, double& width, double& height) {
+// The elements that are replaced by something that is not in the document, and what is known of the size of that.
+bool ReplacedSize(dom::Element* element, const std::string& base, Box& box) {
   const std::string& name = element->localName;
-  if (!element->IsHtml()) return false;
+  const bool html = element->IsHtml();
+  const bool svgRoot = element->namespaceUri == dom::kSvgNamespace && name == "svg" && !(element->parentNode && element->parentNode->IsElement() && static_cast<dom::Element*>(element->parentNode)->namespaceUri == dom::kSvgNamespace);
+  if (!html && !svgRoot) return false;
   const auto attribute = [&](const char* attr) -> double {
     const dom::Attr* a = element->FindAttribute(attr);
     if (!a) return -1;
     char* end = nullptr;
     const double v = std::strtod(a->value.c_str(), &end);
-    return end == a->value.c_str() || v < 0 ? -1 : v;
+    if (end == a->value.c_str() || v < 0) return -1;
+    const std::string unit = end;
+    return (unit.empty() || unit == "px") ? v : -1;
   };
-  if (name == "img") {
-    width = attribute("width");
-    height = attribute("height");
+  if (svgRoot) {
+    box.attrWidth = attribute("width");
+    box.attrHeight = attribute("height");
+    box.naturalWidth = box.attrWidth;
+    box.naturalHeight = box.attrHeight;
+    if (const dom::Attr* vb = element->FindAttribute("viewBox")) {
+      double v[4] = {0, 0, 0, 0};
+      const char* p = vb->value.c_str();
+      int n = 0;
+      while (n < 4) {
+        char* e = nullptr;
+        while (*p == ' ' || *p == ',') ++p;
+        v[n] = std::strtod(p, &e);
+        if (e == p) break;
+        p = e;
+        ++n;
+      }
+      if (n == 4 && v[2] > 0 && v[3] > 0) box.naturalRatio = v[2] / v[3];
+    }
+    if (box.naturalWidth < 0 && box.naturalHeight < 0 && box.naturalRatio == 0) { box.naturalWidth = 300; box.naturalHeight = 150; }
+    return true;
+  }
+  if (name == "img" || (name == "input" && element->FindAttribute("type") && element->FindAttribute("type")->value == "image")) {
+    box.attrWidth = attribute("width");
+    box.attrHeight = attribute("height");
+    std::string src;
+    if (const dom::Attr* a = element->FindAttribute("src")) src = a->value;
+    // The first candidate of srcset stands in when there is no src.
+    if (src.empty()) {
+      if (const dom::Attr* set = element->FindAttribute("srcset")) {
+        size_t i = 0;
+        while (i < set->value.size() && std::isspace(static_cast<unsigned char>(set->value[i]))) ++i;
+        size_t e = i;
+        while (e < set->value.size() && !std::isspace(static_cast<unsigned char>(set->value[e])) && set->value[e] != ',') ++e;
+        src = set->value.substr(i, e - i);
+      }
+    }
+    double w = -1, h = -1, ratio = 0;
+    if (!src.empty() && ImageMetricsOf(src, base, w, h, ratio)) {
+      box.naturalWidth = w;
+      box.naturalHeight = h;
+      box.naturalRatio = ratio;
+    } else {
+      box.naturalWidth = box.naturalHeight = 0;  // broken: nothing, unless the attributes say
+      box.naturalRatio = 0;
+    }
     return true;
   }
   if (name == "canvas") {
-    width = attribute("width");
-    height = attribute("height");
-    if (width < 0) width = 300;
-    if (height < 0) height = 150;
+    box.naturalWidth = attribute("width");
+    box.naturalHeight = attribute("height");
+    if (box.naturalWidth < 0) box.naturalWidth = 300;
+    if (box.naturalHeight < 0) box.naturalHeight = 150;
+    box.naturalRatio = box.naturalHeight > 0 ? box.naturalWidth / box.naturalHeight : 0;
     return true;
   }
   if (name == "video" || name == "iframe" || name == "embed" || name == "object") {
-    width = attribute("width");
-    height = attribute("height");
-    if (width < 0) width = 300;
-    if (height < 0) height = 150;
+    box.attrWidth = attribute("width");
+    box.attrHeight = attribute("height");
+    box.naturalWidth = 300;
+    box.naturalHeight = 150;
+    box.naturalRatio = name == "video" ? 0 : 2;
     return true;
   }
   return false;
@@ -340,7 +390,7 @@ class Builder {
   }
 
   void BuildGenerated(Box& parent, dom::Element* element, const char* pseudo) {
-    std::shared_ptr<const BoxStyle> style = ReadStyle(lc_.ctx, element, pseudo);
+    std::shared_ptr<const BoxStyle> style = Logicalize(ReadStyle(lc_.ctx, element, pseudo));
     if (style->display == Display::None) return;
     // Counters change for the pseudo-element as for any.
     ApplyCounters(*style, style->display == Display::ListItem, nullptr);
@@ -364,7 +414,7 @@ class Builder {
   }
 
   void BuildElement(Box& parent, dom::Element* element) {
-    std::shared_ptr<const BoxStyle> style = ReadStyle(lc_.ctx, element);
+    std::shared_ptr<const BoxStyle> style = Logicalize(ReadStyle(lc_.ctx, element));
     if (style->display == Display::None) return;
     ApplyCounters(*style, style->display == Display::ListItem, element);
     const int listValue = counters_["list-item"].empty() ? 0 : counters_["list-item"].back();
@@ -403,11 +453,8 @@ class Builder {
       box->kind = Box::Kind::LineBreak;
       box->inlineLevel = true;
     }
-    double w = -1, h = -1;
-    if (ReplacedSize(element, w, h)) {
+    if (ReplacedSize(element, dom::DocumentBaseUri(element->nodeDocument), *box)) {
       box->replaced = true;
-      box->naturalWidth = w;
-      box->naturalHeight = h;
       // A replaced inline is atomic: it is laid out as a block inside the line.
       if (box->kind == Box::Kind::Inline) box->kind = Box::Kind::Block;
       Box* raw = parent.AddChild(std::move(box));
@@ -545,7 +592,7 @@ class Builder {
     dom::Element* element = static_cast<dom::Element*>(box.node);
     const std::string type = box.style->listStyleType;
     if (type == "none") return;
-    std::shared_ptr<const BoxStyle> markerStyle = ReadStyle(lc_.ctx, element, "::marker");
+    std::shared_ptr<const BoxStyle> markerStyle = Logicalize(ReadStyle(lc_.ctx, element, "::marker"));
     std::string text;
     if (markerStyle->content != "normal" && markerStyle->content != "none" && !markerStyle->content.empty()) {
       if (!ContentText(*markerStyle, element, text)) return;

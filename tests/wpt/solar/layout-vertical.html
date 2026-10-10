@@ -1,0 +1,45 @@
+<!doctype html>
+<title>layout: writing modes</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<style>
+body { margin: 0; font: 10px/1 Ahem; }
+#a { writing-mode: vertical-rl; width: 200px; height: 100px; }
+#b { width: 30px; height: 40px; }
+#c { width: 20px; }
+#d { writing-mode: vertical-lr; width: 200px; height: 100px; }
+#h { width: 300px; }
+#o { writing-mode: vertical-rl; height: 50px; }
+#t { writing-mode: vertical-rl; }
+#abs { position: absolute; top: 5px; left: 7px; width: 10px; height: 20px; }
+#p { position: relative; writing-mode: vertical-rl; width: 100px; height: 100px; }
+</style>
+<div id=a><div id=b></div><div id=c></div></div>
+<div id=d><div id=e style="width:30px;height:40px"></div><div id=f style="width:20px"></div></div>
+<div id=h><div id=o style="width:40px"></div></div>
+<div id=t style="width:100px;height:100px">XXX</div>
+<div id=p><div id=abs></div></div>
+<script>
+const r = (id) => document.getElementById(id).getBoundingClientRect();
+test(() => {
+  assert_equals(r("b").width, 30); assert_equals(r("b").height, 40);
+  assert_equals(r("b").right, r("a").right, "block-start is on the right");
+  assert_equals(r("c").right, r("b").left);
+  assert_equals(r("c").height, 100, "a block fills the inline size, which is vertical");
+}, "vertical-rl");
+test(() => {
+  assert_equals(r("e").left, r("d").left); assert_equals(r("f").left, r("e").right);
+}, "vertical-lr");
+test(() => {
+  assert_equals(r("o").width, 40); assert_equals(r("o").height, 50);
+}, "orthogonal box in a horizontal parent");
+test(() => {
+  assert_equals(r("t").width, 100);
+  const range = document.getElementById("t").getClientRects();
+  assert_equals(range.length, 1);
+}, "text in a vertical box");
+test(() => {
+  const a = r("abs"), p = r("p");
+  assert_equals(a.left, p.left + 7); assert_equals(a.top, p.top + 5); assert_equals(a.width, 10); assert_equals(a.height, 20);
+}, "absolute box in a vertical containing block");
+</script>

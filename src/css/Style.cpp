@@ -1225,11 +1225,17 @@ uint64_t StyleVersion() { return g_styleVersion; }
 
 std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std::string& property, const std::string& pseudo) {
   // An adopted sheets array can be changed in place, which nothing tells us of: styles are made again when there is one.
-  if (element && element->nodeDocument) {
+  // (Not while another is under way: it holds styles that a new version would drop.)
+  static int depth = 0;
+  if (depth == 0 && element && element->nodeDocument) {
     dom::Node* root = element;
     while (root->parentNode) root = root->parentNode;
     if (element->nodeDocument->adoptedStyleSheets || (root->IsFragment() && static_cast<dom::DocumentFragment*>(root)->adoptedStyleSheets)) ++g_styleVersion;
   }
+  struct Depth {
+    Depth() { ++depth; }
+    ~Depth() { --depth; }
+  } guard;
   Resolver resolver(ctx);
   return resolver.Compute(element, property, pseudo);
 }

@@ -71,6 +71,12 @@ struct Box {
 
   // Replaced boxes: the natural size, negative where there is none.
   double naturalWidth = -1, naturalHeight = -1;
+  double naturalRatio = 0;   // width / height, 0 when it has none
+  double attrWidth = -1, attrHeight = -1;  // the width and height attributes, which size it when the style does not
+
+  // The border box in its own frame, before the sizes are turned into the parent's: the frame the contents are placed in.
+  double ownWidth = 0, ownHeight = 0;
+  WritingMode Mode() const { return style->writingMode; }
 
   // ---- Layout ----
   // The border box, relative to the parent's border box (for an inline box: its first fragment, relative to the block container).
