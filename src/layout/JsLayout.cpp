@@ -165,6 +165,7 @@ Value Scroll(Context& ctx, Value, qe::Args args, Value) {
   }
   position.first = std::min(position.first, maxX);
   position.second = std::min(position.second, maxY);
+  if (args.size() >= 4 && qe::ToBoolean(args[1])) ApplySticky(*tree);
   qe::ArrayPush(ctx, out, qe::FromNumber(position.first));
   qe::ArrayPush(ctx, out, qe::FromNumber(position.second));
   qe::ArrayPush(ctx, out, qe::FromNumber(maxX));

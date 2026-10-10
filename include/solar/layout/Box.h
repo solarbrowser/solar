@@ -103,6 +103,8 @@ struct Box {
   double staticX = 0, staticY = 0;
   // position: relative shifts.
   double shiftX = 0, shiftY = 0;
+  // position: sticky: how far the box is moved from where it is in the flow (it is in x and y already).
+  double stickyX = 0, stickyY = 0;
   // The scrollable overflow, relative to the border box.
   Rect scrollableOverflow;
   // Baselines of the box (from its top): the last line's, for aligning inline-blocks, and the first's, for flex and grid items; negative if none.

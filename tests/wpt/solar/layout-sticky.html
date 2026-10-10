@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<title>position: sticky</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<style>
+body { margin: 0; }
+#scroller { width: 200px; height: 100px; overflow: auto; position: relative; }
+#content { height: 400px; }
+#sticky { position: sticky; top: 10px; height: 20px; margin-top: 30px; }
+#after { height: 300px; }
+#cb { height: 150px; }
+</style>
+<div id="scroller">
+  <div id="content">
+    <div id="cb"><div id="sticky"></div></div>
+    <div id="after"></div>
+  </div>
+</div>
+<script>
+const top_ = () => document.getElementById('sticky').getBoundingClientRect().top;
+test(() => {
+  assert_equals(top_(), 30);
+  scroller.scrollTop = 20;
+  assert_equals(top_(), 10, 'stays 10px below the top edge');
+  scroller.scrollTop = 60;
+  assert_equals(top_(), 10);
+  scroller.scrollTop = 150;
+  // The containing block (150px high, from 30px because the margin goes through it) ends at 180: the box can go no further.
+  assert_equals(top_() + scroller.scrollTop, 160);
+}, 'a sticky box stays in view as far as its containing block lets it');
+</script>

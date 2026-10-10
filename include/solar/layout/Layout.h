@@ -8,6 +8,9 @@
 namespace solar::layout {
 
 // The layout of the document, made again if the tree or its style changed since it was last made.
+// Moves the sticky positioned boxes to where the scroll positions of their scroll containers put them.
+void ApplySticky(Tree& tree);
+
 Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document);
 
 // The boxes an element made (more than one when an inline box was split around a block), in tree order; none for display: none.

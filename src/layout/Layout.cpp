@@ -28,6 +28,7 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
       if (entry.first == document || tree->boxesOf.count(entry.first)) tree->scroll[entry.first] = entry.second;
     }
   }
+  ApplySticky(*tree);
   document->layoutTree = tree;
   return tree.get();
 }
