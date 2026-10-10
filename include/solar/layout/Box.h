@@ -88,8 +88,11 @@ struct Box {
   double shiftX = 0, shiftY = 0;
   // The scrollable overflow, relative to the border box.
   Rect scrollableOverflow;
-  // Baseline of the box (from its top), for aligning inline-blocks; negative if it has none.
+  // Baselines of the box (from its top): the last line's, for aligning inline-blocks, and the first's, for flex and grid items; negative if none.
   double baseline = -1;
+  double firstBaseline = -1;
+  // A flex or grid item is its own formatting context whatever its style.
+  bool forceBfc = false;
   // Intrinsic widths, cached.
   double minContent = -1, maxContent = -1;
 

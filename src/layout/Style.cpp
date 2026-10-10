@@ -266,6 +266,43 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
     s.aspectRatioAuto = ratio.starts_with("auto");
   }
 
+  {
+    const std::string direction = get("flex-direction");
+    s.flexDirection = direction == "row-reverse" ? FlexDirection::RowReverse : direction == "column" ? FlexDirection::Column : direction == "column-reverse" ? FlexDirection::ColumnReverse : FlexDirection::Row;
+    const std::string wrap = get("flex-wrap");
+    s.flexWrap = wrap == "wrap" ? FlexWrap::Wrap : wrap == "wrap-reverse" ? FlexWrap::WrapReverse : FlexWrap::Nowrap;
+    s.flexGrow = Number(get("flex-grow"), 0);
+    s.flexShrink = Number(get("flex-shrink"), 1);
+    const std::string basis = get("flex-basis");
+    if (basis == "content") s.flexBasisContent = true;
+    else s.flexBasis = ParseLength(basis);
+    s.order = static_cast<int>(Number(get("order"), 0));
+    const auto align = [&](const char* property) {
+      std::string v = get(property);
+      Align a;
+      if (v.rfind("safe ", 0) == 0) { a.safe = true; v = v.substr(5); }
+      else if (v.rfind("unsafe ", 0) == 0) { a.unsafe = true; v = v.substr(7); }
+      if (v.rfind("first ", 0) == 0) v = v.substr(6);
+      a.kind = Pick<Align::Kind>(v, {{"auto", Align::Kind::Auto}, {"normal", Align::Kind::Normal}, {"stretch", Align::Kind::Stretch}, {"baseline", Align::Kind::Baseline},
+                                     {"last baseline", Align::Kind::LastBaseline}, {"start", Align::Kind::Start}, {"end", Align::Kind::End}, {"flex-start", Align::Kind::FlexStart},
+                                     {"flex-end", Align::Kind::FlexEnd}, {"self-start", Align::Kind::SelfStart}, {"self-end", Align::Kind::SelfEnd}, {"center", Align::Kind::Center},
+                                     {"left", Align::Kind::Left}, {"right", Align::Kind::Right}, {"space-between", Align::Kind::SpaceBetween}, {"space-around", Align::Kind::SpaceAround},
+                                     {"space-evenly", Align::Kind::SpaceEvenly}}, Align::Kind::Normal);
+      return a;
+    };
+    s.justifyContent = align("justify-content");
+    s.alignItems = align("align-items");
+    s.alignSelf = align("align-self");
+    s.alignContent = align("align-content");
+    s.justifyItems = align("justify-items");
+    s.justifySelf = align("justify-self");
+    const auto gap = [&](const char* property) {
+      const std::string v = get(property);
+      return v == "normal" ? Length() : ParseLength(v);
+    };
+    s.rowGap = gap("row-gap");
+    s.columnGap = gap("column-gap");
+  }
   s.fontSize = Number(get("font-size"), 16);
   s.fontWeight = static_cast<int>(Number(get("font-weight"), 400));
   s.italic = get("font-style") != "normal";

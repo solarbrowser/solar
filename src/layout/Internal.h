@@ -60,6 +60,11 @@ FloatRecord PlaceFloat(LayoutContext& lc, Box& box, double cbLeft, double cbWidt
 // Out-of-flow positioned boxes, once everything else is where it is.
 void PlacePositioned(LayoutContext& lc);
 
+// Flex.cpp: a flex container's items laid out. Sets the box's content height; `heightBasis` is the definite content height, or NaN.
+void LayoutFlex(LayoutContext& lc, Box& container, double contentWidth, double heightBasis, double& contentHeight);
+void FlexContentSizes(LayoutContext& lc, Box& container, double& minContent, double& maxContent);
+inline bool IsFlexDisplay(Display d) { return d == Display::Flex || d == Display::InlineFlex; }
+
 // Inline.cpp: the lines of a block container with inline content, in a content box `width` wide. Sets the box's content height.
 double LayoutInlineContent(LayoutContext& lc, Box& container, double width, double& baseline);
 void InlineContentSizes(LayoutContext& lc, Box& container, double& minContent, double& maxContent);

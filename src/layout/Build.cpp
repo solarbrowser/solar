@@ -291,7 +291,70 @@ class Builder {
     return result;
   }
 
+  static Display Blockified(Display d) {
+    switch (d) {
+      case Display::Inline: case Display::InlineBlock: return Display::Block;
+      case Display::InlineFlex: return Display::Flex;
+      case Display::InlineGrid: return Display::Grid;
+      case Display::InlineTable: return Display::Table;
+      default: return d;
+    }
+  }
+
+  // The children of a flex or grid container are its items: each element, and each run of text as an anonymous one.
+  void NormalizeItems(Box& container) {
+    std::vector<std::unique_ptr<Box>> old = std::move(container.children);
+    container.children.clear();
+    std::vector<std::unique_ptr<Box>> run;
+    const auto flushRun = [&] {
+      bool significant = false;
+      for (auto& r : run) if (!OnlyCollapsibleSpace(*r)) significant = true;
+      if (significant) {
+        auto anonymous = std::make_unique<Box>();
+        anonymous->kind = Box::Kind::Block;
+        anonymous->anonymous = true;
+        anonymous->forceBfc = true;
+        anonymous->style = AnonymousStyle(*container.style, Display::Block);
+        anonymous->hasInlineContent = true;
+        for (auto& r : run) anonymous->AddChild(std::move(r));
+        container.AddChild(std::move(anonymous));
+      }
+      run.clear();
+    };
+    for (auto& child : old) {
+      if (child->kind == Box::Kind::Text) {
+        run.push_back(std::move(child));
+        continue;
+      }
+      flushRun();
+      if (!child->IsOutOfFlow()) {
+        if (child->inlineLevel || child->kind == Box::Kind::Inline) {
+          child->inlineLevel = false;
+          if (child->kind == Box::Kind::Inline) child->kind = Box::Kind::Block;
+          auto changed = std::make_shared<BoxStyle>(*child->style);
+          changed->display = Blockified(changed->display);
+          child->style = changed;
+        }
+        child->forceBfc = true;
+      }
+      container.AddChild(std::move(child));
+    }
+    flushRun();
+    for (auto& c : container.children) {
+      if (c->kind == Box::Kind::Block || c->kind == Box::Kind::Inline) Normalize(*c);
+    }
+  }
+
   void Normalize(Box& container) {
+    switch (container.style->display) {
+      case Display::Flex: case Display::InlineFlex: case Display::Grid: case Display::InlineGrid:
+        if (container.kind == Box::Kind::Block && !container.replaced) {
+          NormalizeItems(container);
+          return;
+        }
+        break;
+      default: break;
+    }
     // Children first, as an inline in a block may itself need work.
     std::vector<std::unique_ptr<Box>> old = std::move(container.children);
     container.children.clear();

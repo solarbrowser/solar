@@ -157,6 +157,10 @@ void ComputeContentSizes(LayoutContext& lc, Box& box) {
     box.minContent = box.maxContent = s.containIntrinsicWidthSet ? s.containIntrinsicWidth.value : 0;
     return;
   }
+  if (IsFlexDisplay(s.display)) {
+    FlexContentSizes(lc, box, box.minContent, box.maxContent);
+    return;
+  }
   if (box.hasInlineContent) {
     InlineContentSizes(lc, box, box.minContent, box.maxContent);
     return;
@@ -476,7 +480,7 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
   box.collapsedThrough = false;
   box.baseline = -1;
   double contentHeight = 0;
-  const bool establishes = s.CreatesBlockFormattingContext() || IsRootBox(box);
+  const bool establishes = s.CreatesBlockFormattingContext() || IsRootBox(box) || box.forceBfc;
   const bool heightIsAuto = !Known(specifiedHeight) && !Known(ratioHeight);
   const double minH = [&] {
     const double v = ResolveSize(s.minHeight, cbHeight);
@@ -510,6 +514,10 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
   if (box.replaced) {
     contentHeight = Known(specifiedHeight) ? specifiedHeight : 0;
     hasContent = true;
+  } else if (IsFlexDisplay(s.display)) {
+    lc.cbX = contentLeftBfc;
+    LayoutFlex(lc, box, width, heightForChildren, contentHeight);
+    for (auto& c : box.children) if (!c->style->IsOutOfFlow()) hasContent = true;
   } else if (box.hasInlineContent) {
     double baseline = -1;
     contentHeight = LayoutInlineContent(lc, box, width, baseline);
@@ -520,6 +528,18 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
     LayoutBlockChildren(lc, box, width, heightForChildren, topOpen, bottomOpen, contentLeftBfc, contentTopBfc, contentHeight);
     for (auto& c : box.children) {
       if (!c->style->IsOutOfFlow() && !c->style->IsFloating() && !c->collapsedThrough) hasContent = true;
+    }
+  }
+  if (!IsFlexDisplay(s.display)) {
+    box.firstBaseline = -1;
+    if (box.hasInlineContent && !box.lines.empty()) {
+      box.firstBaseline = box.lines[0].rect.y + box.lines[0].baseline;
+    } else if (!box.hasInlineContent) {
+      for (auto& c : box.children) {
+        if (c->style->IsOutOfFlow() || c->collapsedThrough || c->firstBaseline < 0) continue;
+        box.firstBaseline = c->y + c->firstBaseline;
+        break;
+      }
     }
   }
   // A box that is its own formatting context holds the floats in it.

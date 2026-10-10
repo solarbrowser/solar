@@ -50,6 +50,19 @@ enum class Visibility : uint8_t { Visible, Hidden, Collapse };
 enum class OverflowWrap : uint8_t { Normal, BreakWord, Anywhere };
 enum class WordBreak : uint8_t { Normal, BreakAll, KeepAll, BreakWord };
 
+enum class FlexDirection : uint8_t { Row, RowReverse, Column, ColumnReverse };
+enum class FlexWrap : uint8_t { Nowrap, Wrap, WrapReverse };
+
+// A value of the box alignment properties (justify-content, align-items, align-self, align-content, justify-self...).
+struct Align {
+  enum class Kind : uint8_t {
+    Auto, Normal, Stretch, Baseline, LastBaseline, Start, End, FlexStart, FlexEnd, SelfStart, SelfEnd, Center, Left, Right, SpaceBetween, SpaceAround, SpaceEvenly,
+  };
+  Kind kind = Kind::Normal;
+  bool safe = false;    // `safe`: not past the start edge
+  bool unsafe = false;  // `unsafe`
+};
+
 struct BoxStyle {
   Display display = Display::Inline;
   Position position = Position::Static;
@@ -107,6 +120,16 @@ struct BoxStyle {
   bool stackingContext = false;
   double opacity = 1;
   bool pointerEventsNone = false;
+
+  // Flexible boxes (css-flexbox) and box alignment (css-align).
+  FlexDirection flexDirection = FlexDirection::Row;
+  FlexWrap flexWrap = FlexWrap::Nowrap;
+  double flexGrow = 0, flexShrink = 1;
+  Length flexBasis;      // Auto: auto; Px/Percent; Calc; MaxContent for content
+  bool flexBasisContent = false;
+  int order = 0;
+  Align justifyContent, alignItems, alignSelf, alignContent, justifyItems, justifySelf;
+  Length rowGap, columnGap;  // Auto: normal (0 in flex, the default in grid)
 
   bool IsOutOfFlow() const { return position == Position::Absolute || position == Position::Fixed; }
   bool IsFloating() const { return floating != Float::None; }

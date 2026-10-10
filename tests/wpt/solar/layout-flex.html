@@ -1,0 +1,80 @@
+<!doctype html>
+<title>layout: flexbox</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<style>
+body { margin: 0; font: 10px/1 Ahem; }
+.f { display: flex; width: 400px; height: 100px; }
+.f > div { height: 20px; }
+</style>
+<div id=a class=f><div style="width:100px"></div><div style="width:50px"></div><div style="width:50px"></div></div>
+<div id=b class=f><div style="flex:1 1 0"></div><div style="flex:2 1 0"></div><div style="flex:1 1 0"></div></div>
+<div id=c class=f style="justify-content:center"><div style="width:100px"></div><div style="width:100px"></div></div>
+<div id=d class=f style="justify-content:space-between"><div style="width:100px"></div><div style="width:100px"></div><div style="width:100px"></div></div>
+<div id=e class=f style="align-items:center"><div style="width:100px"></div></div>
+<div id=g class=f style="align-items:stretch"><div id=gs style="width:100px;height:auto"></div></div>
+<div id=h class=f><div style="width:300px;flex-shrink:1"></div><div style="width:300px;flex-shrink:1"></div></div>
+<div id=i class=f style="flex-direction:column;height:200px"><div style="height:50px"></div><div style="height:50px;flex-grow:1"></div></div>
+<div id=j class=f style="flex-wrap:wrap"><div style="width:250px"></div><div style="width:250px"></div></div>
+<div id=k class=f><div style="width:100px;margin-left:auto"></div></div>
+<div id=l class=f style="flex-direction:row-reverse"><div style="width:100px"></div><div style="width:50px"></div></div>
+<div id=m class=f style="gap:10px"><div style="width:100px"></div><div style="width:100px"></div></div>
+<div id=n style="display:inline-flex"><div style="width:30px;height:10px"></div><div style="width:40px;height:20px"></div></div>
+<script>
+const rect = (el) => el.getBoundingClientRect();
+const kids = (id) => [...document.getElementById(id).children].map((c) => rect(c));
+test(() => {
+  const k = kids("a");
+  assert_equals(k[0].left, 0); assert_equals(k[1].left, 100); assert_equals(k[2].left, 150);
+}, "plain row");
+test(() => {
+  const k = kids("b");
+  assert_equals(k[0].width, 100); assert_equals(k[1].width, 200); assert_equals(k[2].width, 100);
+  assert_equals(k[1].left - rect(document.getElementById("b")).left, 100);
+}, "flex grow");
+test(() => {
+  const k = kids("c"), c = rect(document.getElementById("c"));
+  assert_equals(k[0].left - c.left, 100);
+}, "center");
+test(() => {
+  const k = kids("d"), d = rect(document.getElementById("d"));
+  assert_equals(k[1].left - d.left, 150); assert_equals(k[2].left - d.left, 300);
+}, "space-between");
+test(() => {
+  const k = kids("e"), e = rect(document.getElementById("e"));
+  assert_equals(k[0].top - e.top, 40);
+}, "align-items center");
+test(() => {
+  assert_equals(rect(document.getElementById("gs")).height, 100);
+}, "stretch");
+test(() => {
+  const k = kids("h");
+  assert_equals(k[0].width, 200); assert_equals(k[1].width, 200);
+}, "shrink");
+test(() => {
+  const k = kids("i");
+  assert_equals(k[1].height, 150);
+  assert_equals(k[1].top - rect(document.getElementById("i")).top, 50);
+}, "column grow");
+test(() => {
+  const k = kids("j"), j = rect(document.getElementById("j"));
+  assert_equals(k[1].top - j.top, 50, "second item on a second line; lines stretch to share 100px");
+  assert_equals(k[1].left - j.left, 0);
+}, "wrap");
+test(() => {
+  const k = kids("k"), e = rect(document.getElementById("k"));
+  assert_equals(k[0].left - e.left, 300);
+}, "auto margin");
+test(() => {
+  const k = kids("l"), e = rect(document.getElementById("l"));
+  assert_equals(k[0].right, e.right); assert_equals(k[1].right, k[0].left);
+}, "row-reverse");
+test(() => {
+  const k = kids("m");
+  assert_equals(k[1].left - k[0].left, 110);
+}, "gap");
+test(() => {
+  const n = rect(document.getElementById("n"));
+  assert_equals(n.width, 70); assert_equals(n.height, 20);
+}, "inline-flex");
+</script>
