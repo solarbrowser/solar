@@ -165,6 +165,10 @@ void ComputeContentSizes(LayoutContext& lc, Box& box) {
     GridContentSizes(lc, box, box.minContent, box.maxContent);
     return;
   }
+  if (IsTableDisplay(s.display) && !box.replaced) {
+    TableContentSizes(lc, box, box.minContent, box.maxContent);
+    return;
+  }
   if (box.hasInlineContent) {
     InlineContentSizes(lc, box, box.minContent, box.maxContent);
     return;
@@ -416,6 +420,16 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
     }
     return w;
   };
+  const bool isTable = IsTableDisplay(s.display) && !box.replaced;
+  if (isTable && !Known(forceWidth)) {
+    // A table is as wide as its columns want, within what there is, and never narrower than they can be.
+    ComputeContentSizes(lc, box);
+    const double available = std::max(0.0, availableWidth - ml - mr - extrasH);
+    if (widthAuto) width = std::min(std::max(box.minContent, available), box.maxContent);
+    else width = std::max(width, box.minContent);
+    widthAuto = false;
+    // Collapsed borders make the table's own border half of the collapsed ones; the width is as given.
+  }
   if (widthAuto) {
     if (shrinkToFit) {
       ComputeContentSizes(lc, box);
@@ -521,6 +535,10 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
   } else if (IsFlexDisplay(s.display)) {
     lc.cbX = contentLeftBfc;
     LayoutFlex(lc, box, width, heightForChildren, contentHeight);
+    for (auto& c : box.children) if (!c->style->IsOutOfFlow()) hasContent = true;
+  } else if (IsTableDisplay(s.display) && !box.replaced) {
+    lc.cbX = contentLeftBfc;
+    LayoutTable(lc, box, width, heightForChildren, contentHeight);
     for (auto& c : box.children) if (!c->style->IsOutOfFlow()) hasContent = true;
   } else if (IsGridDisplay(s.display)) {
     lc.cbX = contentLeftBfc;

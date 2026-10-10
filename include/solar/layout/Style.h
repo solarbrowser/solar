@@ -129,6 +129,12 @@ struct BoxStyle {
   bool flexBasisContent = false;
   int order = 0;
   Align justifyContent, alignItems, alignSelf, alignContent, justifyItems, justifySelf;
+  // Tables.
+  bool tableLayoutFixed = false, borderCollapse = false, captionBottom = false, emptyCellsHide = false;
+  double borderSpacingH = 0, borderSpacingV = 0;
+  BorderStyle borderStyleRaw[4] = {BorderStyle::None, BorderStyle::None, BorderStyle::None, BorderStyle::None};  // as specified, before the width is zeroed
+  double borderWidthRaw[4] = {0, 0, 0, 0};
+
   // Grid (css-grid): the computed values as text, read where the grid is laid out.
   std::string gridTemplateColumns, gridTemplateRows, gridTemplateAreas, gridAutoFlow, gridAutoColumns, gridAutoRows;
   std::string gridColumnStart, gridColumnEnd, gridRowStart, gridRowEnd;

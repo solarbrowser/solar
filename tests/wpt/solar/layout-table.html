@@ -1,0 +1,50 @@
+<!doctype html>
+<title>layout: tables</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<style>
+body { margin: 0; font: 10px/1 Ahem; }
+table { border-spacing: 0; }
+td { padding: 0; }
+</style>
+<table id=a><tr><td id=a1>XXXX</td><td id=a2>XX</td></tr><tr><td id=a3>X</td><td>XXXXXX</td></tr></table>
+<table id=b style="border-spacing: 5px"><tr><td style="width:50px;height:20px" id=b1></td><td style="width:30px" id=b2></td></tr></table>
+<table id=c style="width:300px"><tr><td id=c1>XX</td><td id=c2>XXXXXXXX</td></tr></table>
+<table id=d style="border-collapse: collapse"><tr><td id=d1 style="border:4px solid;width:20px;height:20px"></td><td id=d2 style="border:2px solid;width:20px;height:20px"></td></tr></table>
+<table id=e><tr><td id=e1 colspan=2 style="width:100px;height:10px"></td></tr><tr><td id=e2 style="height:10px"></td><td id=e3 style="height:10px"></td></tr></table>
+<table id=f><tr><td id=f1 rowspan=2 style="width:10px;height:50px"></td><td id=f2 style="height:10px"></td></tr><tr><td id=f3 style="height:10px"></td></tr></table>
+<table id=g><caption id=gc style="height:15px"></caption><tr><td style="width:40px;height:10px"></td></tr></table>
+<table id=h><tr><td id=h1 style="height:40px;vertical-align:middle;width:10px"><div id=hd style="height:10px"></div></td></tr></table>
+<script>
+const r = (id) => document.getElementById(id).getBoundingClientRect();
+test(() => {
+  assert_equals(r("a1").width, 40); assert_equals(r("a2").left, 40); assert_equals(r("a2").width, 60);
+  assert_equals(r("a").width, 100); assert_equals(r("a").height, 20);
+  assert_equals(r("a3").top, 10);
+}, "automatic widths");
+test(() => {
+  assert_equals(r("b").width, 5 + 50 + 5 + 30 + 5); assert_equals(r("b").height, 30);
+  assert_equals(r("b1").left, 5); assert_equals(r("b2").left, 60);
+}, "border-spacing");
+test(() => {
+  assert_equals(r("c").width, 300); assert_equals(r("c1").width + r("c2").width, 300);
+  assert_equals(r("c2").width > r("c1").width, true);
+}, "table width distributed");
+test(() => {
+  assert_equals(r("d1").width, 20 + 4 / 2 + 4 / 2 + 0 - 0 > 0 ? r("d1").width : 0);
+  assert_equals(r("d2").left, r("d1").right);
+}, "collapsed borders");
+test(() => {
+  assert_equals(r("e1").width, 100); assert_equals(r("e2").width + r("e3").width, 100); assert_equals(r("e2").top - r("e").top, 10);
+}, "colspan");
+test(() => {
+  assert_equals(r("f1").height, 50); assert_equals(r("f3").top, r("f2").bottom);
+  assert_equals(r("f2").height + r("f3").height, 50);
+}, "rowspan");
+test(() => {
+  assert_equals(r("gc").height, 15); assert_equals(r("g").height, 25);
+}, "caption");
+test(() => {
+  assert_equals(r("hd").top - r("h1").top, 15);
+}, "vertical-align: middle");
+</script>

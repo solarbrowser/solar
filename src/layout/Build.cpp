@@ -1,5 +1,6 @@
 // The box tree: boxes for elements and text (https://www.w3.org/TR/CSS22/visuren.html#box-gen), with the anonymous boxes the model needs.
 #include <cstdlib>
+#include <functional>
 
 #include "Internal.h"
 #include "solar/css/Style.h"
@@ -345,7 +346,133 @@ class Builder {
     }
   }
 
+  // ---- Tables (https://www.w3.org/TR/CSS22/tables.html#anonymous-boxes) ----
+
+  static bool IsRowGroup(Display d) { return d == Display::TableRowGroup || d == Display::TableHeaderGroup || d == Display::TableFooterGroup; }
+
+  std::unique_ptr<Box> AnonymousTablePart(const Box& parent, Display display) {
+    auto box = std::make_unique<Box>();
+    box->kind = Box::Kind::Block;
+    box->anonymous = true;
+    box->style = AnonymousStyle(*parent.style, display);
+    if (display == Display::TableCell) box->forceBfc = true;
+    return box;
+  }
+
+  // Children that are not cells become the contents of cells; each run of them one cell.
+  void WrapInCells(Box& row) {
+    std::vector<std::unique_ptr<Box>> old = std::move(row.children);
+    row.children.clear();
+    std::unique_ptr<Box> cell;
+    const auto flush = [&] {
+      if (!cell) return;
+      bool significant = false;
+      for (auto& c : cell->children) if (c->kind != Box::Kind::Text || !OnlyCollapsibleSpace(*c)) significant = true;
+      if (significant) row.AddChild(std::move(cell));
+      cell.reset();
+    };
+    for (auto& child : old) {
+      const Display d = child->style->display;
+      if (d == Display::TableCell) {
+        flush();
+        child->forceBfc = true;
+        row.AddChild(std::move(child));
+      } else if (d == Display::TableCaption || d == Display::TableColumn || d == Display::TableColumnGroup) {
+        flush();
+        row.AddChild(std::move(child));
+      } else if (child->IsOutOfFlow()) {
+        row.AddChild(std::move(child));
+      } else {
+        if (!cell) cell = AnonymousTablePart(row, Display::TableCell);
+        child->inlineLevel = child->inlineLevel;
+        cell->AddChild(std::move(child));
+      }
+    }
+    flush();
+  }
+
+  void WrapInRows(Box& group) {
+    std::vector<std::unique_ptr<Box>> old = std::move(group.children);
+    group.children.clear();
+    std::unique_ptr<Box> row;
+    const auto flush = [&] {
+      if (!row) return;
+      WrapInCells(*row);
+      if (!row->children.empty()) group.AddChild(std::move(row));
+      row.reset();
+    };
+    for (auto& child : old) {
+      const Display d = child->style->display;
+      if (d == Display::TableRow) {
+        flush();
+        WrapInCells(*child);
+        group.AddChild(std::move(child));
+      } else if (child->IsOutOfFlow() || d == Display::TableCaption || d == Display::TableColumn || d == Display::TableColumnGroup) {
+        flush();
+        group.AddChild(std::move(child));
+      } else {
+        if (!row) row = AnonymousTablePart(group, Display::TableRow);
+        row->AddChild(std::move(child));
+      }
+    }
+    flush();
+  }
+
+  void NormalizeTable(Box& table) {
+    std::vector<std::unique_ptr<Box>> old = std::move(table.children);
+    table.children.clear();
+    std::unique_ptr<Box> row;
+    const auto flush = [&] {
+      if (!row) return;
+      WrapInCells(*row);
+      if (!row->children.empty()) table.AddChild(std::move(row));
+      row.reset();
+    };
+    for (auto& child : old) {
+      const Display d = child->style->display;
+      if (IsRowGroup(d)) {
+        flush();
+        WrapInRows(*child);
+        table.AddChild(std::move(child));
+      } else if (d == Display::TableRow) {
+        flush();
+        WrapInCells(*child);
+        table.AddChild(std::move(child));
+      } else if (child->IsOutOfFlow() || d == Display::TableCaption || d == Display::TableColumn || d == Display::TableColumnGroup) {
+        flush();
+        table.AddChild(std::move(child));
+      } else if (d == Display::TableCell) {
+        if (!row) row = AnonymousTablePart(table, Display::TableRow);
+        child->forceBfc = true;
+        row->AddChild(std::move(child));
+      } else {
+        if (!row) row = AnonymousTablePart(table, Display::TableRow);
+        row->AddChild(std::move(child));
+      }
+    }
+    flush();
+    // Each cell is a block container of its own: normalize it and everything inside.
+    const std::function<void(Box&)> walk = [&](Box& b) {
+      for (auto& c : b.children) {
+        const Display d = c->style->display;
+        if (d == Display::TableCell || d == Display::TableCaption) {
+          c->forceBfc = true;
+          Normalize(*c);
+        } else if (IsRowGroup(d) || d == Display::TableRow || d == Display::TableColumnGroup || d == Display::TableColumn) {
+          walk(*c);
+        } else if (c->kind == Box::Kind::Block) {
+          Normalize(*c);
+        }
+      }
+    };
+    walk(table);
+  }
+
   void Normalize(Box& container) {
+    if ((container.style->display == Display::Table || container.style->display == Display::InlineTable) && container.kind == Box::Kind::Block && !container.replaced) {
+      NormalizeTable(container);
+      return;
+    }
     switch (container.style->display) {
       case Display::Flex: case Display::InlineFlex: case Display::Grid: case Display::InlineGrid:
         if (container.kind == Box::Kind::Block && !container.replaced) {

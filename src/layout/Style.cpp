@@ -300,6 +300,20 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
       const std::string v = get(property);
       return v == "normal" ? Length() : ParseLength(v);
     };
+    s.tableLayoutFixed = get("table-layout") == "fixed";
+    s.borderCollapse = get("border-collapse") == "collapse";
+    s.captionBottom = get("caption-side") == "bottom";
+    s.emptyCellsHide = get("empty-cells") == "hide";
+    {
+      const std::string spacing = get("border-spacing");
+      const size_t space = spacing.find(' ');
+      s.borderSpacingH = Number(spacing, 0);
+      s.borderSpacingV = space == std::string::npos ? s.borderSpacingH : Number(spacing.substr(space + 1), 0);
+    }
+    for (int i = 0; i < 4; ++i) {
+      s.borderStyleRaw[i] = s.borderStyle[i];
+      s.borderWidthRaw[i] = Number(get((std::string("border-") + sides[i] + "-width").c_str()));
+    }
     s.gridTemplateColumns = get("grid-template-columns");
     s.gridTemplateRows = get("grid-template-rows");
     s.gridTemplateAreas = get("grid-template-areas");

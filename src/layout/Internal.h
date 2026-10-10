@@ -65,6 +65,11 @@ void LayoutFlex(LayoutContext& lc, Box& container, double contentWidth, double h
 void FlexContentSizes(LayoutContext& lc, Box& container, double& minContent, double& maxContent);
 inline bool IsFlexDisplay(Display d) { return d == Display::Flex || d == Display::InlineFlex; }
 
+// Table.cpp
+void LayoutTable(LayoutContext& lc, Box& table, double contentWidth, double heightBasis, double& contentHeight);
+void TableContentSizes(LayoutContext& lc, Box& table, double& minContent, double& maxContent);
+inline bool IsTableDisplay(Display d) { return d == Display::Table || d == Display::InlineTable; }
+
 // Grid.cpp
 void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double heightBasis, double& contentHeight);
 void GridContentSizes(LayoutContext& lc, Box& container, double& minContent, double& maxContent);
