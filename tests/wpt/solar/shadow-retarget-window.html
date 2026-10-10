@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<title>Retargeting a related target against the window</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script>new MutationObserver(() => {}).observe(document, { subtree: true, childList: true, attributes: true });</script>
+<div id="host"></div>
+<button id="outside">outside</button>
+<script>
+test(() => {
+  const root = host.attachShadow({ mode: 'open' });
+  const inner = document.createElement('button');
+  root.appendChild(inner);
+  const seen = [];
+  outside.addEventListener('focus', e => seen.push(e.relatedTarget));
+  window.addEventListener('focusin', () => {}, true);
+  inner.focus();
+  outside.focus();
+  assert_equals(seen[seen.length - 1], host);
+}, 'a related target in a shadow tree is retargeted against the window without reading it as a node');
+</script>

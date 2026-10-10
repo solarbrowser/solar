@@ -267,7 +267,8 @@ web::JsEventTarget* GetParent(web::JsEventTarget* self, web::JsEvent* event) {
 }
 
 web::JsEventTarget* RetargetOps(web::JsEventTarget* a, web::JsEventTarget* against) {
-  return Retarget(static_cast<Node*>(a), against ? static_cast<Node*>(against) : nullptr);
+  // What an event is retargeted against can be the window, which is no node and in no tree: then it is nothing any shadow tree is in.
+  return Retarget(static_cast<Node*>(a), against && against->ops ? static_cast<Node*>(against) : nullptr);
 }
 
 bool RootIncludes(web::JsEventTarget* a, web::JsEventTarget* b) { return IsShadowIncludingInclusiveAncestor(static_cast<Node*>(a)->Root(), static_cast<Node*>(b)); }
