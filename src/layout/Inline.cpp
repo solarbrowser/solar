@@ -656,8 +656,18 @@ void MeasureAtom(LayoutContext& lc, Atom& a, double availableForAtomic) {
 
 }  // namespace
 
+// (A box laid out again has its pieces made again.)
+static void ClearFragments(Box& box) {
+  for (auto& child : box.children) {
+    if (child->kind != Box::Kind::Inline && child->kind != Box::Kind::Text) continue;
+    child->fragments.clear();
+    ClearFragments(*child);
+  }
+}
+
 double LayoutInlineContent(LayoutContext& lc, Box& container, double width, double& baselineOut) {
   container.lines.clear();
+  ClearFragments(container);
   baselineOut = -1;
   Collector collector(lc, container);
   collector.Collect(container);

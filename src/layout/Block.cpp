@@ -299,7 +299,8 @@ double QuickMarginTop(const Box& child, double cbWidth) { return MarginOf(*child
 
 // The block children of a box, placed one under another with margins collapsing; floats are placed beside them.
 // (px, py) is the box's content origin in the coordinates of the block formatting context.
-void LayoutBlockChildren(LayoutContext& lc, Box& P, double contentWidth, double heightBasis, bool topOpen, bool bottomOpen, double px, double py, double& contentHeight) {
+void LayoutBlockChildren(LayoutContext& lc, Box& P, double contentWidth, double heightBasis, bool topOpen, bool bottomOpen, double px, double py, double& contentHeight,
+                         size_t first = 0, size_t last = static_cast<size_t>(-1)) {
   double y = 0;
   MarginSet pending;
   bool atTop = true;
@@ -307,7 +308,10 @@ void LayoutBlockChildren(LayoutContext& lc, Box& P, double contentWidth, double 
   bool placedAny = false;
   double lastBaseline = -1;
   const double originX = P.ContentLeft(), originY = P.ContentTop();
+  size_t childIndex = 0;
   for (auto& childPtr : P.children) {
+    const size_t thisIndex = childIndex++;
+    if (thisIndex < first || thisIndex >= last) continue;
     Box& child = *childPtr;
     if (child.outsideMarker) continue;
     if (IsPositionedOutOfFlow(child)) {
@@ -480,6 +484,11 @@ void LayoutBlockChildren(LayoutContext& lc, Box& P, double contentWidth, double 
 }
 
 }  // namespace
+
+// The block children [first, last) of a box laid out in a column `contentWidth` wide, from (0, 0) of the formatting context.
+void LayoutBlockFlow(LayoutContext& lc, Box& box, double contentWidth, size_t first, size_t last, double& contentHeight) {
+  LayoutBlockChildren(lc, box, contentWidth, kNaN, false, false, 0, 0, contentHeight, first, last);
+}
 
 void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeight, bool shrinkToFit) {
   const BoxStyle& s = *box.style;
@@ -682,6 +691,10 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
     lc.cbX = contentLeftBfc;
     LayoutGrid(lc, box, width, heightForChildren, contentHeight);
     for (auto& c : box.children) if (!c->style->IsOutOfFlow()) hasContent = true;
+  } else if (s.IsMulticol() && plainBlock) {
+    lc.cbX = contentLeftBfc;
+    LayoutMulticol(lc, box, width, heightForChildren, contentHeight);
+    hasContent = !box.children.empty();
   } else if (box.hasInlineContent) {
     double baseline = -1;
     contentHeight = LayoutInlineContent(lc, box, width, baseline);

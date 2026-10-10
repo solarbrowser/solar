@@ -145,6 +145,10 @@ std::vector<Rect> ClientRects(Tree& tree, dom::Element* element) {
       for (const Rect& f : box->fragments) out.push_back({origin.x + f.x, origin.y + f.y, f.width, f.height});
     } else if (box->kind == Box::Kind::LineBreak) {
       continue;
+    } else if (box->fragments.size() > 1) {
+      // A block cut into columns has a piece in each.
+      const Rect origin = AbsoluteBorderBox(*box);
+      for (const Rect& f : box->fragments) out.push_back({origin.x + f.x, origin.y + f.y, f.width, f.height});
     } else {
       out.push_back(AbsoluteBorderBox(*box));
     }
@@ -155,7 +159,7 @@ std::vector<Rect> ClientRects(Tree& tree, dom::Element* element) {
       const auto found = tree.scroll.find(p->node);
       if (found != tree.scroll.end()) { dx += found->second.first; dy += found->second.second; }
     }
-    const size_t added = box->kind == Box::Kind::Inline || box->kind == Box::Kind::Text ? box->fragments.size() : 1;
+    const size_t added = box->kind == Box::Kind::Inline || box->kind == Box::Kind::Text || box->fragments.size() > 1 ? box->fragments.size() : 1;
     Matrix matrix;
     const Box* holder = box;
     if (box->kind != Box::Kind::Block) {

@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<title>Multiple columns</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<style>
+body { margin: 0; }
+.mc { column-count: 3; column-gap: 10px; width: 320px; font: 10px/1 Ahem; }
+.mc div { height: 20px; }
+</style>
+<div id="a" class="mc"><div id="a1"></div><div id="a2"></div><div id="a3"></div></div>
+<div id="b" class="mc" style="height: 100px; column-count: 2; width: 210px"><div id="b1" style="height: 50px"></div><div id="b2" style="height: 50px"></div><div id="b3" style="height: 50px"></div></div>
+<div id="c" class="mc" style="column-fill: auto; height: 50px"><div id="c1" style="height: 30px"></div><div id="c2" style="height: 30px"></div><div id="c3" style="height: 30px"></div></div>
+<div id="d" class="mc" style="column-count: auto; column-width: 100px; width: 250px"><div id="d1"></div><div id="d2"></div></div>
+<div id="e" class="mc"><div id="e1"></div><div id="e2" style="break-before: column"></div></div>
+<div id="f" class="mc" style="column-count: 2"><p id="f1" style="margin: 0; width: 100px">AAAA AAAA AAAA AAAA AAAA AAAA AAAA AAAA</p></div>
+<div id="g" class="mc" dir="rtl"><div id="g1"></div><div id="g2"></div><div id="g3"></div></div>
+<script>
+const rect = id => document.getElementById(id).getBoundingClientRect();
+test(() => {
+  // Balanced: three boxes of 20px in 3 columns of (320-20)/3 = 100px.
+  assert_equals(rect('a').height, 20);
+  assert_equals(rect('a1').left, 0);
+  assert_equals(rect('a2').left, 110);
+  assert_equals(rect('a3').left, 220);
+  assert_equals(rect('a2').top, rect('a').top);
+  assert_equals(rect('a1').width, 100);
+}, 'balanced columns');
+test(() => {
+  // Height 100, balance: 3 boxes of 50 - 2 fit in a column (100), so two columns: 100px high.
+  assert_equals(rect('b').height, 100);
+  assert_equals(rect('b2').left, 0);
+  assert_equals(rect('b2').top - rect('b').top, 50);
+  assert_equals(rect('b3').left, 110);
+  assert_equals(rect('b3').top, rect('b').top);
+}, 'columns in a container of a given height');
+test(() => {
+  // column-fill: auto: first column filled first (50px: one box of 30 and not a second that does not fit... boxes are not cut).
+  assert_equals(rect('c1').left, 0);
+  assert_equals(rect('c2').left, 110);
+  assert_equals(rect('c3').left, 220);
+}, 'column-fill: auto');
+test(() => {
+  // width 250, column-width 100 and gap 10: 2 columns of 120.
+  assert_equals(rect('d1').width, 120);
+  assert_equals(rect('d2').left, 130);
+}, 'column-width');
+test(() => {
+  assert_equals(rect('e2').left, 110);
+  assert_equals(rect('e2').top, rect('e').top);
+}, 'forced column break');
+test(() => {
+  const r = document.getElementById('f1').getClientRects();
+  assert_equals(r.length, 2);
+}, 'a block with lines crosses columns');
+test(() => {
+  assert_equals(rect('g1').left, 220);
+  assert_equals(rect('g3').left, 0);
+}, 'right to left columns start on the right');
+</script>

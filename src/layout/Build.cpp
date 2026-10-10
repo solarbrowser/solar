@@ -30,6 +30,11 @@ std::shared_ptr<const BoxStyle> AnonymousStyle(const BoxStyle& parent, Display d
     s.borderStyle[i] = BorderStyle::None;
   }
   s.aspectRatio = 0;
+  s.columnCount = 0;
+  s.columnWidth = -1;
+  s.columnFillAuto = false;
+  s.columnSpanAll = false;
+  s.breakBefore = s.breakAfter = s.breakInside = BreakKind::Auto;
   s.verticalAlign = VerticalAlign::Baseline;
   s.backgroundColor = "rgba(0, 0, 0, 0)";
   s.zIndex = "auto";

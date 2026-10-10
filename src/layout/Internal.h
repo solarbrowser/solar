@@ -56,6 +56,10 @@ void LayoutRoot(LayoutContext& lc);
 // Lays out a block-level box in a containing block `cbWidth` wide, and `cbHeight` high where that is known (NaN where not).
 // With `shrinkToFit` an auto width is the box's contents' preferred width, within what is available (floats, inline-blocks, positioned boxes).
 void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeight, bool shrinkToFit = false);
+// The block children [first, last) of a box laid out one under another in a column, from the origin of a formatting context of their own.
+void LayoutBlockFlow(LayoutContext& lc, Box& box, double contentWidth, size_t first, size_t last, double& contentHeight);
+// Columns.cpp: a multicol container's contents laid out in columns. Sets the box's content height.
+void LayoutMulticol(LayoutContext& lc, Box& container, double contentWidth, double heightBasis, double& contentHeight);
 // The intrinsic widths of the box's contents.
 void ComputeContentSizes(LayoutContext& lc, Box& box);
 
