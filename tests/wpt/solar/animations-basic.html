@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<title>Web Animations basics</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<div id="box" style="position:relative; left: 0px; opacity: 1; width: 100px; background: rgb(255, 0, 0)"></div>
+<script>
+promise_test(async t => {
+  const box = document.getElementById('box');
+  const anim = box.animate({ left: ['0px', '100px'], opacity: [1, 0], backgroundColor: ['rgb(255, 0, 0)', 'rgb(0, 0, 255)'] }, { duration: 1000, fill: 'both' });
+  assert_equals(anim.playState, 'running');
+  assert_true(anim.pending);
+  await anim.ready;
+  assert_false(anim.pending);
+  anim.currentTime = 500;
+  assert_equals(getComputedStyle(box).left, '50px');
+  assert_equals(getComputedStyle(box).opacity, '0.5');
+  assert_equals(getComputedStyle(box).backgroundColor, 'rgb(128, 0, 128)');
+  anim.pause();
+  anim.currentTime = 250;
+  assert_equals(getComputedStyle(box).left, '25px');
+  anim.cancel();
+  assert_equals(getComputedStyle(box).left, '0px');
+  assert_equals(anim.playState, 'idle');
+}, 'animate() interpolates');
+
+promise_test(async t => {
+  const box = document.getElementById('box');
+  const anim = box.animate([{ width: '100px' }, { width: '200px' }], 100);
+  let finished = false;
+  anim.onfinish = () => { finished = true; };
+  await anim.finished;
+  assert_equals(anim.playState, 'finished');
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  assert_true(finished);
+  assert_equals(box.getAnimations().length, 0);
+}, 'finishes');
+
+test(() => {
+  const e = new KeyframeEffect(document.getElementById('box'), [{ left: '1px' }, { left: '5px' }], { duration: 10, easing: 'steps(2, start)' });
+  assert_equals(e.getTiming().easing, 'steps(2, start)');
+  assert_equals(e.getKeyframes().length, 2);
+  assert_equals(e.getKeyframes()[1].computedOffset, 1);
+}, 'effect');
+</script>

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <map>
+
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -228,6 +230,9 @@ struct Element : Node {
   bool scriptStarted = false;
   bool scriptParserInserted = false;
 
+  // What animations give to properties of the element (pseudo-element name → property → value), which the cascade takes over the declared ones.
+  std::map<std::string, std::map<std::string, std::string>> animatedValues;
+
   std::string QualifiedName() const { return prefix.empty() ? localName : prefix + ":" + localName; }
   // `name` is compared as the standard does for a name on an HTML element in an HTML document: after
   // lowering its case.
@@ -274,6 +279,9 @@ struct Document : Node {
   bool hasPreferredSheetSet = false;         // the first style sheet with a title that is on names the preferred set, for good
   std::string preferredSheetSet;
   Quanta::Object* adoptedStyleSheets = nullptr;
+  // The function (script's, animations') that brings what animations give up to date before a computed style is read, and the style version it last ran for.
+  Quanta::Object* styleFlush = nullptr;
+  uint64_t styleFlushedVersion = 0;
   // For an about: document whose iframe is gone: the address it was resolving against, which is the origin it keeps.
   std::string inheritedBase;
   // The Content-Security-Policy values that apply to the document (the header's, and its meta elements').

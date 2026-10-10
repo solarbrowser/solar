@@ -327,6 +327,54 @@
     return t;
   };
 
+  // EventWatcher, as testharness has it: the events of the types watched come as promises, and an event nobody is waiting for fails the test.
+  globalThis.EventWatcher = function EventWatcher(test, watchedNode, eventTypes, timeoutPromise) {
+    if (typeof eventTypes === 'string') eventTypes = [eventTypes];
+    const waitingFor = { current: null };
+    let recordedEvents = null;
+    const fail = (message) => { throw new Error(message); };
+    const eventHandler = test.step_func(function (evt) {
+      if (!waitingFor.current) fail('Unexpected event ' + evt.type + ' (expected: nothing)');
+      if (recordedEvents !== null) recordedEvents.push(evt);
+      if (waitingFor.current.types.length === 0) return;
+      const expected = waitingFor.current.types[0];
+      if (evt.type !== expected) fail('Unexpected event ' + evt.type + ' (expected: ' + expected + ')');
+      waitingFor.current.types.shift();
+      if (waitingFor.current.types.length === 0) {
+        const resolve = waitingFor.current.resolve;
+        waitingFor.current = null;
+        const result = recordedEvents;
+        recordedEvents = null;
+        resolve(result);
+      }
+    });
+    for (const type of eventTypes) watchedNode.addEventListener(type, eventHandler, false);
+    this.wait_for = function (types, options) {
+      if (waitingFor.current) return Promise.reject('Already waiting for an event or events');
+      if (typeof types === 'string') types = [types];
+      if (options && options.record && options.record === 'all') recordedEvents = [];
+      return new Promise((resolve, reject) => {
+        const timeout = test.step_func(function () {
+          // If the timeout fires after the events have been received or during a later wait_for, it is ignored.
+          if (!waitingFor.current || waitingFor.current.resolve !== resolve) return;
+          assert_true(waitingFor.current.types.length === 0, 'Timed out waiting for ' + waitingFor.current.types.join(', '));
+          const result = recordedEvents;
+          recordedEvents = null;
+          const resolveFunc = waitingFor.current.resolve;
+          waitingFor.current = null;
+          resolveFunc(result);
+        });
+        if (timeoutPromise) timeoutPromise().then(timeout);
+        waitingFor.current = { types: types.slice(), resolve, reject };
+      });
+    };
+    this.stop_watching = function () {
+      for (const type of eventTypes) watchedNode.removeEventListener(type, eventHandler, false);
+    };
+    test.add_cleanup(this.stop_watching);
+    return this;
+  };
+
   // The subset-tests-by-key helper only narrows a run by a URL variant; there is none here.
   globalThis.subsetTestByKey = (key, testFunc, ...args) => testFunc(...args);
 

@@ -668,16 +668,52 @@ const char* const kWindowScript = R"JS(
   // so a frame is a 16 ms timer.
   const timeOrigin = Date.now();
   Object.defineProperty(globalThis, "performance", { value: { now() { return Date.now() - timeOrigin; }, timeOrigin, toJSON() { return { timeOrigin }; } }, writable: true, enumerable: true, configurable: true });
+  if (typeof navigator === "undefined") {
+    const navigator = { userAgent: "Mozilla/5.0 (X11; Linux x86_64) Solar/1.0", appName: "Netscape", appVersion: "5.0 (X11)", appCodeName: "Mozilla", platform: "Linux x86_64", product: "Gecko", productSub: "20030107", vendor: "", vendorSub: "", language: "en-US", languages: Object.freeze(["en-US"]), onLine: true, cookieEnabled: true, hardwareConcurrency: 4, webdriver: false, maxTouchPoints: 0, doNotTrack: null, pdfViewerEnabled: false };
+    Object.defineProperty(navigator, Symbol.toStringTag, { value: "Navigator", configurable: true });
+    Object.defineProperty(globalThis, "navigator", { value: navigator, writable: true, enumerable: true, configurable: true });
+  }
   const frames = new Map();
   let nextFrame = 1;
+  let frameTimer = null;
+  // What the animations do on a frame, before the callbacks run: update, finish the frame, and whether another is wanted.
+  const animationFrame = { run: null, end: null, wants: null };
+  const scheduleFrame = () => {
+    if (frameTimer === null && !frameBusy) frameTimer = setTimeout(runFrame, 16);
+  };
+  const reportLater = (error) => setTimeout(() => { throw error; }, 0);
+  let frameBusy = false;
+  function runFrame() {
+    frameTimer = null;
+    frameBusy = true;
+    const now = performance.now();
+    if (animationFrame.run) { try { animationFrame.run(now); } catch (error) { reportLater(error); } }
+    // The promise jobs and the events of the animations have their turn before the callbacks do.
+    setTimeout(() => runCallbacks(now), 0);
+  }
+  function runCallbacks(now) {
+    const callbacks = [...frames.values()];
+    frames.clear();
+    for (const callback of callbacks) {
+      try { callback(now); } catch (error) { reportLater(error); }
+    }
+    if (animationFrame.end) animationFrame.end();
+    frameBusy = false;
+    if (frames.size || (animationFrame.wants && animationFrame.wants())) scheduleFrame();
+  }
+  Object.defineProperty(globalThis, "__solarFrameHook", { value: function (run, end, wants) {
+    animationFrame.run = run; animationFrame.end = end; animationFrame.wants = wants;
+    return scheduleFrame;
+  }, configurable: true });
   Object.defineProperty(globalThis, "requestAnimationFrame", { value: function requestAnimationFrame(callback) {
     if (typeof callback !== "function") throw new TypeError("Failed to execute 'requestAnimationFrame' on 'Window': The callback provided as parameter 1 is not a function.");
     const handle = nextFrame++;
-    frames.set(handle, setTimeout(() => { frames.delete(handle); callback(Date.now() - timeOrigin); }, 16));
+    frames.set(handle, callback);
+    scheduleFrame();
     return handle;
   }, writable: true, enumerable: true, configurable: true });
   Object.defineProperty(globalThis, "cancelAnimationFrame", { value: function cancelAnimationFrame(handle) {
-    if (frames.has(handle)) { clearTimeout(frames.get(handle)); frames.delete(handle); }
+    frames.delete(handle);
   }, writable: true, enumerable: true, configurable: true });
   for (const name of ["addEventListener", "removeEventListener", "dispatchEvent"]) {
     const method = EventTarget.prototype[name];
@@ -912,6 +948,11 @@ void InstallWindowOn(Host& host, dom::Document* document, Quanta::Embed::Realm* 
   for (const char* const* piece = web::kScriptFontLoading; *piece; ++piece) fontLoading += *piece;
   const auto fontLoadingResult = host.Evaluate(fontLoading, "fontloading.js");
   if (!fontLoadingResult.ok) std::fprintf(stderr, "fontloading.js: %s\n", fontLoadingResult.error.c_str());
+  // And Web Animations.
+  std::string animations;
+  for (const char* const* piece = web::kScriptAnimations; *piece; ++piece) animations += *piece;
+  const auto animationsResult = host.Evaluate(animations, "animations.js");
+  if (!animationsResult.ok) std::fprintf(stderr, "animations.js: %s\n", animationsResult.error.c_str());
 }
 
 void InstallWindow(Quanta::Embed::Runtime& runtime, dom::Document* document) { InstallWindowOn(runtime, document, nullptr, nullptr); }

@@ -274,7 +274,7 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
       solar::html::InstallWindow(realm, document);
     });
   }
-  qe::EvaluateResult result = realm.Evaluate(skips + resources + harness, "harness.js");
+  qe::EvaluateResult result = realm.Evaluate(std::string(std::getenv("WPT_ALL") ? "globalThis.__allFailures = true;\n" : "") + skips + resources + harness, "harness.js");
   if (result.ok && !prelude.empty()) result = realm.Evaluate(prelude, "prelude.js");
   if (result.ok && isWindowScript) {
     const std::string address = "http://web-platform.test:8000/" + std::filesystem::relative(path, "tests/wpt").string();

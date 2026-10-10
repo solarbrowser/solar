@@ -60,7 +60,7 @@ endif
 CXXFLAGS += $(OPENSSL_CFLAGS) $(COMPRESSION_CFLAGS) $(HTTP2_CFLAGS)
 
 WEB_SOURCES = $(wildcard src/web/*.cpp)
-WEB_OBJECTS = $(WEB_SOURCES:%.cpp=$(OBJ_DIR)/%.o) $(OBJ_DIR)/$(GEN_DIR)/StreamsScript.o $(OBJ_DIR)/$(GEN_DIR)/UiEventsScript.o $(OBJ_DIR)/$(GEN_DIR)/XhrScript.o $(OBJ_DIR)/$(GEN_DIR)/TypedOmScript.o $(OBJ_DIR)/$(GEN_DIR)/FontLoadingScript.o $(OBJ_DIR)/$(GEN_DIR)/LayoutScript.o
+WEB_OBJECTS = $(WEB_SOURCES:%.cpp=$(OBJ_DIR)/%.o) $(OBJ_DIR)/$(GEN_DIR)/StreamsScript.o $(OBJ_DIR)/$(GEN_DIR)/UiEventsScript.o $(OBJ_DIR)/$(GEN_DIR)/XhrScript.o $(OBJ_DIR)/$(GEN_DIR)/TypedOmScript.o $(OBJ_DIR)/$(GEN_DIR)/FontLoadingScript.o $(OBJ_DIR)/$(GEN_DIR)/LayoutScript.o $(OBJ_DIR)/$(GEN_DIR)/AnimationsScript.o
 
 # The scripts in src/web/js are compiled into the program as C++ sources made from them.
 GEN_DIR = build/gen
@@ -93,6 +93,12 @@ $(GEN_DIR)/FontLoadingScript.cpp: $(FONT_LOADING_JS) $(BUILD_DIR)/EmbedScripts
 	@mkdir -p $(GEN_DIR)
 	@echo "[EMBED] $@"
 	@$(BUILD_DIR)/EmbedScripts FontLoading $(FONT_LOADING_JS) > $@
+
+ANIMATIONS_JS = $(sort $(wildcard src/css/js/animations-*.js))
+$(GEN_DIR)/AnimationsScript.cpp: $(ANIMATIONS_JS) $(BUILD_DIR)/EmbedScripts
+	@mkdir -p $(GEN_DIR)
+	@echo "[EMBED] $@"
+	@$(BUILD_DIR)/EmbedScripts Animations $(ANIMATIONS_JS) > $@
 
 LAYOUT_JS = $(sort $(wildcard src/layout/js/layout-*.js))
 $(GEN_DIR)/LayoutScript.cpp: $(LAYOUT_JS) $(BUILD_DIR)/EmbedScripts

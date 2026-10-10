@@ -1388,9 +1388,11 @@ Value ComputedRaw(Context& ctx, Value, qe::Args args, Value) {
 }
 
 void InstallFontNatives(Context& ctx);
+void InstallAnimationNatives(Context& ctx);
 
 void InstallCssSupports(Context& ctx) {
   InstallFontNatives(ctx);
+  InstallAnimationNatives(ctx);
   qe::DefineGlobalFunction(ctx, "__solarComputedRaw", ComputedRaw, 2);
   qe::DefineGlobalFunction(ctx, "__solarTypedComputeColor", TypedComputeColor, 1);
   qe::DefineGlobalFunction(ctx, "__solarTypedPropertyInfo", TypedPropertyInfo, 1);

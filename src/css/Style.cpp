@@ -1,5 +1,6 @@
 #include <functional>
 #include "solar/css/Style.h"
+#include "solar/css/Animation.h"
 #include "solar/css/Fonts.h"
 #include "solar/css/Logical.h"
 
@@ -1045,6 +1046,29 @@ std::string Resolver::Specified(dom::Element* element, const std::string& proper
     if (parent.element) return Compute(parent.element, property, parent.pseudo);
     return Compute(element, "\x01initial:" + property, pseudo);
   };
+  // What the rest of a declared value comes to: var() substituted, a CSS-wide keyword answered.
+  const auto fromText = [&](std::string text) -> std::string {
+    if (ContainsSubstitution(ParseComponentValues(text))) {
+      std::set<std::string> stack;
+      std::optional<std::string> substituted = Substitute(element, pseudo, text, 0, stack);
+      if (!substituted) {
+        valid = false;
+        return definition.inherited && parent.element ? fromParent() : "initial";
+      }
+      text = *substituted;
+    }
+    const ComponentValues parsed = Trimmed(ParseComponentValues(text));
+    if (IsCssWideKeyword(parsed)) {
+      const std::string keyword = Lower(parsed[0].token.value);
+      if (keyword == "initial") return "initial";
+      if (keyword == "inherit") return parent.element ? Compute(parent.element, property, parent.pseudo) : "initial";
+      if (definition.inherited && parent.element) return fromParent();
+      return "initial";
+    }
+    return text;
+  };
+  // The animations' values come over the declared ones (but for !important and transitions, which are not here).
+  if (const std::string* animated = AnimatedValue(element, pseudo, property)) return fromText(*animated);
   auto winner = style.cascade.find(property);
   std::string ownName = property;
   if (style.hasLogical && HasLogicalCounterparts(property)) {
@@ -1080,25 +1104,8 @@ std::string Resolver::Specified(dom::Element* element, const std::string& proper
       valid = false;
       return "initial";
     }
-  } else if (ContainsSubstitution(ParseComponentValues(text))) {
-    std::set<std::string> stack;
-    std::optional<std::string> substituted = Substitute(element, pseudo, text, 0, stack);
-    if (!substituted) {
-      valid = false;
-      return definition.inherited && parent.element ? fromParent() : "initial";
-    }
-    text = *substituted;
   }
-  const ComponentValues parsed = Trimmed(ParseComponentValues(text));
-  if (IsCssWideKeyword(parsed)) {
-    const std::string keyword = Lower(parsed[0].token.value);
-    if (keyword == "initial") return "initial";
-    if (keyword == "inherit") return parent.element ? Compute(parent.element, property, parent.pseudo) : "initial";
-    // unset, revert, revert-layer
-    if (definition.inherited && parent.element) return fromParent();
-    return "initial";
-  }
-  return text;
+  return fromText(text);
 }
 
 std::string TextOfComputed(const ValueMatch& match) { return SerializeValue(match.normalized); }
@@ -1219,8 +1226,14 @@ std::string Resolver::Finish(dom::Element* element, const std::string& property,
 
 }  // namespace
 
-void NoteStyleChange() { ++g_styleVersion; }
-void NoteStyleChangeForRegistry() { ++g_styleVersion; }
+uint64_t g_authorVersion = 1;
+void NoteStyleChange() {
+  ++g_styleVersion;
+  ++g_authorVersion;
+}
+void NoteStyleChangeForRegistry() { NoteStyleChange(); }
+void NoteAnimatedStyleChange() { ++g_styleVersion; }
+uint64_t AuthorStyleVersion() { return dom::TreeVersion() * 1000003 + g_authorVersion; }
 uint64_t StyleVersion() { return g_styleVersion; }
 
 std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std::string& property, const std::string& pseudo) {
@@ -1231,6 +1244,18 @@ std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std
     dom::Node* root = element;
     while (root->parentNode) root = root->parentNode;
     if (element->nodeDocument->adoptedStyleSheets || (root->IsFragment() && static_cast<dom::DocumentFragment*>(root)->adoptedStyleSheets)) ++g_styleVersion;
+  }
+  // What animations give is brought up to date first, when what it depends on has changed.
+  static bool flushing = false;
+  if (depth == 0 && !flushing && !StyleFlushSuppressed() && element && element->nodeDocument && element->nodeDocument->styleFlush) {
+    dom::Document* document = element->nodeDocument;
+    const uint64_t version = AuthorStyleVersion();
+    if (document->styleFlushedVersion != version) {
+      flushing = true;
+      Quanta::Embed::Call(ctx, Quanta::Embed::FromObject(document->styleFlush), Quanta::Embed::Undefined());
+      flushing = false;
+      document->styleFlushedVersion = AuthorStyleVersion();
+    }
   }
   struct Depth {
     Depth() { ++depth; }

@@ -29,5 +29,9 @@ std::vector<CssStyleSheet*> SheetsOfTreeRoot(dom::Node* root);
 // Something a style depends on changed (a sheet, a declaration): computed values are made again.
 void NoteStyleChange();
 uint64_t StyleVersion();
+// An animation changed the values it gives: computed values are made again, but nothing that was declared is different.
+void NoteAnimatedStyleChange();
+// A number that changes with the tree and with what is declared, not with what animations give.
+uint64_t AuthorStyleVersion();
 
 }  // namespace solar::css
