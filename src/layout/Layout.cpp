@@ -13,7 +13,22 @@
 namespace solar::layout {
 
 Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
-  const css::MediaEnvironment environment = css::EnvironmentFor(document);
+  css::MediaEnvironment environment = css::EnvironmentFor(document);
+  // The viewport of a frame is the room its element has, which is whatever style says of it.
+  if (dom::Element* frame = document->frameElement; frame && frame->nodeDocument && frame->nodeDocument != document) {
+    static int depth = 0;
+    if (depth < 8) {
+      ++depth;
+      Tree* outer = UpdateLayout(ctx, frame->nodeDocument);
+      --depth;
+      for (const Box* b : BoxesOf(*outer, frame)) {
+        if (b->kind != Box::Kind::Block) continue;
+        environment.width = std::max(0.0, b->width - b->border.Horizontal() - b->padding.Horizontal());
+        environment.height = std::max(0.0, b->height - b->border.Vertical() - b->padding.Vertical());
+        break;
+      }
+    }
+  }
   const uint64_t version = (dom::TreeVersion() * 1000003 + css::StyleVersion()) * 1000003 + static_cast<uint64_t>(environment.width * 7 + environment.height);
   if (document->layoutTree && document->layoutTree->builtFor == version && document->layoutTree->root) return document->layoutTree.get();
   auto tree = std::make_shared<Tree>();
@@ -73,9 +88,9 @@ Rect Origin(const Box& block) {
 namespace {
 
 // The transforms of a box and the boxes around it, as one matrix in document coordinates; false if none of them is transformed.
-bool CumulativeTransform(const Box& box, Matrix& out) {
+bool CumulativeTransform(const Box& box, Matrix& out, const Box* stop = nullptr) {
   std::vector<const Box*> chain;
-  for (const Box* b = &box; b; b = CoordinateParent(*b)) chain.push_back(b);
+  for (const Box* b = &box; b && b != stop; b = CoordinateParent(*b)) chain.push_back(b);
   std::reverse(chain.begin(), chain.end());
   Matrix total;
   bool any = false;
@@ -134,6 +149,8 @@ bool CumulativeTransform(const Box& box, Matrix& out) {
 }
 
 }  // namespace
+
+bool TransformBelow(const Box& box, const Box* stop, Matrix& out) { return CumulativeTransform(box, out, stop); }
 
 std::vector<Rect> ClientRects(Tree& tree, dom::Element* element) {
   std::vector<Rect> out;
@@ -464,54 +481,47 @@ std::vector<dom::Element*> ElementsAtPoint(Tree& tree, double x, double y) {
   return hits;
 }
 
-namespace {
-
-void FarthestExtent(const Box& box, double ox, double oy, double& right, double& bottom, bool& any) {
-  const Rect r = AbsoluteBorderBox(box);
-  if (box.kind == Box::Kind::Block) {
-    right = std::max(right, r.x + r.width - ox);
-    bottom = std::max(bottom, r.y + r.height - oy);
-    any = true;
+dom::Element* ViewportElement(dom::Document* document) {
+  dom::Element* root = document ? document->DocumentElement() : nullptr;
+  if (!root || document->mode != dom::Document::Mode::Quirks) return root;
+  for (dom::Node* child = root->firstChild; child; child = child->nextSibling) {
+    if (child->IsElement() && static_cast<dom::Element*>(child)->IsHtml("body")) return static_cast<dom::Element*>(child);
   }
-  for (const auto& line : box.lines) {
-    for (const LineItem& item : line.items) {
-      if (item.kind != LineItem::Kind::Text) continue;
-      right = std::max(right, r.x + item.rect.Right() - ox);
-      bottom = std::max(bottom, r.y + item.rect.Bottom() - oy);
-      any = true;
-    }
-  }
-  for (const auto& c : box.children) FarthestExtent(*c, ox, oy, right, bottom, any);
+  return nullptr;
 }
 
-}  // namespace
-
-void ScrollRange(Tree& tree, dom::Element* element, double& maxX, double& maxY) {
-  maxX = maxY = 0;
+void ScrollBounds(Tree& tree, dom::Element* element, double& minX, double& minY, double& maxX, double& maxY) {
+  minX = minY = maxX = maxY = 0;
   if (!tree.root) return;
   dom::Document* document = element ? element->nodeDocument : (tree.root->node && tree.root->node->IsDocument() ? static_cast<dom::Document*>(tree.root->node) : nullptr);
   if (!document) return;
-  if (!element || element == document->DocumentElement()) {
-    double right = 0, bottom = 0;
-    bool any = false;
-    FarthestExtent(*tree.root, 0, 0, right, bottom, any);
-    maxX = std::max(0.0, right - tree.viewportWidth);
-    maxY = std::max(0.0, bottom - tree.viewportHeight);
-    return;
+  const Box* scroller = nullptr;
+  if (!element || element == ViewportElement(document)) {
+    scroller = tree.root.get();
+  } else {
+    for (const Box* b : BoxesOf(tree, element)) if (b->kind == Box::Kind::Block) { scroller = b; break; }
+    if (!scroller) return;
+    const BoxStyle& p = scroller->style->Physical();
+    const auto scrolls = [](Overflow o) { return o != Overflow::Visible && o != Overflow::Clip; };
+    if (!scrolls(p.overflowX) && !scrolls(p.overflowY)) return;
   }
-  const std::vector<Box*>& boxes = BoxesOf(tree, element);
-  const Box* box = nullptr;
-  for (const Box* b : boxes) if (b->kind == Box::Kind::Block) { box = b; break; }
-  if (!box || (box->style->Physical().overflowX == Overflow::Visible && box->style->Physical().overflowY == Overflow::Visible) || box->style->Physical().overflowX == Overflow::Clip) return;
-  const Rect abs = AbsoluteBorderBox(*box);
-  double right = 0, bottom = 0;
-  bool any = false;
-  FarthestExtent(*box, abs.x, abs.y, right, bottom, any);
-  const double clientW = box->width - box->border.Horizontal(), clientH = box->height - box->border.Vertical();
-  maxX = std::max(0.0, right - box->border.left - clientW);
-  maxY = std::max(0.0, bottom - box->border.top - clientH);
-  if (box->style->Physical().overflowX == Overflow::Visible) maxX = 0;
-  if (box->style->Physical().overflowY == Overflow::Visible) maxY = 0;
+  const Rect overflow = ScrollableOverflow(tree, *scroller, scroller == tree.root.get() ? document->DocumentElement() : nullptr);
+  const double clientW = scroller == tree.root.get() ? tree.viewportWidth : scroller->width - scroller->border.Horizontal();
+  const double clientH = scroller == tree.root.get() ? tree.viewportHeight : scroller->height - scroller->border.Vertical();
+  minX = std::min(0.0, overflow.x);
+  minY = std::min(0.0, overflow.y);
+  maxX = std::max(0.0, overflow.Right() - clientW);
+  maxY = std::max(0.0, overflow.Bottom() - clientH);
+  if (scroller != tree.root.get()) {
+    const BoxStyle& p = scroller->style->Physical();
+    if (p.overflowX == Overflow::Visible || p.overflowX == Overflow::Clip) minX = maxX = 0;
+    if (p.overflowY == Overflow::Visible || p.overflowY == Overflow::Clip) minY = maxY = 0;
+  }
+}
+
+void ScrollRange(Tree& tree, dom::Element* element, double& maxX, double& maxY) {
+  double minX, minY;
+  ScrollBounds(tree, element, minX, minY, maxX, maxY);
 }
 
 }  // namespace solar::layout

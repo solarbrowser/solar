@@ -61,7 +61,7 @@ Value Metrics(Context& ctx, Value, qe::Args args, Value) {
     return out;
   }
   const Rect abs = AbsoluteBorderBox(*box);
-  const bool isRoot = element->nodeDocument->DocumentElement() == element;
+  const bool isRoot = ViewportElement(element->nodeDocument) == element;
   const bool inlineBox = box->kind != Box::Kind::Block;
   double clientWidth = inlineBox ? 0 : box->width - box->border.Horizontal();
   double clientHeight = inlineBox ? 0 : box->height - box->border.Vertical();
@@ -69,11 +69,14 @@ Value Metrics(Context& ctx, Value, qe::Args args, Value) {
     clientWidth = tree->viewportWidth;
     clientHeight = tree->viewportHeight;
   }
-  double right = 0, bottom = 0;
-  bool any = false;
-  if (!inlineBox) Extent(*box, abs.x, abs.y, right, bottom, any);
-  const double scrollWidth = std::max(clientWidth, right - box->border.left);
-  const double scrollHeight = std::max(clientHeight, bottom - box->border.top);
+  double scrollWidth = clientWidth, scrollHeight = clientHeight;
+  if (!inlineBox) {
+    const bool viewportBox = isRoot;
+    const Box& scroller = viewportBox ? *tree->root : *box;
+    const Rect overflow = ScrollableOverflow(*tree, scroller, viewportBox ? element : nullptr);
+    scrollWidth = std::max(clientWidth, overflow.width);
+    scrollHeight = std::max(clientHeight, overflow.height);
+  }
   push(inlineBox ? 0 : box->border.top);
   push(inlineBox ? 0 : box->border.left);
   push(clientWidth);
@@ -153,18 +156,18 @@ Value Scroll(Context& ctx, Value, qe::Args args, Value) {
   Value out = qe::NewArray(ctx);
   if (!document) return out;
   Tree* tree = UpdateLayout(ctx, document);
-  const bool viewport = !element || element == document->DocumentElement();
+  const bool viewport = !element || element == ViewportElement(document);
   const dom::Node* key = viewport ? static_cast<const dom::Node*>(document) : element;
-  double maxX = 0, maxY = 0;
-  ScrollRange(*tree, viewport ? nullptr : element, maxX, maxY);
+  double minX = 0, minY = 0, maxX = 0, maxY = 0;
+  ScrollBounds(*tree, viewport ? nullptr : element, minX, minY, maxX, maxY);
   auto& position = tree->scroll[key];
   if (args.size() >= 4 && qe::ToBoolean(args[1])) {
     const double x = qe::ToNumber(ctx, args[2]), y = qe::ToNumber(ctx, args[3]);
-    position.first = std::isnan(x) ? position.first : std::max(0.0, std::min(maxX, x));
-    position.second = std::isnan(y) ? position.second : std::max(0.0, std::min(maxY, y));
+    position.first = std::isnan(x) ? position.first : std::max(minX, std::min(maxX, x));
+    position.second = std::isnan(y) ? position.second : std::max(minY, std::min(maxY, y));
   }
-  position.first = std::min(position.first, maxX);
-  position.second = std::min(position.second, maxY);
+  position.first = std::max(minX, std::min(position.first, maxX));
+  position.second = std::max(minY, std::min(position.second, maxY));
   if (args.size() >= 4 && qe::ToBoolean(args[1])) ApplySticky(*tree);
   qe::ArrayPush(ctx, out, qe::FromNumber(position.first));
   qe::ArrayPush(ctx, out, qe::FromNumber(position.second));

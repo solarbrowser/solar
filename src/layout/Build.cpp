@@ -140,6 +140,44 @@ class Builder {
  public:
   explicit Builder(LayoutContext& lc) : lc_(lc) {}
 
+  // https://www.w3.org/TR/css-overflow-3/#overflow-propagation: the overflow of the root element is the viewport's, or the body's if the root
+  // element's is visible; the element it came from does not clip.
+  void PropagateViewportOverflow(Box& initial, dom::Document* document) {
+    Box* html = nullptr;
+    for (auto& c : initial.children) if (c->node == document->DocumentElement()) html = c.get();
+    if (!html) return;
+    const auto visible = [](const BoxStyle& p) { return p.overflowX == Overflow::Visible && p.overflowY == Overflow::Visible; };
+    Box* source = html;
+    if (visible(html->style->Physical())) {
+      source = nullptr;
+      for (auto& c : html->children) {
+        if (c->node && c->node->IsElement() && static_cast<dom::Element*>(c->node)->IsHtml("body")) {
+          source = c.get();
+          break;
+        }
+      }
+    }
+    if (!source) return;
+    const BoxStyle& p = source->style->Physical();
+    if (visible(p)) return;
+    Overflow x = p.overflowX, y = p.overflowY;
+    // clip is hidden for the viewport; a visible one beside a scrolling one is auto.
+    if (x == Overflow::Clip) x = Overflow::Hidden;
+    if (y == Overflow::Clip) y = Overflow::Hidden;
+    if (x == Overflow::Visible) x = Overflow::Auto;
+    if (y == Overflow::Visible) y = Overflow::Auto;
+    lc_.tree.viewportOverflowX = x;
+    lc_.tree.viewportOverflowY = y;
+    auto style = std::make_shared<BoxStyle>(*source->style);
+    style->overflowX = style->overflowY = Overflow::Visible;
+    if (style->physicalStyle) {
+      auto physical = std::make_shared<BoxStyle>(*style->physicalStyle);
+      physical->overflowX = physical->overflowY = Overflow::Visible;
+      style->physicalStyle = physical;
+    }
+    source->style = style;
+  }
+
   void Build(dom::Document* document) {
     styles_ = std::make_unique<CounterStyles>(document);
     auto root = std::make_unique<Box>();
@@ -153,6 +191,7 @@ class Builder {
     if (html) BuildElement(*initial, html);
     Normalize(*initial);
     AttachMarkers(*initial);
+    PropagateViewportOverflow(*initial, document);
   }
 
  private:

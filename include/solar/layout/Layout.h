@@ -36,6 +36,15 @@ std::vector<Rect> ClientRects(Tree& tree, dom::Element* element);
 
 // The elements under a point of the viewport, topmost first (as elementsFromPoint has them); empty outside the viewport.
 std::vector<dom::Element*> ElementsAtPoint(Tree& tree, double x, double y);
+// The element whose scroll position and sizes are the viewport's: the root element, or in quirks mode the body.
+dom::Element* ViewportElement(dom::Document* document);
+// The scrollable overflow area of a scroll container (the viewport, for the root box: pass the root element's box's element), in the coordinates of its
+// padding box: the padding box and what sticks out of it where it can be scrolled to.
+Rect ScrollableOverflow(Tree& tree, const Box& scroller, dom::Element* rootElement);
+// The transforms of a box and the boxes above it down from `stop` (excluded), as a matrix; false if there are none.
+bool TransformBelow(const Box& box, const Box* stop, Matrix& out);
+// How far the element may scroll in each direction, and how far back (negative where the start of the scrolling is the far side).
+void ScrollBounds(Tree& tree, dom::Element* element, double& minX, double& minY, double& maxX, double& maxY);
 // How far the element may scroll in each direction (0 for what does not scroll); the viewport for the root element.
 void ScrollRange(Tree& tree, dom::Element* element, double& maxX, double& maxY);
 

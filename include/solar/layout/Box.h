@@ -135,6 +135,7 @@ struct Tree {
   std::unique_ptr<Box> root;  // the initial containing block, anonymous, whose only child is the root element's box
   std::unordered_map<const dom::Node*, std::vector<Box*>> boxesOf;
   double viewportWidth = 800, viewportHeight = 600;
+  Overflow viewportOverflowX = Overflow::Auto, viewportOverflowY = Overflow::Auto;  // the overflow of the viewport, the root element's or the body's
   uint64_t builtFor = 0;  // the versions of the tree and of style it was made from
   // How far elements (and the viewport, under the document) are scrolled; carried over when the tree is made again.
   std::unordered_map<const dom::Node*, std::pair<double, double>> scroll;
