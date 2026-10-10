@@ -3,6 +3,9 @@
 page="$1"
 dir=$(dirname "$page")
 tmp="$dir/zz-allfail-$(basename "$page")"
-{ echo '<script>globalThis.__allFailures = true;</script>'; cat "$page"; } > "$tmp"
+case "$page" in
+  *.js) { cat "$page"; echo; echo "globalThis.__allFailures = true;"; } > "$tmp" ;;
+  *) { echo '<script>globalThis.__allFailures = true;</script>'; cat "$page"; } > "$tmp" ;;
+esac
 build/WptTest "$tmp" 2>&1
 rm -f "$tmp"

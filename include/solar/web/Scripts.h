@@ -6,5 +6,6 @@ namespace solar::web {
 extern const char* const kScriptStreams[];
 extern const char* const kScriptUiEvents[];
 extern const char* const kScriptXhr[];
+extern const char* const kScriptTypedOm[];
 
 }  // namespace solar::web

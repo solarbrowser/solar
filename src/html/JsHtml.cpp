@@ -891,6 +891,12 @@ void InstallWindowOn(Host& host, dom::Document* document, Quanta::Embed::Realm* 
   for (const char* const* piece = web::kScriptXhr; *piece; ++piece) xhr += *piece;
   const auto xhrResult = host.Evaluate(xhr, "xhr.js");
   if (!xhrResult.ok) std::fprintf(stderr, "xhr.js: %s\n", xhrResult.error.c_str());
+  // The Typed OM is written in script, over the CSS interfaces.
+  std::string typedOm;
+  for (const char* const* piece = web::kScriptTypedOm; *piece; ++piece) typedOm += *piece;
+  typedOm += "\n__solarTypedOm.install(); delete globalThis.__solarTypedOm;\n";
+  const auto typedOmResult = host.Evaluate(typedOm, "typedom.js");
+  if (!typedOmResult.ok) std::fprintf(stderr, "typedom.js: %s\n", typedOmResult.error.c_str());
 }
 
 void InstallWindow(Quanta::Embed::Runtime& runtime, dom::Document* document) { InstallWindowOn(runtime, document, nullptr, nullptr); }

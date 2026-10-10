@@ -5,6 +5,7 @@
 #include "solar/url/Parser.h"
 #include "solar/url/Serializer.h"
 #include "solar/css/Descriptors.h"
+#include "solar/css/Shorthands.h"
 #include "solar/css/Properties.h"
 #include "solar/css/Style.h"
 #include "solar/dom/CustomElements.h"
@@ -1327,7 +1328,29 @@ Value RegisterProperty(Context& ctx, Value, qe::Args args, Value) {
   return qe::Undefined();
 }
 
+// What the Typed OM needs to know of a property: [kind, syntax], kind being longhand, shorthand or custom; nothing if it is not one.
+Value TypedPropertyInfo(Context& ctx, Value, qe::Args args, Value) {
+  if (args.empty()) return qe::Null();
+  std::string name = qe::ToWtf8(ctx, args[0]);
+  if (qe::HasException(ctx)) return qe::Undefined();
+  Value result = qe::NewArray(ctx);
+  if (name.starts_with("--")) {
+    if (name.size() < 3) return qe::Null();
+    qe::ArrayPush(ctx, result, qe::FromWtf8(ctx, "custom"));
+    qe::ArrayPush(ctx, result, qe::FromWtf8(ctx, ""));
+    return result;
+  }
+  if (!NormalizePropertyName(name)) return qe::Null();
+  const PropertyDefinition* definition = FindProperty(name);
+  if (!definition) return qe::Null();
+  qe::ArrayPush(ctx, result, qe::FromWtf8(ctx, IsShorthandProperty(*definition) ? "shorthand" : "longhand"));
+  qe::ArrayPush(ctx, result, qe::FromWtf8(ctx, definition->syntax));
+  qe::ArrayPush(ctx, result, qe::FromWtf8(ctx, definition->name));
+  return result;
+}
+
 void InstallCssSupports(Context& ctx) {
+  qe::DefineGlobalFunction(ctx, "__solarTypedPropertyInfo", TypedPropertyInfo, 1);
   qe::DefineGlobalFunction(ctx, "__solarCssRegisterProperty", RegisterProperty, 1);
   qe::DefineGlobalFunction(ctx, "__solarCssSupports", CssSupports, 1);
   qe::DefineGlobalFunction(ctx, "__solarAdoptValidate", AdoptValidate, 2);

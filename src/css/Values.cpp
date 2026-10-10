@@ -763,7 +763,7 @@ ComponentValue Canonical(const ComponentValue& v, const ComputeContext& c, bool&
   ComponentValue out = v;
   if (v.kind != ComponentValue::Kind::Token || v.token.type != T::Dimension) return out;
   const std::string unit = Lower(v.token.value);
-  double px = -1;
+  double px = NAN;  // (not -1: a negative length is a length)
   const double n = v.token.number;
   if (unit == "em") px = n * c.fontSize;
   else if (unit == "rem") px = n * c.rootFontSize;
@@ -788,7 +788,7 @@ ComponentValue Canonical(const ComponentValue& v, const ComputeContext& c, bool&
     // cqw and cqh stand for the width and the height, cqi and cqb for the inline and the block axis
     else if (base == "vw") px = n * w;
   }
-  if (px >= 0 || (px == -1 && false)) {
+  if (!std::isnan(px)) {
     out.token.number = px;
     out.token.value = "px";
     changed = true;

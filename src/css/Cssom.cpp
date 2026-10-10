@@ -329,7 +329,7 @@ std::string CssDeclarations::Serialize() const {
     done.insert(entry.name);
     if (!entry.pendingShorthand.empty()) continue;  // known only once its variables are
     if (!out.empty()) out += ' ';
-    out += entry.name + ": " + entry.value + (entry.important ? " !important" : "") + ";";
+    out += (entry.name.starts_with("--") ? SerializeIdentifier(entry.name) : entry.name) + ": " + entry.value + (entry.important ? " !important" : "") + ";";
   }
   return out;
 }

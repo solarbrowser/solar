@@ -49,7 +49,7 @@ endif
 CXXFLAGS += $(OPENSSL_CFLAGS) $(COMPRESSION_CFLAGS) $(HTTP2_CFLAGS)
 
 WEB_SOURCES = $(wildcard src/web/*.cpp)
-WEB_OBJECTS = $(WEB_SOURCES:%.cpp=$(OBJ_DIR)/%.o) $(OBJ_DIR)/$(GEN_DIR)/StreamsScript.o $(OBJ_DIR)/$(GEN_DIR)/UiEventsScript.o $(OBJ_DIR)/$(GEN_DIR)/XhrScript.o
+WEB_OBJECTS = $(WEB_SOURCES:%.cpp=$(OBJ_DIR)/%.o) $(OBJ_DIR)/$(GEN_DIR)/StreamsScript.o $(OBJ_DIR)/$(GEN_DIR)/UiEventsScript.o $(OBJ_DIR)/$(GEN_DIR)/XhrScript.o $(OBJ_DIR)/$(GEN_DIR)/TypedOmScript.o
 
 # The scripts in src/web/js are compiled into the program as C++ sources made from them.
 GEN_DIR = build/gen
@@ -70,6 +70,12 @@ $(GEN_DIR)/XhrScript.cpp: $(XHR_JS) $(BUILD_DIR)/EmbedScripts
 	@mkdir -p $(GEN_DIR)
 	@echo "[EMBED] $@"
 	@$(BUILD_DIR)/EmbedScripts Xhr $(XHR_JS) > $@
+
+TYPED_OM_JS = $(sort $(wildcard src/css/js/typedom-*.js))
+$(GEN_DIR)/TypedOmScript.cpp: $(TYPED_OM_JS) $(BUILD_DIR)/EmbedScripts
+	@mkdir -p $(GEN_DIR)
+	@echo "[EMBED] $@"
+	@$(BUILD_DIR)/EmbedScripts TypedOm $(TYPED_OM_JS) > $@
 
 $(BUILD_DIR)/EmbedScripts: tools/EmbedScripts.cpp
 	@mkdir -p $(BUILD_DIR)
