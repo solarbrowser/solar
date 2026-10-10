@@ -69,6 +69,71 @@ Rect Origin(const Box& block) {
 
 }  // namespace
 
+namespace {
+
+// The transforms of a box and the boxes around it, as one matrix in document coordinates; false if none of them is transformed.
+bool CumulativeTransform(const Box& box, Matrix& out) {
+  std::vector<const Box*> chain;
+  for (const Box* b = &box; b; b = CoordinateParent(*b)) chain.push_back(b);
+  std::reverse(chain.begin(), chain.end());
+  Matrix total;
+  bool any = false;
+  for (size_t i = 0; i < chain.size(); ++i) {
+    const Box& b = *chain[i];
+    if (b.kind != Box::Kind::Block || !b.style) continue;
+    const Box* parent = i > 0 ? chain[i - 1] : nullptr;
+    const Rect abs = AbsoluteBorderBox(b);
+    Matrix own;
+    const bool transformed = TransformOf(b, own);
+    // The parent's perspective acts on this box.
+    Matrix perspective;
+    bool hasPerspective = false;
+    if (parent && parent->style && parent->style->perspective != "none") {
+      Matrix p;
+      if (ParseTransformList("perspective(" + parent->style->perspective + ")", 0, 0, p)) {
+        const Rect pabs = AbsoluteBorderBox(*parent);
+        double ox = parent->width / 2, oy = parent->height / 2;
+        const std::vector<std::string> parts = [&] {
+          std::vector<std::string> v;
+          std::string word;
+          for (char c : parent->style->perspectiveOrigin + " ") { if (c == ' ') { if (!word.empty()) v.push_back(word); word.clear(); } else word += c; }
+          return v;
+        }();
+        const auto px = [&](const std::string& t, double basis, double& out2) {
+          char* end = nullptr;
+          const double v = std::strtod(t.c_str(), &end);
+          if (end == t.c_str()) return;
+          out2 = std::string(end) == "%" ? basis * v / 100 : v;
+        };
+        if (parts.size() >= 2) { px(parts[0], parent->width, ox); px(parts[1], parent->height, oy); }
+        Matrix to, back;
+        to.m[12] = pabs.x + ox; to.m[13] = pabs.y + oy;
+        back.m[12] = -(pabs.x + ox); back.m[13] = -(pabs.y + oy);
+        perspective = to * p * back;
+        hasPerspective = true;
+      }
+    }
+    if (!transformed && !hasPerspective) continue;
+    if (parent && parent->style && !parent->style->preserve3d) {
+      // Not preserving 3D: what came before is flattened into the plane.
+      total.m[2] = total.m[6] = total.m[8] = total.m[9] = total.m[11] = total.m[14] = 0;
+      total.m[10] = 1;
+    }
+    if (hasPerspective) total = total * perspective;
+    if (transformed) {
+      Matrix to, back;
+      to.m[12] = abs.x; to.m[13] = abs.y;
+      back.m[12] = -abs.x; back.m[13] = -abs.y;
+      total = total * to * own * back;
+    }
+    any = true;
+  }
+  out = total;
+  return any;
+}
+
+}  // namespace
+
 std::vector<Rect> ClientRects(Tree& tree, dom::Element* element) {
   std::vector<Rect> out;
   for (Box* box : BoxesOf(tree, element)) {
@@ -90,8 +155,27 @@ std::vector<Rect> ClientRects(Tree& tree, dom::Element* element) {
       const auto found = tree.scroll.find(p->node);
       if (found != tree.scroll.end()) { dx += found->second.first; dy += found->second.second; }
     }
+    const size_t added = box->kind == Box::Kind::Inline || box->kind == Box::Kind::Text ? box->fragments.size() : 1;
+    Matrix matrix;
+    const Box* holder = box;
+    if (box->kind != Box::Kind::Block) {
+      holder = box->parent;
+      while (holder && holder->kind != Box::Kind::Block) holder = holder->parent;
+    }
+    if (holder && CumulativeTransform(*holder, matrix)) {
+      for (size_t i = out.size() - added; i < out.size(); ++i) {
+        double xs[4], ys[4];
+        matrix.Map(out[i].x, out[i].y, xs[0], ys[0]);
+        matrix.Map(out[i].x + out[i].width, out[i].y, xs[1], ys[1]);
+        matrix.Map(out[i].x, out[i].y + out[i].height, xs[2], ys[2]);
+        matrix.Map(out[i].x + out[i].width, out[i].y + out[i].height, xs[3], ys[3]);
+        double l = xs[0], r = xs[0], t = ys[0], b = ys[0];
+        for (int k = 1; k < 4; ++k) { l = std::min(l, xs[k]); r = std::max(r, xs[k]); t = std::min(t, ys[k]); b = std::max(b, ys[k]); }
+        out[i] = {l, t, r - l, b - t};
+      }
+    }
     if (dx != 0 || dy != 0) {
-      for (size_t i = out.size() - (box->kind == Box::Kind::Inline || box->kind == Box::Kind::Text ? box->fragments.size() : 1); i < out.size(); ++i) {
+      for (size_t i = out.size() - added; i < out.size(); ++i) {
         out[i].x -= dx;
         out[i].y -= dy;
       }
@@ -142,6 +226,17 @@ std::string Px(double v) {
 
 }  // namespace
 
+namespace {
+
+std::string Num(double v) {
+  if (std::fabs(v) < 5e-7) return "0";
+  char buffer[64];
+  std::snprintf(buffer, sizeof buffer, "%.6g", v);
+  return buffer;
+}
+
+}  // namespace
+
 bool UsedValue(Tree& tree, dom::Element* element, const std::string& property, std::string& out) {
   const std::vector<Box*>& boxes = BoxesOf(tree, element);
   if (boxes.empty()) return false;
@@ -169,6 +264,18 @@ bool UsedValue(Tree& tree, dom::Element* element, const std::string& property, s
       out = Px(first ? shift : -shift);
       return true;
     }
+  }
+  if (property == "transform") {
+    if (isInline || box->style->transform == "none") return false;
+    Matrix m;
+    if (!ParseTransformList(box->style->transform, box->width, box->height, m)) return false;
+    if (m.Is2d()) out = "matrix(" + Num(m.m[0]) + ", " + Num(m.m[1]) + ", " + Num(m.m[4]) + ", " + Num(m.m[5]) + ", " + Num(m.m[12]) + ", " + Num(m.m[13]) + ")";
+    else {
+      out = "matrix3d(";
+      for (int i = 0; i < 16; ++i) out += (i ? ", " : "") + Num(m.m[i]);
+      out += ")";
+    }
+    return true;
   }
   if (property == "min-width" || property == "min-height") {
     const Length& l = property == "min-width" ? box->style->minWidth : box->style->minHeight;
@@ -199,7 +306,7 @@ bool ResolvedHook(Quanta::Context& ctx, dom::Element* element, const std::string
   const std::string physical = css::PhysicalOf(given, {css::ComputedValue(ctx, element, "writing-mode"), css::ComputedValue(ctx, element, "direction")});
   if (!physical.empty()) property = physical;
   static const char* const names[] = {"width", "height", "min-width", "min-height", "margin-top", "margin-right", "margin-bottom", "margin-left", "padding-top",
-                                      "padding-right", "padding-bottom", "padding-left", "top", "right", "bottom", "left"};
+                                      "padding-right", "padding-bottom", "padding-left", "top", "right", "bottom", "left", "transform"};
   bool relevant = false;
   for (const char* n : names) if (property == n) relevant = true;
   if (!relevant) return false;

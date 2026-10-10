@@ -13,6 +13,19 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document);
 // The boxes an element made (more than one when an inline box was split around a block), in tree order; none for display: none.
 const std::vector<Box*>& BoxesOf(Tree& tree, const dom::Node* node);
 
+// A 4x4 matrix, column-major as the CSS matrix3d() has it.
+struct Matrix {
+  double m[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+  Matrix operator*(const Matrix& other) const;
+  bool IsIdentity() const;
+  bool Is2d() const;
+  void Map(double x, double y, double& outX, double& outY) const;
+};
+// The transform list as a matrix (percentages of the given box size); false if it is not valid.
+bool ParseTransformList(const std::string& text, double width, double height, Matrix& out);
+// The matrix a box's transform properties come to, about its transform origin, in the box's own coordinates; false if it has none.
+bool TransformOf(const Box& box, Matrix& out);
+
 // A box's border box in the coordinates of the document (the initial containing block's origin).
 Rect AbsoluteBorderBox(const Box& box);
 // The rectangles of an element as getClientRects gives them, in the coordinates of the viewport, and their union.

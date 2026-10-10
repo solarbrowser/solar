@@ -300,6 +300,14 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
       const std::string v = get(property);
       return v == "normal" ? Length() : ParseLength(v);
     };
+    s.transform = get("transform");
+    s.transformOrigin = get("transform-origin");
+    s.translate = get("translate");
+    s.rotate = get("rotate");
+    s.scale = get("scale");
+    s.perspective = get("perspective");
+    s.perspectiveOrigin = get("perspective-origin");
+    s.preserve3d = get("transform-style") == "preserve-3d";
     s.counterReset = get("counter-reset");
     s.counterIncrement = get("counter-increment");
     s.counterSet = get("counter-set");

@@ -129,6 +129,10 @@ struct BoxStyle {
   bool flexBasisContent = false;
   int order = 0;
   Align justifyContent, alignItems, alignSelf, alignContent, justifyItems, justifySelf;
+  // Transforms (css-transforms): the computed values as text.
+  std::string transform = "none", transformOrigin, translate = "none", rotate = "none", scale = "none", perspective = "none", perspectiveOrigin;
+  bool preserve3d = false;
+
   // Counters and lists.
   std::string counterReset, counterIncrement, counterSet, listStyleType, quotes;
   bool listStyleInside = false;

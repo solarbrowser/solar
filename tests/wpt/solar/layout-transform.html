@@ -1,0 +1,46 @@
+<!doctype html>
+<title>layout: transforms and geometry</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<style>
+body { margin: 0; }
+#a { width: 100px; height: 50px; margin: 100px 0 0 100px; transform: rotate(90deg); }
+#b { width: 100px; height: 50px; transform: translate(10px, 20px) scale(2); transform-origin: 0 0; }
+#c { width: 100px; height: 50px; }
+#c > div { width: 10px; height: 10px; }
+#s { width: 100px; height: 50px; overflow: scroll; }
+#s > div { width: 300px; height: 300px; }
+#p { position: absolute; left: 50px; top: 50px; width: 20px; height: 20px; z-index: 2 }
+#q { position: absolute; left: 50px; top: 50px; width: 40px; height: 40px; z-index: 1 }
+</style>
+<div id=a></div><div id=b></div>
+<div id=s><div id=sc></div></div>
+<div id=p></div><div id=q></div>
+<script>
+const r = (id) => document.getElementById(id).getBoundingClientRect();
+test(() => {
+  const a = r("a");
+  assert_approx_equals(a.left, 125, 0.01); assert_approx_equals(a.top, 75, 0.01);
+  assert_approx_equals(a.width, 50, 0.01); assert_approx_equals(a.height, 100, 0.01);
+  assert_equals(document.getElementById("a").offsetWidth, 100, "offset sizes ignore transforms");
+  assert_equals(getComputedStyle(document.getElementById("a")).transform.slice(0, 7), "matrix(");
+}, "rotation about the centre");
+test(() => {
+  const b = r("b");
+  assert_equals(b.width, 200); assert_equals(b.height, 100); assert_equals(b.left, 10);
+}, "translate and scale");
+test(() => {
+  const s = document.getElementById("s");
+  assert_equals(s.scrollWidth, 300); assert_equals(s.clientWidth, 100);
+  s.scrollTop = 40; s.scrollLeft = 10;
+  assert_equals(s.scrollTop, 40);
+  assert_equals(r("sc").top, r("s").top - 40);
+  s.scrollTop = 1000;
+  assert_equals(s.scrollTop, 300 - 50);
+}, "scrolling");
+test(() => {
+  assert_equals(document.elementFromPoint(60, 60).id, "p");
+  assert_equals(document.elementFromPoint(85, 85).id, "q");
+  assert_equals(document.elementFromPoint(-1, 0), null);
+}, "elementFromPoint honours z-index");
+</script>
