@@ -300,6 +300,16 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
       const std::string v = get(property);
       return v == "normal" ? Length() : ParseLength(v);
     };
+    s.gridTemplateColumns = get("grid-template-columns");
+    s.gridTemplateRows = get("grid-template-rows");
+    s.gridTemplateAreas = get("grid-template-areas");
+    s.gridAutoFlow = get("grid-auto-flow");
+    s.gridAutoColumns = get("grid-auto-columns");
+    s.gridAutoRows = get("grid-auto-rows");
+    s.gridColumnStart = get("grid-column-start");
+    s.gridColumnEnd = get("grid-column-end");
+    s.gridRowStart = get("grid-row-start");
+    s.gridRowEnd = get("grid-row-end");
     s.rowGap = gap("row-gap");
     s.columnGap = gap("column-gap");
   }

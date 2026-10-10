@@ -161,6 +161,10 @@ void ComputeContentSizes(LayoutContext& lc, Box& box) {
     FlexContentSizes(lc, box, box.minContent, box.maxContent);
     return;
   }
+  if (IsGridDisplay(s.display)) {
+    GridContentSizes(lc, box, box.minContent, box.maxContent);
+    return;
+  }
   if (box.hasInlineContent) {
     InlineContentSizes(lc, box, box.minContent, box.maxContent);
     return;
@@ -518,6 +522,10 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
     lc.cbX = contentLeftBfc;
     LayoutFlex(lc, box, width, heightForChildren, contentHeight);
     for (auto& c : box.children) if (!c->style->IsOutOfFlow()) hasContent = true;
+  } else if (IsGridDisplay(s.display)) {
+    lc.cbX = contentLeftBfc;
+    LayoutGrid(lc, box, width, heightForChildren, contentHeight);
+    for (auto& c : box.children) if (!c->style->IsOutOfFlow()) hasContent = true;
   } else if (box.hasInlineContent) {
     double baseline = -1;
     contentHeight = LayoutInlineContent(lc, box, width, baseline);
@@ -530,7 +538,7 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
       if (!c->style->IsOutOfFlow() && !c->style->IsFloating() && !c->collapsedThrough) hasContent = true;
     }
   }
-  if (!IsFlexDisplay(s.display)) {
+  if (!IsFlexDisplay(s.display) && !IsGridDisplay(s.display)) {
     box.firstBaseline = -1;
     if (box.hasInlineContent && !box.lines.empty()) {
       box.firstBaseline = box.lines[0].rect.y + box.lines[0].baseline;

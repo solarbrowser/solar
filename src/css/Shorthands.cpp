@@ -570,6 +570,39 @@ bool ExpandShorthand(const PropertyDefinition& property, const ComponentValues& 
     for (Longhand& l : mine) out.push_back(std::move(l));
     return true;
   }
+  if (property.name == std::string("grid-row") || property.name == std::string("grid-column") || property.name == std::string("grid-area")) {
+    // Lines apart at the slashes; a line left out is the one before it if that is a name, and auto otherwise.
+    std::vector<ComponentValues> parts(1);
+    for (const ComponentValue& v : values) {
+      if (v.IsDelim('/')) parts.emplace_back();
+      else parts.back().push_back(v);
+    }
+    const bool area = property.name == std::string("grid-area");
+    if (parts.size() > (area ? 4u : 2u)) return false;
+    std::vector<std::string> text;
+    for (ComponentValues& part : parts) {
+      part = Trimmed(part);
+      if (part.empty()) return false;
+      const PropertyDefinition* leaf = FindProperty(property.longhands[0]);
+      ValueMatch one;
+      if (!leaf || !MatchPropertyValue(*leaf, part, one)) return false;
+      text.push_back(SerializeValue(one.normalized));
+    }
+    const auto named = [&](size_t i) { return i < text.size() && IsGridName(text[i]); };
+    if (area) {
+      // row-start / column-start / row-end / column-end
+      if (text.size() < 2) text.push_back(named(0) ? text[0] : "auto");
+      if (text.size() < 3) text.push_back(named(0) ? text[0] : "auto");
+      if (text.size() < 4) text.push_back(named(1) ? text[1] : "auto");
+      const char* order[4] = {"grid-row-start", "grid-column-start", "grid-row-end", "grid-column-end"};
+      for (size_t i = 0; i < 4; ++i) ExpandLonghand(order[i], text[i], out);
+    } else {
+      if (text.size() < 2) text.push_back(named(0) ? text[0] : "auto");
+      ExpandLonghand(property.longhands[0], text[0], out);
+      ExpandLonghand(property.longhands[1], text[1], out);
+    }
+    return true;
+  }
   ValueMatch match;
   if (!MatchPropertyValue(property, values, match)) return false;
   const ComponentValues& items = match.normalized;

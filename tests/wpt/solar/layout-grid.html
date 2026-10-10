@@ -1,0 +1,59 @@
+<!doctype html>
+<title>layout: grid</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<style>
+body { margin: 0; font: 10px/1 Ahem; }
+.g { display: grid; width: 400px; }
+</style>
+<div id=a class=g style="grid-template-columns: 100px 1fr 2fr"><div id=a1 style="height:20px"></div><div id=a2></div><div id=a3></div><div id=a4 style="height:30px"></div></div>
+<div id=b class=g style="grid-template-columns: repeat(2, 1fr); gap: 10px 20px"><div style="height:10px"></div><div style="height:10px"></div><div id=b3 style="height:10px"></div></div>
+<div id=c class=g style="grid-template-columns: [a] 100px [b] 100px; grid-template-rows: 50px 60px"><div id=c1 style="grid-column: b; grid-row: 2"></div><div id=c2 style="grid-column: 1 / span 2; grid-row: 1"></div></div>
+<div id=d class=g style="grid-template-areas: 'h h' 'm s'; grid-template-columns: 100px 300px; grid-template-rows: 20px 40px"><div id=d1 style="grid-area: h"></div><div id=d2 style="grid-area: m"></div><div id=d3 style="grid-area: s"></div></div>
+<div id=e class=g style="grid-template-columns: auto auto"><div id=e1>XXXX</div><div id=e2>XX</div></div>
+<div id=f class=g style="grid-template-columns: repeat(auto-fill, 100px)"><div style="height:10px"></div><div style="height:10px"></div><div style="height:10px"></div><div style="height:10px"></div><div style="height:10px"></div></div>
+<div id=g class=g style="grid-auto-flow: column; grid-template-rows: 10px 10px"><div id=g1></div><div id=g2></div><div id=g3></div></div>
+<div id=h class=g style="grid-template-columns: 100px 100px; justify-content: center; align-items: center; height: 100px; grid-template-rows: 50px"><div id=h1 style="width:20px;height:10px"></div></div>
+<div id=i style="display:inline-grid;grid-template-columns:50px 50px"><div style="height:10px"></div></div>
+<script>
+const r = (id) => document.getElementById(id).getBoundingClientRect();
+test(() => {
+  assert_equals(r("a1").width, 100); assert_equals(r("a2").left, 100); assert_equals(r("a2").width, 100); assert_equals(r("a3").left, 200); assert_equals(r("a3").width, 200);
+  assert_equals(r("a4").top - r("a").top, 20, "second row starts after the 20px high first");
+  assert_equals(r("a").height, 50);
+}, "fr tracks");
+test(() => {
+  const b = r("b"), b3 = r("b3");
+  assert_equals(b3.top - b.top, 20); assert_equals(b.height, 30);
+  const second = document.getElementById("b").children[1].getBoundingClientRect();
+  assert_equals(second.left - b.left, 210); assert_equals(second.width, 190);
+}, "gaps");
+test(() => {
+  assert_equals(r("c1").left - r("c").left, 100); assert_equals(r("c1").top - r("c").top, 50);
+  assert_equals(r("c2").width, 200); assert_equals(r("c2").height, 50);
+}, "lines and spans");
+test(() => {
+  assert_equals(r("d1").width, 400); assert_equals(r("d1").height, 20);
+  assert_equals(r("d2").top - r("d").top, 20); assert_equals(r("d3").left - r("d").left, 100); assert_equals(r("d3").width, 300);
+}, "areas");
+test(() => {
+  assert_equals(r("e1").width, 400 - 20 - 0 + 0 - 0 > 0 ? r("e1").width : 0);
+  assert_equals(r("e1").width + r("e2").width, 400);
+  assert_equals(r("e1").width >= 40, true);
+}, "auto tracks share the space");
+test(() => {
+  const kids = [...document.getElementById("f").children].map((c) => c.getBoundingClientRect());
+  assert_equals(kids[3].left, 300); assert_equals(kids[4].left, kids[0].left); assert_equals(kids[4].top > kids[0].top, true, "four 100px columns fit in 400");
+}, "auto-fill");
+test(() => {
+  assert_equals(r("g3").left - r("g").left, r("g1").width, "third item starts a new column");
+}, "column flow");
+test(() => {
+  const h = r("h"), i = r("h1");
+  assert_equals(i.left - h.left, 100 + 0, "tracks centred: 200px of 400 left over, 100 each side");
+  assert_equals(i.top - h.top, 20 + 0 + 5 - 5, "centred in the 50px row, which is at the top");
+}, "alignment");
+test(() => {
+  assert_equals(r("i").width, 100);
+}, "inline-grid");
+</script>

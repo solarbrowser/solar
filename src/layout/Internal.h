@@ -65,6 +65,11 @@ void LayoutFlex(LayoutContext& lc, Box& container, double contentWidth, double h
 void FlexContentSizes(LayoutContext& lc, Box& container, double& minContent, double& maxContent);
 inline bool IsFlexDisplay(Display d) { return d == Display::Flex || d == Display::InlineFlex; }
 
+// Grid.cpp
+void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double heightBasis, double& contentHeight);
+void GridContentSizes(LayoutContext& lc, Box& container, double& minContent, double& maxContent);
+inline bool IsGridDisplay(Display d) { return d == Display::Grid || d == Display::InlineGrid; }
+
 // Inline.cpp: the lines of a block container with inline content, in a content box `width` wide. Sets the box's content height.
 double LayoutInlineContent(LayoutContext& lc, Box& container, double width, double& baseline);
 void InlineContentSizes(LayoutContext& lc, Box& container, double& minContent, double& maxContent);

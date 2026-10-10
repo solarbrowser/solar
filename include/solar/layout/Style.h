@@ -129,6 +129,9 @@ struct BoxStyle {
   bool flexBasisContent = false;
   int order = 0;
   Align justifyContent, alignItems, alignSelf, alignContent, justifyItems, justifySelf;
+  // Grid (css-grid): the computed values as text, read where the grid is laid out.
+  std::string gridTemplateColumns, gridTemplateRows, gridTemplateAreas, gridAutoFlow, gridAutoColumns, gridAutoRows;
+  std::string gridColumnStart, gridColumnEnd, gridRowStart, gridRowEnd;
   Length rowGap, columnGap;  // Auto: normal (0 in flex, the default in grid)
 
   bool IsOutOfFlow() const { return position == Position::Absolute || position == Position::Fixed; }

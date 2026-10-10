@@ -1559,4 +1559,5 @@ tests/wpt/solar/dataset.html
 tests/wpt/solar/font-loading.html
 tests/wpt/solar/layout-flex.html
 tests/wpt/solar/layout-flow.html
+tests/wpt/solar/layout-grid.html
 tests/wpt/solar/link-sheet.html
