@@ -429,6 +429,21 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
   s.overflowWrap = Pick<OverflowWrap>(get("overflow-wrap"), {{"break-word", OverflowWrap::BreakWord}, {"anywhere", OverflowWrap::Anywhere}}, OverflowWrap::Normal);
   s.wordBreak = Pick<WordBreak>(get("word-break"), {{"break-all", WordBreak::BreakAll}, {"keep-all", WordBreak::KeepAll}, {"break-word", WordBreak::BreakWord}}, WordBreak::Normal);
   s.tabSize = static_cast<int>(Number(get("tab-size"), 8));
+  {
+    const std::string lb = get("line-break");
+    s.lineBreak = lb == "loose" ? 1 : lb == "strict" ? 2 : lb == "anywhere" ? 3 : 0;
+    for (const dom::Node* n = element; n; n = n->parentNode) {
+      if (!n->IsElement()) continue;
+      const dom::Element* e = static_cast<const dom::Element*>(n);
+      const dom::Attr* a = e->FindAttribute("", "lang");
+      if (!a) a = e->FindAttribute("http://www.w3.org/XML/1998/namespace", "lang");
+      if (a) {
+        s.lang = a->value;
+        for (char& c : s.lang) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        break;
+      }
+    }
+  }
   s.color = get("color");
   s.backgroundColor = get("background-color");
   s.fontFamily = get("font-family");

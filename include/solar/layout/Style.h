@@ -102,6 +102,8 @@ struct BoxStyle {
   double letterSpacing = 0, wordSpacing = 0;
   TextTransform textTransform = TextTransform::None;
   OverflowWrap overflowWrap = OverflowWrap::Normal;
+  int lineBreak = 0;  // line-break: 0 auto/normal, 1 loose, 2 strict, 3 anywhere
+  std::string lang;   // the language of the element (the nearest lang attribute), lowercase
   WordBreak wordBreak = WordBreak::Normal;
   int tabSize = 8;
   std::string color = "rgb(0, 0, 0)";

@@ -628,6 +628,19 @@ bool ExpandShorthand(const PropertyDefinition& property, const ComponentValues& 
     for (Longhand& l : mine) out.push_back(std::move(l));
     return true;
   }
+  if (name == "white-space" && items.size() == 1 && items[0].IsIdent()) {
+    // The keywords of the old property are both of the new ones.
+    static const std::map<std::string, std::pair<const char*, const char*>> keywords = {
+        {"normal", {"collapse", "wrap"}}, {"pre", {"preserve", "nowrap"}}, {"pre-wrap", {"preserve", "wrap"}}, {"pre-line", {"preserve-breaks", "wrap"}},
+        {"nowrap", {"collapse", "nowrap"}}, {"break-spaces", {"break-spaces", "wrap"}}};
+    const auto found = keywords.find(Lower(items[0].token.value));
+    if (found != keywords.end()) {
+      add("white-space-collapse", found->second.first);
+      add("text-wrap-mode", found->second.second);
+      for (Longhand& l : mine) out.push_back(std::move(l));
+      return true;
+    }
+  }
   if (name == "flex" && items.size() == 1 && items[0].IsIdent() && Lower(items[0].token.value) == "none") {
     add("flex-grow", "0");
     add("flex-shrink", "0");
@@ -972,6 +985,17 @@ std::optional<std::string> SerializeShorthand(const PropertyDefinition& shorthan
       if (same) return attempt;
     }
     return std::nullopt;
+  } else if (name == "white-space") {
+    std::string collapse, wrap;
+    for (size_t i = 0; i < n; ++i) {
+      if (std::string(shorthand.longhands[i]) == "white-space-collapse") collapse = input.values[i];
+      else if (std::string(shorthand.longhands[i]) == "text-wrap-mode") wrap = input.values[i];
+    }
+    if (collapse.empty() || wrap.empty()) return std::nullopt;
+    static const std::map<std::string, std::string> names = {{"collapse wrap", "normal"}, {"preserve nowrap", "pre"}, {"preserve wrap", "pre-wrap"}, {"preserve-breaks wrap", "pre-line"},
+                                                              {"collapse nowrap", "nowrap"}, {"break-spaces wrap", "break-spaces"}};
+    const auto found = names.find(collapse + " " + wrap);
+    candidate = found != names.end() ? found->second : (wrap == "wrap" ? collapse : collapse + " " + wrap);
   } else if (name == "grid-row" || name == "grid-column") {
     if (n != 2) return std::nullopt;
     const std::string start = input.values[0], end = input.values[1];

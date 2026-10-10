@@ -14,6 +14,9 @@ CSS_OBJECTS = $(CSS_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
 # Fonts: the files are read and the text is shaped with HarfBuzz, which pkg-config finds as it does OpenSSL.
 FONT_SOURCES = $(wildcard src/font/*.cpp)
 FONT_OBJECTS = $(FONT_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
+# Text: Unicode properties and the algorithms on them (line breaking, bidi, case).
+TEXT_SOURCES = $(wildcard src/text/*.cpp)
+TEXT_OBJECTS = $(TEXT_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
 # Layout: the box tree of a document and where its boxes go.
 LAYOUT_SOURCES = $(wildcard src/layout/*.cpp)
 LAYOUT_OBJECTS = $(LAYOUT_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
@@ -126,7 +129,7 @@ quanta:
 
 $(QUANTA_LIBS): | quanta
 
-solar: $(OBJ_DIR)/src/main.o $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
+solar: $(OBJ_DIR)/src/main.o $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS)
 
@@ -229,7 +232,7 @@ $(BUILD_DIR)/HtmlTokenizerTest: $(OBJ_DIR)/tests/HtmlTokenizerTest.o $(OBJ_DIR)/
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^
 
-$(BUILD_DIR)/HtmlTreeTest: $(OBJ_DIR)/tests/HtmlTreeTest.o $(HTML_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(URL_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
+$(BUILD_DIR)/HtmlTreeTest: $(OBJ_DIR)/tests/HtmlTreeTest.o $(HTML_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(URL_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS)
 
@@ -237,7 +240,7 @@ $(BUILD_DIR)/DomTest: $(OBJ_DIR)/tests/DomTest.o $(URL_OBJECTS) $(DOM_OBJECTS) $
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
 
-$(BUILD_DIR)/WptTest: $(OBJ_DIR)/tests/WptTest.o $(URL_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
+$(BUILD_DIR)/WptTest: $(OBJ_DIR)/tests/WptTest.o $(URL_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS)
 

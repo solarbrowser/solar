@@ -8,6 +8,7 @@
 #include "Internal.h"
 #include "solar/css/Fonts.h"
 #include "solar/css/Tokenizer.h"
+#include "solar/text/Unicode.h"
 
 namespace solar::layout {
 
@@ -73,21 +74,13 @@ char32_t ToLower(char32_t c) {
   return c;
 }
 
-std::string Transform(const std::string& text, TextTransform transform) {
-  if (transform == TextTransform::None) return text;
-  std::string out;
-  bool startOfWord = true;
-  for (size_t i = 0; i < text.size();) {
-    char32_t c = DecodeAt(text, i);
-    if (transform == TextTransform::Uppercase) c = ToUpper(c);
-    else if (transform == TextTransform::Lowercase) c = ToLower(c);
-    else if (transform == TextTransform::Capitalize) {
-      if (startOfWord && IsAlnum(c)) c = ToUpper(c);
-      startOfWord = !IsAlnum(c) && c != '\'' && c != 0x2019;
-    }
-    AppendCp(out, c);
+std::string Transform(const std::string& text, TextTransform transform, const std::string& language) {
+  switch (transform) {
+    case TextTransform::Uppercase: return text::ChangeCase(text, text::CaseMode::Upper, language);
+    case TextTransform::Lowercase: return text::ChangeCase(text, text::CaseMode::Lower, language);
+    case TextTransform::Capitalize: return text::ChangeCase(text, text::CaseMode::Title, language);
+    default: return text;
   }
-  return out;
 }
 
 // ---- Fonts ----
@@ -217,7 +210,7 @@ struct Collector {
   // The text after white space processing.
   std::string Process(Box& text) {
     const BoxStyle& s = *text.style;
-    std::string in = Transform(text.text, s.textTransform);
+    std::string in = Transform(text.text, s.textTransform, s.lang);
     std::string out;
     switch (s.whiteSpaceCollapse) {
       case WhiteSpaceCollapse::Collapse:
@@ -399,58 +392,20 @@ struct Collector {
   }
 };
 
-// Break opportunities (UAX #14, in the little of it that matters for these scripts): after the character ending at each offset.
 void FindBreaks(const std::string& all, const BoxStyle& containerStyle, std::vector<char>& breakAfter) {
-  breakAfter.assign(all.size() + 1, 0);
-  std::vector<std::pair<size_t, char32_t>> chars;  // end offset, code point
-  for (size_t i = 0; i < all.size();) {
-    const char32_t cp = DecodeAt(all, i);
-    chars.push_back({i, cp});
+  text::LineBreakOptions options;
+  options.strictness = containerStyle.lineBreak == 1 ? text::LineBreakOptions::Strictness::Loose : containerStyle.lineBreak == 2 ? text::LineBreakOptions::Strictness::Strict :
+                       containerStyle.lineBreak == 3 ? text::LineBreakOptions::Strictness::Anywhere : text::LineBreakOptions::Strictness::Normal;
+  options.words = containerStyle.wordBreak == WordBreak::BreakAll ? text::LineBreakOptions::Words::BreakAll : containerStyle.wordBreak == WordBreak::KeepAll ? text::LineBreakOptions::Words::KeepAll :
+                  text::LineBreakOptions::Words::Normal;
+  options.japaneseOrChinese = containerStyle.lang.rfind("ja", 0) == 0 || containerStyle.lang.rfind("zh", 0) == 0;
+  breakAfter = text::FindLineBreaks(all, options);
+  // Spaces are where lines end when the style keeps them (break-spaces): the algorithm allows a break after the last of a run only.
+  if (containerStyle.whiteSpaceCollapse == WhiteSpaceCollapse::BreakSpaces) {
+    for (size_t i = 0; i < all.size(); ++i) if (all[i] == ' ') breakAfter[i + 1] = 1;
   }
-  for (size_t k = 0; k < chars.size(); ++k) {
-    const char32_t c = chars[k].second;
-    const bool hasNext = k + 1 < chars.size();
-    const char32_t next = hasNext ? chars[k + 1].second : 0;
-    bool allow = false;
-    if (c == '\n') {
-      allow = true;
-    } else if (!hasNext) {
-      allow = false;  // (the end of the text is the end of the line anyway)
-    } else if (IsCombining(next)) {
-      allow = false;
-    } else if (c == 0xA0 || c == 0x2007 || c == 0x202F || c == 0x2060 || c == 0xFEFF || c == 0x200D) {
-      allow = false;
-    } else if (next == 0xA0 || next == 0x2060 || next == 0xFEFF || next == 0x200D) {
-      allow = false;
-    } else if (c == 0x200B) {
-      allow = true;
-    } else if (next == 0x200B) {
-      allow = false;
-    } else if (IsSpaceChar(c)) {
-      allow = !IsSpaceChar(next) || containerStyle.whiteSpaceCollapse == WhiteSpaceCollapse::BreakSpaces;
-      if (IsSpaceChar(next) && containerStyle.whiteSpaceCollapse == WhiteSpaceCollapse::BreakSpaces) allow = true;
-    } else if (IsSpaceChar(next)) {
-      allow = false;
-    } else if (c == '-' || c == 0x2010 || c == 0x2013 || c == 0xAD) {
-      // After a hyphen, but not before a number or when the hyphen starts a word.
-      const bool startsWord = k == 0 || IsSpaceChar(chars[k - 1].second) || chars[k - 1].second == '\n';
-      allow = !startsWord && !(next >= '0' && next <= '9' && c == '-') && next != '-' && !IsClosingPunct(next);
-    } else if (c == 0xFFFC || next == 0xFFFC) {
-      allow = !(next == '.' || next == ',' || next == ')' || next == '!' || next == '?' || next == ';' || next == ':');
-      if (c == 0xFFFC && (next == '.' || next == ',' || next == ')' || next == '!' || next == '?' || next == ';' || next == ':')) allow = false;
-    } else if (IsCjk(c) && IsCjk(next)) {
-      allow = !IsClosingPunct(next) && !IsOpeningPunct(c);
-      if (containerStyle.wordBreak == WordBreak::KeepAll && !(c >= 0x3000 && c <= 0x303F)) allow = false;
-    } else if (IsCjk(c) && !IsAlnum(next) && next < 0x80) {
-      allow = false;
-    } else if (IsCjk(c) && IsAlnum(next)) {
-      allow = containerStyle.wordBreak != WordBreak::KeepAll;
-    } else if (IsAlnum(c) && IsCjk(next)) {
-      allow = !IsClosingPunct(next) && containerStyle.wordBreak != WordBreak::KeepAll;
-    }
-    if (!allow && containerStyle.wordBreak == WordBreak::BreakAll && IsAlnum(c) && IsAlnum(next)) allow = true;
-    if (allow) breakAfter[chars[k].first] = 1;
-  }
+  // A newline in the text ends the line whatever the algorithm says of it.
+  for (size_t i = 0; i < all.size(); ++i) if (all[i] == '\n') breakAfter[i + 1] = 1;
 }
 
 // ---- Lines ----
