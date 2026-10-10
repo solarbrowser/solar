@@ -1,5 +1,6 @@
 #include <functional>
 #include "solar/css/Style.h"
+#include "solar/css/Logical.h"
 
 #include <algorithm>
 #include <climits>
@@ -368,6 +369,7 @@ struct ElementStyle {
   std::set<std::string> resolving;
   std::vector<std::vector<DeclarationEntry>> storage;  // the style attribute's declarations
   bool built = false;
+  bool hasLogical = false;  // a logical property is declared for the element
 };
 
 std::map<std::pair<dom::Element*, std::string>, ElementStyle>& Cache() {
@@ -528,6 +530,13 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
     for (const DeclarationEntry& entry : style.storage.back()) gatherer.Offer(entry, true, true, kUnlayered, Specificity{});
   }
   RollBack(style.cascade);
+  for (const auto& [name, winner] : style.cascade) {
+    (void)winner;
+    if (IsLogicalProperty(name)) {
+      style.hasLogical = true;
+      break;
+    }
+  }
 }
 
 // ---- var() ----
@@ -848,7 +857,19 @@ std::string Resolver::Specified(dom::Element* element, const std::string& proper
     if (parent.element) return Compute(parent.element, property, parent.pseudo);
     return Compute(element, "\x01initial:" + property, pseudo);
   };
-  const auto winner = style.cascade.find(property);
+  auto winner = style.cascade.find(property);
+  std::string ownName = property;
+  if (style.hasLogical && HasLogicalCounterparts(property)) {
+    // A logical property that is, here, this one competes with it in the cascade.
+    const WritingContext writing = {Compute(element, "writing-mode", pseudo), Compute(element, "direction", pseudo)};
+    for (const std::string& logical : LogicalsOf(property, writing)) {
+      const auto candidate = style.cascade.find(logical);
+      if (candidate != style.cascade.end() && (winner == style.cascade.end() || Beats(candidate->second, winner->second))) {
+        winner = candidate;
+        ownName = logical;
+      }
+    }
+  }
   if (winner == style.cascade.end()) {
     if (definition.inherited && parent.element) return fromParent();
     return "initial";
@@ -865,7 +886,7 @@ std::string Resolver::Specified(dom::Element* element, const std::string& proper
     }
     text.clear();
     for (const Longhand& l : longhands) {
-      if (l.name == property) text = l.value;
+      if (l.name == ownName) text = l.value;
     }
     if (text.empty()) {
       valid = false;
@@ -914,6 +935,12 @@ std::string Resolver::Compute(dom::Element* element, const std::string& property
   }
   const PropertyDefinition* definition = FindProperty(name);
   if (!definition) return "";
+  if (IsLogicalProperty(name)) {
+    // A logical property computes to what the physical one it is here computes to.
+    const WritingContext writing = {Compute(element, "writing-mode", pseudo), Compute(element, "direction", pseudo)};
+    const std::string physical = PhysicalOf(name, writing);
+    if (!physical.empty() && FindProperty(physical)) return Compute(element, initialOnly ? "\x01initial:" + physical : physical, pseudo);
+  }
   // Not in a document: no computed style.
   dom::Node* root = dom::ShadowIncludingRoot(element);
   if (!root || !root->IsDocument()) return "";
