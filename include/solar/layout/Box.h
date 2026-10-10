@@ -113,6 +113,8 @@ struct Tree {
   std::unordered_map<const dom::Node*, std::vector<Box*>> boxesOf;
   double viewportWidth = 800, viewportHeight = 600;
   uint64_t builtFor = 0;  // the versions of the tree and of style it was made from
+  // How far elements (and the viewport, under the document) are scrolled; carried over when the tree is made again.
+  std::unordered_map<const dom::Node*, std::pair<double, double>> scroll;
   std::vector<std::unique_ptr<Box>> detached;  // boxes the tree no longer holds, kept so that pointers stay good
 };
 

@@ -105,6 +105,7 @@ tests/wpt/css/css-box/parsing/max-width-invalid.html
 tests/wpt/css/css-box/parsing/max-width-valid.html
 tests/wpt/css/css-box/parsing/overflow-invalid.html
 tests/wpt/css/css-box/parsing/overflow-valid.html
+tests/wpt/css/css-box/parsing/padding-computed.html
 tests/wpt/css/css-box/parsing/padding-invalid.html
 tests/wpt/css/css-box/parsing/padding-shorthand.html
 tests/wpt/css/css-box/parsing/padding-valid.html
@@ -145,6 +146,7 @@ tests/wpt/css/css-cascade/revert-rule-custom-property.html
 tests/wpt/css/css-cascade/revert-rule-important.html
 tests/wpt/css/css-cascade/revert-rule-layer.html
 tests/wpt/css/css-cascade/revert-rule-revert-layer.html
+tests/wpt/css/css-cascade/revert-rule-shadow.html
 tests/wpt/css/css-cascade/revert-val-004.html
 tests/wpt/css/css-cascade/revert-val-011.html
 tests/wpt/css/css-cascade/scope-cssom.html
@@ -201,6 +203,7 @@ tests/wpt/css/css-conditional/container-queries/container-inheritance.html
 tests/wpt/css/css-conditional/container-queries/container-name-computed.html
 tests/wpt/css/css-conditional/container-queries/container-type-computed.html
 tests/wpt/css/css-conditional/container-queries/container-type-containment.html
+tests/wpt/css/css-conditional/container-queries/container-type-layout-invalidation.html
 tests/wpt/css/css-conditional/container-queries/container-type-parsing.html
 tests/wpt/css/css-conditional/container-queries/container-units-typed-om.html
 tests/wpt/css/css-conditional/container-queries/inheritance-from-container.html
@@ -218,14 +221,24 @@ tests/wpt/css/css-conditional/js/supports-conditionText.html
 tests/wpt/css/css-conditional/supports-basic.html
 tests/wpt/css/css-contain/contain-chrome-thcrash-001.html
 tests/wpt/css/css-contain/contain-flexbox-outline.html
+tests/wpt/css/css-contain/contain-paint-049.html
+tests/wpt/css/css-contain/contain-paint-dynamic-001.html
+tests/wpt/css/css-contain/contain-size-dynamic-001.html
 tests/wpt/css/css-contain/container-type-important.html
+tests/wpt/css/css-contain/content-visibility/content-visibility-015.html
+tests/wpt/css/css-contain/content-visibility/content-visibility-016.html
+tests/wpt/css/css-contain/content-visibility/content-visibility-017.html
+tests/wpt/css/css-contain/content-visibility/content-visibility-018.html
 tests/wpt/css/css-contain/content-visibility/content-visibility-026.html
 tests/wpt/css/css-contain/content-visibility/content-visibility-036.html
 tests/wpt/css/css-contain/content-visibility/content-visibility-053.html
+tests/wpt/css/css-contain/content-visibility/content-visibility-069.html
+tests/wpt/css/css-contain/content-visibility/content-visibility-088.html
 tests/wpt/css/css-contain/content-visibility/content-visibility-089.html
 tests/wpt/css/css-contain/content-visibility/content-visibility-091.html
 tests/wpt/css/css-contain/content-visibility/content-visibility-forced-layout-client-rects.html
 tests/wpt/css/css-contain/content-visibility/content-visibility-hidden-offsetTop-left-width-height.html
+tests/wpt/css/css-contain/content-visibility/content-visibility-hidden-scrollTop-left-width-height.html
 tests/wpt/css/css-contain/content-visibility/document-element-computed-style.html
 tests/wpt/css/css-contain/content-visibility/inheritance.html
 tests/wpt/css/css-contain/content-visibility/parsing/content-visibility-computed.html
@@ -233,6 +246,7 @@ tests/wpt/css/css-contain/content-visibility/parsing/content-visibility-invalid.
 tests/wpt/css/css-contain/content-visibility/parsing/content-visibility-valid.html
 tests/wpt/css/css-contain/inheritance.html
 tests/wpt/css/css-contain/parsing/contain-computed-children.html
+tests/wpt/css/css-contain/parsing/contain-computed.html
 tests/wpt/css/css-contain/parsing/contain-invalid.html
 tests/wpt/css/css-contain/parsing/contain-valid.html
 tests/wpt/css/css-content/parsing/content-counter-valid.html
@@ -426,6 +440,7 @@ tests/wpt/css/css-logical/parsing/inset-computed.html
 tests/wpt/css/css-logical/parsing/inset-invalid.html
 tests/wpt/css/css-logical/parsing/inset-shorthand.html
 tests/wpt/css/css-logical/parsing/inset-valid.html
+tests/wpt/css/css-logical/parsing/margin-block-inline-computed.html
 tests/wpt/css/css-logical/parsing/margin-block-inline-invalid.html
 tests/wpt/css/css-logical/parsing/margin-block-inline-shorthand.html
 tests/wpt/css/css-logical/parsing/margin-block-inline-valid.html
@@ -437,6 +452,7 @@ tests/wpt/css/css-logical/parsing/min-block-size-invalid.html
 tests/wpt/css/css-logical/parsing/min-block-size-valid.html
 tests/wpt/css/css-logical/parsing/min-inline-size-invalid.html
 tests/wpt/css/css-logical/parsing/min-inline-size-valid.html
+tests/wpt/css/css-logical/parsing/padding-block-inline-computed.html
 tests/wpt/css/css-logical/parsing/padding-block-inline-invalid.html
 tests/wpt/css/css-logical/parsing/padding-block-inline-shorthand.html
 tests/wpt/css/css-logical/parsing/padding-block-inline-valid.html
@@ -815,6 +831,7 @@ tests/wpt/css/css-typed-om/stylevalue-subclasses/numeric-objects/numeric-factory
 tests/wpt/css/css-typed-om/stylevalue-subclasses/numeric-objects/parse.tentative.html
 tests/wpt/css/css-typed-om/stylevalue-subclasses/numeric-objects/to.tentative.any.js
 tests/wpt/css/css-typed-om/stylevalue-subclasses/numeric-objects/toSum.tentative.html
+tests/wpt/css/css-typed-om/the-stylepropertymap/computed/computed.tentative.html
 tests/wpt/css/css-typed-om/the-stylepropertymap/computed/get-auto-min-size.html
 tests/wpt/css/css-typed-om/the-stylepropertymap/computed/get-disconnected-element.html
 tests/wpt/css/css-typed-om/the-stylepropertymap/computed/get-invalid.html
@@ -1046,6 +1063,9 @@ tests/wpt/css/css-values/calc-size/interpolate-size-computed.html
 tests/wpt/css/css-values/calc-size/interpolate-size-parsing.html
 tests/wpt/css/css-values/calc-time-values.html
 tests/wpt/css/css-values/calc-unit-analysis.html
+tests/wpt/css/css-values/ch-empty-pseudo-recalc-on-font-load.html
+tests/wpt/css/css-values/ch-pseudo-recalc-on-font-load.html
+tests/wpt/css/css-values/ch-recalc-on-font-load.html
 tests/wpt/css/css-values/clamp-color-computed.html
 tests/wpt/css/css-values/clamp-color-invalid.html
 tests/wpt/css/css-values/clamp-integer-computed.html
@@ -1062,6 +1082,7 @@ tests/wpt/css/css-values/getComputedStyle-calc-mixed-units-002.html
 tests/wpt/css/css-values/hypot-pow-sqrt-invalid.html
 tests/wpt/css/css-values/lh-unit-004.html
 tests/wpt/css/css-values/lh-unit-005.html
+tests/wpt/css/css-values/line-break-ch-unit.html
 tests/wpt/css/css-values/minmax-angle-computed.html
 tests/wpt/css/css-values/minmax-angle-invalid.html
 tests/wpt/css/css-values/minmax-angle-serialize.html
@@ -1134,6 +1155,7 @@ tests/wpt/css/css-viewport/zoom/computed-outline-width-keywords.html
 tests/wpt/css/css-viewport/zoom/explicit-inherit/all-length-properties.html
 tests/wpt/css/css-viewport/zoom/font-relative-units-with-zoom.html
 tests/wpt/css/css-viewport/zoom/length-implicit-and-explicit-inheritance.html
+tests/wpt/css/css-viewport/zoom/scroll-top-test-with-zoom.html
 tests/wpt/css/css-viewport/zoom/text-indent-computed.html
 tests/wpt/css/css-viewport/zoom/word-spacing-inherited-computed.html
 tests/wpt/css/css-viewport/zoom/zoom-with-sign-function.html
@@ -1219,6 +1241,7 @@ tests/wpt/css/cssom/border-shorthand-serialization.html
 tests/wpt/css/cssom/computed-style-001.html
 tests/wpt/css/cssom/computed-style-002.html
 tests/wpt/css/cssom/computed-style-003.html
+tests/wpt/css/cssom/computed-style-005.html
 tests/wpt/css/cssom/computed-style-set-property.html
 tests/wpt/css/cssom/css-rule-selector-text.html
 tests/wpt/css/cssom/css-style-attribute-modifications.html
@@ -1492,6 +1515,7 @@ tests/wpt/css/selectors/is-specificity.html
 tests/wpt/css/selectors/is-where-basic.html
 tests/wpt/css/selectors/is-where-not.html
 tests/wpt/css/selectors/is-where-pseudo-classes.html
+tests/wpt/css/selectors/is-where-shadow.html
 tests/wpt/css/selectors/last-child.html
 tests/wpt/css/selectors/last-of-type.html
 tests/wpt/css/selectors/missing-right-token.html
@@ -1533,4 +1557,5 @@ tests/wpt/solar/css-values.html
 tests/wpt/solar/cssom-basic.html
 tests/wpt/solar/dataset.html
 tests/wpt/solar/font-loading.html
+tests/wpt/solar/layout-flow.html
 tests/wpt/solar/link-sheet.html

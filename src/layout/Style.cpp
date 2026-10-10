@@ -319,6 +319,25 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
     const std::string type = get("container-type");
     if (type == "size") { s.containLayout = true; s.containSizeInline = s.containSizeBlock = true; }
     else if (type == "inline-size") { s.containLayout = true; s.containSizeInline = true; }
+    const auto none = [&](const char* property) { const std::string v = get(property); return v.empty() || v == "none"; };
+    const std::string willChange = get("will-change");
+    const bool willTransform = willChange.find("transform") != std::string::npos || willChange.find("perspective") != std::string::npos || willChange.find("filter") != std::string::npos;
+    s.containsPositioned = !none("transform") || !none("perspective") || !none("filter") || !none("backdrop-filter") || !none("translate") || !none("rotate") || !none("scale") ||
+                           willTransform || s.containLayout || s.containPaint;
+    s.opacity = Number(get("opacity"), 1);
+    s.pointerEventsNone = get("pointer-events") == "none";
+    const bool positionedZ = s.position != Position::Static && get("z-index") != "auto";
+    s.stackingContext = positionedZ || s.position == Position::Fixed || s.position == Position::Sticky || s.opacity < 1 || s.containsPositioned || get("isolation") == "isolate" ||
+                        get("mix-blend-mode") != "normal" || !none("clip-path") || !none("mask-image") || willChange.find("opacity") != std::string::npos;
+    const auto intrinsic = [&](const char* property, Length& l, bool& set) {
+      std::string v = get(property);
+      if (v.rfind("auto ", 0) == 0) v = v.substr(5);
+      if (v == "none" || v.empty()) return;
+      l = ParseLength(v);
+      set = l.kind == Length::Kind::Px;
+    };
+    intrinsic("contain-intrinsic-width", s.containIntrinsicWidth, s.containIntrinsicWidthSet);
+    intrinsic("contain-intrinsic-height", s.containIntrinsicHeight, s.containIntrinsicHeightSet);
     if (get("content-visibility") == "hidden") {
       s.containLayout = s.containPaint = s.containSizeInline = s.containSizeBlock = true;
       s.skipContents = true;

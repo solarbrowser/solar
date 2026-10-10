@@ -224,7 +224,6 @@ class Builder {
     Box* raw = parent.AddChild(std::move(box));
     Register(raw);
     if (raw->kind == Box::Kind::LineBreak) return;
-    if (raw->style->skipContents) return;
     BuildGenerated(*raw, element, "::before");
     BuildChildren(*raw, element, raw->style);
     BuildGenerated(*raw, element, "::after");

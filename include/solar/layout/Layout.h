@@ -18,6 +18,11 @@ Rect AbsoluteBorderBox(const Box& box);
 // The rectangles of an element as getClientRects gives them, in the coordinates of the viewport, and their union.
 std::vector<Rect> ClientRects(Tree& tree, dom::Element* element);
 
+// The elements under a point of the viewport, topmost first (as elementsFromPoint has them); empty outside the viewport.
+std::vector<dom::Element*> ElementsAtPoint(Tree& tree, double x, double y);
+// How far the element may scroll in each direction (0 for what does not scroll); the viewport for the root element.
+void ScrollRange(Tree& tree, dom::Element* element, double& maxX, double& maxY);
+
 // Text for looking at layout by eye or in a test.
 std::string DumpTree(const Tree& tree);
 

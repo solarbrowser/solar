@@ -153,7 +153,10 @@ void ComputeContentSizes(LayoutContext& lc, Box& box) {
     box.minContent = box.maxContent = w;
     return;
   }
-  if (s.containSizeInline) return;  // its contents count for nothing
+  if (s.containSizeInline) {  // its contents count for nothing
+    box.minContent = box.maxContent = s.containIntrinsicWidthSet ? s.containIntrinsicWidth.value : 0;
+    return;
+  }
   if (box.hasInlineContent) {
     InlineContentSizes(lc, box, box.minContent, box.maxContent);
     return;
@@ -524,7 +527,7 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
   double usedHeight;
   if (Known(specifiedHeight)) usedHeight = specifiedHeight;
   else if (Known(ratioHeight)) usedHeight = ratioHeight;
-  else usedHeight = s.containSizeBlock ? 0 : contentHeight;
+  else usedHeight = s.containSizeBlock ? (s.containIntrinsicHeightSet ? s.containIntrinsicHeight.value : 0) : contentHeight;
   if (!Known(forceHeight)) {
     const double maxH = ResolveSize(s.maxHeight, cbHeight);
     if (Known(maxH)) usedHeight = std::min(usedHeight, borderBox ? std::max(0.0, maxH - extrasV) : maxH);
@@ -572,10 +575,10 @@ struct CbRect {
 bool IsPositioned(const Box& b) { return b.style->position != Position::Static; }
 
 CbRect ContainingBlockOf(LayoutContext& lc, const Box& box) {
-  if (box.style->position == Position::Fixed) return {0, 0, lc.viewportWidth, lc.viewportHeight};
+  const bool fixed = box.style->position == Position::Fixed;
   for (const Box* p = box.parent; p; p = p->parent) {
     if (p->parent == nullptr) break;  // the initial containing block
-    if (!IsPositioned(*p)) continue;
+    if (!(fixed ? p->style->containsPositioned : (IsPositioned(*p) || p->style->containsPositioned))) continue;
     if (p->kind == Box::Kind::Block) {
       const Rect r = AbsoluteBorderBox(*p);
       return {r.x + p->border.left, r.y + p->border.top, r.width - p->border.Horizontal(), r.height - p->border.Vertical()};

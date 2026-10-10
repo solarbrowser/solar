@@ -1083,7 +1083,7 @@ double LayoutInlineContent(LayoutContext& lc, Box& container, double width, doub
           piece.inlineParent = open.empty() ? &container : open.back().box;
           const double parentShift = open.empty() ? rootShift : open.back().shift;
           // The baseline of the atomic inline: its own, or the bottom margin edge.
-          const double baselineInBox = b.baseline >= 0 && b.style->overflowY == Overflow::Visible ? b.baseline : b.height;
+          const double baselineInBox = b.baseline >= 0 && b.style->overflowY == Overflow::Visible && !b.style->containLayout ? b.baseline : b.height;
           const double aboveBase = b.margin.top + baselineInBox;
           const double belowBase = b.height - baselineInBox + b.margin.bottom;
           double shift = parentShift;

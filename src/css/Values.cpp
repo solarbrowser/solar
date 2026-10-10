@@ -800,12 +800,14 @@ ComponentValue Canonical(const ComponentValue& v, const ComputeContext& c, bool&
   const double n = v.token.number;
   if (unit == "em") px = n * c.fontSize;
   else if (unit == "rem") px = n * c.rootFontSize;
-  else if (unit == "ex" || unit == "ch") px = n * c.fontSize * 0.5;
-  else if (unit == "cap") px = n * c.fontSize * 0.7;
-  else if (unit == "ic") px = n * c.fontSize;
-  else if (unit == "rex" || unit == "rch") px = n * c.rootFontSize * 0.5;
-  else if (unit == "rcap") px = n * c.rootFontSize * 0.7;
-  else if (unit == "ric") px = n * c.rootFontSize;
+  else if (unit == "ex") px = n * (c.exHeight >= 0 ? c.exHeight : c.fontSize * 0.5);
+  else if (unit == "ch") px = n * (c.chWidth >= 0 ? c.chWidth : c.fontSize * 0.5);
+  else if (unit == "cap") px = n * (c.capHeight >= 0 ? c.capHeight : c.fontSize * 0.7);
+  else if (unit == "ic") px = n * (c.icWidth >= 0 ? c.icWidth : c.fontSize);
+  else if (unit == "rex") px = n * (c.rootExHeight >= 0 ? c.rootExHeight : c.rootFontSize * 0.5);
+  else if (unit == "rch") px = n * (c.rootChWidth >= 0 ? c.rootChWidth : c.rootFontSize * 0.5);
+  else if (unit == "rcap") px = n * (c.rootCapHeight >= 0 ? c.rootCapHeight : c.rootFontSize * 0.7);
+  else if (unit == "ric") px = n * (c.rootIcWidth >= 0 ? c.rootIcWidth : c.rootFontSize);
   else if (unit == "lh") px = n * c.lineHeight;
   else if (unit == "rlh") px = n * c.rootLineHeight;
   else {
@@ -1937,6 +1939,23 @@ bool MatchPropertyValue(const PropertyDefinition& property, const ComponentValue
   CanonicalGradients(out.normalized, compute != nullptr);
   if (!CanonicalFontValue(property.name, out, compute != nullptr)) return false;
   if (std::string(property.name) == "display") CanonicalDisplay(out);
+  if (compute && std::string(property.name) == "contain") {
+    // The computed value is the shorthand keyword when the longhand ones add up to it.
+    std::set<std::string> words;
+    for (const ComponentValue& c : out.normalized) if (c.IsIdent()) words.insert(Lower(c.token.value));
+    const auto only = [&](std::initializer_list<const char*> list) {
+      if (words.size() != list.size()) return false;
+      for (const char* w : list) if (!words.count(w)) return false;
+      return true;
+    };
+    const char* shorthand = only({"layout", "style", "paint"}) ? "content" : only({"size", "layout", "style", "paint"}) ? "strict" : nullptr;
+    if (shorthand) {
+      ComponentValue ident;
+      ident.token.type = T::Ident;
+      ident.token.value = shorthand;
+      out.normalized = {ident};
+    }
+  }
   if (std::string(property.name) == "grid-template-rows" || std::string(property.name) == "grid-template-columns") CanonicalTrackList(out);
   {
     const std::string n = property.name;

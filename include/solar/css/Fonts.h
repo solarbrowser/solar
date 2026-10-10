@@ -13,6 +13,13 @@ namespace solar::css {
 
 // The request a style makes: the families of font-family (names unquoted, generics lowercased), weight, stretch and style.
 font::Request FontRequestFor(dom::Element* element, const std::string& pseudo = "");
+// The font-relative lengths of a font at a size, in px: the x-height, the width of "0", the cap height, the width of "水", and the normal line height.
+struct FontUnits {
+  double ex = -1, ch = -1, cap = -1, ic = -1, lineHeight = -1;
+};
+// What the element's own font (or a pseudo-element's) comes to; all unknown if there is none.
+FontUnits FontUnitsFor(dom::Element* element, const std::string& pseudo, double fontSize);
+
 // The request for a family list as written (font-family's computed text), and the rest as values.
 font::Request MakeFontRequest(const std::string& familyText, double weight, double width, bool italic);
 // The faces for the request in the document: its @font-face fonts first, then the system's; the generic fallbacks last. Never empty

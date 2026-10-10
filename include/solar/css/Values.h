@@ -18,6 +18,9 @@ struct ComputeContext {
   double rootFontSize = 16;
   double lineHeight = 18.4;    // of the element (what 1lh is), in px
   double rootLineHeight = 18.4;
+  // The font-relative units, in px, from the element's font: negative where it is not known (a fixed fraction of the size is used).
+  double exHeight = -1, chWidth = -1, capHeight = -1, icWidth = -1;
+  double rootExHeight = -1, rootChWidth = -1, rootCapHeight = -1, rootIcWidth = -1;
   double viewportWidth = 800;
   double viewportHeight = 600;
   std::string currentColor = "rgb(0, 0, 0)";  // what currentcolor stands for

@@ -1,4 +1,5 @@
 #include "solar/css/MediaQuery.h"
+#include "solar/css/Fonts.h"
 
 #include <algorithm>
 #include <cmath>
@@ -8,6 +9,27 @@
 #include "solar/css/Syntax.h"
 
 namespace solar::css {
+
+namespace {
+
+// The initial font at its initial size (16px): what the font-relative units of a media query are of.
+FontUnits InitialFontUnits() {
+  static const FontUnits units = [] {
+    FontUnits u;
+    const auto faces = FontsForRequest(nullptr, MakeFontRequest("", 400, 100, false));
+    if (faces.empty()) return FontUnits{8, 8, 11.2, 16, 18.4};
+    const font::Metrics& m = faces[0]->metrics();
+    u.ex = m.xHeight * 16;
+    u.cap = m.capHeight * 16;
+    u.ch = faces[0]->HasGlyph('0') ? faces[0]->Advance('0') * 16 : 8;
+    u.ic = faces[0]->HasGlyph(0x6C34) ? faces[0]->Advance(0x6C34) * 16 : 16;
+    u.lineHeight = std::round(m.ascent * 16) + std::round(m.descent * 16) + m.lineGap * 16;
+    return u;
+  }();
+  return units;
+}
+
+}  // namespace
 
 namespace {
 
@@ -131,10 +153,11 @@ std::optional<double> ParseTyped(const ComponentValues& values, FeatureType type
         const double n = c.token.number;
         if (unit == "px") return n;
         if (unit == "em" || unit == "rem") return n * 16;
-        if (unit == "ex" || unit == "ch" || unit == "rex" || unit == "rch") return n * 8;
-        if (unit == "cap" || unit == "rcap") return n * 11.2;
-        if (unit == "ic" || unit == "ric") return n * 16;
-        if (unit == "lh" || unit == "rlh") return n * 18.4;
+        if (unit == "ex" || unit == "rex") return n * InitialFontUnits().ex;
+        if (unit == "ch" || unit == "rch") return n * InitialFontUnits().ch;
+        if (unit == "cap" || unit == "rcap") return n * InitialFontUnits().cap;
+        if (unit == "ic" || unit == "ric") return n * InitialFontUnits().ic;
+        if (unit == "lh" || unit == "rlh") return n * InitialFontUnits().lineHeight;
         if (unit == "in") return n * 96;
         if (unit == "cm") return n * 96 / 2.54;
         if (unit == "mm") return n * 96 / 25.4;

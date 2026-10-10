@@ -133,6 +133,42 @@ Value OffsetParent(Context& ctx, Value, qe::Args args, Value) {
   return qe::Null();
 }
 
+// __solarLayoutScroll(element or null, set, x, y): [x, y, maxX, maxY] of the element's scroll position (the viewport's for null).
+Value Scroll(Context& ctx, Value, qe::Args args, Value) {
+  dom::Element* element = args.empty() ? nullptr : DOMObject::Cast<dom::Element>(args[0]);
+  dom::Document* document = element ? element->nodeDocument : dom::AssociatedDocument(ctx);
+  Value out = qe::NewArray(ctx);
+  if (!document) return out;
+  Tree* tree = UpdateLayout(ctx, document);
+  const bool viewport = !element || element == document->DocumentElement();
+  const dom::Node* key = viewport ? static_cast<const dom::Node*>(document) : element;
+  double maxX = 0, maxY = 0;
+  ScrollRange(*tree, viewport ? nullptr : element, maxX, maxY);
+  auto& position = tree->scroll[key];
+  if (args.size() >= 4 && qe::ToBoolean(args[1])) {
+    const double x = qe::ToNumber(ctx, args[2]), y = qe::ToNumber(ctx, args[3]);
+    position.first = std::isnan(x) ? position.first : std::max(0.0, std::min(maxX, x));
+    position.second = std::isnan(y) ? position.second : std::max(0.0, std::min(maxY, y));
+  }
+  position.first = std::min(position.first, maxX);
+  position.second = std::min(position.second, maxY);
+  qe::ArrayPush(ctx, out, qe::FromNumber(position.first));
+  qe::ArrayPush(ctx, out, qe::FromNumber(position.second));
+  qe::ArrayPush(ctx, out, qe::FromNumber(maxX));
+  qe::ArrayPush(ctx, out, qe::FromNumber(maxY));
+  return out;
+}
+
+// __solarLayoutElementsAt(x, y): the elements under the point, topmost first.
+Value ElementsAt(Context& ctx, Value, qe::Args args, Value) {
+  Value out = qe::NewArray(ctx);
+  dom::Document* document = dom::AssociatedDocument(ctx);
+  if (!document || args.size() < 2) return out;
+  Tree* tree = UpdateLayout(ctx, document);
+  for (dom::Element* e : ElementsAtPoint(*tree, qe::ToNumber(ctx, args[0]), qe::ToNumber(ctx, args[1]))) qe::ArrayPush(ctx, out, dom::NodeValue(e));
+  return out;
+}
+
 Value Dump(Context& ctx, Value, qe::Args args, Value) {
   dom::Document* document = args.empty() ? dom::AssociatedDocument(ctx) : nullptr;
   if (!document) return qe::Undefined();
@@ -149,6 +185,8 @@ void InstallLayoutNatives(Context& ctx) {
   qe::DefineGlobalFunction(ctx, "__solarLayoutMetrics", Metrics, 1);
   qe::DefineGlobalFunction(ctx, "__solarLayoutRects", ClientRectsNative, 1);
   qe::DefineGlobalFunction(ctx, "__solarLayoutOffsetParent", OffsetParent, 1);
+  qe::DefineGlobalFunction(ctx, "__solarLayoutScroll", Scroll, 4);
+  qe::DefineGlobalFunction(ctx, "__solarLayoutElementsAt", ElementsAt, 2);
   qe::DefineGlobalFunction(ctx, "__solarLayoutDump", Dump, 0);
 }
 

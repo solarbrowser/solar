@@ -100,6 +100,13 @@ struct BoxStyle {
   // nothing in the sizes it asks for. content-visibility: hidden skips the contents altogether.
   bool containLayout = false, containPaint = false, containSizeInline = false, containSizeBlock = false;
   bool skipContents = false;
+  Length containIntrinsicWidth, containIntrinsicHeight;  // px, or none (Auto kind with value 0)
+  bool containIntrinsicWidthSet = false, containIntrinsicHeightSet = false;
+  // What makes a box the containing block of the positioned boxes inside it (besides being positioned), and a stacking context.
+  bool containsPositioned = false;
+  bool stackingContext = false;
+  double opacity = 1;
+  bool pointerEventsNone = false;
 
   bool IsOutOfFlow() const { return position == Position::Absolute || position == Position::Fixed; }
   bool IsFloating() const { return floating != Float::None; }

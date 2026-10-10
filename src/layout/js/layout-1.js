@@ -8,6 +8,10 @@
   delete global.__solarLayoutMetrics;
   delete global.__solarLayoutRects;
   delete global.__solarLayoutOffsetParent;
+  const scrollNative = global.__solarLayoutScroll;
+  const elementsAt = global.__solarLayoutElementsAt;
+  delete global.__solarLayoutScroll;
+  delete global.__solarLayoutElementsAt;
 
   const element = (value, name) => {
     if (!(value instanceof Element)) throw new TypeError('Illegal invocation');
@@ -77,8 +81,69 @@
   getter(Element.prototype, 'clientHeight', 3, integer);
   getter(Element.prototype, 'scrollWidth', 4, integer);
   getter(Element.prototype, 'scrollHeight', 5, integer);
-  define(Element.prototype, 'scrollTop', { get() { element(this); return 0; }, set(v) { element(this); } });
-  define(Element.prototype, 'scrollLeft', { get() { element(this); return 0; }, set(v) { element(this); } });
+  const toNumber = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+  define(Element.prototype, 'scrollTop', {
+    get() { return scrollNative(element(this), false, 0, 0)[1]; },
+    set(v) { const el = element(this); const [x] = scrollNative(el, false, 0, 0); scrollNative(el, true, x, toNumber(v)); },
+  });
+  define(Element.prototype, 'scrollLeft', {
+    get() { return scrollNative(element(this), false, 0, 0)[0]; },
+    set(v) { const el = element(this); const [, y] = scrollNative(el, false, 0, 0); scrollNative(el, true, toNumber(v), y); },
+  });
+  // scroll(x, y) and scroll({ left, top, behavior }); an element scrolls to where it is told, a missing coordinate being where it is.
+  const scrollArguments = (args, current) => {
+    if (args.length === 0) return current;
+    if (args.length === 1) {
+      const o = args[0];
+      if (o === null || (typeof o !== 'object' && typeof o !== 'function' && o !== undefined)) throw new TypeError('The provided value is not of type ScrollToOptions.');
+      return [o && o.left !== undefined ? toNumber(o.left) : current[0], o && o.top !== undefined ? toNumber(o.top) : current[1]];
+    }
+    return [toNumber(args[0]), toNumber(args[1])];
+  };
+  const scrollMethods = (target, resolve) => {
+    define(target, 'scroll', { value: function scroll(...args) { const el = resolve(this); const cur = scrollNative(el, false, 0, 0); const [x, y] = scrollArguments(args, cur); scrollNative(el, true, x, y); }, writable: true });
+    define(target, 'scrollTo', { value: function scrollTo(...args) { const el = resolve(this); const cur = scrollNative(el, false, 0, 0); const [x, y] = scrollArguments(args, cur); scrollNative(el, true, x, y); }, writable: true });
+    define(target, 'scrollBy', {
+      value: function scrollBy(...args) {
+        const el = resolve(this);
+        const cur = scrollNative(el, false, 0, 0);
+        const delta = scrollArguments(args, [0, 0]);
+        if (args.length === 1) {
+          const o = args[0] || {};
+          scrollNative(el, true, cur[0] + toNumber(o.left), cur[1] + toNumber(o.top));
+        } else {
+          scrollNative(el, true, cur[0] + delta[0], cur[1] + delta[1]);
+        }
+      },
+      writable: true,
+    });
+  };
+  scrollMethods(Element.prototype, element);
+  scrollMethods(global, () => null);
+  for (const [name, index] of [['scrollX', 0], ['pageXOffset', 0], ['scrollY', 1], ['pageYOffset', 1]]) {
+    Object.defineProperty(global, name, { get() { return scrollNative(null, false, 0, 0)[index]; }, set(v) {}, enumerable: true, configurable: true });
+  }
+  define(Document.prototype, 'scrollingElement', {
+    get() { return this.compatMode === 'BackCompat' ? this.body : this.documentElement; },
+  });
+  define(Document.prototype, 'elementFromPoint', {
+    value: function elementFromPoint(x, y) {
+      if (arguments.length < 2) throw new TypeError("Failed to execute 'elementFromPoint' on 'Document': 2 arguments required, but only " + arguments.length + ' present.');
+      const list = elementsAt(Number(x), Number(y));
+      return list.length ? list[0] : null;
+    },
+    writable: true,
+  });
+  define(Document.prototype, 'elementsFromPoint', {
+    value: function elementsFromPoint(x, y) {
+      if (arguments.length < 2) throw new TypeError("Failed to execute 'elementsFromPoint' on 'Document': 2 arguments required, but only " + arguments.length + ' present.');
+      return elementsAt(Number(x), Number(y));
+    },
+    writable: true,
+  });
 
   const html = HTMLElement.prototype;
   getter(html, 'offsetWidth', 8, integer);

@@ -1,5 +1,6 @@
 #include <functional>
 #include "solar/css/Style.h"
+#include "solar/css/Fonts.h"
 #include "solar/css/Logical.h"
 
 #include <algorithm>
@@ -115,6 +116,7 @@ struct Winner {
   bool author = false;
   uint32_t rule = 0;  // the rule it came from
   uint32_t proximity = UINT32_MAX;  // from the scoping root, when in an @scope
+  int context = 0;  // 0 the element's own tree; more is further out (a ::part() rule), less further in (a ::slotted() rule)
   std::vector<Winner> rest;  // what lost to it, for revert and revert-layer
 };
 
@@ -123,6 +125,8 @@ constexpr int kUnlayered = INT_MAX / 2;
 bool Beats(const Winner& a, const Winner& b) {
   if (!b.entry) return true;
   if (a.origin != b.origin) return a.origin > b.origin;
+  // Outer contexts win for normal declarations, inner ones for important.
+  if (a.context != b.context) return (a.origin >= 2) ? a.context < b.context : a.context > b.context;
   if (a.layer != b.layer) return a.layer > b.layer;
   if (b.specificity < a.specificity) return true;
   if (a.specificity < b.specificity) return false;
@@ -147,6 +151,12 @@ struct Gatherer {
   MediaEnvironment media = EnvironmentFor(element->nodeDocument);
   bool hostScoped = false;  // the rules are of a shadow tree and the element is its host: author rules of the outer tree win
   int layerBase = 0;        // added to the rank of a layer: a shadow host's rules are below the rules around them
+  // Rules that reach into another tree: ::slotted() rules of the slot's tree, ::part() rules of the trees around a shadow host.
+  enum class Mode { Own, Slotted, Part } mode = Mode::Own;
+  const dom::Element* slot = nullptr;       // Slotted: the slot the element is assigned to
+  const dom::Element* partHost = nullptr;   // Part: the host whose shadow tree the element is in
+  std::vector<std::string> partNames;       // Part: the names the element has in that tree
+  int contextRank = 0;
 
   void RegisterLayer(const std::string& path) {
     if (path.empty() || layerRank.count(path)) return;
@@ -171,6 +181,9 @@ struct Gatherer {
     return layerBase + (found == layerRank.end() ? 0 : found->second);
   }
 
+  // Whether the selector, as the rules of the current mode read it, is for the element.
+  bool Matches(const ComplexSelector& selector, Specificity& extra);
+
   void Offer(const DeclarationEntry& entry, bool author, bool inlineStyle, int layer, Specificity spec) {
     Winner candidate;
     candidate.entry = &entry;
@@ -179,6 +192,7 @@ struct Gatherer {
     candidate.order = ++order;
     candidate.rule = ruleSerial;
     candidate.proximity = proximity;
+    candidate.context = contextRank;
     if (inlineStyle) candidate.specificity = Specificity{1000000, 0, 0};
     // Normal: user agent, author; important: author, user agent. Layers reverse for important declarations.
     candidate.origin = entry.important ? (author ? 2 : 3) : (author ? 1 : 0);
@@ -219,8 +233,12 @@ struct Gatherer {
           Specificity best;
           bool matched = false;
           for (const ComplexSelector& selector : *rule->selectors) {
-            if (MatchesComplex(selector, element, matchContext)) {
-              const Specificity s = SpecificityOf(selector);
+            Specificity extra;
+            if (Matches(selector, extra)) {
+              Specificity s = SpecificityOf(selector);
+              s.ids += extra.ids;
+              s.classes += extra.classes;
+              s.types += extra.types;
               if (!matched || best < s) best = s;
               matched = true;
             }
@@ -352,11 +370,83 @@ std::vector<CssStyleSheet*> SheetsOfTree(dom::Node* root, Quanta::Context* ctx =
 }
 
 dom::Element* FlatParent(dom::Element* element) {
+  if (element->assignedSlot) return element->assignedSlot;
   dom::Node* parent = element->parentNode;
   if (!parent) return nullptr;
   if (dom::Element* e = dom::AsElement(parent)) return e;
   if (parent->IsFragment() && static_cast<dom::DocumentFragment*>(parent)->isShadowRoot) return static_cast<dom::DocumentFragment*>(parent)->host;
   return nullptr;
+}
+
+
+namespace {
+
+// The selector split at a ::part() or ::slotted() that ends it: the part before, as a selector, and the pseudo-element's argument.
+bool SplitPseudoTail(const ComplexSelector& selector, const char* which, ComplexSelector& head, std::string& argument) {
+  if (selector.compounds.empty()) return false;
+  const CompoundSelector& last = selector.compounds.back();
+  if (last.simples.empty()) return false;
+  const SimpleSelector& tail = last.simples.back();
+  if (tail.kind != SimpleSelector::Kind::PseudoElement || tail.name != which) return false;
+  head = selector;
+  head.compounds.back().simples.pop_back();
+  if (head.compounds.back().simples.empty()) {
+    SimpleSelector universal;
+    universal.kind = SimpleSelector::Kind::Universal;
+    head.compounds.back().simples.push_back(universal);
+  }
+  argument = tail.value;
+  return true;
+}
+
+const SelectorList* ParsedArgument(const std::string& text) {
+  static std::map<std::string, std::optional<SelectorList>> cache;
+  auto found = cache.find(text);
+  if (found == cache.end()) found = cache.emplace(text, ParseSelectorList(text)).first;
+  return found->second ? &*found->second : nullptr;
+}
+
+std::vector<std::string> SplitWords(const std::string& text) {
+  std::vector<std::string> out;
+  std::string word;
+  for (char c : text) {
+    if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f') {
+      if (!word.empty()) out.push_back(word);
+      word.clear();
+    } else {
+      word += c;
+    }
+  }
+  if (!word.empty()) out.push_back(word);
+  return out;
+}
+
+}  // namespace
+
+bool Gatherer::Matches(const ComplexSelector& selector, Specificity& extra) {
+  if (mode == Mode::Own) return MatchesComplex(selector, element, matchContext);
+  ComplexSelector head;
+  std::string argument;
+  if (mode == Mode::Slotted) {
+    if (!SplitPseudoTail(selector, "slotted", head, argument)) return false;
+    const SelectorList* list = ParsedArgument(argument);
+    if (!list) return false;
+    // The slot is what the rest of the selector is about; the argument is about the slotted element.
+    if (!MatchesComplex(head, slot, matchContext)) return false;
+    MatchContext inElement;
+    for (const ComplexSelector& s : *list) {
+      if (s.compounds.size() == 1 && MatchesComplex(s, element, inElement)) {
+        extra = SpecificityOf(s);
+        return true;
+      }
+    }
+    return false;
+  }
+  if (!SplitPseudoTail(selector, "part", head, argument)) return false;
+  for (const std::string& name : SplitWords(argument)) {
+    if (std::find(partNames.begin(), partNames.end(), name) == partNames.end()) return false;
+  }
+  return MatchesComplex(head, partHost, matchContext);
 }
 
 // ---- The resolver ----
@@ -519,6 +609,78 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
     for (CssStyleSheet* sheet : sheets) {
       if (sheet->disabled || !MediaListMatches(sheet->media ? sheet->media->queries : std::vector<std::string>(), inner.media)) continue;
       inner.Rules(sheet->rules, -1000);
+    }
+  }
+  if (pseudo.empty()) {
+    const auto runSheets = [&](Gatherer& g, dom::Node* tree) {
+      const std::vector<CssStyleSheet*> sheets = SheetsOfTree(tree, element->nodeDocument ? element->nodeDocument->context : nullptr);
+      g.order = gatherer.order;
+      g.ruleSerial = gatherer.ruleSerial + 2000000;
+      g.collecting = true;
+      for (CssStyleSheet* sheet : sheets) {
+        if (sheet->disabled || !MediaListMatches(sheet->media ? sheet->media->queries : std::vector<std::string>(), g.media)) continue;
+        g.Rules(sheet->rules, kUnlayered);
+      }
+      g.RankLayers();
+      g.collecting = false;
+      for (CssStyleSheet* sheet : sheets) {
+        if (sheet->disabled || !MediaListMatches(sheet->media ? sheet->media->queries : std::vector<std::string>(), g.media)) continue;
+        g.Rules(sheet->rules, kUnlayered);
+      }
+      gatherer.order = std::max(gatherer.order, g.order);
+      gatherer.ruleSerial = std::max(gatherer.ruleSerial, g.ruleSerial);
+    };
+    // ::slotted() rules of the trees of the slots the element is assigned to.
+    for (const dom::Element* slot = element->assignedSlot; slot; slot = slot->assignedSlot) {
+      dom::Node* slotRoot = const_cast<dom::Element*>(slot);
+      while (slotRoot->parentNode) slotRoot = slotRoot->parentNode;
+      if (!slotRoot->IsFragment() || !static_cast<dom::DocumentFragment*>(slotRoot)->isShadowRoot) break;
+      Gatherer g{element, gatherer.matchContext, style.cascade};
+      g.mode = Gatherer::Mode::Slotted;
+      g.slot = slot;
+      g.contextRank = -1;
+      g.matchContext.host = static_cast<dom::DocumentFragment*>(slotRoot)->host;
+      runSheets(g, slotRoot);
+    }
+    // ::part() rules of the trees around the shadow host whose tree the element is in.
+    if (treeRoot && treeRoot->IsFragment() && static_cast<dom::DocumentFragment*>(treeRoot)->isShadowRoot) {
+      std::vector<std::string> names;
+      if (const dom::Attr* part = element->FindAttribute("part")) names = SplitWords(part->value);
+      const dom::Element* host = static_cast<dom::DocumentFragment*>(treeRoot)->host;
+      int rank = 1;
+      while (host && !names.empty()) {
+        dom::Node* outer = const_cast<dom::Element*>(host);
+        while (outer->parentNode) outer = outer->parentNode;
+        if (outer->IsDocument() || outer->IsFragment()) {
+          Gatherer g{element, gatherer.matchContext, style.cascade};
+          g.mode = Gatherer::Mode::Part;
+          g.partHost = host;
+          g.partNames = names;
+          g.contextRank = rank++;
+          g.matchContext.host = outer->IsFragment() && static_cast<dom::DocumentFragment*>(outer)->isShadowRoot ? static_cast<dom::DocumentFragment*>(outer)->host : nullptr;
+          runSheets(g, outer);
+        }
+        // exportparts="inner: outer, ..." lets the names go on to the tree around that one.
+        if (!outer->IsFragment() || !static_cast<dom::DocumentFragment*>(outer)->isShadowRoot) break;
+        std::vector<std::string> exported;
+        if (const dom::Attr* attr = host->FindAttribute("exportparts")) {
+          std::string current;
+          std::vector<std::string> pieces;
+          for (char c : attr->value) {
+            if (c == ',') { pieces.push_back(current); current.clear(); } else current += c;
+          }
+          pieces.push_back(current);
+          for (const std::string& piece : pieces) {
+            const size_t colon = piece.find(':');
+            const std::vector<std::string> inner = SplitWords(colon == std::string::npos ? piece : piece.substr(0, colon));
+            const std::vector<std::string> outerName = SplitWords(colon == std::string::npos ? piece : piece.substr(colon + 1));
+            if (inner.empty() || outerName.empty()) continue;
+            if (std::find(names.begin(), names.end(), inner[0]) != names.end()) exported.push_back(outerName[0]);
+          }
+        }
+        names = exported;
+        host = static_cast<dom::DocumentFragment*>(outer)->host;
+      }
     }
   }
   // The style attribute (a pseudo-element has none).
@@ -826,6 +988,32 @@ ComputeContext Resolver::ContextFor(dom::Element* element, const std::string& pr
   }
   c.lineHeight = c.fontSize * 1.15;
   c.rootLineHeight = c.rootFontSize * 1.15;
+  // The units that come from the font.
+  {
+    const auto mentions = [&](const char* unit) { return lowered.find(unit) != std::string::npos; };
+    const bool fontUnits = needsSizes && (mentions("ex") || mentions("ch") || mentions("cap") || mentions("ic"));
+    if (fontUnits || needsLineHeight) {
+      // (font-size is relative to the parent's font)
+      dom::Element* fontElement = isFontSize ? parent.element : element;
+      const std::string fontPseudo = isFontSize ? parent.pseudo : pseudo;
+      if (fontElement) {
+        const FontUnits u = FontUnitsFor(fontElement, fontPseudo, c.fontSize);
+        c.exHeight = u.ex;
+        c.chWidth = u.ch;
+        c.capHeight = u.cap;
+        c.icWidth = u.ic;
+        if (u.lineHeight >= 0) c.lineHeight = u.lineHeight;
+      }
+      if (root && (mentions("rex") || mentions("rch") || mentions("rcap") || mentions("ric") || mentions("rlh"))) {
+        const FontUnits r = FontUnitsFor(root, "", c.rootFontSize);
+        c.rootExHeight = r.ex;
+        c.rootChWidth = r.ch;
+        c.rootCapHeight = r.cap;
+        c.rootIcWidth = r.ic;
+        if (r.lineHeight >= 0) c.rootLineHeight = r.lineHeight;
+      }
+    }
+  }
   if (needsLineHeight && property != "line-height" && property != "font-size") {
     const std::string lh = Compute(element, "line-height", pseudo);
     const double px = ParsePx(lh);

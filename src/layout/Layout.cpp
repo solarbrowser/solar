@@ -1,6 +1,8 @@
 #include "solar/layout/Layout.h"
 
 #include <cmath>
+#include <algorithm>
+#include <functional>
 #include <sstream>
 
 #include "Internal.h"
@@ -21,6 +23,11 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
   BuildTree(lc, document);
   LayoutRoot(lc);
   tree->builtFor = version;
+  if (document->layoutTree) {
+    for (const auto& entry : document->layoutTree->scroll) {
+      if (entry.first == document || tree->boxesOf.count(entry.first)) tree->scroll[entry.first] = entry.second;
+    }
+  }
   document->layoutTree = tree;
   return tree.get();
 }
@@ -75,6 +82,19 @@ std::vector<Rect> ClientRects(Tree& tree, dom::Element* element) {
       continue;
     } else {
       out.push_back(AbsoluteBorderBox(*box));
+    }
+    // Scrolled ancestors move what is in them.
+    double dx = 0, dy = 0;
+    for (const Box* p = box->parent; p; p = p->parent) {
+      if (!p->node) continue;
+      const auto found = tree.scroll.find(p->node);
+      if (found != tree.scroll.end()) { dx += found->second.first; dy += found->second.second; }
+    }
+    if (dx != 0 || dy != 0) {
+      for (size_t i = out.size() - (box->kind == Box::Kind::Inline || box->kind == Box::Kind::Text ? box->fragments.size() : 1); i < out.size(); ++i) {
+        out[i].x -= dx;
+        out[i].y -= dy;
+      }
     }
   }
   return out;
@@ -188,5 +208,193 @@ bool ResolvedHook(Quanta::Context& ctx, dom::Element* element, const std::string
 }
 
 void InstallResolvedHook() { css::SetResolvedValueHook(ResolvedHook); }
+
+}  // namespace solar::layout
+
+namespace solar::layout {
+
+namespace {
+
+bool Contains(const Rect& r, double x, double y) { return x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height; }
+
+bool IsPositionedBox(const Box& b) { return b.style && b.style->position != Position::Static; }
+
+// z-index as a number; auto is 0 for ordering.
+int ZOf(const Box& b) {
+  const std::string& z = b.style->zIndex;
+  if (z == "auto" || z.empty()) return 0;
+  return std::atoi(z.c_str());
+}
+
+// Boxes in the order they are painted, bottom first, for the stacking context (or pseudo one) rooted at `root`.
+void PaintOrder(const Box& root, std::vector<const Box*>& out) {
+  std::vector<std::pair<int, const Box*>> negative, positive;
+  std::vector<const Box*> zero, blocks, floats, inlines;
+  std::vector<const Box*> stack;
+  const std::function<void(const Box&)> walk = [&](const Box& b) {
+    for (const auto& childPtr : b.children) {
+      const Box& c = *childPtr;
+      const bool context = c.style->stackingContext;
+      if (IsPositionedBox(c) || context) {
+        const int z = ZOf(c);
+        if (z < 0 && context) negative.push_back({z, &c});
+        else if (z > 0 && context) positive.push_back({z, &c});
+        else zero.push_back(&c);
+        continue;
+      }
+      if (c.style->IsFloating()) { floats.push_back(&c); continue; }
+      if (c.kind == Box::Kind::Block && c.inlineLevel) { inlines.push_back(&c); continue; }  // an atomic inline paints as a whole
+      if (c.kind == Box::Kind::Block) blocks.push_back(&c);
+      else inlines.push_back(&c);
+      walk(c);
+    }
+  };
+  out.push_back(&root);
+  walk(root);
+  std::stable_sort(negative.begin(), negative.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+  std::stable_sort(positive.begin(), positive.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+  for (const auto& n : negative) PaintOrder(*n.second, out);
+  for (const Box* b : blocks) out.push_back(b);
+  for (const Box* f : floats) PaintOrder(*f, out);
+  for (const Box* i : inlines) {
+    if (i->kind == Box::Kind::Block) PaintOrder(*i, out);
+    else out.push_back(i);
+  }
+  for (const Box* z : zero) PaintOrder(*z, out);
+  for (const auto& p : positive) PaintOrder(*p.second, out);
+}
+
+// Whether a point is inside every ancestor's clip.
+bool Clipped(Tree& tree, const Box& box, double x, double y) {
+  for (const Box* p = box.parent; p; p = p->parent) {
+    if (!p->style || p->kind != Box::Kind::Block) continue;
+    if (p->style->overflowX == Overflow::Visible && p->style->overflowY == Overflow::Visible) continue;
+    Rect r = AbsoluteBorderBox(*p);
+    double dx = 0, dy = 0;
+    for (const Box* q = p->parent; q; q = q->parent) {
+      if (!q->node) continue;
+      const auto found = tree.scroll.find(q->node);
+      if (found != tree.scroll.end()) { dx += found->second.first; dy += found->second.second; }
+    }
+    r.x += p->border.left - dx;
+    r.y += p->border.top - dy;
+    r.width -= p->border.Horizontal();
+    r.height -= p->border.Vertical();
+    if (p->style->overflowX != Overflow::Visible && (x < r.x || x >= r.x + r.width)) return true;
+    if (p->style->overflowY != Overflow::Visible && (y < r.y || y >= r.y + r.height)) return true;
+  }
+  return false;
+}
+
+}  // namespace
+
+std::vector<dom::Element*> ElementsAtPoint(Tree& tree, double x, double y) {
+  std::vector<dom::Element*> hits;
+  if (x < 0 || y < 0 || x >= tree.viewportWidth || y >= tree.viewportHeight || !tree.root) return hits;
+  std::vector<const Box*> order;
+  PaintOrder(*tree.root, order);
+  const auto add = [&](dom::Node* node) {
+    while (node && !node->IsElement()) node = node->parentNode;
+    if (!node) return;
+    dom::Element* element = static_cast<dom::Element*>(node);
+    if (std::find(hits.begin(), hits.end(), element) == hits.end()) hits.push_back(element);
+  };
+  for (size_t i = order.size(); i-- > 0;) {
+    const Box& b = *order[i];
+    if (b.style->visibility != Visibility::Visible || b.style->pointerEventsNone) continue;
+    bool skipped = false;
+    for (const Box* p = b.parent; p; p = p->parent) if (p->style && p->style->skipContents) skipped = true;
+    if (skipped) continue;
+    bool inside = false;
+    if (b.kind == Box::Kind::Block) {
+      Rect r = AbsoluteBorderBox(b);
+      double dx = 0, dy = 0;
+      for (const Box* q = b.parent; q; q = q->parent) {
+        if (!q->node) continue;
+        const auto found = tree.scroll.find(q->node);
+        if (found != tree.scroll.end()) { dx += found->second.first; dy += found->second.second; }
+      }
+      r.x -= dx;
+      r.y -= dy;
+      inside = Contains(r, x, y);
+    } else if (b.kind == Box::Kind::Inline || b.kind == Box::Kind::Text) {
+      const Box* container = b.parent;
+      while (container && container->kind != Box::Kind::Block) container = container->parent;
+      if (!container) continue;
+      const Rect origin = AbsoluteBorderBox(*container);
+      double dx = 0, dy = 0;
+      for (const Box* q = container; q; q = q->parent) {
+        if (!q->node) continue;
+        const auto found = tree.scroll.find(q->node);
+        if (found != tree.scroll.end() && q != container) { dx += found->second.first; dy += found->second.second; }
+        else if (found != tree.scroll.end()) { dx += found->second.first; dy += found->second.second; }
+      }
+      for (const Rect& f : b.fragments) {
+        if (Contains({origin.x + f.x - dx, origin.y + f.y - dy, f.width, f.height}, x, y)) inside = true;
+      }
+    }
+    if (!inside || Clipped(tree, b, x, y)) continue;
+    const Box* owner = &b;
+    while (owner && !owner->node) owner = owner->parent;
+    if (owner && owner->node && owner->node->IsDocument()) continue;
+    if (owner) add(owner->node);
+  }
+  // Over the canvas, the root element is what is there.
+  if (tree.root && !tree.root->children.empty() && tree.root->node && tree.root->node->IsDocument()) {
+    dom::Element* html = static_cast<dom::Document*>(tree.root->node)->DocumentElement();
+    if (html && std::find(hits.begin(), hits.end(), html) == hits.end()) hits.push_back(html);
+  }
+  return hits;
+}
+
+namespace {
+
+void FarthestExtent(const Box& box, double ox, double oy, double& right, double& bottom, bool& any) {
+  const Rect r = AbsoluteBorderBox(box);
+  if (box.kind == Box::Kind::Block) {
+    right = std::max(right, r.x + r.width - ox);
+    bottom = std::max(bottom, r.y + r.height - oy);
+    any = true;
+  }
+  for (const auto& line : box.lines) {
+    for (const LineItem& item : line.items) {
+      if (item.kind != LineItem::Kind::Text) continue;
+      right = std::max(right, r.x + item.rect.Right() - ox);
+      bottom = std::max(bottom, r.y + item.rect.Bottom() - oy);
+      any = true;
+    }
+  }
+  for (const auto& c : box.children) FarthestExtent(*c, ox, oy, right, bottom, any);
+}
+
+}  // namespace
+
+void ScrollRange(Tree& tree, dom::Element* element, double& maxX, double& maxY) {
+  maxX = maxY = 0;
+  if (!tree.root) return;
+  dom::Document* document = element ? element->nodeDocument : (tree.root->node && tree.root->node->IsDocument() ? static_cast<dom::Document*>(tree.root->node) : nullptr);
+  if (!document) return;
+  if (!element || element == document->DocumentElement()) {
+    double right = 0, bottom = 0;
+    bool any = false;
+    FarthestExtent(*tree.root, 0, 0, right, bottom, any);
+    maxX = std::max(0.0, right - tree.viewportWidth);
+    maxY = std::max(0.0, bottom - tree.viewportHeight);
+    return;
+  }
+  const std::vector<Box*>& boxes = BoxesOf(tree, element);
+  const Box* box = nullptr;
+  for (const Box* b : boxes) if (b->kind == Box::Kind::Block) { box = b; break; }
+  if (!box || (box->style->overflowX == Overflow::Visible && box->style->overflowY == Overflow::Visible) || box->style->overflowX == Overflow::Clip) return;
+  const Rect abs = AbsoluteBorderBox(*box);
+  double right = 0, bottom = 0;
+  bool any = false;
+  FarthestExtent(*box, abs.x, abs.y, right, bottom, any);
+  const double clientW = box->width - box->border.Horizontal(), clientH = box->height - box->border.Vertical();
+  maxX = std::max(0.0, right - box->border.left - clientW);
+  maxY = std::max(0.0, bottom - box->border.top - clientH);
+  if (box->style->overflowX == Overflow::Visible) maxX = 0;
+  if (box->style->overflowY == Overflow::Visible) maxY = 0;
+}
 
 }  // namespace solar::layout

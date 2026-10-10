@@ -333,6 +333,19 @@ std::vector<std::shared_ptr<font::Face>> FontsFor(dom::Element* element, const s
   return FontsForRequest(element->nodeDocument, FontRequestFor(element, pseudo));
 }
 
+FontUnits FontUnitsFor(dom::Element* element, const std::string& pseudo, double fontSize) {
+  FontUnits units;
+  const std::shared_ptr<font::Face> face = PrimaryFont(element, pseudo);
+  if (!face) return units;
+  const font::Metrics& m = face->metrics();
+  units.ex = m.xHeight * fontSize;
+  units.cap = m.capHeight * fontSize;
+  units.ch = face->HasGlyph('0') ? face->Advance('0') * fontSize : fontSize * 0.5;
+  units.ic = face->HasGlyph(0x6C34) ? face->Advance(0x6C34) * fontSize : fontSize;
+  units.lineHeight = std::round(m.ascent * fontSize) + std::round(m.descent * fontSize) + m.lineGap * fontSize;
+  return units;
+}
+
 std::shared_ptr<font::Face> PrimaryFont(dom::Element* element, const std::string& pseudo) {
   const std::vector<std::shared_ptr<font::Face>> faces = FontsFor(element, pseudo);
   return faces.empty() ? nullptr : faces[0];
@@ -371,6 +384,7 @@ int DocumentFaceState(dom::Document* document, size_t index) {
 void SetScriptFaces(dom::Document* document, std::vector<ScriptFace> faces) {
   ScriptFaces()[document] = std::move(faces);
   ++g_scriptVersion;
+  NoteStyleChange();  // what depends on the font (ch, ex, line boxes) is worked out again
 }
 
 }  // namespace solar::css
