@@ -160,7 +160,7 @@
     }
     toMatrix() {
       const s = this[INTERNAL];
-      return new DOMMatrix().skewXSelf(absolute(s.ax, 'deg')).skewYSelf(absolute(s.ay, 'deg'));
+      return new DOMMatrix([1, Math.tan((absolute(s.ay, 'deg') * Math.PI) / 180), Math.tan((absolute(s.ax, 'deg') * Math.PI) / 180), 1, 0, 0]);
     }
     toString() {
       const s = this[INTERNAL];

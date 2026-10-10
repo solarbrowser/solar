@@ -719,6 +719,7 @@ tests/wpt/css/css-typed-om/factory-absolute-length.html
 tests/wpt/css/css-typed-om/factory-duration.html
 tests/wpt/css/css-typed-om/factory-font-relative-length.html
 tests/wpt/css/css-typed-om/factory-frequency.html
+tests/wpt/css/css-typed-om/historical.html
 tests/wpt/css/css-typed-om/parse-calc-expressions.html
 tests/wpt/css/css-typed-om/set-var-reference-thcrash.html
 tests/wpt/css/css-typed-om/stylevalue-normalization/normalize-ident.tentative.html
@@ -735,10 +736,18 @@ tests/wpt/css/css-typed-om/stylevalue-serialization/cssMathValue.tentative.html
 tests/wpt/css/css-typed-om/stylevalue-serialization/cssStyleValue-string.html
 tests/wpt/css/css-typed-om/stylevalue-serialization/cssUnitValue.tentative.html
 tests/wpt/css/css-typed-om/stylevalue-serialization/cssUnparsedValue.html
+tests/wpt/css/css-typed-om/stylevalue-subclasses/cssColorValue.html
+tests/wpt/css/css-typed-om/stylevalue-subclasses/cssHSL.html
+tests/wpt/css/css-typed-om/stylevalue-subclasses/cssHWB.html
 tests/wpt/css/css-typed-om/stylevalue-subclasses/cssKeywordValue-invalid.any.js
 tests/wpt/css/css-typed-om/stylevalue-subclasses/cssKeywordValue-value.any.js
 tests/wpt/css/css-typed-om/stylevalue-subclasses/cssKeywordValue.any.js
+tests/wpt/css/css-typed-om/stylevalue-subclasses/cssLCH.html
+tests/wpt/css/css-typed-om/stylevalue-subclasses/cssLab.html
+tests/wpt/css/css-typed-om/stylevalue-subclasses/cssOKLCH.html
+tests/wpt/css/css-typed-om/stylevalue-subclasses/cssOKLab.html
 tests/wpt/css/css-typed-om/stylevalue-subclasses/cssPerspective.tentative.html
+tests/wpt/css/css-typed-om/stylevalue-subclasses/cssRGB.html
 tests/wpt/css/css-typed-om/stylevalue-subclasses/cssRotate.tentative.html
 tests/wpt/css/css-typed-om/stylevalue-subclasses/cssScale.tentative.html
 tests/wpt/css/css-typed-om/stylevalue-subclasses/cssSkew.tentative.html

@@ -5,6 +5,7 @@
 #include "solar/url/Parser.h"
 #include "solar/url/Serializer.h"
 #include "solar/css/Descriptors.h"
+#include "solar/css/Color.h"
 #include "solar/css/Shorthands.h"
 #include "solar/css/Values.h"
 #include "solar/css/Properties.h"
@@ -1355,7 +1356,22 @@ Value TypedPropertyInfo(Context& ctx, Value, qe::Args args, Value) {
   return result;
 }
 
+// A color as the computed rgb() it comes to (hex and named colors for the Typed OM), nothing if the text is not a color.
+Value TypedComputeColor(Context& ctx, Value, qe::Args args, Value) {
+  if (args.empty()) return qe::Null();
+  const std::string text = qe::ToWtf8(ctx, args[0]);
+  if (qe::HasException(ctx)) return qe::Undefined();
+  ComponentValue value;
+  if (!ParseComponentValue(text, value)) return qe::Null();
+  const std::optional<ComponentValue> normalized = NormalizeColor(value);
+  if (!normalized) return qe::Null();
+  const std::optional<ComponentValue> computed = ComputeColor(*normalized, "rgb(0, 0, 0)", "light");
+  if (!computed) return qe::Null();
+  return qe::FromWtf8(ctx, Serialize(*computed));
+}
+
 void InstallCssSupports(Context& ctx) {
+  qe::DefineGlobalFunction(ctx, "__solarTypedComputeColor", TypedComputeColor, 1);
   qe::DefineGlobalFunction(ctx, "__solarTypedPropertyInfo", TypedPropertyInfo, 1);
   qe::DefineGlobalFunction(ctx, "__solarCssRegisterProperty", RegisterProperty, 1);
   qe::DefineGlobalFunction(ctx, "__solarCssSupports", CssSupports, 1);
