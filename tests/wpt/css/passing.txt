@@ -2885,3 +2885,7 @@ tests/wpt/css/css-sizing/contain-intrinsic-size/contain-intrinsic-size-logical-0
 tests/wpt/css/css-sizing/keyword-sizes-on-floated-element.html
 tests/wpt/css/css-sizing/keyword-sizes-on-inline-block.html
 tests/wpt/css/css-sizing/stretch/replaced-stretch-height-001.html
+tests/wpt/css/css-sizing/aspect-ratio/abspos-aspect-ratio-border.html
+tests/wpt/css/css-sizing/aspect-ratio/box-sizing-aspect-ratio-positioned.html
+tests/wpt/css/css-sizing/aspect-ratio/replaced-element-042.html
+tests/wpt/css/css-sizing/keyword-sizes-for-intrinsic-contributions.html

@@ -127,7 +127,14 @@ struct Flex {
       const double margins = mainAxis ? it.marginMainStart + it.marginMainEnd : it.marginCrossStart + it.marginCrossEnd;
       if (l.kind == Length::Kind::Stretch) return Known(basis) ? std::max(0.0, basis - margins - pb) : kNaN;
       if (l.kind != Length::Kind::MinContent && l.kind != Length::Kind::MaxContent && l.kind != Length::Kind::FitContent) return kNaN;
-      if (row != mainAxis) return kNaN;
+      if (row != mainAxis) {
+        // In the block axis they are the height of the contents; an image is as high as it is by itself.
+        if (it.box->replaced) {
+          const double natural = it.box->naturalHeight >= 0 ? it.box->naturalHeight : 150;
+          return natural;
+        }
+        return kNaN;
+      }
       ComputeContentSizes(lc, *it.box);
       if (l.kind == Length::Kind::MinContent) return it.box->minContent;
       if (l.kind == Length::Kind::MaxContent) return it.box->maxContent;

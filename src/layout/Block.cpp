@@ -213,6 +213,10 @@ void ReplacedContentSize(const Box& box, double cbWidth, double cbHeight, double
     if (ratio <= 0 && aw > 0 && ah > 0) ratio = aw / ah;
   }
   if (s.aspectRatio > 0 && !s.aspectRatioAuto) ratio = s.aspectRatio;
+  // An explicit ratio is of the box that box-sizing says: the sizes it gives are those of the border box.
+  const bool borderRatio = borderBox && s.aspectRatio > 0 && !s.aspectRatioAuto;
+  const auto heightFromWidth = [&](double width) { return borderRatio ? std::max(0.0, (width + extrasH) / ratio - extrasV) : width / ratio; };
+  const auto widthFromHeight = [&](double height) { return borderRatio ? std::max(0.0, (height + extrasV) * ratio - extrasH) : height * ratio; };
   const bool widthAuto = !Known(cssW), heightAuto = !Known(cssH);
   w = cssW;
   h = cssH;
@@ -224,9 +228,9 @@ void ReplacedContentSize(const Box& box, double cbWidth, double cbHeight, double
     else { w = 300; h = 150; }
     if (s.aspectRatio > 0 && !s.aspectRatioAuto && nw >= 0) h = w / ratio;
   } else if (widthAuto) {
-    w = ratio > 0 ? h * ratio : (nw >= 0 ? nw : 300);
+    w = ratio > 0 ? widthFromHeight(h) : (nw >= 0 ? nw : 300);
   } else if (heightAuto) {
-    h = ratio > 0 ? w / ratio : (nh >= 0 ? nh : 150);
+    h = ratio > 0 ? heightFromWidth(w) : (nh >= 0 ? nh : 150);
   }
   // min and max keep the ratio of what was automatic.
   // The size the image has by itself, which the intrinsic keywords come to.
@@ -249,10 +253,10 @@ void ReplacedContentSize(const Box& box, double cbWidth, double cbHeight, double
   const double maxW = content(s.maxWidth, cbWidth), minW = content(s.minWidth, cbWidth);
   const double maxH = contentV(s.maxHeight, cbHeight), minH = contentV(s.minHeight, cbHeight);
   for (int pass = 0; pass < 2; ++pass) {
-    if (Known(maxW) && w > maxW) { w = maxW; if (heightAuto && ratio > 0) h = w / ratio; }
-    if (Known(minW) && w < minW) { w = minW; if (heightAuto && ratio > 0) h = w / ratio; }
-    if (Known(maxH) && h > maxH) { h = maxH; if (widthAuto && ratio > 0) w = h * ratio; }
-    if (Known(minH) && h < minH) { h = minH; if (widthAuto && ratio > 0) w = h * ratio; }
+    if (Known(maxW) && w > maxW) { w = maxW; if (heightAuto && ratio > 0) h = heightFromWidth(w); }
+    if (Known(minW) && w < minW) { w = minW; if (heightAuto && ratio > 0) h = heightFromWidth(w); }
+    if (Known(maxH) && h > maxH) { h = maxH; if (widthAuto && ratio > 0) w = widthFromHeight(h); }
+    if (Known(minH) && h < minH) { h = minH; if (widthAuto && ratio > 0) w = widthFromHeight(h); }
   }
 }
 
@@ -309,13 +313,23 @@ void ComputeContentSizes(LayoutContext& lc, Box& box) {
     if (Known(fixed)) {
       const double w = cs.boxSizing == BoxSizing::BorderBox ? std::max(0.0, fixed - ExtrasHorizontal(*child)) : fixed;
       mn = mx = w;
+    } else if (cs.width.kind == Length::Kind::MinContent) {
+      mn = mx = child->minContent;
+    } else if (cs.width.kind == Length::Kind::MaxContent) {
+      mn = mx = child->maxContent;
     } else if (cs.width.kind == Length::Kind::Percent || cs.width.kind == Length::Kind::Calc) {
       mn = 0;  // a percentage of an unknown width contributes nothing to the minimum
     }
     const double maxW = ResolveSize(cs.maxWidth, kNaN);
     if (Known(maxW)) { mn = std::min(mn, maxW); mx = std::min(mx, maxW); }
+    else if (cs.maxWidth.kind == Length::Kind::MinContent) { mn = std::min(mn, child->minContent); mx = std::min(mx, child->minContent); }
+    else if (cs.maxWidth.kind == Length::Kind::MaxContent) { mn = std::min(mn, child->maxContent); mx = std::min(mx, child->maxContent); }
+    else if (cs.maxWidth.kind == Length::Kind::FitContent) { mn = std::min(mn, child->minContent); mx = std::min(mx, child->maxContent); }
     const double minW = ResolveSize(cs.minWidth, kNaN);
     if (Known(minW)) { mn = std::max(mn, minW); mx = std::max(mx, minW); }
+    else if (cs.minWidth.kind == Length::Kind::MinContent) { mn = std::max(mn, child->minContent); mx = std::max(mx, child->minContent); }
+    else if (cs.minWidth.kind == Length::Kind::MaxContent) { mn = std::max(mn, child->maxContent); mx = std::max(mx, child->maxContent); }
+    else if (cs.minWidth.kind == Length::Kind::FitContent) { mn = std::max(mn, child->minContent); mx = std::max(mx, child->maxContent); }
     box.minContent = std::max(box.minContent, mn + extras);
     box.maxContent = std::max(box.maxContent, mx + extras);
   }
@@ -1188,6 +1202,11 @@ void PlaceOne(LayoutContext& lc, Box& a) {
   } else if (s.width.kind == Length::Kind::MinContent || s.width.kind == Length::Kind::MaxContent) {
     ComputeContentSizes(lc, a);
     W = s.width.kind == Length::Kind::MinContent ? a.minContent : a.maxContent;
+  }
+  // A height and a ratio give the width (of the box that box-sizing says the ratio is of).
+  if (!Known(W) && !a.replaced && s.aspectRatio > 0 && !s.aspectRatioAuto && (s.height.kind == Length::Kind::Px || s.height.IsPercentage())) {
+    const double h = ResolveSize(s.height, ch);
+    if (Known(h)) W = borderBox ? std::max(0.0, h * s.aspectRatio - extrasH) : (h * s.aspectRatio);
   }
   const bool widthAuto = !Known(W);
   double L = left, R = right;
