@@ -689,6 +689,7 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
     box.collapsedThrough = memo.collapsedThrough;
     box.staticX = memo.staticX; box.staticY = memo.staticY; box.shiftX = memo.shiftX; box.shiftY = memo.shiftY;
     box.baseline = memo.baseline; box.firstBaseline = memo.firstBaseline; box.minContent = memo.minContent; box.maxContent = memo.maxContent;
+    box.ownFirstBaseline = memo.ownFirstBaseline; box.ownLastBaseline = memo.ownLastBaseline;
     box.stickyX = box.stickyY = 0;
     box.hitSerial = lc.tree.serial;
     // (What a layout takes from the context for the box laid out is used up.)
@@ -715,6 +716,7 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
       memo.collapsedThrough = box.collapsedThrough;
       memo.staticX = box.staticX; memo.staticY = box.staticY; memo.shiftX = box.shiftX; memo.shiftY = box.shiftY;
       memo.baseline = box.baseline; memo.firstBaseline = box.firstBaseline; memo.minContent = box.minContent; memo.maxContent = box.maxContent;
+      memo.ownFirstBaseline = box.ownFirstBaseline; memo.ownLastBaseline = box.ownLastBaseline;
     }
   }
   if (box.node && box.node->IsElement() && !box.anonymous) {
@@ -1074,6 +1076,24 @@ void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cb
     else if (Known(bottom)) box.shiftY = -bottom;
   }
 
+  box.ownFirstBaseline = box.firstBaseline;
+  box.ownLastBaseline = box.baseline;
+  // In vertical-lr the line is over at the right but the block starts at the left: from the start of the block a baseline is as far as the line is thick without the room over it.
+  if (box.Mode() == WritingMode::VerticalLr && plainBlock) {
+    if (box.hasInlineContent && !box.lines.empty()) {
+      const Line& first = box.lines.front();
+      const Line& last = box.lines.back();
+      box.ownFirstBaseline = first.rect.y + first.rect.height - first.baseline;
+      box.ownLastBaseline = last.rect.y + last.rect.height - last.baseline;
+    } else if (!box.hasInlineContent) {
+      box.ownFirstBaseline = box.ownLastBaseline = -1;
+      for (auto& c : box.children) {
+        if (c->style->IsOutOfFlow() || c->collapsedThrough || c->ownFirstBaseline < 0 || Orthogonal(box.Mode(), c->Mode())) continue;
+        if (box.ownFirstBaseline < 0) box.ownFirstBaseline = c->y + c->ownFirstBaseline;
+        box.ownLastBaseline = c->y + c->ownLastBaseline;
+      }
+    }
+  }
   if (keepOwnFrame) {
     box.ownWidth = box.width;
     box.ownHeight = box.height;

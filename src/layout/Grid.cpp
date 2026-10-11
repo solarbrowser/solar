@@ -4,6 +4,7 @@
 #include <functional>
 #include <map>
 #include <set>
+#include <tuple>
 
 #include "Internal.h"
 #include "solar/css/Syntax.h"
@@ -253,7 +254,25 @@ struct GridItem {
   bool subgridAxis[2] = {false, false};
   int onlyAxis = -1;  // such an item of a subgrid takes part in the sizing of the one axis only
   bool hasColumns = false;  // (for the rows) its columns are known too
+  // Baseline alignment in an axis: what the item lines up on (0 none, 1 first, 2 last), at which side of the axis (the minimum side) its baseline is read from, how far from
+  // the margin edge of that side the baseline is, and how much room that group leaves it before the margin edge.
+  int baselineKind[2] = {0, 0};
+  bool baselineMin[2] = {true, true};
+  double baselineDistance[2] = {0, 0}, shim[2] = {0, 0};
 };
+
+// The way the frame of a writing mode runs, physically: x (along the lines) and y (from block start to block end), as (right, down).
+struct PhysDir {
+  int x, y;
+};
+PhysDir FrameXDir(WritingMode m) { return m == WritingMode::HorizontalTb ? PhysDir{1, 0} : m == WritingMode::SidewaysLr ? PhysDir{0, -1} : PhysDir{0, 1}; }
+PhysDir FrameYDir(WritingMode m) {
+  switch (m) {
+    case WritingMode::HorizontalTb: return {0, 1};
+    case WritingMode::VerticalRl: case WritingMode::SidewaysRl: return {-1, 0};
+    default: return {1, 0};
+  }
+}
 
 struct Track {
   TrackDef def;
@@ -757,15 +776,31 @@ struct Grid {
     const BoxStyle& s = *b.style;
     b.border = {s.border[0], s.border[1], s.border[2], s.border[3]};
     b.padding = {std::max(0.0, s.padding[0].Resolve(cb)), std::max(0.0, s.padding[1].Resolve(cb)), std::max(0.0, s.padding[2].Resolve(cb)), std::max(0.0, s.padding[3].Resolve(cb))};
-    it.padBorder[0] = b.border.Vertical() + b.padding.Vertical();
-    it.padBorder[1] = b.border.Horizontal() + b.padding.Horizontal();
-    const int starts[2] = {0, 3}, ends[2] = {2, 1};  // top/bottom, left/right
-    for (int a = 0; a < 2; ++a) {
-      it.autoMarginStart[a] = s.margin[starts[a]].IsAuto();
-      it.autoMarginEnd[a] = s.margin[ends[a]].IsAuto();
-      it.marginStart[a] = it.autoMarginStart[a] ? 0 : s.margin[starts[a]].Resolve(cb);
-      it.marginEnd[a] = it.autoMarginEnd[a] ? 0 : s.margin[ends[a]].Resolve(cb);
+    Edges margin, autoMargin, border = b.border, padding = b.padding;
+    const double* marginSides[4] = {&margin.top, &margin.right, &margin.bottom, &margin.left};
+    double* autoSides[4] = {&autoMargin.top, &autoMargin.right, &autoMargin.bottom, &autoMargin.left};
+    for (int i = 0; i < 4; ++i) {
+      *autoSides[i] = s.margin[i].IsAuto() ? 1 : 0;
+      *const_cast<double*>(marginSides[i]) = s.margin[i].IsAuto() ? 0 : s.margin[i].Resolve(cb);
     }
+    // The edges are those of the item's own frame: the grid's are those of its frame.
+    if (b.Mode() != container.Mode()) {
+      const auto across = [&](const Edges& e) { return EdgesToFrame(container.Mode(), EdgesToPhysical(b.Mode(), e)); };
+      margin = across(margin);
+      autoMargin = across(autoMargin);
+      border = across(border);
+      padding = across(padding);
+    }
+    it.padBorder[0] = border.Vertical() + padding.Vertical();
+    it.padBorder[1] = border.Horizontal() + padding.Horizontal();
+    it.autoMarginStart[0] = autoMargin.top != 0;
+    it.autoMarginEnd[0] = autoMargin.bottom != 0;
+    it.autoMarginStart[1] = autoMargin.left != 0;
+    it.autoMarginEnd[1] = autoMargin.right != 0;
+    it.marginStart[0] = margin.top;
+    it.marginEnd[0] = margin.bottom;
+    it.marginStart[1] = margin.left;
+    it.marginEnd[1] = margin.right;
   }
 
   Align::Kind SelfAlign(const GridItem& it, int axis) const {
@@ -776,6 +811,76 @@ struct Grid {
     Align::Kind k = self.kind == Align::Kind::Auto ? items.kind : self.kind;
     if (k == Align::Kind::Auto) k = Align::Kind::Normal;
     return k;
+  }
+
+  // ---- Baseline alignment (css-align-3 §9, css-grid-1 §6.6) ----
+  // An item lines up on a baseline in an axis when it asks for it, spans one track there, and has no auto margins in it.
+  int BaselineKindOf(const GridItem& it, int axis) const {
+    if (it.span[axis] != 1 || it.autoMarginStart[axis] || it.autoMarginEnd[axis] || it.subgridAxis[axis] || it.onlyAxis >= 0) return 0;
+    const Align::Kind k = SelfAlign(it, axis);
+    return k == Align::Kind::Baseline ? 1 : k == Align::Kind::LastBaseline ? 2 : 0;
+  }
+
+  // Where the baseline of each item that has one in the axis is, and the room the items of a group have to leave to line up on it. The group is the
+  // items in one track that read their baseline from the same side.
+  void ComputeBaselines(int axis, const std::function<double(const GridItem&)>& areaWidthOf, const std::function<double(const GridItem&)>& sizeAlong) {
+    const WritingMode mode = container.Mode();
+    const PhysDir along = axis == 1 ? FrameXDir(mode) : FrameYDir(mode);
+    using Key = std::tuple<int, bool, int>;
+    std::map<Key, double> widest;
+    std::map<Key, const GridItem*> reference;  // the item of a group whose baseline is a real one: it has the writing mode that the others' synthesized baselines go by
+    std::vector<GridItem*> members;
+    std::vector<bool> blockAlongOf;
+    for (GridItem& it : items) {
+      it.baselineKind[axis] = BaselineKindOf(it, axis);
+      it.shim[axis] = 0;
+      if (!it.baselineKind[axis]) continue;
+      Box& b = *it.box;
+      const bool orthogonal = Orthogonal(mode, b.Mode());
+      const bool blockAlong = (axis == 0) != orthogonal;  // the block axis of the item is along the axis
+      // Which side of the axis the start of the item (its block start or its inline start, whichever is along it) is at.
+      PhysDir start;
+      if (blockAlong) start = FrameYDir(b.Mode());
+      else start = b.style->direction == Direction::Ltr ? FrameXDir(b.Mode()) : PhysDir{-FrameXDir(b.Mode()).x, -FrameXDir(b.Mode()).y};
+      const bool startAtMin = start.x * along.x + start.y * along.y > 0;
+      const bool first = it.baselineKind[axis] == 1;
+      it.baselineMin[axis] = first ? startAtMin : !startAtMin;
+      const Key key{it.pos[axis], it.baselineMin[axis], it.baselineKind[axis]};
+      if (blockAlong) {
+        // (Laid out for its baselines, in its own frame.)
+        if (areaWidthOf) LayoutItemAt(it, areaWidthOf(it), kNaN);
+        if (!reference.count(key)) reference[key] = &it;
+      }
+      members.push_back(&it);
+      blockAlongOf.push_back(blockAlong);
+    }
+    for (size_t m = 0; m < members.size(); ++m) {
+      GridItem& it = *members[m];
+      Box& b = *it.box;
+      const bool first = it.baselineKind[axis] == 1;
+      const bool atMin = it.baselineMin[axis];
+      const Key key{it.pos[axis], atMin, it.baselineKind[axis]};
+      // How far the baseline is from the margin edge at the side of the group.
+      double distance;
+      if (blockAlongOf[m]) {
+        const double blockSize = b.ownHeight;
+        distance = first ? (b.ownFirstBaseline >= 0 ? b.ownFirstBaseline : blockSize) : (b.ownLastBaseline >= 0 ? blockSize - b.ownLastBaseline : 0);
+        distance += atMin ? it.marginStart[axis] : it.marginEnd[axis];
+      } else {
+        // Synthesized: the border box's edge that is under the text of the writing mode the others in the group go by.
+        distance = atMin ? it.marginStart[axis] : it.marginEnd[axis];
+        const auto ref = reference.find(key);
+        if (ref != reference.end()) {
+          const WritingMode refMode = ref->second->box->Mode();
+          const PhysDir under = refMode == WritingMode::HorizontalTb ? PhysDir{0, 1} : refMode == WritingMode::SidewaysLr ? PhysDir{1, 0} : PhysDir{-1, 0};
+          const int toward = under.x * along.x + under.y * along.y;
+          if (toward != 0 && (toward < 0) != atMin) distance += std::max(0.0, sizeAlong(it));
+        }
+      }
+      it.baselineDistance[axis] = distance;
+      widest[key] = std::max(widest[key], distance);
+    }
+    for (GridItem* it : members) it->shim[axis] = widest[Key{it->pos[axis], it->baselineMin[axis], it->baselineKind[axis]}] - it->baselineDistance[axis];
   }
 
   // The size property of the item in an axis resolved to a content-box length, or NaN.
@@ -1187,6 +1292,12 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
   // Columns.
   for (GridItem& it : grid.items) if (!it.subgridAxis[1]) grid.ColumnContributions(it, contentWidth);
   for (GridItem& v : grid.virtualItems) if (v.onlyAxis == 1) grid.ColumnContributions(v, contentWidth);
+  grid.ComputeBaselines(1, [&](const GridItem&) { return contentWidth; }, [](const GridItem& it) { return it.maxContentContribution - it.marginStart[1] - it.marginEnd[1]; });
+  for (GridItem& it : grid.items) {
+    it.minContribution += it.shim[1];
+    it.minContentContribution += it.shim[1];
+    it.maxContentContribution += it.shim[1];
+  }
   grid.SizeTracks(1, contentWidth, false);
   // The widths of the item areas, for the rows.
   double spread[2] = {0, 0};  // what content distribution adds to the gap between two tracks: an area that spans tracks has it too
@@ -1201,8 +1312,14 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
     if (v.onlyAxis != 0) continue;
     grid.RowContributions(v, v.hasColumns ? areaSize(v, 1) : contentWidth);
   }
+  grid.ComputeBaselines(0, [&](const GridItem& it) { return areaSize(it, 1); }, [](const GridItem& it) { return it.box->height; });
+  for (GridItem& it : grid.items) {
+    it.minContribution += it.shim[0];
+    it.minContentContribution += it.shim[0];
+    it.maxContentContribution += it.shim[0];
+  }
   const double rowsAvailable = heightBasis;
-  grid.SizeTracks(0, rowsAvailable, false);
+  grid.SizeTracks(0, rowsAvailable, true);  // (a height that is auto is the max-content one)
   // align/justify-content positions.
   const auto contentOffset = [&](int axis, double available) {
     // A subgridded axis has its tracks from the grid above: nothing of its own to distribute.
@@ -1251,20 +1368,11 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
   // Place the items.
   const double originX = container.ContentLeft(), originY = container.ContentTop();
   double firstBaseline = -1;
-  // Baseline alignment: items in the same row that ask for it line up on the largest ascent.
-  std::map<int, double> rowAscent;
-  for (GridItem& it : grid.items) {
-    if (grid.SelfAlign(it, 0) != Align::Kind::Baseline) continue;
-    grid.LayoutItemAt(it, areaSize(it, 1), kNaN);
-    const double base = it.box->firstBaseline >= 0 ? it.box->firstBaseline : it.box->height;
-    rowAscent[it.pos[0]] = std::max(rowAscent[it.pos[0]], it.marginStart[0] + base);
-  }
-  for (GridItem& it : grid.items) {
+  // The item laid out in its grid area.
+  const auto layoutAtArea = [&](GridItem& it) {
     Box& b = *it.box;
     const BoxStyle& st = *b.style;
     const double areaW = areaSize(it, 1), areaH = areaSize(it, 0);
-    const double areaX = grid.tracks[1][it.pos[1]].position, areaY = grid.tracks[0][it.pos[0]].position;
-    double w[2];  // content sizes: [rows, columns]
     double forced[2] = {kNaN, kNaN};
     const Align::Kind kinds[2] = {grid.SelfAlign(it, 0), grid.SelfAlign(it, 1)};
     const double area[2] = {areaH, areaW};
@@ -1272,7 +1380,6 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
       const double specified = grid.SpecifiedSize(it, a, a == 0 ? heightBasis : contentWidth);
       const bool stretch = (kinds[a] == Align::Kind::Normal || kinds[a] == Align::Kind::Stretch) && !it.autoMarginStart[a] && !it.autoMarginEnd[a] && !b.replaced;
       if (!Known(specified) && stretch) forced[a] = std::max(0.0, area[a] - it.marginStart[a] - it.marginEnd[a] - it.padBorder[a]);
-      (void)w;
     }
     // A grid container that is a subgrid takes the tracks it spans.
     if (IsGridDisplay(st.display)) {
@@ -1294,6 +1401,27 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
     grid.lc.cbX = 0;
     grid.lc.boxY = 0;
     LayoutBlockLevel(lc, b, areaW, areaH, true);
+  };
+  // What the items that line up on a baseline have to leave, now that the areas they are in are known: the sizes of the items count for the baselines that are at the far edge.
+  {
+    bool any = false;
+    for (GridItem& it : grid.items) any = any || grid.BaselineKindOf(it, 0) || grid.BaselineKindOf(it, 1);
+    if (any) {
+      for (GridItem& it : grid.items) {
+        if (grid.BaselineKindOf(it, 0) || grid.BaselineKindOf(it, 1)) layoutAtArea(it);
+      }
+      grid.ComputeBaselines(0, nullptr, [](const GridItem& it) { return it.box->height; });
+      grid.ComputeBaselines(1, nullptr, [](const GridItem& it) { return it.box->width; });
+    }
+  }
+  for (GridItem& it : grid.items) {
+    Box& b = *it.box;
+    const BoxStyle& st = *b.style;
+    const double areaW = areaSize(it, 1), areaH = areaSize(it, 0);
+    const double areaX = grid.tracks[1][it.pos[1]].position, areaY = grid.tracks[0][it.pos[0]].position;
+    const Align::Kind kinds[2] = {grid.SelfAlign(it, 0), grid.SelfAlign(it, 1)};
+    const double area[2] = {areaH, areaW};
+    layoutAtArea(it);
     // Position by alignment.
     const double sizes[2] = {b.height, b.width};
     double offsets[2];
@@ -1323,8 +1451,10 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
           case Align::Kind::End: case Align::Kind::FlexEnd: case Align::Kind::SelfEnd: start += rtl ? 0 : free; break;
           case Align::Kind::Center: start += free / 2; break;
           case Align::Kind::Right: start += a == 1 ? free : 0; break;
-          case Align::Kind::Baseline:
-            if (a == 0) start = rowAscent[it.pos[0]] - (b.firstBaseline >= 0 ? b.firstBaseline : b.height);
+          case Align::Kind::Baseline: case Align::Kind::LastBaseline:
+            // On a baseline: the room the group asks for before the side the baseline is read from. Without one (the item spans tracks, has auto margins) it is at the start, or at the end for the last baseline.
+            if (it.baselineKind[a]) start = it.baselineMin[a] ? it.marginStart[a] + it.shim[a] : area[a] - sizes[a] - it.marginEnd[a] - it.shim[a];
+            else if (k == Align::Kind::LastBaseline) start += free;
             break;
           case Align::Kind::Left: break;
           case Align::Kind::Start: case Align::Kind::SelfStart: case Align::Kind::FlexStart:
@@ -1432,6 +1562,12 @@ void GridContentSizes(LayoutContext& lc, Box& container, double& minContent, dou
     grid.Place();
     for (GridItem& it : grid.items) grid.ItemEdges(it, 0);
     for (GridItem& it : grid.items) grid.ColumnContributions(it, kNaN);
+    grid.ComputeBaselines(1, [](const GridItem&) { return kNaN; }, [](const GridItem& it) { return it.maxContentContribution - it.marginStart[1] - it.marginEnd[1]; });
+    for (GridItem& it : grid.items) {
+      it.minContribution += it.shim[1];
+      it.minContentContribution += it.shim[1];
+      it.maxContentContribution += it.shim[1];
+    }
     grid.SizeTracks(1, kNaN, pass == 1);
     (pass == 0 ? minContent : maxContent) = grid.TrackSum(1);
   }

@@ -1398,13 +1398,20 @@ double LayoutInlineContentOnce(LayoutContext& lc, Box& container, double width, 
       above = std::max(above, p.shift + p.above);
       below = std::max(below, -p.shift + p.below);
     }
-    double alignedTall = 0;
-    for (const BoxExtent& be : extents) if (be.used && (be.top || be.bottom)) alignedTall = std::max(alignedTall, be.above + be.below);
-    for (const Piece& p : pieces) if ((p.top || p.bottom) && p.item.kind == LineItem::Kind::Atomic) alignedTall = std::max(alignedTall, p.above + p.below);
-    if (alignedTall > above + below) {
-      // top-aligned things extend the bottom; bottom-aligned ones the top (when both, the line is as tall as the taller).
-      below = alignedTall - above;
+    double topTall = 0, bottomTall = 0;
+    for (const BoxExtent& be : extents) {
+      if (!be.used) continue;
+      if (be.top) topTall = std::max(topTall, be.above + be.below);
+      if (be.bottom) bottomTall = std::max(bottomTall, be.above + be.below);
     }
+    for (const Piece& p : pieces) {
+      if (p.item.kind != LineItem::Kind::Atomic) continue;
+      if (p.top) topTall = std::max(topTall, p.above + p.below);
+      if (p.bottom) bottomTall = std::max(bottomTall, p.above + p.below);
+    }
+    // top-aligned things extend the bottom of the line; bottom-aligned ones the top (when both, the line is as tall as the taller).
+    if (topTall > above + below) below = topTall - above;
+    if (bottomTall > above + below) above = bottomTall - below;
     const double lineHeight = above + below;
     const double baselineY = above;
 

@@ -89,6 +89,7 @@ struct LayoutMemo {
   double topPositive = 0, topNegative = 0, bottomPositive = 0, bottomNegative = 0;
   bool collapsedThrough = false;
   double staticX = 0, staticY = 0, shiftX = 0, shiftY = 0, baseline = -1, firstBaseline = -1, minContent = -1, maxContent = -1;
+  double ownFirstBaseline = -1, ownLastBaseline = -1;
 };
 
 struct Box {
@@ -153,6 +154,7 @@ struct Box {
   // Baselines of the box (from its top): the last line's, for aligning inline-blocks, and the first's, for flex and grid items; negative if none.
   double baseline = -1;
   double firstBaseline = -1;
+  double ownFirstBaseline = -1, ownLastBaseline = -1;  // the baselines in the box's own frame (the others are given up when it is turned into its parent's)
   // A flex or grid item is its own formatting context whatever its style.
   bool forceBfc = false;
   // Kept from the tree before when nothing in it changed (see Builder): a box whose subtree depends on more than the document's nodes is volatile.
