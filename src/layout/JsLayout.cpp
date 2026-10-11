@@ -8,6 +8,8 @@
 
 namespace solar::layout {
 
+void AskForContentVisibilityFrame();
+
 namespace qe = Quanta::Embed;
 using Quanta::Context;
 using Quanta::DOMObject;
@@ -172,6 +174,7 @@ Value Scroll(Context& ctx, Value, qe::Args args, Value) {
     ApplySticky(*tree);
     // What is near the viewport is worked out from where it is scrolled to.
     if (document->contentVisibilityAutoSeen) tree->builtFor = 0;
+    AskForContentVisibilityFrame();
   }
   qe::ArrayPush(ctx, out, qe::FromNumber(position.first));
   qe::ArrayPush(ctx, out, qe::FromNumber(position.second));
@@ -283,15 +286,42 @@ void InstallResolvedHook();
 namespace {
 Context* g_cvContext = nullptr;
 bool g_cvRequested = false;
+bool g_updatesWanted = false;  // observers are watching: a frame is asked for when the tree, or the scroll, changes
 }  // namespace
 
 // A change of the tree, where content-visibility: auto is in use: a frame is asked for, as the rendering is updated after it.
 void AskForContentVisibilityFrame() {
-  if (g_cvRequested || !css::g_contentVisibilityAutoMentioned || !g_cvContext) return;
+  if (g_cvRequested || !(css::g_contentVisibilityAutoMentioned || g_updatesWanted) || !g_cvContext) return;
   dom::Document* document = dom::AssociatedDocument(*g_cvContext);
   if (!document || !document->contentVisibilityWake) return;
   g_cvRequested = true;
   Quanta::Embed::Call(*g_cvContext, qe::FromObject(document->contentVisibilityWake), qe::Undefined());
+}
+
+// __solarLayoutWantUpdates(bool): whether a frame is wanted when the tree or the scroll position changes.
+Value WantUpdates(Context&, Value, qe::Args args, Value) {
+  g_updatesWanted = !args.empty() && qe::ToBoolean(args[0]);
+  return qe::Undefined();
+}
+
+// __solarLayoutBoxSizes(element): [border width, border height, content width, content height, padding left, padding top] of the box as layout made it (no transforms), or null.
+Value BoxSizes(Context& ctx, Value, qe::Args args, Value) {
+  dom::Element* element = args.empty() ? nullptr : DOMObject::Cast<dom::Element>(args[0]);
+  if (!element || !element->nodeDocument) return qe::Null();
+  Tree* tree = UpdateLayout(ctx, element->nodeDocument);
+  const std::vector<Box*>& boxes = BoxesOf(*tree, element);
+  Value out = qe::NewArray(ctx);
+  for (double v : {0.0, 0.0, 0.0, 0.0, 0.0, 0.0}) qe::ArrayPush(ctx, out, qe::FromNumber(v));
+  if (boxes.empty() || boxes[0]->kind != Box::Kind::Block) return out;
+  const Box& box = *boxes[0];
+  Value result = qe::NewArray(ctx);
+  qe::ArrayPush(ctx, result, qe::FromNumber(box.width));
+  qe::ArrayPush(ctx, result, qe::FromNumber(box.height));
+  qe::ArrayPush(ctx, result, qe::FromNumber(std::max(0.0, box.width - box.border.Horizontal() - box.padding.Horizontal())));
+  qe::ArrayPush(ctx, result, qe::FromNumber(std::max(0.0, box.height - box.border.Vertical() - box.padding.Vertical())));
+  qe::ArrayPush(ctx, result, qe::FromNumber(box.padding.left));
+  qe::ArrayPush(ctx, result, qe::FromNumber(box.padding.top));
+  return result;
 }
 
 // __solarLayoutSetCvWake(function): the function that asks for a frame to send the contentvisibilityautostatechange events in.
@@ -364,6 +394,8 @@ void InstallLayoutNatives(Context& ctx) {
   qe::DefineGlobalFunction(ctx, "__solarLayoutRangeRects", RangeRects, 3);
   qe::DefineGlobalFunction(ctx, "__solarLayoutProcessedText", ProcessedText, 1);
   qe::DefineGlobalFunction(ctx, "__solarLayoutSetCvWake", SetCvWake, 1);
+  qe::DefineGlobalFunction(ctx, "__solarLayoutWantUpdates", WantUpdates, 1);
+  qe::DefineGlobalFunction(ctx, "__solarLayoutBoxSizes", BoxSizes, 1);
   qe::DefineGlobalFunction(ctx, "__solarLayoutCvTake", CvTake, 0);
 }
 

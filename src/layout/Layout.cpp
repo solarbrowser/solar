@@ -382,7 +382,8 @@ bool UsedValue(Tree& tree, dom::Element* element, const std::string& property, s
       return true;
     }
     if (property == "padding-" + side) {
-      const double v = i == 0 ? box->padding.top : i == 1 ? box->padding.right : i == 2 ? box->padding.bottom : box->padding.left;
+      // (The room of a scrollbar is in the padding of the box, and not in the padding that was asked for.)
+      const double v = i == 0 ? box->padding.top - box->scrollbar.top : i == 1 ? box->padding.right - box->scrollbar.right : i == 2 ? box->padding.bottom - box->scrollbar.bottom : box->padding.left - box->scrollbar.left;
       out = Px(v);
       return true;
     }

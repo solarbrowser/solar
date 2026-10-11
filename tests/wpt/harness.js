@@ -79,6 +79,12 @@
   globalThis.assert_less_than_equal = (actual, expected, description) => {
     if (!(actual <= expected)) fail('expected a number less than or equal to ' + describe(expected) + ' but got ' + describe(actual), description);
   };
+  globalThis.assert_between_inclusive = (actual, lower, upper, description) => {
+    if (!(actual >= lower && actual <= upper)) fail('expected a number between ' + describe(lower) + ' and ' + describe(upper) + ' inclusive but got ' + describe(actual), description);
+  };
+  globalThis.assert_between_exclusive = (actual, lower, upper, description) => {
+    if (!(actual > lower && actual < upper)) fail('expected a number between ' + describe(lower) + ' and ' + describe(upper) + ' exclusive but got ' + describe(actual), description);
+  };
   globalThis.assert_in_array = (actual, expected, description) => {
     if (!expected.includes(actual)) fail(describe(actual) + ' not in array', description);
   };

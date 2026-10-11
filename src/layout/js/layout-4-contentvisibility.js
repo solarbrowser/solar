@@ -39,6 +39,10 @@
   // Every frame updates the rendering first, which is where the elements that came to be skipped or not are found.
   const addStep = global.__solarAddFrameStep;
   delete global.__solarAddFrameStep;
+  // The end of the rendering update, for the observers (layout-5-observers.js).
+  global.__solarRendering = { addEndStep: global.__solarAddFrameEndStep, want: global.__solarLayoutWantUpdates, rendered: send };
+  delete global.__solarAddFrameEndStep;
+  delete global.__solarLayoutWantUpdates;
   if (typeof addStep === 'function') addStep(() => send());
   setWake(() => {
     if (scheduled || typeof global.requestAnimationFrame !== 'function') return;

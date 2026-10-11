@@ -685,6 +685,7 @@ const char* const kWindowScript = R"JS(
   let frameBusy = false;
   // Other steps of "update the rendering" (layout's: the events of content-visibility: auto), which run before the animations.
   const frameSteps = [];
+  const frameEndSteps = [];
   function runFrame() {
     frameTimer = null;
     frameBusy = true;
@@ -700,12 +701,15 @@ const char* const kWindowScript = R"JS(
     for (const callback of callbacks) {
       try { callback(now); } catch (error) { reportLater(error); }
     }
+    // The rest of "update the rendering", after the callbacks: observers of size and intersection.
+    for (const step of frameEndSteps) { try { step(now); } catch (error) { reportLater(error); } }
     // Whether another frame is wanted is seen at the time of this one: the animations are running or not as of it.
     const more = frames.size > 0 || (animationFrame.wants && animationFrame.wants());
     if (animationFrame.end) animationFrame.end();
     frameBusy = false;
     if (more) scheduleFrame();
   }
+  Object.defineProperty(globalThis, "__solarAddFrameEndStep", { value: function (step) { frameEndSteps.push(step); }, configurable: true });
   Object.defineProperty(globalThis, "__solarAddFrameStep", { value: function (step) { frameSteps.push(step); }, configurable: true });
   Object.defineProperty(globalThis, "__solarFrameHook", { value: function (run, end, wants) {
     animationFrame.run = run; animationFrame.end = end; animationFrame.wants = wants;
