@@ -111,15 +111,28 @@ struct Flex {
     it.shrink = s.flexShrink;
     const Length& crossLen = row ? s.height : s.width;
     it.crossAuto = !Known(ResolveSize(crossLen, row ? containerHeight : containerWidth));
-    if (crossLen.IsKeyword()) it.crossAuto = true;
+    // (A keyword is not auto: the item is not stretched. The intrinsic ones are the content in the block axis, stretch fills the container.)
+    if (crossLen.IsKeyword()) it.crossAuto = false;
+    // (stretch in the cross axis fills the line, as the stretching of align-self does.)
+    if (crossLen.kind == Length::Kind::Stretch) it.crossAuto = true;
   }
 
   // The content-box size a size property asks for in the item's main or cross axis, or NaN.
   double Specified(const Item& it, const Length& l, bool mainAxis) const {
     const double basis = (row == mainAxis) ? containerWidth : containerHeight;
     double v = ResolveSize(l, basis);
-    if (!Known(v)) return kNaN;
     const double pb = mainAxis ? it.padBorderMain : it.padBorderCross;
+    if (!Known(v)) {
+      // The keywords: the intrinsic ones are of the inline axis (they are auto in the other), stretch fills what the container has.
+      const double margins = mainAxis ? it.marginMainStart + it.marginMainEnd : it.marginCrossStart + it.marginCrossEnd;
+      if (l.kind == Length::Kind::Stretch) return Known(basis) ? std::max(0.0, basis - margins - pb) : kNaN;
+      if (l.kind != Length::Kind::MinContent && l.kind != Length::Kind::MaxContent && l.kind != Length::Kind::FitContent) return kNaN;
+      if (row != mainAxis) return kNaN;
+      ComputeContentSizes(lc, *it.box);
+      if (l.kind == Length::Kind::MinContent) return it.box->minContent;
+      if (l.kind == Length::Kind::MaxContent) return it.box->maxContent;
+      return std::min(std::max(it.box->minContent, Known(basis) ? std::max(0.0, basis - margins - pb) : it.box->maxContent), it.box->maxContent);
+    }
     return it.box->style->boxSizing == BoxSizing::BorderBox ? std::max(0.0, v - pb) : v;
   }
 
@@ -188,9 +201,6 @@ struct Flex {
       if (!s.flexBasisContent) {
         const Length& basis = s.flexBasis.IsAuto() ? (row ? s.width : s.height) : s.flexBasis;
         base = Specified(it, basis, true);
-        if (basis.kind == Length::Kind::MinContent || basis.kind == Length::Kind::MaxContent || basis.kind == Length::Kind::FitContent) {
-          base = row ? (ComputeContentSizes(lc, b), basis.kind == Length::Kind::MinContent ? b.minContent : b.maxContent) : kNaN;
-        }
       }
       if (!Known(base)) {
         if (b.replaced && !row && b.naturalHeight >= 0) base = b.naturalHeight;

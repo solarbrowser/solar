@@ -199,6 +199,9 @@ void ReplacedContentSize(const Box& box, double cbWidth, double cbHeight, double
   if (Known(cssH) && borderBox) cssH = std::max(0.0, cssH - extrasV);
   if (!Known(cssW) && s.width.IsAuto() && box.attrWidth >= 0) cssW = box.attrWidth;
   if (!Known(cssH) && s.height.IsAuto() && box.attrHeight >= 0) cssH = box.attrHeight;
+  // stretch: the margin box fills the containing block.
+  if (s.width.kind == Length::Kind::Stretch && Known(cbWidth)) cssW = std::max(0.0, cbWidth - MarginOf(s, 3, cbWidth) - MarginOf(s, 1, cbWidth) - extrasH);
+  if (s.height.kind == Length::Kind::Stretch && Known(cbHeight)) cssH = std::max(0.0, cbHeight - MarginOf(s, 0, cbWidth) - MarginOf(s, 2, cbWidth) - extrasV);
   double ratio = box.naturalRatio;
   if (ratio <= 0 && box.naturalWidth > 0 && box.naturalHeight > 0) ratio = box.naturalWidth / box.naturalHeight;
   if (ratio <= 0 && box.attrWidth > 0 && box.attrHeight > 0) ratio = box.attrWidth / box.attrHeight;
@@ -664,6 +667,10 @@ void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cb
     else if (s.width.kind == Length::Kind::MaxContent) width = box.maxContent;
     else width = std::min(std::max(box.minContent, availableWidth - ml - mr - extrasH), box.maxContent);
     widthAuto = false;
+  } else if (s.width.kind == Length::Kind::Stretch && Known(availableWidth)) {
+    // stretch: the margin box fills the containing block.
+    width = std::max(0.0, availableWidth - ml - mr - extrasH);
+    widthAuto = false;
   } else {
     const double specified = ResolveSize(s.width, cbWidth);
     if (Known(specified)) {
@@ -671,12 +678,15 @@ void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cb
       widthAuto = false;
     }
   }
+  const double stretchWidth = Known(availableWidth) ? std::max(0.0, availableWidth - ml - mr - extrasH) : kNaN;
   const auto clampWidth = [&](double w) {
     if (Known(forceWidth)) return w;
     const double maxW = ResolveSize(s.maxWidth, cbWidth);
     if (Known(maxW)) w = std::min(w, std::max(0.0, maxW - (borderBox ? extrasH : sbH)));
+    else if (s.maxWidth.kind == Length::Kind::Stretch && Known(stretchWidth)) w = std::min(w, stretchWidth);
     const double minW = ResolveSize(s.minWidth, cbWidth);
     if (Known(minW)) w = std::max(w, std::max(0.0, minW - (borderBox ? extrasH : sbH)));
+    else if (s.minWidth.kind == Length::Kind::Stretch && Known(stretchWidth)) w = std::max(w, stretchWidth);
     else if (s.minWidth.kind == Length::Kind::MinContent || s.minWidth.kind == Length::Kind::MaxContent) {
       ComputeContentSizes(lc, box);
       w = std::max(w, s.minWidth.kind == Length::Kind::MinContent ? box.minContent : box.maxContent);
@@ -741,6 +751,8 @@ void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cb
   // ---- height basis for the children ----
   double specifiedHeight = Known(forceHeight) ? forceHeight : ResolveSize(s.height, cbHeight);
   if (Known(specifiedHeight) && !Known(forceHeight)) specifiedHeight = std::max(0.0, specifiedHeight - (borderBox ? extrasV : sbV));
+  const double stretchHeight = Known(cbHeight) ? std::max(0.0, cbHeight - box.margin.top - box.margin.bottom - extrasV) : kNaN;
+  if (!Known(forceHeight) && s.height.kind == Length::Kind::Stretch && Known(stretchHeight)) specifiedHeight = stretchHeight;
   // aspect-ratio gives a height from the width.
   double ratioHeight = kNaN;
   if (!box.replaced && s.aspectRatio > 0 && !Known(specifiedHeight) && !s.aspectRatioAuto) ratioHeight = width / s.aspectRatio;
@@ -772,6 +784,7 @@ void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cb
   const bool heightIsAuto = !Known(specifiedHeight) && !Known(ratioHeight);
   const double minH = [&] {
     const double v = ResolveSize(s.minHeight, cbHeight);
+    if (s.minHeight.kind == Length::Kind::Stretch && Known(stretchHeight)) return stretchHeight;
     return Known(v) ? std::max(0.0, v - (borderBox ? extrasV : sbV)) : 0.0;
   }();
   // A box's top margin is the first child's too if nothing is between them.
@@ -866,7 +879,12 @@ void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cb
   if (!Known(forceHeight)) {
     const double maxH = ResolveSize(s.maxHeight, cbHeight);
     if (Known(maxH)) usedHeight = std::min(usedHeight, std::max(0.0, maxH - (borderBox ? extrasV : sbV)));
+    else if (s.maxHeight.kind == Length::Kind::Stretch && Known(stretchHeight)) usedHeight = std::min(usedHeight, stretchHeight);
+    // The intrinsic keywords in the block axis are the height of the contents.
+    const auto intrinsicKeyword = [](const Length& l) { return l.kind == Length::Kind::MinContent || l.kind == Length::Kind::MaxContent || l.kind == Length::Kind::FitContent; };
+    if (intrinsicKeyword(s.maxHeight)) usedHeight = std::min(usedHeight, contentHeight);
     usedHeight = std::max(usedHeight, minH);
+    if (intrinsicKeyword(s.minHeight)) usedHeight = std::max(usedHeight, contentHeight);
   }
   usedHeight = std::max(0.0, usedHeight);
   box.height = usedHeight + extrasV;
@@ -1142,15 +1160,21 @@ void PlaceOne(LayoutContext& lc, Box& a) {
   }
   const bool widthAuto = !Known(W);
   double L = left, R = right;
+  const bool stretchW = s.width.kind == Length::Kind::Stretch;
   const auto shrink = [&](double avail) {
+    if (stretchW) return std::max(0.0, avail);  // stretch: all of the room
     ComputeContentSizes(lc, a);
     return std::min(std::max(a.minContent, std::max(0.0, avail)), a.maxContent);
   };
+  // What stretch comes to: all the room from the inset (the static position for an inset that is auto) to the other.
+  const auto stretchAvailable = [&]() { return std::max(0.0, cw - (Known(L) ? L : (Known(R) ? 0.0 : staticLeft)) - (Known(R) ? R : 0.0) - ml - mr - extrasH); };
   const auto clampW = [&](double w) {
     const double maxW = ResolveSize(s.maxWidth, cw);
     if (Known(maxW)) w = std::min(w, borderBox ? std::max(0.0, maxW - extrasH) : maxW);
+    else if (s.maxWidth.kind == Length::Kind::Stretch) w = std::min(w, stretchAvailable());
     const double minW = ResolveSize(s.minWidth, cw);
     if (Known(minW)) w = std::max(w, borderBox ? std::max(0.0, minW - extrasH) : minW);
+    else if (s.minWidth.kind == Length::Kind::Stretch) w = std::max(w, stretchAvailable());
     return w;
   };
   const auto solveH = [&]() {
@@ -1192,6 +1216,7 @@ void PlaceOne(LayoutContext& lc, Box& a) {
     L = Place(inlineSide, i0, i1, W + extrasH + ml + mr, cw, Dot(orthogonalToCb ? FrameY(cbMode) : InlineStartDir(cbMode, cbDirection), FrameX(mode)) < 0, inlineSelf.safe, inlineSelf.unsafe);
   }
 
+  if (getenv("SOLAR_DEBUG")) std::fprintf(stderr, "PlaceOne W %g L %g R %g ml %g mr %g extrasH %g cw %g stretch %d inlineSide %d\n", W, L, R, ml, mr, extrasH, cw, (int)stretchW, (int)inlineSide);
   // Lay out at the width, for the height the contents have.
   lc.forceWidth = W;
   lc.keepOwnFrame = true;
@@ -1207,7 +1232,12 @@ void PlaceOne(LayoutContext& lc, Box& a) {
   const bool heightAuto = !Known(H);
   double T = top, B = bottom;
   const double contentH = a.height - extrasV;
-  if (heightAuto) {
+  if (heightAuto && s.height.kind == Length::Kind::Stretch) {
+    // stretch: the margin box fills what is left of the containing block.
+    const double from = Known(T) ? T : (Known(B) ? 0.0 : staticTop);
+    H = std::max(0.0, ch - from - (Known(B) ? B : 0.0) - mt - mb - extrasV);
+    if (!Known(T) && !Known(B)) T = staticTop;
+  } else if (heightAuto) {
     if (!Known(T) && !Known(B)) { H = contentH; T = staticTop; }
     else if (!Known(T)) H = contentH;
     else if (!Known(B)) H = contentH;
@@ -1215,10 +1245,13 @@ void PlaceOne(LayoutContext& lc, Box& a) {
     else H = std::max(0.0, ch - T - B - mt - mb - extrasV);
   }
   {
+    const double stretchRoom = std::max(0.0, ch - (Known(T) ? T : (Known(B) ? 0.0 : staticTop)) - (Known(B) ? B : 0.0) - mt - mb - extrasV);
     const double maxH = ResolveSize(s.maxHeight, ch);
     if (Known(maxH)) H = std::min(H, borderBox ? std::max(0.0, maxH - extrasV) : maxH);
+    else if (s.maxHeight.kind == Length::Kind::Stretch) H = std::min(H, stretchRoom);
     const double minH = ResolveSize(s.minHeight, ch);
     if (Known(minH)) H = std::max(H, borderBox ? std::max(0.0, minH - extrasV) : minH);
+    else if (s.minHeight.kind == Length::Kind::Stretch) H = std::max(H, stretchRoom);
   }
   if (!Known(T) && !Known(B)) T = staticTop;
   if (!Known(T)) T = ch - B - H - extrasV - mt - mb;

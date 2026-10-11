@@ -236,6 +236,7 @@ Length ParseLength(const std::string& text) {
   if (text == "min-content") { l.kind = Length::Kind::MinContent; return l; }
   if (text == "max-content") { l.kind = Length::Kind::MaxContent; return l; }
   if (text == "fit-content") { l.kind = Length::Kind::FitContent; return l; }
+  if (text == "stretch" || text == "-webkit-fill-available" || text == "-moz-available") { l.kind = Length::Kind::Stretch; return l; }
   if (text.starts_with("calc(") || text.starts_with("min(") || text.starts_with("max(") || text.starts_with("clamp(")) {
     // Without a percentage in it it is known now.
     if (text.find('%') == std::string::npos) {

@@ -44,6 +44,8 @@ SUPPLEMENT = {
 OVERRIDE = {
     "<grid-line>": "auto | <grid-ident> | [ <integer> && <grid-ident>? ] | [ span && [ <integer> || <grid-ident> ] ]",
     "<paint>": "none | <color> | <url> [ none | <color> ]? | context-fill | context-stroke",
+    # The legacy names of stretch.
+    "<box-size>": "<length-percentage [0,∞]> | stretch | -webkit-fill-available | -moz-available | contain | min-content | max-content | fit-content | fit-content(<length-percentage [0,∞]>) | <calc-size()>",
 }
 
 # Properties whose entry in the data is behind what browsers accept (applied after the data is read).

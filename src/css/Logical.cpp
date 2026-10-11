@@ -39,20 +39,21 @@ struct Info {
 const std::unordered_map<std::string, Info>& Table() {
   static const std::unordered_map<std::string, Info> table = [] {
     std::unordered_map<std::string, Info> map;
-    const auto edge = [&](const std::string& beforeSide, const std::string& afterSide) {
+    // (The names of the physical properties are the same without the key: inset-block-start is top, not inset-top.)
+    const auto edge = [&](const std::string& beforeSide, const std::string& afterSide, const std::string& physicalBefore) {
       for (const bool block : {true, false}) {
         for (const bool end : {false, true}) {
           const std::string name = beforeSide + (block ? "block" : "inline") + (end ? "-end" : "-start") + afterSide;
-          map[name] = {Kind::Edge, beforeSide, afterSide, block, end, false};
+          map[name] = {Kind::Edge, physicalBefore, afterSide, block, end, false};
         }
       }
     };
-    edge("margin-", "");
-    edge("padding-", "");
-    edge("scroll-margin-", "");
-    edge("scroll-padding-", "");
-    edge("inset-", "");
-    for (const char* suffix : {"-width", "-style", "-color"}) edge("border-", suffix);
+    edge("margin-", "", "margin-");
+    edge("padding-", "", "padding-");
+    edge("scroll-margin-", "", "scroll-margin-");
+    edge("scroll-padding-", "", "scroll-padding-");
+    edge("inset-", "", "");
+    for (const char* suffix : {"-width", "-style", "-color"}) edge("border-", suffix, "border-");
     for (const bool block : {true, false}) {
       const std::string axis = block ? "block" : "inline";
       for (const char* prefix : {"", "min-", "max-"}) map[std::string(prefix) + axis + "-size"] = {Kind::Size, prefix, "", block, false, false};

@@ -2867,3 +2867,16 @@ tests/wpt/resize-observer/observe-018.html
 tests/wpt/resize-observer/observe-019.html
 tests/wpt/resize-observer/ordering.html
 tests/wpt/resize-observer/scrollbars-2.html
+tests/wpt/css/css-sizing/available-height-for-replaced-content-001.html
+tests/wpt/css/css-sizing/contain-intrinsic-size/auto-004.html
+tests/wpt/css/css-sizing/contain-intrinsic-size/auto-011.html
+tests/wpt/css/css-sizing/contain-intrinsic-size/contain-intrinsic-size-029.html
+tests/wpt/css/css-sizing/stretch/auto-margins-1.html
+tests/wpt/css/css-sizing/stretch/block-height-001.html
+tests/wpt/css/css-sizing/stretch/flex-basis-1.html
+tests/wpt/css/css-sizing/stretch/flex-item-height-001.html
+tests/wpt/css/css-sizing/stretch/flex-item-height-003.html
+tests/wpt/css/css-sizing/stretch/flex-stretch-min-max-cross-001.html
+tests/wpt/css/css-sizing/stretch/indefinite-4.html
+tests/wpt/css/css-sizing/stretch/stretch-block-size-002.html
+tests/wpt/css/css-sizing/stretch/stretch-inline-size-002.html

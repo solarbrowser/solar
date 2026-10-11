@@ -10,7 +10,7 @@
 namespace solar::layout {
 
 struct Length {
-  enum class Kind : uint8_t { Auto, Px, Percent, Calc, None, MinContent, MaxContent, FitContent };
+  enum class Kind : uint8_t { Auto, Px, Percent, Calc, None, MinContent, MaxContent, FitContent, Stretch };
   Kind kind = Kind::Auto;
   double value = 0;
   std::string calc;  // a calc() that has a percentage in it, as written

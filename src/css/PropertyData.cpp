@@ -870,7 +870,7 @@ const TypeDefinition kTypeDefinitions[] = {
     {"<border-style>", "none | hidden | dotted | dashed | solid | double | groove | ridge | inset | outset"},
     {"<border-width>", "thin | medium | thick"},
     {"<bottom>", "auto"},
-    {"<box-size>", "<length-percentage [0,∞]> | stretch | contain | min-content | max-content | fit-content | fit-content(<length-percentage [0,∞]>) | <calc-size()>"},
+    {"<box-size>", "<length-percentage [0,∞]> | stretch | -webkit-fill-available | -moz-available | contain | min-content | max-content | fit-content | fit-content(<length-percentage [0,∞]>) | <calc-size()>"},
     {"<box>", "content-box | padding-box | border-box | margin-box | fill-box | stroke-box | view-box"},
     {"<calc-keyword>", "e | pi | infinity | -infinity | NaN"},
     {"<calc-product>", "<calc-value> [ [ '*' | / ] <calc-value> ]*"},
