@@ -1331,6 +1331,15 @@ std::string Resolver::Finish(dom::Element* element, const std::string& property,
   if (IsCssWideKeyword(values)) return Lower(values[0].token.value);
   const Parent parent = ParentOf(element, pseudo);
 
+  // A subgrid is a grid container in a grid: elsewhere what it says of itself does not count.
+  if ((property == "grid-template-columns" || property == "grid-template-rows") && values.size() >= 1 && values[0].IsIdent() && Lower(values[0].token.value) == "subgrid" && pseudo.empty()) {
+    const std::string own = Compute(element, "display", pseudo);
+    if (own == "grid" || own == "inline-grid") {
+      const std::string up = parent.element ? Compute(parent.element, "display", "") : std::string();
+      if (up != "grid" && up != "inline-grid") return "none";
+    }
+  }
+
   // The legend of a fieldset is block-level (https://html.spec.whatwg.org/multipage/rendering.html#fieldset-and-legend): its display is blockified.
   if (property == "display" && pseudo.empty() && element->IsHtml("legend") &&
       values.size() == 1 && values[0].IsIdent()) {

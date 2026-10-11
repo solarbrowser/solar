@@ -35,6 +35,14 @@ struct GridLines {
   std::vector<std::vector<std::string>> names[2];       // the names of each line
 };
 
+// The tracks a grid container that is a subgrid in an axis takes from the grid it is an item of: the sizes of the tracks it spans and the names of their lines.
+struct SubgridTracks {
+  bool active = false;
+  std::vector<double> sizes;
+  std::vector<std::vector<std::string>> names;  // one more than the sizes: the lines
+  double gap = 0;
+};
+
 // A piece of text on a line, shaped.
 struct TextPiece {
   Box* box = nullptr;           // the text box it is of
@@ -113,6 +121,7 @@ struct Box {
   std::shared_ptr<const BoxStyle> firstLineStyle;  // the style of its ::first-line, when it has one
   std::vector<FirstLineEdit> firstLineEdits;
   bool hasInlineContent = false;  // the children are all inline-level
+  SubgridTracks subgrid[2];  // set by the grid this box is an item of, for the axes it is a subgrid in: [0] rows, [1] columns
   std::shared_ptr<GridLines> gridLines;  // a grid container's, once laid out
   // Margin collapsing: the margins that go out through the top and bottom of the box as sums of the largest positive and most negative.
   double topPositive = 0, topNegative = 0, bottomPositive = 0, bottomNegative = 0;

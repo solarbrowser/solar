@@ -1462,6 +1462,12 @@ namespace {
 
 // A track list with the line names run together: adjacent [ ] blocks are one, and an empty one is nothing.
 void CanonicalTrackList(ValueMatch& match) {
+  // A subgrid names its lines one by one: the lists are not run together, and an empty one is a line without a name.
+  for (const ComponentValue& v : match.normalized) {
+    if (v.IsWhitespace()) continue;
+    if (v.IsIdent() && Lower(v.token.value) == "subgrid") return;
+    break;
+  }
   ComponentValues out;
   const auto isNames = [](const ComponentValue& v) { return v.IsBlock(T::LeftBracket); };
   for (size_t i = 0; i < match.normalized.size(); ++i) {

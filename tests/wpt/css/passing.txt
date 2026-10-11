@@ -880,7 +880,6 @@ tests/wpt/css/css-grid/subgrid/subgrid-baseline-013.html
 tests/wpt/css/css-grid/subgrid/subgrid-baseline-014.html
 tests/wpt/css/css-grid/subgrid/subgrid-baseline-015.html
 tests/wpt/css/css-grid/subgrid/subgrid-baseline-016.html
-tests/wpt/css/css-grid/subgrid/subgrid-baseline-018.html
 tests/wpt/css/css-grid/subgrid/subgrid-own-column-gap-does-not-inflate-intrinsic-width.html
 tests/wpt/css/css-grid/table-grid-item-005.html
 tests/wpt/css/css-images/parsing/conic-gradient-calc-angle-percentage-invalid.html
@@ -2915,3 +2914,15 @@ tests/wpt/css/css-grid/grid-model/grid-item-accepts-first-letter-001.html
 tests/wpt/css/css-grid/grid-model/grid-item-accepts-first-line-001.html
 tests/wpt/css/css-grid/layout-algorithm/flex-sizing-columns-min-max-width-001.html
 tests/wpt/css/css-grid/placement/grid-container-change-grid-tracks-recompute-child-positions-001.html
+tests/wpt/css/css-grid/grid-definition/grid-inline-template-columns-rows-resolved-values-001.html
+tests/wpt/css/css-grid/grid-definition/grid-template-columns-rows-resolved-values-001.html
+tests/wpt/css/css-grid/grid-items/grid-item-fixed-margin-001.html
+tests/wpt/css/css-grid/grid-items/grid-items-minimum-width-001.html
+tests/wpt/css/css-grid/grid-items/grid-items-minimum-width-002.html
+tests/wpt/css/css-grid/grid-model/grid-container-margin-border-padding-scrollbar-001.html
+tests/wpt/css/css-grid/subgrid/grid-template-computed-invalid-subgrid.html
+tests/wpt/css/css-grid/subgrid/grid-template-computed-nogrid.html
+tests/wpt/css/css-grid/subgrid/grid-template-valid.html
+tests/wpt/css/css-grid/subgrid/placement-invalidation-001.html
+tests/wpt/css/css-grid/subgrid/subgrid-baseline-011.html
+tests/wpt/css/css-grid/subgrid/subgridded-axis-content-distribution-001.html

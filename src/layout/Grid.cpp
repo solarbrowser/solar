@@ -249,6 +249,10 @@ struct GridItem {
   double marginStart[2] = {0, 0}, marginEnd[2] = {0, 0};
   bool autoMarginStart[2] = {false, false}, autoMarginEnd[2] = {false, false};
   double minContribution = 0, minContentContribution = 0, maxContentContribution = 0;
+  // A subgrid does not size the tracks it spans by itself: the items inside it do, as if they were items of the grid it is in.
+  bool subgridAxis[2] = {false, false};
+  int onlyAxis = -1;  // such an item of a subgrid takes part in the sizing of the one axis only
+  bool hasColumns = false;  // (for the rows) its columns are known too
 };
 
 struct Track {
@@ -393,6 +397,134 @@ struct Grid {
     explicitCount[0] = static_cast<int>(tracks[0].size());
     explicitCount[1] = static_cast<int>(tracks[1].size());
   }
+
+  std::vector<GridItem> virtualItems;  // the items inside the subgrids, for the sizing of the axis the subgrid shares
+
+  // The items that size an axis: those that are not subgrids in it, and the items inside the subgrids that are.
+  std::vector<GridItem*> SizingItems(int axis) {
+    std::vector<GridItem*> out;
+    for (GridItem& it : items) if (!it.subgridAxis[axis]) out.push_back(&it);
+    for (GridItem& it : virtualItems) if (it.onlyAxis == axis) out.push_back(&it);
+    return out;
+  }
+
+  // Whether a box is a subgrid in the axis (its template says so and it is a grid container).
+  bool IsSubgridIn(const Box& b, int axis) const {
+    if (!IsGridDisplay(b.style->display)) return false;
+    return Lower(axis == 0 ? b.style->gridTemplateRows : b.style->gridTemplateColumns).rfind("subgrid", 0) == 0;
+  }
+
+  // The items inside a subgrid `box` that spans `count` tracks of `axis` from `from`: made items of this grid. `startExtra` and `endExtra` are what is added at its
+  // two ends by the subgrids around it (its own margin, border and padding are added here).
+  void ExpandSubgrid(GridItem& root, Box& box, int axis, int from, int count, double startExtra, double endExtra, double columnWidth) {
+    const BoxStyle& bs = *box.style;
+    const int starts[2] = {0, 3}, ends[2] = {2, 1};
+    const auto edge = [&](int side) {
+      const double border = bs.border[side];
+      const double padding = std::max(0.0, bs.padding[side].Resolve(columnWidth));
+      const double margin = bs.margin[side].IsAuto() ? 0 : bs.margin[side].Resolve(columnWidth);
+      return border + padding + margin;
+    };
+    const double S = startExtra + edge(starts[axis]), E = endExtra + edge(ends[axis]);
+    // Its own grid, only for where its items are in the lines it spans.
+    Grid inner(lc, box, kNaN, kNaN);
+    box.subgrid[axis] = SubgridTracks();
+    box.subgrid[axis].active = true;
+    box.subgrid[axis].sizes.assign(static_cast<size_t>(count), 0.0);
+    for (int i = from; i <= from + count; ++i) box.subgrid[axis].names.push_back(static_cast<size_t>(i) < lineNames[axis].size() ? lineNames[axis][i] : std::vector<std::string>());
+    box.subgrid[1 - axis] = SubgridTracks();
+    // The other axis too, when it is shared as well: the items inside are placed in its lines.
+    const int other = 1 - axis;
+    if (root.subgridAxis[other] && root.box == &box && IsSubgridIn(box, other)) {
+      box.subgrid[other].active = true;
+      box.subgrid[other].sizes.assign(static_cast<size_t>(root.span[other]), 0.0);
+      for (int i = root.pos[other]; i <= root.pos[other] + root.span[other]; ++i) box.subgrid[other].names.push_back(static_cast<size_t>(i) < lineNames[other].size() ? lineNames[other][i] : std::vector<std::string>());
+    }
+    std::vector<Box*> boxes;
+    for (auto& c : box.children) if (!c->style->IsOutOfFlow()) boxes.push_back(c.get());
+    std::stable_sort(boxes.begin(), boxes.end(), [](const Box* a, const Box* b) { return a->style->order < b->style->order; });
+    inner.items.resize(boxes.size());
+    for (size_t i = 0; i < boxes.size(); ++i) inner.items[i].box = boxes[i];
+    inner.gap[0] = inner.gap[1] = 0;
+    inner.ParseTemplates(kNaN, kNaN);
+    inner.ApplySubgrid();
+    inner.Place();
+    for (GridItem& si : inner.items) {
+      const double itemStart = si.pos[axis] == 0 ? S : 0;
+      const double itemEnd = si.pos[axis] + si.span[axis] == count ? E : 0;
+      if (IsSubgridIn(*si.box, axis)) {
+        ExpandSubgrid(root, *si.box, axis, from + si.pos[axis], si.span[axis], itemStart, itemEnd, columnWidth);
+        continue;
+      }
+      GridItem v;
+      v.box = si.box;
+      v.onlyAxis = axis;
+      v.pos[axis] = from + si.pos[axis];
+      v.span[axis] = si.span[axis];
+      ItemEdges(v, columnWidth);
+      v.marginStart[axis] += itemStart + (si.pos[axis] > 0 ? inner.subgridGapDelta[axis] : 0);
+      v.marginEnd[axis] += itemEnd + (si.pos[axis] + si.span[axis] < count ? inner.subgridGapDelta[axis] : 0);
+      // The columns of such an item, for the heights it asks for: those of the subgrid when it shares them, and else the width of the subgrid.
+      if (axis == 0 && root.box == &box && inner.subgridded[1]) {
+        v.pos[1] = root.pos[1] + si.pos[1];
+        v.span[1] = si.span[1];
+        v.hasColumns = true;
+      }
+      virtualItems.push_back(v);
+    }
+  }
+
+  // A subgrid in an axis has the tracks of the grid it is in, for the lines it spans: sizes and names come from there, less its own edges at the two ends.
+  bool subgridded[2] = {false, false};
+  void ApplySubgrid() {
+    const std::string* texts[2] = {&style.gridTemplateRows, &style.gridTemplateColumns};
+    for (int axis = 0; axis < 2; ++axis) {
+      const SubgridTracks& from = container.subgrid[axis];
+      if (!from.active || from.sizes.empty() || Lower(*texts[axis]).rfind("subgrid", 0) != 0) continue;
+      subgridded[axis] = true;
+      // Its own margin, border and padding at the start and the end of the axis belong to the first and the last track.
+      const Edges& m = container.margin;
+      const double startExtra = axis == 0 ? m.top + container.border.top + container.padding.top : m.left + container.border.left + container.padding.left;
+      const double endExtra = axis == 0 ? m.bottom + container.border.bottom + container.padding.bottom : m.right + container.border.right + container.padding.right;
+      tracks[axis].clear();
+      for (size_t i = 0; i < from.sizes.size(); ++i) {
+        Track t;
+        double size = from.sizes[i];
+        if (i == 0) size -= startExtra;
+        if (i + 1 == from.sizes.size()) size -= endExtra;
+        size = std::max(0.0, size);
+        t.def.min = t.def.max = Fn();
+        t.def.min.k = t.def.max.k = Fn::K::Length;
+        t.def.min.value = t.def.max.value = size;
+        tracks[axis].push_back(t);
+      }
+      lineNames[axis] = from.names;
+      lineNames[axis].resize(tracks[axis].size() + 1);
+      // The names it gives lines itself, one list for each line from the start.
+      const solar::css::ComponentValues values = solar::css::ParseComponentValues(*texts[axis]);
+      size_t line = 0;
+      for (const ComponentValue& v : values) {
+        if (!v.IsBlock(T::LeftBracket)) continue;
+        if (line < lineNames[axis].size()) {
+          for (const ComponentValue& name : v.children) if (name.IsIdent()) lineNames[axis][line].push_back(name.token.value);
+        }
+        ++line;
+      }
+      // Its areas name its lines too.
+      for (const auto& [name, a] : areas) {
+        const int first = axis == 0 ? a[0] : a[2], last = axis == 0 ? a[1] : a[3];
+        if (first >= 1 && static_cast<size_t>(first - 1) < lineNames[axis].size()) lineNames[axis][first - 1].push_back(name + "-start");
+        if (last >= 1 && static_cast<size_t>(last - 1) < lineNames[axis].size()) lineNames[axis][last - 1].push_back(name + "-end");
+      }
+      explicitCount[axis] = static_cast<int>(tracks[axis].size());
+      // The gap between its tracks is the one of the grid above; what its own gap is more or less than that is shared by the two items beside a line, as margin.
+      const double own = axis == 0 ? ResolveSize(style.rowGap, kNaN) : ResolveSize(style.columnGap, kNaN);
+      gap[axis] = from.gap;
+      subgridGapDelta[axis] = Known(own) ? (own - from.gap) / 2 : 0;
+    }
+  }
+  bool gapGiven[2] = {false, false};
+  double subgridGapDelta[2] = {0, 0};
 
   // The 1-based line number of the nth line with a name, or 0.
   int FindNamedLine(int axis, const std::string& name, int n, bool isEnd) const {
@@ -767,8 +899,7 @@ struct Grid {
       if (t.limit < t.base) t.limit = t.base;
     }
     // Items by span, those that cross no flexible track first for the intrinsic sizes.
-    std::vector<GridItem*> order;
-    for (GridItem& it : items) order.push_back(&it);
+    std::vector<GridItem*> order = SizingItems(axis);
     std::stable_sort(order.begin(), order.end(), [&](const GridItem* a, const GridItem* b) { return a->span[axis] < b->span[axis]; });
     const auto spansFlexible = [&](const GridItem& it) {
       for (int i = it.pos[axis]; i < it.pos[axis] + it.span[axis]; ++i) if (ts[i].def.max.k == Fn::K::Fr) return true;
@@ -934,7 +1065,8 @@ struct Grid {
         }
       } else {
         // Indefinite: each flexible track is as big as its items want; the fr is the largest of base/factor.
-        for (GridItem& it : items) {
+        for (GridItem* itp : SizingItems(axis)) {
+          GridItem& it = *itp;
           double factors = 0, other = g * (it.span[axis] - 1);
           for (int i = it.pos[axis]; i < it.pos[axis] + it.span[axis]; ++i) {
             if (ts[i].def.max.k == Fn::K::Fr) factors += ts[i].def.max.value;
@@ -1007,6 +1139,8 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
   const double colGap = ResolveSize(s.columnGap, contentWidth), rowGap = ResolveSize(s.rowGap, heightBasis);
   grid.gap[1] = Known(colGap) ? colGap : 0;
   grid.gap[0] = Known(rowGap) ? rowGap : 0;
+  grid.gapGiven[1] = Known(colGap);
+  grid.gapGiven[0] = Known(rowGap);
   std::vector<Box*> boxes;
   for (auto& c : container.children) {
     if (c->style->IsOutOfFlow()) {
@@ -1018,13 +1152,41 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
   }
   std::stable_sort(boxes.begin(), boxes.end(), [](const Box* a, const Box* b) { return a->style->order < b->style->order; });
   grid.items.resize(boxes.size());
-  for (size_t i = 0; i < boxes.size(); ++i) grid.items[i].box = boxes[i];
+  for (size_t i = 0; i < boxes.size(); ++i) {
+    grid.items[i].box = boxes[i];
+    // (The tracks of a subgrid are known when its grid has sized them: until then it has none.)
+    boxes[i]->subgrid[0].active = boxes[i]->subgrid[1].active = false;
+  }
   grid.ParseTemplates(contentWidth, heightBasis);
+  grid.ApplySubgrid();
   grid.Place();
   for (GridItem& it : grid.items) grid.ItemEdges(it, contentWidth);
+  // In a subgridded axis the items beside a line have the share of the gap of the subgrid that the grid above does not have.
+  for (GridItem& it : grid.items) {
+    for (int a = 0; a < 2; ++a) {
+      if (!grid.subgridded[a] || grid.subgridGapDelta[a] == 0) continue;
+      if (it.pos[a] > 0) it.marginStart[a] += grid.subgridGapDelta[a];
+      if (it.pos[a] + it.span[a] < static_cast<int>(grid.tracks[a].size())) it.marginEnd[a] += grid.subgridGapDelta[a];
+    }
+  }
+  // The items in a subgrid size the tracks it spans.
+  for (GridItem& it : grid.items) {
+    for (int a = 0; a < 2; ++a) {
+      if (!grid.IsSubgridIn(*it.box, a)) continue;
+      it.subgridAxis[a] = true;
+    }
+  }
+  for (size_t i = 0; i < grid.items.size(); ++i) {
+    for (int a = 0; a < 2; ++a) {
+      if (!grid.items[i].subgridAxis[a]) continue;
+      // (the other axis has to be known to the items inside, for placing them)
+      grid.ExpandSubgrid(grid.items[i], *grid.items[i].box, a, grid.items[i].pos[a], grid.items[i].span[a], 0, 0, contentWidth);
+    }
+  }
 
   // Columns.
-  for (GridItem& it : grid.items) grid.ColumnContributions(it, contentWidth);
+  for (GridItem& it : grid.items) if (!it.subgridAxis[1]) grid.ColumnContributions(it, contentWidth);
+  for (GridItem& v : grid.virtualItems) if (v.onlyAxis == 1) grid.ColumnContributions(v, contentWidth);
   grid.SizeTracks(1, contentWidth, false);
   // The widths of the item areas, for the rows.
   double spread[2] = {0, 0};  // what content distribution adds to the gap between two tracks: an area that spans tracks has it too
@@ -1034,11 +1196,17 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
     return size;
   };
   // Rows.
-  for (GridItem& it : grid.items) grid.RowContributions(it, areaSize(it, 1));
+  for (GridItem& it : grid.items) if (!it.subgridAxis[0]) grid.RowContributions(it, areaSize(it, 1));
+  for (GridItem& v : grid.virtualItems) {
+    if (v.onlyAxis != 0) continue;
+    grid.RowContributions(v, v.hasColumns ? areaSize(v, 1) : contentWidth);
+  }
   const double rowsAvailable = heightBasis;
   grid.SizeTracks(0, rowsAvailable, false);
   // align/justify-content positions.
   const auto contentOffset = [&](int axis, double available) {
+    // A subgridded axis has its tracks from the grid above: nothing of its own to distribute.
+    if (grid.subgridded[axis]) return std::pair<double, double>{0, 0};
     const double used = grid.TrackSum(axis);
     const double free = Known(available) ? available - used : 0;
     Align a = axis == 1 ? s.justifyContent : s.alignContent;
@@ -1105,6 +1273,21 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
       const bool stretch = (kinds[a] == Align::Kind::Normal || kinds[a] == Align::Kind::Stretch) && !it.autoMarginStart[a] && !it.autoMarginEnd[a] && !b.replaced;
       if (!Known(specified) && stretch) forced[a] = std::max(0.0, area[a] - it.marginStart[a] - it.marginEnd[a] - it.padBorder[a]);
       (void)w;
+    }
+    // A grid container that is a subgrid takes the tracks it spans.
+    if (IsGridDisplay(st.display)) {
+      const std::string* texts[2] = {&st.gridTemplateRows, &st.gridTemplateColumns};
+      for (int a = 0; a < 2; ++a) {
+        if (Lower(*texts[a]).rfind("subgrid", 0) != 0) continue;
+        SubgridTracks& sub = b.subgrid[a];
+        sub = SubgridTracks();
+        sub.active = true;
+        for (int i = it.pos[a]; i < it.pos[a] + it.span[a]; ++i) sub.sizes.push_back(grid.tracks[a][i].base);
+        for (int i = it.pos[a]; i <= it.pos[a] + it.span[a]; ++i) {
+          sub.names.push_back(static_cast<size_t>(i) < grid.lineNames[a].size() ? grid.lineNames[a][i] : std::vector<std::string>());
+        }
+        sub.gap = grid.gap[a] + spread[a];
+      }
     }
     grid.lc.forceWidth = forced[1];
     grid.lc.forceHeight = forced[0];
