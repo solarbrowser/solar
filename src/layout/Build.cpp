@@ -88,6 +88,8 @@ bool ReplacedSize(dom::Element* element, const std::string& base, Box& box) {
       }
       if (n == 4 && v[2] > 0 && v[3] > 0) box.naturalRatio = v[2] / v[3];
     }
+    // The ratio is that of the attributes when there are both; the view box is for when there is not.
+    if (box.attrWidth > 0 && box.attrHeight > 0) box.naturalRatio = box.attrWidth / box.attrHeight;
     if (box.naturalWidth < 0 && box.naturalHeight < 0 && box.naturalRatio == 0) { box.naturalWidth = 300; box.naturalHeight = 150; }
     return true;
   }

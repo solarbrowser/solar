@@ -647,6 +647,42 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
       for (const DeclarationEntry& entry : rule.declarations) gatherer.Offer(entry, false, false, kUnlayered, best);
     }
   }
+  // The width and height attributes of images and the like are declarations of no weight: any rule of the author wins over them.
+  if (pseudo.empty() && (element->IsHtml() || (element->namespaceUri == dom::kSvgNamespace && element->localName == "svg"))) {
+    const std::string& tag = element->localName;
+    if (tag == "svg" || tag == "img" || tag == "video" || tag == "embed" || tag == "object" || tag == "iframe" || tag == "input") {
+      const bool input = tag == "input";
+      for (const char* name : {"width", "height"}) {
+        const dom::Attr* attribute = element->FindAttribute("", name);
+        if (!attribute) continue;
+        if (input) {
+          const dom::Attr* type = element->FindAttribute("", "type");
+          std::string t = type ? type->value : "";
+          for (char& c : t) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+          if (t != "image") continue;
+        }
+        // "Rules for parsing dimension values": digits with a fraction, then a percent sign or nothing.
+        const std::string& text = attribute->value;
+        size_t i = 0;
+        while (i < text.size() && (text[i] == ' ' || text[i] == '\t' || text[i] == '\n' || text[i] == '\f' || text[i] == '\r')) ++i;
+        const size_t start = i;
+        while (i < text.size() && text[i] >= '0' && text[i] <= '9') ++i;
+        if (i == start) continue;
+        if (i < text.size() && text[i] == '.') {
+          ++i;
+          while (i < text.size() && text[i] >= '0' && text[i] <= '9') ++i;
+        }
+        const std::string number = text.substr(start, i - start);
+        const bool percent = i < text.size() && text[i] == '%';
+        DeclarationEntry entry;
+        entry.name = name;
+        entry.value = number + (percent ? "%" : "px");
+        style.storage.push_back({entry});
+        ++gatherer.ruleSerial;
+        gatherer.Offer(style.storage.back()[0], true, false, -1000000, Specificity{});  // (below every layer)
+      }
+    }
+  }
   // The tree the element is in: a shadow tree's elements are styled by that tree's sheets (and the document's own are not for
   // them). The root of the element's own tree is not the document's when it is in a shadow tree.
   dom::Node* treeRoot = element;

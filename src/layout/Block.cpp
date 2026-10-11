@@ -202,8 +202,6 @@ void ReplacedContentSize(const Box& box, double cbWidth, double cbHeight, double
   double cssW = ignoreWidth ? kNaN : ResolveSize(s.width, cbWidth), cssH = ResolveSize(s.height, cbHeight);
   if (Known(cssW) && borderBox) cssW = std::max(0.0, cssW - extrasH);
   if (Known(cssH) && borderBox) cssH = std::max(0.0, cssH - extrasV);
-  if (!Known(cssW) && (s.width.IsAuto() || ignoreWidth) && aw >= 0) cssW = aw;
-  if (!Known(cssH) && s.height.IsAuto() && ah >= 0) cssH = ah;
   // stretch: the margin box fills the containing block.
   if (s.width.kind == Length::Kind::Stretch && Known(cbWidth)) cssW = std::max(0.0, cbWidth - MarginOf(s, 3, cbWidth) - MarginOf(s, 1, cbWidth) - extrasH);
   if (s.height.kind == Length::Kind::Stretch && Known(cbHeight)) cssH = std::max(0.0, cbHeight - MarginOf(s, 0, cbWidth) - MarginOf(s, 2, cbWidth) - extrasV);
@@ -733,6 +731,17 @@ void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cb
     const double minW = ResolveSize(s.minWidth, cbWidth);
     if (Known(minW)) w = std::max(w, std::max(0.0, minW - (borderBox ? extrasH : sbH)));
     else if (const double k = keywordWidth(s.minWidth); Known(k)) w = std::max(w, k);
+    // The min and max heights carry over to the width through a ratio.
+    if (s.aspectRatio > 0 && !s.aspectRatioAuto && !box.replaced) {
+      const auto transferred = [&](double h) {
+        const double heightBox = std::max(borderBox ? h : h + extrasV, extrasV);
+        return std::max(0.0, borderBox ? heightBox * s.aspectRatio - extrasH : (heightBox - extrasV) * s.aspectRatio);
+      };
+      const double maxH = ResolveSize(s.maxHeight, cbHeight);
+      if (Known(maxH)) w = std::min(w, transferred(maxH));
+      const double minH = ResolveSize(s.minHeight, cbHeight);
+      if (Known(minH)) w = std::max(w, transferred(minH));
+    }
     return w;
   };
   const bool isTable = IsTableDisplay(s.display) && !box.replaced;
@@ -744,6 +753,16 @@ void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cb
     else width = std::max(width, box.minContent);
     widthAuto = false;
     // Collapsed borders make the table's own border half of the collapsed ones; the width is as given.
+  }
+  // A ratio and a height that is given make the width (of the box that box-sizing says, which the border and the padding keep from being squashed to nothing).
+  if (widthAuto && !Known(forceWidth) && !box.replaced && !isTable && s.aspectRatio > 0 && !s.aspectRatioAuto && (s.height.kind == Length::Kind::Px || s.height.IsPercentage())) {
+    const double givenHeight = ResolveSize(s.height, cbHeight);
+    if (Known(givenHeight)) {
+      const double heightBox = std::max(borderBox ? givenHeight : givenHeight + extrasV, extrasV);
+      const double widthBox = heightBox * s.aspectRatio;
+      width = std::max(0.0, borderBox ? widthBox - extrasH : (heightBox - extrasV) * s.aspectRatio);
+      widthAuto = false;
+    }
   }
   if (widthAuto) {
     if (shrinkToFit || box.formControl) {
@@ -797,7 +816,7 @@ void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cb
   if (!Known(forceHeight) && s.height.kind == Length::Kind::Stretch && Known(stretchHeight)) specifiedHeight = stretchHeight;
   // aspect-ratio gives a height from the width.
   double ratioHeight = kNaN;
-  if (!box.replaced && s.aspectRatio > 0 && !Known(specifiedHeight) && !s.aspectRatioAuto) ratioHeight = width / s.aspectRatio;
+  if (!box.replaced && s.aspectRatio > 0 && !Known(specifiedHeight) && !s.aspectRatioAuto) ratioHeight = borderBox ? std::max(0.0, (width + extrasH) / s.aspectRatio - extrasV) : width / s.aspectRatio;
   if (box.replaced && !Known(forceHeight)) {
     double rw, rh;
     ReplacedContentSize(box, cbWidth, cbHeight, rw, rh);
@@ -807,7 +826,7 @@ void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cb
       if (ratio <= 0 && box.naturalWidth > 0 && box.naturalHeight > 0) ratio = box.naturalWidth / box.naturalHeight;
       if (ratio <= 0 && box.attrWidth > 0 && box.attrHeight > 0) ratio = box.attrWidth / box.attrHeight;
       if (s.aspectRatio > 0 && !s.aspectRatioAuto) ratio = s.aspectRatio;
-      const bool heightFixed = Known(ResolveSize(s.height, cbHeight)) || s.height.kind == Length::Kind::Stretch || (s.height.IsAuto() && box.attrHeight >= 0);
+      const bool heightFixed = Known(ResolveSize(s.height, cbHeight)) || s.height.kind == Length::Kind::Stretch ;
       if (!heightFixed && ratio > 0) rh = width / ratio;
     }
     specifiedHeight = rh;
