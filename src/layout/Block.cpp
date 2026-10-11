@@ -269,7 +269,7 @@ void ComputeContentSizes(LayoutContext& lc, Box& box) {
     box.minContent = box.maxContent = w;
     return;
   }
-  if (s.containSizeInline && !IsGridDisplay(s.display)) {  // its contents count for nothing
+  if (s.containSizeInline && (!IsGridDisplay(s.display) || s.gridLanes)) {  // its contents count for nothing
     const dom::Element* element = box.element();
     // (content-visibility: auto keeps the block size it had, not the inline size, as the engines that sized the tests do.)
     if (s.containIntrinsicWidthAuto && s.skipContents && element && element->lastRenderedWidth >= 0) {
@@ -1027,8 +1027,8 @@ void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cb
   double usedHeight;
   if (Known(specifiedHeight)) usedHeight = specifiedHeight;
   else if (Known(ratioHeight)) usedHeight = ratioHeight;
-  else if (s.containSizeBlock && !IsGridDisplay(s.display) && (s.containIntrinsicHeightAuto || s.contentVisibilityAuto) && s.skipContents && box.element() && box.element()->lastRenderedHeight >= 0) usedHeight = box.element()->lastRenderedHeight;
-  else usedHeight = s.containSizeBlock && !IsGridDisplay(s.display) ? (s.containIntrinsicHeightSet ? s.containIntrinsicHeight.value : (box.emptyHeight >= 0 ? box.emptyHeight : box.formControl ? box.naturalHeight : 0)) : (box.formControl ? box.naturalHeight : contentHeight);
+  else if (s.containSizeBlock && (!IsGridDisplay(s.display) || s.gridLanes) && (s.containIntrinsicHeightAuto || s.contentVisibilityAuto) && s.skipContents && box.element() && box.element()->lastRenderedHeight >= 0) usedHeight = box.element()->lastRenderedHeight;
+  else usedHeight = s.containSizeBlock && (!IsGridDisplay(s.display) || s.gridLanes) ? (s.containIntrinsicHeightSet ? s.containIntrinsicHeight.value : (box.emptyHeight >= 0 ? box.emptyHeight : box.formControl ? box.naturalHeight : 0)) : (box.formControl ? box.naturalHeight : contentHeight);
   if (!Known(forceHeight)) {
     const double maxH = ResolveSize(s.maxHeight, cbHeight);
     if (Known(maxH)) usedHeight = std::min(usedHeight, std::max(0.0, maxH - (borderBox ? extrasV : sbV)));

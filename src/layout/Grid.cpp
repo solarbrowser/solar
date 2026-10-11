@@ -1407,8 +1407,19 @@ void LayoutGridLanes(LayoutContext& lc, Box& container, double contentWidth, dou
   for (GridItem& it : grid.items) grid.ItemEdges(it, contentWidth);
 
   // ---- The sizes of the lanes: an item with no lane of its own counts for every place it could be in. ----
+  // A subgrid in the lanes is not an item of them: the items in it are (and are, in every place it could be in, when it has no lane of its own).
   for (GridItem& it : grid.items) {
-    if (it.definite[L]) continue;
+    if (!it.box->style || !grid.IsSubgridIn(*it.box, L)) continue;
+    it.subgridAxis[L] = true;
+    if (it.definite[L]) {
+      grid.ExpandSubgrid(it, *it.box, L, it.pos[L], it.span[L], 0, 0, contentWidth);
+    } else {
+      it.lanesAuto = true;
+      for (int w = 0; w + it.span[L] <= lanes; ++w) grid.ExpandSubgrid(it, *it.box, L, w, it.span[L], 0, 0, contentWidth);
+    }
+  }
+  for (GridItem& it : grid.items) {
+    if (it.definite[L] || it.subgridAxis[L]) continue;
     it.lanesAuto = true;
     for (int w = 0; w + it.span[L] <= lanes; ++w) {
       GridItem v = it;
@@ -1428,11 +1439,11 @@ void LayoutGridLanes(LayoutContext& lc, Box& container, double contentWidth, dou
     return std::max(0.0, content) + extras;
   };
   if (L == 1) {
-    for (GridItem& it : grid.items) if (!it.lanesAuto) grid.ColumnContributions(it, contentWidth);
+    for (GridItem& it : grid.items) if (!it.lanesAuto && !it.subgridAxis[1]) grid.ColumnContributions(it, contentWidth);
     for (GridItem& v : grid.virtualItems) grid.ColumnContributions(v, contentWidth);
     grid.SizeTracks(1, contentWidth, false);
   } else {
-    for (GridItem& it : grid.items) if (!it.lanesAuto) grid.RowContributions(it, fitWidth(it));
+    for (GridItem& it : grid.items) if (!it.lanesAuto && !it.subgridAxis[0]) grid.RowContributions(it, fitWidth(it));
     for (GridItem& v : grid.virtualItems) grid.RowContributions(v, fitWidth(v));
     grid.SizeTracks(0, heightBasis, true);
   }
@@ -1476,14 +1487,80 @@ void LayoutGridLanes(LayoutContext& lc, Box& container, double contentWidth, dou
   const double originX = container.ContentLeft(), originY = container.ContentTop();
   struct Slot {
     GridItem* item;
-    double flowStart;  // the border box
-    double flowSize;
+    int lane, span;
+    double marginStart;  // where its margin box begins along the lanes
+    double outer;        // the margin box's size there
+    double across;       // where its border box begins across the lanes
+    double area;         // the room across the lanes
+    double forcedAcross; // the size across the lanes it was laid out at, if it was given one
+    double flowStart = 0, flowSize = 0;  // the border box, along the lanes
   };
   std::vector<Slot> slots;
+  // Dense packing: an item goes to the earliest place along the lanes where it fits, in the holes the others leave.
+  const bool dense = s.gridLanesDense || Lower(s.gridAutoFlow).find("dense") != std::string::npos;
+  std::vector<std::vector<std::pair<double, double>>> occupied(static_cast<size_t>(lanes));
+  // How large the item is along the lanes when it is in the lanes from `lane` on.
+  const auto measureOuter = [&](GridItem& it, int lane) {
+    const int saved = it.pos[L];
+    it.pos[L] = lane;
+    Box& b = *it.box;
+    const double area = areaOf(it);
+    double forced[2] = {kNaN, kNaN};
+    const Align::Kind kind = grid.SelfAlign(it, L);
+    const double specified = grid.SpecifiedSize(it, L, L == 0 ? heightBasis : contentWidth);
+    const bool stretch = (kind == Align::Kind::Normal || kind == Align::Kind::Stretch) && !it.autoMarginStart[L] && !it.autoMarginEnd[L] && !b.replaced;
+    if (!Known(specified) && stretch) forced[L] = std::max(0.0, area - it.marginStart[L] - it.marginEnd[L] - it.padBorder[L]);
+    lc.forceWidth = forced[1];
+    lc.forceHeight = forced[0];
+    lc.cbX = 0;
+    lc.boxY = 0;
+    LayoutBlockLevel(lc, b, L == 1 ? area : contentWidth, L == 0 ? area : heightBasis, true);
+    it.pos[L] = saved;
+    return (F == 0 ? b.height : b.width) + it.marginStart[F] + it.marginEnd[F];
+  };
+  const auto freeStart = [&](int lane, int span, double outer) {
+    std::vector<double> candidates = {0.0};
+    for (int l = lane; l < lane + span; ++l) for (const auto& iv : occupied[static_cast<size_t>(l)]) candidates.push_back(iv.second);
+    std::sort(candidates.begin(), candidates.end());
+    for (const double p : candidates) {
+      bool fits = true;
+      for (int l = lane; l < lane + span && fits; ++l) {
+        for (const auto& iv : occupied[static_cast<size_t>(l)]) {
+          if (p < iv.second - 1e-9 && p + outer + grid.gap[F] > iv.first + 1e-9) { fits = false; break; }
+        }
+      }
+      if (fits) return p;
+    }
+    return candidates.back();
+  };
   for (GridItem& it : grid.items) {
     int lane = it.pos[L];
     const int span = it.span[L];
-    if (it.lanesAuto) {
+    double denseStart = kNaN;
+    if (dense) {
+      const int windows = it.lanesAuto ? lanes - span + 1 : 1;
+      std::vector<double> at(static_cast<size_t>(windows));
+      double best = kInf;
+      for (int w = 0; w < windows; ++w) {
+        const int candidate = it.lanesAuto ? w : std::min(lane, std::max(0, lanes - span));
+        at[static_cast<size_t>(w)] = freeStart(candidate, span, measureOuter(it, candidate));
+        best = std::min(best, at[static_cast<size_t>(w)]);
+      }
+      int chosen = 0;
+      for (int k = 0; k < windows; ++k) {
+        const int w = it.lanesAuto ? (cursor + k < windows ? cursor + k : cursor + k - windows - std::max(0, cursor - windows)) : 0;
+        if (w >= 0 && w < windows && at[static_cast<size_t>(w)] <= best + tolerance) {
+          chosen = w;
+          break;
+        }
+      }
+      if (it.lanesAuto) {
+        lane = chosen;
+        cursor = lane + span >= lanes ? 0 : lane + span;
+        it.pos[L] = lane;
+      }
+      denseStart = at[static_cast<size_t>(chosen)];
+    } else if (it.lanesAuto) {
       const int windows = lanes - span + 1;
       const auto endOf = [&](int w) {
         double e = -kInf;
@@ -1493,19 +1570,21 @@ void LayoutGridLanes(LayoutContext& lc, Box& container, double contentWidth, dou
       double best = kInf;
       for (int w = 0; w < windows; ++w) best = std::min(best, endOf(w));
       lane = 0;
+      // (From the cursor on, and then from the start.)
       for (int k = 0; k < windows; ++k) {
-        const int w = (cursor + k) % windows;
-        if (endOf(w) <= best + tolerance) {
+        const int w = cursor + k < windows ? cursor + k : cursor + k - windows - std::max(0, cursor - windows);
+        if (w >= 0 && w < windows && endOf(w) <= best + tolerance) {
           lane = w;
           break;
         }
       }
-      cursor = lane + span;
+      cursor = lane + span >= lanes ? 0 : lane + span;
       it.pos[L] = lane;
     }
     lane = std::min(lane, std::max(0, lanes - span));
     double start = -kInf;
     for (int i = lane; i < lane + span; ++i) start = std::max(start, laneEnd[static_cast<size_t>(i)]);
+    if (Known(denseStart)) start = denseStart;
     // Laid out in the room of its lanes.
     Box& b = *it.box;
     const BoxStyle& st = *b.style;
@@ -1573,23 +1652,71 @@ void LayoutGridLanes(LayoutContext& lc, Box& container, double contentWidth, dou
     // (The lane that starts the window, or the one at its far end when the lanes run the other way.)
     double windowStart = laneStart;
     for (int i = lane; i < lane + span; ++i) windowStart = std::min(windowStart, grid.tracks[L][i].position);
-    const double flowStart = start + it.marginStart[F];
-    slots.push_back({&it, flowStart, sizes[F]});
-    if (L == 1) {
-      b.x = originX + windowStart + offset + b.shiftX;
-      b.y = originY + flowStart + b.shiftY;
-    } else {
-      b.y = originY + windowStart + offset + b.shiftY;
-      b.x = originX + flowStart + b.shiftX;
-    }
+    slots.push_back({&it, lane, span, start, flowOuter, windowStart + offset, area, forced[L]});
     const double end = start + flowOuter + grid.gap[F];
-    for (int i = lane; i < lane + span; ++i) laneEnd[static_cast<size_t>(i)] = end;
+    for (int i = lane; i < lane + span; ++i) {
+      laneEnd[static_cast<size_t>(i)] = dense ? std::max(laneEnd[static_cast<size_t>(i)], end) : end;
+      occupied[static_cast<size_t>(i)].push_back({start, end});
+    }
   }
   double flowTotal = 0;
   for (double e : laneEnd) flowTotal = std::max(flowTotal, e);
   if (!slots.empty()) flowTotal = std::max(0.0, flowTotal - grid.gap[F]);
   // The size along the axis of the lanes is the lanes'; the other is as far as the items reach, but for a size it is given.
   const double flowSize = F == 0 ? (Known(heightBasis) ? heightBasis : flowTotal) : (Known(contentWidth) ? contentWidth : flowTotal);
+  // Along the lanes an item has the room from where it begins to where the next item in its lanes does (or the end): where it is in that is up to its alignment.
+  {
+    std::vector<std::vector<size_t>> inLane(static_cast<size_t>(lanes));
+    for (size_t i = 0; i < slots.size(); ++i) for (int l = slots[i].lane; l < slots[i].lane + slots[i].span; ++l) inLane[static_cast<size_t>(l)].push_back(i);
+    for (auto& list : inLane) std::stable_sort(list.begin(), list.end(), [&](size_t a, size_t b) { return slots[a].marginStart < slots[b].marginStart; });
+    for (size_t i = 0; i < slots.size(); ++i) {
+      Slot& slot = slots[i];
+      GridItem& it = *slot.item;
+      Box& b = *it.box;
+      double limit = flowSize;
+      for (int l = slot.lane; l < slot.lane + slot.span; ++l) {
+        const std::vector<size_t>& list = inLane[static_cast<size_t>(l)];
+        for (size_t k = 0; k + 1 < list.size(); ++k) {
+          if (list[k] == i) limit = std::min(limit, slots[list[k + 1]].marginStart - grid.gap[F]);
+        }
+      }
+      double size = F == 0 ? b.height : b.width;
+      double free = limit - slot.marginStart - slot.outer;
+      Align::Kind kind = grid.SelfAlign(it, F);
+      double shift = 0;
+      if (kind == Align::Kind::Stretch && free > 0 && !b.replaced && !Known(grid.SpecifiedSize(it, F, F == 0 ? heightBasis : contentWidth))) {
+        // It grows to the room (laid out again at the size).
+        const double grown = size + free;
+        // (The content size along the lanes is its size less its padding and border.)
+        const double content = std::max(0.0, grown - it.padBorder[F]);
+        lc.forceWidth = F == 1 ? content : slot.forcedAcross;
+        lc.forceHeight = F == 0 ? content : slot.forcedAcross;
+        lc.cbX = 0;
+        lc.boxY = 0;
+        LayoutBlockLevel(lc, b, L == 1 ? slot.area : contentWidth, L == 0 ? slot.area : heightBasis, true);
+        b.margin.top = it.marginStart[0];
+        b.margin.bottom = it.marginEnd[0];
+        b.margin.left = it.marginStart[1];
+        b.margin.right = it.marginEnd[1];
+        size = F == 0 ? b.height : b.width;
+        free = 0;
+      } else if (kind == Align::Kind::End || kind == Align::Kind::FlexEnd || kind == Align::Kind::SelfEnd) {
+        shift = free;
+      } else if (kind == Align::Kind::Center) {
+        shift = free / 2;
+      }
+      if (free < 0) shift = 0;
+      slot.flowSize = size;
+      slot.flowStart = slot.marginStart + it.marginStart[F] + shift;
+      if (L == 1) {
+        b.x = originX + slot.across + b.shiftX;
+        b.y = originY + slot.flowStart + b.shiftY;
+      } else {
+        b.y = originY + slot.across + b.shiftY;
+        b.x = originX + slot.flowStart + b.shiftX;
+      }
+    }
+  }
   if (fillReverse) {
     // The items begin at the far end and run back.
     for (Slot& slot : slots) {
