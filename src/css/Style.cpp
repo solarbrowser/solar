@@ -80,6 +80,17 @@ td, th { padding: 1px; } th { text-align: center; }
 caption { text-align: center; }
 img { }
 button, input, select, textarea { text-indent: initial; }
+input, select, button, textarea { margin: 0em; font-size: 13.3333px; letter-spacing: normal; word-spacing: normal; line-height: normal; text-transform: none; text-shadow: none; text-align: start; }
+input { padding: 1px 2px; border: 2px inset; }
+input[type=hidden i] { display: none; }
+input[type=search i] { box-sizing: border-box; }
+input[type=checkbox i], input[type=radio i] { margin: 3px 3px 3px 4px; padding: initial; border: initial; box-sizing: border-box; }
+input[type=range i] { margin: 2px; padding: initial; border: initial; }
+input[type=color i] { width: 50px; height: 27px; border: 1px solid; padding: 1px 2px; box-sizing: border-box; }
+input[type=button i], input[type=submit i], input[type=reset i], input[type=file i], button { padding: 1px 6px; border: 2px outset; box-sizing: border-box; text-align: center; }
+textarea { padding: 2px; border: 1px solid; overflow: auto; white-space: pre-wrap; word-wrap: break-word; }
+select { border: 1px solid; box-sizing: border-box; }
+progress, meter { box-sizing: border-box; vertical-align: -0.2em; }
 [dir]:dir(ltr), bdi:dir(ltr), input[type=tel i]:dir(ltr) { direction: ltr; }
 [dir]:dir(rtl), bdi:dir(rtl) { direction: rtl; }
 address, blockquote, center, dialog, div, figure, figcaption, footer, form, header, hr, legend, listing, main, p, plaintext, pre, search, xmp, bdi, output { unicode-bidi: isolate; }

@@ -251,7 +251,11 @@ void ComputeContentSizes(LayoutContext& lc, Box& box) {
     return;
   }
   if (s.containSizeInline && !IsGridDisplay(s.display)) {  // its contents count for nothing
-    box.minContent = box.maxContent = s.containIntrinsicWidthSet ? s.containIntrinsicWidth.value : 0;
+    box.minContent = box.maxContent = s.containIntrinsicWidthSet ? s.containIntrinsicWidth.value : (box.emptyWidth >= 0 ? box.emptyWidth : 0);
+    return;
+  }
+  if (box.formControl) {
+    box.minContent = box.maxContent = box.naturalWidth;
     return;
   }
   if (IsFlexDisplay(s.display)) {
@@ -684,7 +688,7 @@ void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cb
     // Collapsed borders make the table's own border half of the collapsed ones; the width is as given.
   }
   if (widthAuto) {
-    if (shrinkToFit) {
+    if (shrinkToFit || box.formControl) {
       ComputeContentSizes(lc, box);
       const double available = std::max(0.0, availableWidth - ml - mr - extrasH);
       width = std::min(std::max(box.minContent, available), box.maxContent);
@@ -753,6 +757,7 @@ void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cb
   // ---- contents ----
   box.collapsedThrough = false;
   box.baseline = -1;
+  if (box.formControl && box.controlAscent >= 0) box.baseline = box.ContentTop() + box.controlAscent;
   double contentHeight = 0;
   // align-content other than normal puts the contents of a block container in the room it has, and makes it a formatting context.
   const bool plainBlock = !box.replaced && !IsFlexDisplay(s.display) && !IsGridDisplay(s.display) && !IsTableDisplay(s.display) && s.display != Display::TableCell;
@@ -850,7 +855,7 @@ void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cb
   double usedHeight;
   if (Known(specifiedHeight)) usedHeight = specifiedHeight;
   else if (Known(ratioHeight)) usedHeight = ratioHeight;
-  else usedHeight = s.containSizeBlock && !IsGridDisplay(s.display) ? (s.containIntrinsicHeightSet ? s.containIntrinsicHeight.value : 0) : contentHeight;
+  else usedHeight = s.containSizeBlock && !IsGridDisplay(s.display) ? (s.containIntrinsicHeightSet ? s.containIntrinsicHeight.value : (box.emptyHeight >= 0 ? box.emptyHeight : box.formControl ? box.naturalHeight : 0)) : (box.formControl ? box.naturalHeight : contentHeight);
   if (!Known(forceHeight)) {
     const double maxH = ResolveSize(s.maxHeight, cbHeight);
     if (Known(maxH)) usedHeight = std::min(usedHeight, std::max(0.0, maxH - (borderBox ? extrasV : sbV)));

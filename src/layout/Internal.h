@@ -152,5 +152,7 @@ void ConvertPlaced(Box& b, WritingMode frameMode, double fw, double fh, const Re
 
 // Fonts of a box's style.
 std::shared_ptr<font::Face> PrimaryFace(LayoutContext& lc, const Box& box);
+// Controls.cpp: the natural size of a form control, if the element is one that is replaced by a control.
+bool ControlSize(LayoutContext& lc, dom::Element* element, Box& box);
 
 }  // namespace solar::layout

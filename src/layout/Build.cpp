@@ -504,7 +504,26 @@ class Builder {
       box->kind = Box::Kind::LineBreak;
       box->inlineLevel = true;
     }
-    if (ReplacedSize(element, dom::DocumentBaseUri(element->nodeDocument), *box)) {
+    const bool isReplaced = ReplacedSize(element, dom::DocumentBaseUri(element->nodeDocument), *box);
+    const bool control = !isReplaced && ControlSize(lc_, element, *box);
+    // The table-internal displays do not apply to what is replaced or a control: it is inline.
+    if (isReplaced || control) {
+      const Display d = box->style->display;
+      if (d == Display::TableRowGroup || d == Display::TableHeaderGroup || d == Display::TableFooterGroup || d == Display::TableRow || d == Display::TableCell ||
+          d == Display::TableColumn || d == Display::TableColumnGroup || d == Display::TableCaption) {
+        auto changed = std::make_shared<BoxStyle>(*box->style);
+        changed->display = control ? Display::InlineBlock : Display::Inline;
+        if (changed->physicalStyle) {
+          auto physical = std::make_shared<BoxStyle>(*changed->physicalStyle);
+          physical->display = changed->display;
+          changed->physicalStyle = physical;
+        }
+        box->style = changed;
+        box->inlineLevel = true;
+        box->kind = Box::Kind::Block;
+      }
+    }
+    if (isReplaced) {
       box->replaced = true;
       // A replaced inline is atomic: it is laid out as a block inside the line.
       if (box->kind == Box::Kind::Inline) box->kind = Box::Kind::Block;
@@ -512,9 +531,12 @@ class Builder {
       Register(raw);
       return;
     }
+    // A control is atomic in a line, and its options and the like are not boxes of their own.
+    if (control && box->kind == Box::Kind::Inline) box->kind = Box::Kind::Block;
     Box* raw = parent.AddChild(std::move(box));
     Register(raw);
     if (raw->kind == Box::Kind::LineBreak) return;
+    if (control && !element->IsHtml("textarea")) return;
     BuildGenerated(*raw, element, "before");
     BuildChildren(*raw, element, raw->style);
     BuildGenerated(*raw, element, "after");

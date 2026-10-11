@@ -80,6 +80,9 @@ struct Box {
 
   // Replaced boxes: the natural size, negative where there is none.
   double naturalWidth = -1, naturalHeight = -1;
+  double emptyWidth = -1, emptyHeight = -1;  // a form control: its size with nothing in it, which size containment gives it
+  bool formControl = false;   // a form control: a box with a size of its own when its width and height are auto
+  double controlAscent = -1;  // a form control with text: where its baseline is, from the top of its content box
   double naturalRatio = 0;   // width / height, 0 when it has none
   double attrWidth = -1, attrHeight = -1;  // the width and height attributes, which size it when the style does not
 
