@@ -145,12 +145,12 @@ double Bfc::ClearY(bool left, bool right) const {
   return y;
 }
 
-FloatRecord PlaceFloat(LayoutContext& lc, Box& box, double cbLeft, double cbWidth, double minY) {
+FloatRecord PlaceFloat(LayoutContext& lc, Box& box, double cbLeft, double cbWidth, double minY, double cbHeight) {
   ++lc.floatEvents;
   const double savedBoxY = lc.boxY, savedCbX = lc.cbX;
   lc.boxY = minY;
   lc.cbX = cbLeft;
-  LayoutBlockLevel(lc, box, cbWidth, kNaN, true);
+  LayoutBlockLevel(lc, box, cbWidth, cbHeight, true);
   lc.boxY = savedBoxY;
   lc.cbX = savedCbX;
   const double mw = box.margin.left + box.width + box.margin.right;
@@ -190,44 +190,58 @@ FloatRecord PlaceFloat(LayoutContext& lc, Box& box, double cbLeft, double cbWidt
 
 // ---- Replaced boxes ----
 
-void ReplacedContentSize(const Box& box, double cbWidth, double cbHeight, double& w, double& h) {
+void ReplacedContentSize(const Box& box, double cbWidth, double cbHeight, double& w, double& h, bool ignoreWidth) {
   const BoxStyle& s = *box.style;
+  // The natural size and the attributes, but for what size containment says: it has none of its own, and contain-intrinsic-size is the size instead.
+  double nw = box.naturalWidth, nh = box.naturalHeight, nr = box.naturalRatio, aw = box.attrWidth, ah = box.attrHeight;
+  if (s.containSizeInline) { nw = s.containIntrinsicWidthSet ? s.containIntrinsicWidth.value : 0; nr = 0; aw = -1; }
+  if (s.containSizeBlock) { nh = s.containIntrinsicHeightSet ? s.containIntrinsicHeight.value : 0; nr = 0; ah = -1; }
+  const bool contained = s.containSizeInline || s.containSizeBlock;
   const bool borderBox = s.boxSizing == BoxSizing::BorderBox;
   const double extrasH = ExtrasHorizontal(box), extrasV = ExtrasVertical(box);
-  double cssW = ResolveSize(s.width, cbWidth), cssH = ResolveSize(s.height, cbHeight);
+  double cssW = ignoreWidth ? kNaN : ResolveSize(s.width, cbWidth), cssH = ResolveSize(s.height, cbHeight);
   if (Known(cssW) && borderBox) cssW = std::max(0.0, cssW - extrasH);
   if (Known(cssH) && borderBox) cssH = std::max(0.0, cssH - extrasV);
-  if (!Known(cssW) && s.width.IsAuto() && box.attrWidth >= 0) cssW = box.attrWidth;
-  if (!Known(cssH) && s.height.IsAuto() && box.attrHeight >= 0) cssH = box.attrHeight;
+  if (!Known(cssW) && (s.width.IsAuto() || ignoreWidth) && aw >= 0) cssW = aw;
+  if (!Known(cssH) && s.height.IsAuto() && ah >= 0) cssH = ah;
   // stretch: the margin box fills the containing block.
   if (s.width.kind == Length::Kind::Stretch && Known(cbWidth)) cssW = std::max(0.0, cbWidth - MarginOf(s, 3, cbWidth) - MarginOf(s, 1, cbWidth) - extrasH);
   if (s.height.kind == Length::Kind::Stretch && Known(cbHeight)) cssH = std::max(0.0, cbHeight - MarginOf(s, 0, cbWidth) - MarginOf(s, 2, cbWidth) - extrasV);
-  double ratio = box.naturalRatio;
-  if (ratio <= 0 && box.naturalWidth > 0 && box.naturalHeight > 0) ratio = box.naturalWidth / box.naturalHeight;
-  if (ratio <= 0 && box.attrWidth > 0 && box.attrHeight > 0) ratio = box.attrWidth / box.attrHeight;
+  double ratio = nr;
+  if (!contained) {
+    if (ratio <= 0 && nw > 0 && nh > 0) ratio = nw / nh;
+    if (ratio <= 0 && aw > 0 && ah > 0) ratio = aw / ah;
+  }
   if (s.aspectRatio > 0 && !s.aspectRatioAuto) ratio = s.aspectRatio;
   const bool widthAuto = !Known(cssW), heightAuto = !Known(cssH);
   w = cssW;
   h = cssH;
   if (widthAuto && heightAuto) {
-    if (box.naturalWidth >= 0 && box.naturalHeight >= 0) { w = box.naturalWidth; h = box.naturalHeight; }
-    else if (box.naturalWidth >= 0) { w = box.naturalWidth; h = ratio > 0 ? w / ratio : 150; }
-    else if (box.naturalHeight >= 0) { h = box.naturalHeight; w = ratio > 0 ? h * ratio : 300; }
+    if (nw >= 0 && nh >= 0) { w = nw; h = nh; }
+    else if (nw >= 0) { w = nw; h = ratio > 0 ? w / ratio : 150; }
+    else if (nh >= 0) { h = nh; w = ratio > 0 ? h * ratio : 300; }
     else if (ratio > 0) { w = Known(cbWidth) ? std::min(cbWidth, 300.0) : 300; h = w / ratio; }
     else { w = 300; h = 150; }
-    if (s.aspectRatio > 0 && !s.aspectRatioAuto && box.naturalWidth >= 0) h = w / ratio;
+    if (s.aspectRatio > 0 && !s.aspectRatioAuto && nw >= 0) h = w / ratio;
   } else if (widthAuto) {
-    w = ratio > 0 ? h * ratio : (box.naturalWidth >= 0 ? box.naturalWidth : 300);
+    w = ratio > 0 ? h * ratio : (nw >= 0 ? nw : 300);
   } else if (heightAuto) {
-    h = ratio > 0 ? w / ratio : (box.naturalHeight >= 0 ? box.naturalHeight : 150);
+    h = ratio > 0 ? w / ratio : (nh >= 0 ? nh : 150);
   }
   // min and max keep the ratio of what was automatic.
+  // The size the image has by itself, which the intrinsic keywords come to.
+  const double naturalW = nw >= 0 ? nw : (ratio > 0 && nh >= 0 ? nh * ratio : 300);
+  const double naturalH = nh >= 0 ? nh : (ratio > 0 && nw >= 0 ? nw / ratio : 150);
   const auto content = [&](const Length& l, double basis) {
+    if (l.kind == Length::Kind::Stretch) return Known(cbWidth) ? std::max(0.0, cbWidth - MarginOf(s, 3, cbWidth) - MarginOf(s, 1, cbWidth) - extrasH) : kNaN;
+    if (l.kind == Length::Kind::MinContent || l.kind == Length::Kind::MaxContent || l.kind == Length::Kind::FitContent) return naturalW;
     double v = ResolveSize(l, basis);
     if (Known(v) && borderBox) v = std::max(0.0, v - extrasH);
     return v;
   };
   const auto contentV = [&](const Length& l, double basis) {
+    if (l.kind == Length::Kind::Stretch) return Known(cbHeight) ? std::max(0.0, cbHeight - MarginOf(s, 0, cbWidth) - MarginOf(s, 2, cbWidth) - extrasV) : kNaN;
+    if (l.kind == Length::Kind::MinContent || l.kind == Length::Kind::MaxContent || l.kind == Length::Kind::FitContent) return naturalH;
     double v = ResolveSize(l, basis);
     if (Known(v) && borderBox) v = std::max(0.0, v - extrasV);
     return v;
@@ -334,7 +348,7 @@ void LayoutBlockChildren(LayoutContext& lc, Box& P, double contentWidth, double 
       continue;
     }
     if (IsFloat(child)) {
-      const FloatRecord rec = PlaceFloat(lc, child, px, contentWidth, py + y + pending.Sum());
+      const FloatRecord rec = PlaceFloat(lc, child, px, contentWidth, py + y + pending.Sum(), heightBasis);
       child.x = rec.left - px + child.margin.left + originX;
       child.y = rec.top - py + child.margin.top + originY;
       // A float is not in the flow, but a relative offset moves it.
@@ -679,18 +693,32 @@ void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cb
     }
   }
   const double stretchWidth = Known(availableWidth) ? std::max(0.0, availableWidth - ml - mr - extrasH) : kNaN;
+  // What a keyword in the min or max width comes to, as a content width: NaN if it is not one.
+  const auto keywordWidth = [&](const Length& l) -> double {
+    if (l.kind == Length::Kind::Stretch) return stretchWidth;
+    if (l.kind != Length::Kind::MinContent && l.kind != Length::Kind::MaxContent && l.kind != Length::Kind::FitContent) return kNaN;
+    double mn, mx;
+    if (box.replaced) {
+      double rw, rh;
+      ReplacedContentSize(box, cbWidth, cbHeight, rw, rh, true);
+      mn = mx = rw;
+    } else {
+      ComputeContentSizes(lc, box);
+      mn = box.minContent;
+      mx = box.maxContent;
+    }
+    if (l.kind == Length::Kind::MinContent) return mn;
+    if (l.kind == Length::Kind::MaxContent) return mx;
+    return std::min(std::max(mn, Known(availableWidth) ? std::max(0.0, availableWidth - ml - mr - extrasH) : mx), mx);
+  };
   const auto clampWidth = [&](double w) {
     if (Known(forceWidth)) return w;
     const double maxW = ResolveSize(s.maxWidth, cbWidth);
     if (Known(maxW)) w = std::min(w, std::max(0.0, maxW - (borderBox ? extrasH : sbH)));
-    else if (s.maxWidth.kind == Length::Kind::Stretch && Known(stretchWidth)) w = std::min(w, stretchWidth);
+    else if (const double k = keywordWidth(s.maxWidth); Known(k)) w = std::min(w, k);
     const double minW = ResolveSize(s.minWidth, cbWidth);
     if (Known(minW)) w = std::max(w, std::max(0.0, minW - (borderBox ? extrasH : sbH)));
-    else if (s.minWidth.kind == Length::Kind::Stretch && Known(stretchWidth)) w = std::max(w, stretchWidth);
-    else if (s.minWidth.kind == Length::Kind::MinContent || s.minWidth.kind == Length::Kind::MaxContent) {
-      ComputeContentSizes(lc, box);
-      w = std::max(w, s.minWidth.kind == Length::Kind::MinContent ? box.minContent : box.maxContent);
-    }
+    else if (const double k = keywordWidth(s.minWidth); Known(k)) w = std::max(w, k);
     return w;
   };
   const bool isTable = IsTableDisplay(s.display) && !box.replaced;
@@ -759,13 +787,13 @@ void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cb
   if (box.replaced && !Known(forceHeight)) {
     double rw, rh;
     ReplacedContentSize(box, cbWidth, cbHeight, rw, rh);
-    // (when the width was forced the height follows the ratio)
-    if (Known(forceWidth)) {
+    // (when the width was forced, or is not what the style said once clamped, the height follows the ratio)
+    if (Known(forceWidth) || std::fabs(width - rw) > 1e-9) {
       double ratio = box.naturalRatio;
       if (ratio <= 0 && box.naturalWidth > 0 && box.naturalHeight > 0) ratio = box.naturalWidth / box.naturalHeight;
       if (ratio <= 0 && box.attrWidth > 0 && box.attrHeight > 0) ratio = box.attrWidth / box.attrHeight;
       if (s.aspectRatio > 0 && !s.aspectRatioAuto) ratio = s.aspectRatio;
-      const bool heightFixed = !s.height.IsAuto() || box.attrHeight >= 0;
+      const bool heightFixed = Known(ResolveSize(s.height, cbHeight)) || s.height.kind == Length::Kind::Stretch || (s.height.IsAuto() && box.attrHeight >= 0);
       if (!heightFixed && ratio > 0) rh = width / ratio;
     }
     specifiedHeight = rh;
@@ -1157,6 +1185,9 @@ void PlaceOne(LayoutContext& lc, Box& a) {
     if (Known(w)) W = borderBox ? std::max(0.0, w - extrasH) : w;
   } else if (a.replaced) {
     W = a.width - extrasH;
+  } else if (s.width.kind == Length::Kind::MinContent || s.width.kind == Length::Kind::MaxContent) {
+    ComputeContentSizes(lc, a);
+    W = s.width.kind == Length::Kind::MinContent ? a.minContent : a.maxContent;
   }
   const bool widthAuto = !Known(W);
   double L = left, R = right;
@@ -1168,13 +1199,22 @@ void PlaceOne(LayoutContext& lc, Box& a) {
   };
   // What stretch comes to: all the room from the inset (the static position for an inset that is auto) to the other.
   const auto stretchAvailable = [&]() { return std::max(0.0, cw - (Known(L) ? L : (Known(R) ? 0.0 : staticLeft)) - (Known(R) ? R : 0.0) - ml - mr - extrasH); };
+  // A keyword in the min or max width, as a content width.
+  const auto keyword = [&](const Length& l) -> double {
+    if (l.kind == Length::Kind::Stretch) return stretchAvailable();
+    if (l.kind != Length::Kind::MinContent && l.kind != Length::Kind::MaxContent && l.kind != Length::Kind::FitContent) return kNaN;
+    ComputeContentSizes(lc, a);
+    if (l.kind == Length::Kind::MinContent) return a.minContent;
+    if (l.kind == Length::Kind::MaxContent) return a.maxContent;
+    return std::min(std::max(a.minContent, stretchAvailable()), a.maxContent);
+  };
   const auto clampW = [&](double w) {
     const double maxW = ResolveSize(s.maxWidth, cw);
     if (Known(maxW)) w = std::min(w, borderBox ? std::max(0.0, maxW - extrasH) : maxW);
-    else if (s.maxWidth.kind == Length::Kind::Stretch) w = std::min(w, stretchAvailable());
+    else if (const double k = keyword(s.maxWidth); Known(k)) w = std::min(w, k);
     const double minW = ResolveSize(s.minWidth, cw);
     if (Known(minW)) w = std::max(w, borderBox ? std::max(0.0, minW - extrasH) : minW);
-    else if (s.minWidth.kind == Length::Kind::Stretch) w = std::max(w, stretchAvailable());
+    else if (const double k = keyword(s.minWidth); Known(k)) w = std::max(w, k);
     return w;
   };
   const auto solveH = [&]() {
@@ -1228,6 +1268,8 @@ void PlaceOne(LayoutContext& lc, Box& a) {
     if (Known(h)) H = borderBox ? std::max(0.0, h - extrasV) : h;
   } else if (a.replaced) {
     H = a.height - extrasV;
+  } else if (s.height.kind == Length::Kind::MinContent || s.height.kind == Length::Kind::MaxContent || s.height.kind == Length::Kind::FitContent) {
+    H = a.height - extrasV;  // the intrinsic keywords are the height of the contents
   }
   const bool heightAuto = !Known(H);
   double T = top, B = bottom;

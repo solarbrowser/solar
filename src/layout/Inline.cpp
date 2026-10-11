@@ -690,6 +690,8 @@ static void ClearFragments(Box& box) {
 }
 
 double LayoutInlineContentOnce(LayoutContext& lc, Box& container, double width, double& baselineOut) {
+  // The height floats resolve their percentages and stretch against: the container's, when it has one.
+  const double floatCbHeight = lc.inlineCbHeight;
   container.lines.clear();
   ClearFragments(container);
   baselineOut = -1;
@@ -827,7 +829,7 @@ double LayoutInlineContentOnce(LayoutContext& lc, Box& container, double width, 
   std::vector<Box*> deferredFloats;
   const double strutHeight = std::max(1.0, strutAbove + strutBelow);
   const auto placeFloat = [&](Box* f) {
-    const FloatRecord rec = PlaceFloat(lc, *f, lc.containerX, width, lc.containerY + lineTop);
+    const FloatRecord rec = PlaceFloat(lc, *f, lc.containerX, width, lc.containerY + lineTop, floatCbHeight);
     f->x = rec.left - lc.containerX + f->margin.left + container.ContentLeft();
     f->y = rec.top - lc.containerY + f->margin.top + container.ContentTop();
   };

@@ -68,7 +68,7 @@ void ComputeContentSizes(LayoutContext& lc, Box& box);
 
 // Places a float (a block laid out shrink-to-fit) as high and as far to its side as the floats before it and `minY` allow, in a containing block whose
 // content box is [cbLeft, cbLeft + cbWidth] wide in the context. Returns its margin box.
-FloatRecord PlaceFloat(LayoutContext& lc, Box& box, double cbLeft, double cbWidth, double minY);
+FloatRecord PlaceFloat(LayoutContext& lc, Box& box, double cbLeft, double cbWidth, double minY, double cbHeight = std::numeric_limits<double>::quiet_NaN());
 // Out-of-flow positioned boxes, once everything else is where it is.
 void PlacePositioned(LayoutContext& lc);
 
@@ -103,7 +103,8 @@ bool ReadImageMetrics(const std::string& data, double& width, double& height, do
 bool ImageMetricsOf(const std::string& address, const std::string& base, double& width, double& height, double& ratio);
 
 // The content size a replaced box comes to in a containing block of that size (NaN height: not known).
-void ReplacedContentSize(const Box& box, double cbWidth, double cbHeight, double& width, double& height);
+// (`ignoreWidth`: as if the width were auto, which is what the intrinsic keywords of the min and max sizes are about.)
+void ReplacedContentSize(const Box& box, double cbWidth, double cbHeight, double& width, double& height, bool ignoreWidth = false);
 
 // Moves what a box holds (children, lines, fragments) down by dy: for aligning it in a space bigger than it.
 void ShiftContents(Box& box, double dy);

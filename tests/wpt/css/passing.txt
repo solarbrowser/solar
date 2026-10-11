@@ -2880,3 +2880,8 @@ tests/wpt/css/css-sizing/stretch/flex-stretch-min-max-cross-001.html
 tests/wpt/css/css-sizing/stretch/indefinite-4.html
 tests/wpt/css/css-sizing/stretch/stretch-block-size-002.html
 tests/wpt/css/css-sizing/stretch/stretch-inline-size-002.html
+tests/wpt/css/css-sizing/abspos-intrinsic-height-inset-percentage-child.html
+tests/wpt/css/css-sizing/contain-intrinsic-size/contain-intrinsic-size-logical-003.html
+tests/wpt/css/css-sizing/keyword-sizes-on-floated-element.html
+tests/wpt/css/css-sizing/keyword-sizes-on-inline-block.html
+tests/wpt/css/css-sizing/stretch/replaced-stretch-height-001.html

@@ -209,9 +209,10 @@ std::shared_ptr<const BoxStyle> Logicalize(const std::shared_ptr<const BoxStyle>
   std::swap(l->minWidth, l->minHeight);
   std::swap(l->maxWidth, l->maxHeight);
   std::swap(l->overflowX, l->overflowY);
-  std::swap(l->containSizeInline, l->containSizeBlock);
+  // (contain: inline-size is of the inline axis of the box already; the intrinsic sizes are of the width and the height.)
   std::swap(l->containIntrinsicWidth, l->containIntrinsicHeight);
   std::swap(l->containIntrinsicWidthSet, l->containIntrinsicHeightSet);
+  std::swap(l->containIntrinsicWidthAuto, l->containIntrinsicHeightAuto);
   if (l->aspectRatio > 0) l->aspectRatio = 1 / l->aspectRatio;
   for (int i = 0; i < 4; ++i) {
     const int from = PhysicalSideOf(mode, i);
