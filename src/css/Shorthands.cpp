@@ -66,7 +66,18 @@ void FlattenLeavesImpl(const PropertyDefinition& property, std::vector<std::stri
 
 }  // namespace
 
+std::string InitialValueTextUncached(const PropertyDefinition& property);
+
 std::string InitialValueText(const PropertyDefinition& property) {
+  // (What the initial value comes to depends on the property alone, and is asked for by every element for every property it says nothing of.)
+  const bool known = &property >= kPropertyDefinitions && &property < kPropertyDefinitions + kPropertyDefinitionCount;
+  if (!known) return InitialValueTextUncached(property);
+  static std::unordered_map<const PropertyDefinition*, std::string> cache;
+  if (const auto found = cache.find(&property); found != cache.end()) return found->second;
+  return cache[&property] = InitialValueTextUncached(property);
+}
+
+std::string InitialValueTextUncached(const PropertyDefinition& property) {
   const std::string initial = property.initial;
   if (initial.empty()) return "initial";
   const ComponentValues values = Trimmed(ParseComponentValues(initial));

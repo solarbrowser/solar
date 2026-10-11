@@ -381,7 +381,21 @@ struct Gatherer {
   }
 };
 
+std::vector<CssStyleSheet*> SheetsOfTreeUncached(dom::Node* root, Quanta::Context* ctx);
+
+// The style sheets of a tree, kept until something changes: every element asks for them.
 std::vector<CssStyleSheet*> SheetsOfTree(dom::Node* root, Quanta::Context* ctx = nullptr) {
+  static std::unordered_map<dom::Node*, std::pair<uint64_t, std::vector<CssStyleSheet*>>> cache;
+  const uint64_t version = dom::TreeVersion() * 1000003 + g_styleVersion;
+  auto found = cache.find(root);
+  if (found != cache.end() && found->second.first == version) return found->second.second;
+  std::vector<CssStyleSheet*> sheets = SheetsOfTreeUncached(root, ctx);
+  if (cache.size() > 64) cache.clear();
+  cache[root] = {version, sheets};
+  return sheets;
+}
+
+std::vector<CssStyleSheet*> SheetsOfTreeUncached(dom::Node* root, Quanta::Context* ctx) {
   std::vector<CssStyleSheet*> sheets;
   for (dom::Node* node = root; node; node = node->NextInTree(root)) {
     dom::Element* element = dom::AsElement(node);

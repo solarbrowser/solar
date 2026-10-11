@@ -446,6 +446,8 @@ class Builder {
   }
 
   void BuildGenerated(Box& parent, dom::Element* element, const char* pseudo) {
+    // Without a rule for it there is nothing generated: the style of it is not worth working out.
+    if (!solar::css::HasPseudoStyle(element, pseudo)) return;
     std::shared_ptr<const BoxStyle> style = Logicalize(ReadStyle(lc_.ctx, element, pseudo));
     if (style->display == Display::None) return;
     // Counters change for the pseudo-element as for any.
