@@ -103,6 +103,9 @@ namespace {
 
 void ConvertContents(Box& b);
 
+// The tree being converted: boxes that layout left as they were (see LayoutMemo) have their contents converted already.
+uint64_t g_convertSerial = 0;
+
 // b's own rectangle, in the frame it was laid out in, as a physical one.
 void ConvertSelf(Box& b, WritingMode mode, double fw, double fh) {
   Rect r;
@@ -185,18 +188,20 @@ void ConvertContents(Box& b) {
       ConvertSelf(*c, mode, fw, fh);
       c->ownWidth = ow;
       c->ownHeight = oh;
-      ConvertContents(*c);
+      if (!(c->hitSerial == g_convertSerial && c->converted)) ConvertContents(*c);
     } else if (c->kind == Box::Kind::Inline || c->kind == Box::Kind::Text) {
       ConvertFragments(*c, mode, fw, fh);
       if (c->kind == Box::Kind::Inline) ConvertThroughInline(*c, mode, fw, fh);
     }
   }
+  b.converted = true;
 }
 
 }  // namespace
 
 // Everything laid out in the logical frames, as physical rectangles; boxes taken out of the flow are left to be placed.
 void ConvertTree(Tree& tree) {
+  g_convertSerial = tree.serial;
   Box& icb = *tree.root;
   const double ow = icb.ownWidth, oh = icb.ownHeight;
   // The initial containing block is its own frame; its size is the viewport's.

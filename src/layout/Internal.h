@@ -49,7 +49,8 @@ struct LayoutContext {
 };
 
 // Build.cpp: the box tree of the document.
-void BuildTree(LayoutContext& lc, dom::Document* document);
+// `previous` is the tree before, whose boxes are taken over where nothing changed; true if some may have been (it is then not whole any more).
+bool BuildTree(LayoutContext& lc, dom::Document* document, Tree* previous = nullptr);
 std::shared_ptr<const BoxStyle> AnonymousStyle(const BoxStyle& parent, Display display);
 
 // Block.cpp: block layout.

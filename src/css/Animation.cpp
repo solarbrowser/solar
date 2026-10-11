@@ -252,6 +252,9 @@ void SetAnimatedValues(dom::Element* element, const std::string& pseudo, Animate
     }
   }
   ++element->animVersion;
+  for (dom::Node* n = element; n; n = n->parentNode) {
+    if (n->IsElement()) ++static_cast<dom::Element*>(n)->subtreeVersion;
+  }
   NoteAnimatedStyleChange();
 }
 

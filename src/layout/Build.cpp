@@ -7,6 +7,7 @@
 
 #include "Internal.h"
 #include "solar/css/MediaQuery.h"
+#include "solar/css/Selectors.h"
 #include "solar/css/Style.h"
 #include "solar/css/Syntax.h"
 #include "solar/css/Tokenizer.h"
@@ -141,7 +142,10 @@ bool ReplacedSize(dom::Element* element, const std::string& base, Box& box) {
 
 class Builder {
  public:
-  explicit Builder(LayoutContext& lc) : lc_(lc) {}
+  Builder(LayoutContext& lc, Tree* previous) : lc_(lc), previous_(previous) {}
+
+  uint64_t Serial() const { return serial_; }
+  bool Reusing() const { return canReuse_; }
 
   // https://www.w3.org/TR/css-overflow-3/#overflow-propagation: the overflow of the root element is the viewport's, or the body's if the root
   // element's is visible; the element it came from does not clip.
@@ -198,6 +202,13 @@ class Builder {
       environmentKey_ = std::hash<double>()(env.width) * 31 + std::hash<double>()(env.height) * 17 + std::hash<double>()(env.resolution) * 7 + std::hash<std::string>()(env.colorScheme);
     }
     if (html) css::ComputedValue(lc_.ctx, html, "display");
+    // The boxes of the tree before are kept for what has not changed, when nothing in the document makes a box depend on more than its own subtree.
+    canReuse_ = previous_ && previous_->root && reuse_.allowed && !getenv("SOLAR_NOREUSE") && !document->containerQueriesSeen && !document->contentVisibilityAutoSeen &&
+                !css::g_firstLetterSeen && !css::g_firstLineSeen && !dom::HasShadowTrees();
+    if (canReuse_) {
+      lc_.tree.boxesOf = std::move(previous_->boxesOf);
+      previous_->damaged = true;
+    }
     if (html) BuildElement(*initial, html);
     Normalize(*initial);
     ApplyFirstLetters(lc_, *initial);
@@ -211,6 +222,12 @@ class Builder {
   solar::css::StyleReuse reuse_;
   uint64_t environmentKey_ = 0;
   bool dirtyBelow_ = false;  // the style of an element above was made again
+  Tree* previous_ = nullptr;
+  bool canReuse_ = false;
+  static inline uint64_t g_serial = 0;
+  const uint64_t serial_ = ++g_serial;
+  uint64_t volatileEvents_ = 0;  // counted when something is built that depends on more than the nodes under it (counters, replaced contents)
+  std::unordered_map<const Box*, std::unique_ptr<Box>*> slots_;  // where the boxes of the tree before are held
   std::unique_ptr<CounterStyles> styles_;
 
   // ---- Counters (https://www.w3.org/TR/css-lists-3/#counters) ----
@@ -250,6 +267,11 @@ class Builder {
   }
 
   void ApplyCounters(const BoxStyle& style, bool listItem, dom::Element* element) {
+    // (What reads or sets a counter depends on the elements before it.)
+    if (listItem || (!style.counterReset.empty() && style.counterReset != "none") || (!style.counterIncrement.empty() && style.counterIncrement != "none") ||
+        (!style.counterSet.empty() && style.counterSet != "none") || (element && element->IsHtml() && (element->localName == "ol" || element->localName == "ul" || element->localName == "menu" || element->localName == "dir" || element->localName == "li"))) {
+      ++volatileEvents_;
+    }
     for (const auto& [name, value] : ParseCounterList(style.counterReset, 0)) Instantiate(name, value);
     // HTML: ol, ul and menu reset the list item counter; li may set it.
     if (element && element->IsHtml()) {
@@ -353,6 +375,7 @@ class Builder {
   // The text of a content value, with counters worked out now; false if it is not text (none, normal).
   bool ContentText(const BoxStyle& style, dom::Element* element, std::string& out) {
     if (style.content == "normal" || style.content == "none" || style.content.empty()) return false;
+    if (style.content.find("counter") != std::string::npos || style.content.find("quote") != std::string::npos) ++volatileEvents_;
     const solar::css::ComponentValues values = solar::css::ParseComponentValues(style.content);
     for (const solar::css::ComponentValue& v : values) {
       if (v.IsWhitespace()) continue;
@@ -412,8 +435,38 @@ class Builder {
     return {"\xE2\x80\x9C", "\xE2\x80\x9D", "\xE2\x80\x98", "\xE2\x80\x99"};
   }
 
-  void Register(Box* box) {
-    if (box->node) lc_.tree.boxesOf[box->node].push_back(box);
+  // (The registry of boxes is made from the final tree.)
+  void Register(Box*) {}
+
+  bool Reused(const Box& box) const { return box.reusedIn == serial_; }
+
+  // The box of an element from the tree before, taken out of it, when it is good as it was: its style and everything in it unchanged.
+  std::unique_ptr<Box> TakeOld(const Box& parent, dom::Element* element) {
+    if (!canReuse_ || element->subtreeBuilt != element->subtreeVersion) return nullptr;
+    if (element->IsHtml("html") || element->IsHtml("body")) return nullptr;  // (the viewport takes its overflow from them)
+    switch (parent.style->display) {
+      case Display::Ruby: case Display::RubyBase: case Display::RubyText: case Display::RubyBaseContainer: case Display::RubyTextContainer: return nullptr;
+      default: break;
+    }
+    const auto found = lc_.tree.boxesOf.find(element);
+    if (found == lc_.tree.boxesOf.end() || found->second.size() != 1) return nullptr;
+    Box* old = found->second[0];
+    if (old->volatileSubtree || old->node != element || !old->parent || old->kind == Box::Kind::LineBreak) return nullptr;
+    // A box that block-in-inline splitting took out of the box of its parent is not taken over: where it stands is not where the elements put it.
+    {
+      const Box* holder = old->parent;
+      while (holder && holder->anonymous && holder->parent) holder = holder->parent;
+      if (!holder || holder->node != element->parentNode) return nullptr;
+    }
+    auto slot = slots_.find(old);
+    if (slot == slots_.end()) {
+      for (auto& c : old->parent->children) slots_[c.get()] = &c;
+      slot = slots_.find(old);
+    }
+    if (slot == slots_.end() || !*slot->second) return nullptr;
+    std::unique_ptr<Box> taken = std::move(*slot->second);
+    taken->reusedIn = serial_;
+    return taken;
   }
 
   static bool IsInline(const Box& b) { return b.inlineLevel; }
@@ -519,6 +572,26 @@ class Builder {
     } below{this, dirtyBelow_};
     dirtyBelow_ = dirtyBelow_ || recomputed;
     if (style->display == Display::None) return;
+    if (!recomputed && style->display != Display::Contents) {
+      if (std::unique_ptr<Box> old = TakeOld(parent, element)) {
+        parent.AddChild(std::move(old));
+        return;
+      }
+    }
+    const uint64_t volatileBefore = volatileEvents_;
+    struct Seal {
+      Builder* b;
+      dom::Element* element;
+      Box** box;
+      uint64_t before;
+      ~Seal() {
+        if (!*box) return;
+        (*box)->volatileSubtree = b->volatileEvents_ != before;
+        element->subtreeBuilt = element->subtreeVersion;
+      }
+    };
+    Box* sealed = nullptr;
+    Seal seal{this, element, &sealed, volatileBefore};
     // Style containment keeps the counters of its subtree to itself.
     struct Scope {
       Builder* b;
@@ -604,12 +677,16 @@ class Builder {
       if (box->kind == Box::Kind::Inline) box->kind = Box::Kind::Block;
       Box* raw = parent.AddChild(std::move(box));
       Register(raw);
+      sealed = raw;
+      ++volatileEvents_;  // (what a replaced element shows is not in the document's nodes)
       return;
     }
     // A control is atomic in a line, and its options and the like are not boxes of their own.
     if (control && box->kind == Box::Kind::Inline) box->kind = Box::Kind::Block;
     Box* raw = parent.AddChild(std::move(box));
     Register(raw);
+    sealed = raw;
+    if (control) ++volatileEvents_;  // (nor what a form control shows)
     if (raw->kind == Box::Kind::LineBreak) return;
     if (control && !element->IsHtml("textarea")) return;
     BuildGenerated(*raw, element, "before");
@@ -640,6 +717,7 @@ class Builder {
     c->node = b.node;
     c->style = b.style;
     c->pseudo = b.pseudo;
+    c->volatileSubtree = true;  // (a piece of an inline box with a block in it: the boxes of the block are not in it)
     return c;
   }
 
@@ -846,6 +924,7 @@ class Builder {
 
   // ---- List markers ----
   void AttachMarkers(Box& box) {
+    if (Reused(box)) return;
     for (size_t i = 0; i < box.children.size(); ++i) AttachMarkers(*box.children[i]);
     if (box.style->display != Display::ListItem || !box.node || !box.node->IsElement() || box.kind != Box::Kind::Block) return;
     dom::Element* element = static_cast<dom::Element*>(box.node);
@@ -955,7 +1034,7 @@ class Builder {
       const Display d = child->style->display;
       if (d == Display::TableRow) {
         flush();
-        WrapInCells(*child);
+        if (!Reused(*child)) WrapInCells(*child);
         group.AddChild(std::move(child));
       } else if (child->IsOutOfFlow() || d == Display::TableCaption || d == Display::TableColumn || d == Display::TableColumnGroup) {
         flush();
@@ -982,11 +1061,11 @@ class Builder {
       const Display d = child->style->display;
       if (IsRowGroup(d)) {
         flush();
-        WrapInRows(*child);
+        if (!Reused(*child)) WrapInRows(*child);
         table.AddChild(std::move(child));
       } else if (d == Display::TableRow) {
         flush();
-        WrapInCells(*child);
+        if (!Reused(*child)) WrapInCells(*child);
         table.AddChild(std::move(child));
       } else if (child->IsOutOfFlow() || d == Display::TableCaption || d == Display::TableColumn || d == Display::TableColumnGroup) {
         flush();
@@ -1019,6 +1098,7 @@ class Builder {
   }
 
   void Normalize(Box& container) {
+    if (Reused(container)) return;
     if ((container.style->display == Display::Table || container.style->display == Display::InlineTable) && container.kind == Box::Kind::Block && !container.replaced) {
       NormalizeTable(container);
       return;
@@ -1110,21 +1190,40 @@ class Builder {
   void RebuildRegistry() {}
 };
 
-void Collect(Tree& tree, Box& box) {
+// The boxes of the final tree, but those taken over whole from the tree before (the registry has them).
+void Collect(Tree& tree, Box& box, uint64_t serial) {
+  if (box.reusedIn == serial) return;
   if (box.node && box.parent) tree.boxesOf[box.node].push_back(&box);
-  if (!box.node && box.element() == nullptr && !box.pseudo.empty()) {}
-  for (auto& c : box.children) Collect(tree, *c);
+  for (auto& c : box.children) Collect(tree, *c, serial);
+}
+
+// What is left of the tree before are the boxes that were not kept: out of the registry.
+void Forget(Tree& tree, const Box& box) {
+  if (box.node) {
+    const auto found = tree.boxesOf.find(box.node);
+    if (found != tree.boxesOf.end()) {
+      std::erase(found->second, const_cast<Box*>(&box));
+      if (found->second.empty()) tree.boxesOf.erase(found);
+    }
+  }
+  for (const auto& c : box.children) {
+    if (c) Forget(tree, *c);
+  }
 }
 
 }  // namespace
 
-void BuildTree(LayoutContext& lc, dom::Document* document) {
-  Builder builder(lc);
-  lc.tree.boxesOf.clear();
+bool BuildTree(LayoutContext& lc, dom::Document* document, Tree* previous) {
+  Builder builder(lc, previous);
   builder.Build(document);
   // (The registry is made from the final tree: boxes were moved and cloned while it was normalized.)
-  lc.tree.boxesOf.clear();
-  Collect(lc.tree, *lc.tree.root);
+  if (builder.Reusing()) {
+    Forget(lc.tree, *previous->root);
+  } else {
+    lc.tree.boxesOf.clear();
+  }
+  Collect(lc.tree, *lc.tree.root, builder.Serial());
+  return builder.Reusing();
 }
 
 }  // namespace solar::layout

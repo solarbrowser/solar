@@ -70,6 +70,10 @@ void NoteDamage(Node* node, uint8_t flags) {
   } else if (node && (flags & kDamageText) && node->parentNode && node->parentNode->IsElement()) {
     ++static_cast<Element*>(node->parentNode)->childrenVersion;
   }
+  // The boxes of everything above are no good as they were either.
+  for (Node* n = node; n; n = n->parentNode) {
+    if (n->IsElement()) ++static_cast<Element*>(n)->subtreeVersion;
+  }
   if (DamageTracker* tracker = DamageOf(node)) tracker->Note(node, flags);
 }
 

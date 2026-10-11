@@ -552,6 +552,7 @@ void LayoutTable(LayoutContext& lc, Box& table, double contentWidth, double heig
     Box& rb = *row.box;
     rb.x = originX + hs;
     rb.y = originY + gridTop + row.y;
+    rb.stickyX = rb.stickyY = 0;
     rb.width = cols ? colX[cols] - 2 * hs + (cols > 0 ? 0 : 0) : 0;
     rb.width = std::max(0.0, gridWidth - 2 * hs);
     rb.height = row.height;
@@ -612,6 +613,7 @@ void LayoutTable(LayoutContext& lc, Box& table, double contentWidth, double heig
     if (top <= bottom) {
       g->x = originX + hs;
       g->y = top;
+      g->stickyX = g->stickyY = 0;
       g->width = std::max(0.0, gridWidth - 2 * hs);
       g->height = bottom - top;
       for (auto& r : g->children) {

@@ -1,6 +1,8 @@
 #include "solar/layout/Layout.h"
 
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <algorithm>
 #include <functional>
 #include <set>
@@ -77,6 +79,89 @@ bool UpdateContentVisibility(Tree& tree, dom::Document* document, bool& eventsPe
 
 }  // namespace
 
+namespace {
+
+// (Debugging) The tree made from what the tree before had is the tree made from nothing.
+bool SameBoxes(const Box& a, const Box& b, std::string& where) {
+  const auto name = [](const Box& x) { return x.element() ? x.element()->localName : std::string(x.anonymous ? "(anonymous)" : x.pseudo.empty() ? "(text)" : x.pseudo); };
+  const auto differ = [&](const char* what) {
+    if (getenv("SOLAR_VERIFY_DUMP")) {
+      for (const Box* x : {&a, &b}) {
+        std::fprintf(stderr, "--- %s\n", name(*x).c_str());
+        const std::function<void(const Box&, int)> dump = [&](const Box& n, int depth) {
+          std::fprintf(stderr, "%*s%s kind=%d y=%.1f h=%.1f inl=%d\n", depth * 2, "", name(n).c_str(), (int)n.kind, n.y, n.height, (int)n.inlineLevel);
+          for (const auto& c : n.children) dump(*c, depth + 1);
+        };
+        for (const auto& c : x->children) dump(*c, 1);
+      }
+    }
+    where = name(a) + " " + what + " (" + std::to_string(a.x) + "," + std::to_string(a.y) + "," + std::to_string(a.width) + "," + std::to_string(a.height) + ") vs (" + std::to_string(b.x) + "," +
+            std::to_string(b.y) + "," + std::to_string(b.width) + "," + std::to_string(b.height) + ")";
+    return false;
+  };
+  if (a.kind != b.kind || a.node != b.node || a.anonymous != b.anonymous || a.inlineLevel != b.inlineLevel) return differ("kind");
+  // (The deepest box that differs is the one to look at: what is inside is compared first.)
+  if (a.children.size() == b.children.size()) {
+    for (size_t i = 0; i < a.children.size(); ++i) {
+      if (!SameBoxes(*a.children[i], *b.children[i], where)) return false;
+    }
+  }
+  const auto close = [](double p, double q) { return std::fabs(p - q) < 0.001 || (std::isnan(p) && std::isnan(q)); };
+  if (!close(a.x, b.x) || !close(a.y, b.y) || !close(a.width, b.width) || !close(a.height, b.height)) return differ("geometry");
+  const Edges ea[3] = {a.margin, a.border, a.padding}, eb[3] = {b.margin, b.border, b.padding};
+  for (int i = 0; i < 3; ++i) {
+    if (!close(ea[i].top, eb[i].top) || !close(ea[i].right, eb[i].right) || !close(ea[i].bottom, eb[i].bottom) || !close(ea[i].left, eb[i].left)) return differ("edges");
+  }
+  if (!close(a.topPositive, b.topPositive) || !close(a.topNegative, b.topNegative) || !close(a.bottomPositive, b.bottomPositive) || !close(a.bottomNegative, b.bottomNegative) || a.collapsedThrough != b.collapsedThrough) return differ("margins");
+  if (!close(a.ownWidth, b.ownWidth) || !close(a.ownHeight, b.ownHeight) || !close(a.rubyOver, b.rubyOver) || !close(a.rubyUnder, b.rubyUnder)) return differ("own/ruby");
+  if (a.fragments.size() != b.fragments.size()) return differ("fragments");
+  for (size_t i = 0; i < a.fragments.size(); ++i) {
+    if (!close(a.fragments[i].x, b.fragments[i].x) || !close(a.fragments[i].y, b.fragments[i].y) || !close(a.fragments[i].width, b.fragments[i].width) || !close(a.fragments[i].height, b.fragments[i].height)) return differ("fragment");
+  }
+  if (a.lines.size() != b.lines.size()) return differ("lines");
+  for (size_t i = 0; i < a.lines.size(); ++i) {
+    if (a.lines[i].items.size() != b.lines[i].items.size() || !close(a.lines[i].rect.y, b.lines[i].rect.y) || !close(a.lines[i].rect.x, b.lines[i].rect.x) || !close(a.lines[i].rect.width, b.lines[i].rect.width)) return differ("line");
+    if (!close(a.lines[i].rect.height, b.lines[i].rect.height) || !close(a.lines[i].baseline, b.lines[i].baseline)) return differ("line height");
+    for (size_t k = 0; k < a.lines[i].items.size(); ++k) {
+      const Rect& p = a.lines[i].items[k].rect;
+      const Rect& q = b.lines[i].items[k].rect;
+      if (!close(p.x, q.x) || !close(p.y, q.y) || !close(p.width, q.width) || !close(p.height, q.height)) return differ("line item");
+    }
+  }
+  if (!close(a.scrollableOverflow.width, b.scrollableOverflow.width) || !close(a.scrollableOverflow.height, b.scrollableOverflow.height) || !close(a.baseline, b.baseline)) return differ("overflow/baseline");
+  if (!close(a.firstBaseline, b.firstBaseline) || !close(a.staticX, b.staticX) || !close(a.staticY, b.staticY) || !close(a.scrollbar.top, b.scrollbar.top) || !close(a.scrollbar.left, b.scrollbar.left) || !close(a.scrollbar.right, b.scrollbar.right) || !close(a.scrollbar.bottom, b.scrollbar.bottom)) return differ("baseline/static/scrollbar");
+  if (a.style != b.style && (a.style->display != b.style->display)) return differ("display");
+  if (!close(a.stickyX, b.stickyX) || !close(a.stickyY, b.stickyY) || !close(a.shiftX, b.shiftX) || !close(a.shiftY, b.shiftY)) return differ("shift");
+  if (a.children.size() != b.children.size()) return differ("children");
+  for (size_t i = 0; i < a.children.size(); ++i) {
+    if (!SameBoxes(*a.children[i], *b.children[i], where)) return false;
+  }
+  return true;
+}
+
+}  // namespace
+
+Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document);
+
+namespace {
+
+void VerifyAgainstFresh(Quanta::Context& ctx, dom::Document* document, const css::MediaEnvironment& environment, Tree& tree) {
+  Tree fresh;
+  double barWidth = 0, barHeight = 0;
+  css::ViewportScrollbars(ctx, document, barWidth, barHeight);
+  fresh.viewportWidth = environment.width - barWidth;
+  fresh.viewportHeight = environment.height - barHeight;
+  LayoutContext lc{ctx, fresh, fresh.viewportWidth, fresh.viewportHeight};
+  BuildTree(lc, document, nullptr);
+  LayoutRoot(lc);
+  fresh.scroll = tree.scroll;
+  ApplySticky(fresh);
+  std::string where;
+  if (!SameBoxes(*tree.root, *fresh.root, where)) std::fprintf(stderr, "VERIFY mismatch: %s\n", where.c_str());
+}
+
+}  // namespace
+
 Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
   css::MediaEnvironment environment = css::EnvironmentFor(document);
   // The viewport of a frame is the room its element has, which is whatever style says of it.
@@ -109,9 +194,10 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
   if (document->layoutTree && document->layoutTree->builtFor == versionNow() && document->layoutTree->root) return document->layoutTree.get();
   static std::set<const dom::Document*> inside;
   // (Asked for again while it is being made, from a style that needs the size of a container: what is there is answered.)
-  if (inside.count(document)) return document->layoutTree ? document->layoutTree.get() : nullptr;
+  if (inside.count(document)) return document->layoutTree && !document->layoutTree->damaged ? document->layoutTree.get() : nullptr;
   inside.insert(document);
   std::shared_ptr<Tree> tree;
+  const std::shared_ptr<Tree> previous = document->layoutTree;
   // The styles that depend on the size of containers are made from the sizes of the last pass; layout is done again until they stop changing.
   bool eventsPending = false;
   for (int pass = 0; pass < 5; ++pass) {
@@ -122,7 +208,7 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
     tree->viewportWidth = environment.width - barWidth;
     tree->viewportHeight = environment.height - barHeight;
     LayoutContext lc{ctx, *tree, tree->viewportWidth, tree->viewportHeight};
-    BuildTree(lc, document);
+    BuildTree(lc, document, pass == 0 && previous && previous->root ? previous.get() : nullptr);
     LayoutRoot(lc);
     const bool containers = document->containerQueriesSeen && UpdateContainerSizes(*tree);
     // (What the scroll position was is kept for the new tree, as the relevance of boxes is worked out from it.)
@@ -152,6 +238,7 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
   }
   ApplySticky(*tree);
   document->layoutTree = tree;
+  if (getenv("SOLAR_VERIFY") && previous && (previous->damaged || getenv("SOLAR_NOREUSE"))) VerifyAgainstFresh(ctx, document, environment, *tree);
   return tree.get();
 }
 

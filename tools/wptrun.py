@@ -38,7 +38,8 @@ def run_page(path):
     summary = re.findall(r"^(\d+)/(\d+) passed", text, re.M)
     first = next((l.strip() for l in text.splitlines() if l.strip().startswith("FAIL")), "")
     s = f"{summary[-1][0]}/{summary[-1][1]} passed" if summary else "NO SUMMARY"
-    return f"{path} :: rc={code} {s}" + (f" | {first[:200]}" if first else "")
+    verify = next((l.strip() for l in text.splitlines() if l.startswith("VERIFY")), "")
+    return f"{path} :: rc={code} {s}" + (f" | {first[:200]}" if first else "") + (f" | {verify[:300]}" if verify else "")
 
 
 def check(listings):
@@ -59,6 +60,9 @@ def check(listings):
         json.dump(known, open(TIMES, "w"))
     except OSError:
         pass
+    for l in lines:
+        if "VERIFY" in l:
+            print(l)
     failed = [l for l in lines if not re.search(r"rc=0 (\d+)/\1 passed", l)]
     for l in failed:
         print(l)

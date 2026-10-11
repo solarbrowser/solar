@@ -77,6 +77,20 @@ struct FirstLineEdit {
   size_t moved = 0;                       // the children of a split inline box that went to the tail
 };
 
+// What the layout of a box was given and what it came to, for the box to be left as it is when it is asked to lay out in the same way again
+// (the contents of it, in the frame of the tree they were converted to, stay where they are).
+struct LayoutMemo {
+  bool valid = false;
+  double cbWidth = 0, cbHeight = 0, forceWidth = 0, forceHeight = 0, availOverride = 0, inlineCbHeight = 0, viewportWidth = 0, viewportHeight = 0;
+  bool shrinkToFit = false, keepOwnFrame = false, keepScrollbars = false;
+  double x = 0, y = 0, width = 0, height = 0, ownWidth = 0, ownHeight = 0;
+  Edges margin, border, padding, scrollbar;
+  bool scrollbarForce[2] = {false, false};
+  double topPositive = 0, topNegative = 0, bottomPositive = 0, bottomNegative = 0;
+  bool collapsedThrough = false;
+  double staticX = 0, staticY = 0, shiftX = 0, shiftY = 0, baseline = -1, firstBaseline = -1, minContent = -1, maxContent = -1;
+};
+
 struct Box {
   enum class Kind : uint8_t { Block, Inline, Text, LineBreak };
   Kind kind = Kind::Block;
@@ -141,6 +155,12 @@ struct Box {
   double firstBaseline = -1;
   // A flex or grid item is its own formatting context whatever its style.
   bool forceBfc = false;
+  // Kept from the tree before when nothing in it changed (see Builder): a box whose subtree depends on more than the document's nodes is volatile.
+  bool volatileSubtree = false;
+  uint64_t reusedIn = 0;  // the build that took it over from the tree before
+  LayoutMemo memo;
+  uint64_t hitSerial = 0;  // the tree in which layout left it as it was (see LayoutMemo)
+  bool converted = false;  // what is in it is in the physical frame already (it has not been laid out since)
   // Intrinsic widths, cached.
   double minContent = -1, maxContent = -1;
 
@@ -160,12 +180,19 @@ struct Box {
 };
 
 // The layout of a document.
+inline uint64_t NextTreeSerial() {
+  static uint64_t last = 0;
+  return ++last;
+}
+
 struct Tree {
+  uint64_t serial = NextTreeSerial();
   std::unique_ptr<Box> root;  // the initial containing block, anonymous, whose only child is the root element's box
   std::unordered_map<const dom::Node*, std::vector<Box*>> boxesOf;
   double viewportWidth = 800, viewportHeight = 600;
   bool keepScrollbars = false;  // layout is being repeated for container queries: the scrollbars of the pass before stay
   Overflow viewportOverflowX = Overflow::Auto, viewportOverflowY = Overflow::Auto;  // the overflow of the viewport, the root element's or the body's
+  bool damaged = false;  // boxes were taken out of it for the tree that replaces it
   uint64_t builtFor = 0;  // the versions of the tree and of style it was made from
   // How far elements (and the viewport, under the document) are scrolled; carried over when the tree is made again.
   std::unordered_map<const dom::Node*, std::pair<double, double>> scroll;

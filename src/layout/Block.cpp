@@ -639,8 +639,84 @@ static void LayoutBlockLevelDetecting(LayoutContext& lc, Box& box, double cbWidt
   }
 }
 
+namespace {
+
+bool SameNumber(double a, double b) { return a == b || (std::isnan(a) && std::isnan(b)); }
+
+// A box in a block container's flow, whose parent only places it (and does not reach into what is inside it afterwards), outside of multicol containers.
+bool MemoEligible(const Box& box) {
+  if (box.kind != Box::Kind::Block || box.inlineLevel || box.outsideMarker || !box.parent || box.parent->kind != Box::Kind::Block) return false;
+  if (box.style->IsOutOfFlow() || box.style->IsFloating()) return false;
+  switch (box.parent->style->display) {
+    case Display::Block: case Display::FlowRoot: case Display::ListItem: break;
+    default: return false;
+  }
+  for (const Box* p = box.parent; p; p = p->parent) {
+    if (p->style->IsMulticol()) return false;
+  }
+  return true;
+}
+
+bool Establishes(const Box& box) {
+  const BoxStyle& s = *box.style;
+  const bool plainBlock = !box.replaced && !IsFlexDisplay(s.display) && !IsGridDisplay(s.display) && !IsTableDisplay(s.display) && s.display != Display::TableCell;
+  const bool contentAligned = plainBlock && s.alignContent.kind != Align::Kind::Normal && s.alignContent.kind != Align::Kind::Stretch && s.alignContent.kind != Align::Kind::Auto;
+  return s.CreatesBlockFormattingContext() || IsRootBox(box) || box.forceBfc || contentAligned || s.display == Display::TableCell;
+}
+
+}  // namespace
+
+void ResetStatics(Box& box) {
+  for (auto& c : box.children) {
+    if (c->kind == Box::Kind::Block && c->style->IsOutOfFlow()) c->staticX = c->staticY = 0;
+    else if (c->kind == Box::Kind::Inline) ResetStatics(*c);
+  }
+}
+
 void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeight, bool shrinkToFit) {
-  LayoutBlockLevelDetecting(lc, box, cbWidth, cbHeight, shrinkToFit);
+  static const bool disabled = std::getenv("SOLAR_NOMEMO") != nullptr;
+  const bool eligible = !disabled && MemoEligible(box);
+  const bool establishes = eligible && Establishes(box);
+  const bool floatsEmpty = !lc.bfc || lc.bfc->floats.empty();
+  LayoutMemo& memo = box.memo;
+  if (eligible && memo.valid && (floatsEmpty || establishes) && memo.shrinkToFit == shrinkToFit && memo.keepOwnFrame == lc.keepOwnFrame && memo.keepScrollbars == lc.tree.keepScrollbars &&
+      SameNumber(memo.cbWidth, cbWidth) && SameNumber(memo.cbHeight, cbHeight) && SameNumber(memo.forceWidth, lc.forceWidth) && SameNumber(memo.forceHeight, lc.forceHeight) &&
+      SameNumber(memo.availOverride, lc.availOverride) && SameNumber(memo.inlineCbHeight, lc.inlineCbHeight) && memo.viewportWidth == lc.viewportWidth && memo.viewportHeight == lc.viewportHeight) {
+    box.x = memo.x; box.y = memo.y; box.width = memo.width; box.height = memo.height; box.ownWidth = memo.ownWidth; box.ownHeight = memo.ownHeight;
+    box.margin = memo.margin; box.border = memo.border; box.padding = memo.padding; box.scrollbar = memo.scrollbar;
+    box.scrollbarForce[0] = memo.scrollbarForce[0]; box.scrollbarForce[1] = memo.scrollbarForce[1];
+    box.topPositive = memo.topPositive; box.topNegative = memo.topNegative; box.bottomPositive = memo.bottomPositive; box.bottomNegative = memo.bottomNegative;
+    box.collapsedThrough = memo.collapsedThrough;
+    box.staticX = memo.staticX; box.staticY = memo.staticY; box.shiftX = memo.shiftX; box.shiftY = memo.shiftY;
+    box.baseline = memo.baseline; box.firstBaseline = memo.firstBaseline; box.minContent = memo.minContent; box.maxContent = memo.maxContent;
+    box.stickyX = box.stickyY = 0;
+    box.hitSerial = lc.tree.serial;
+    // (What a layout takes from the context for the box laid out is used up.)
+    lc.forceWidth = lc.forceHeight = lc.availOverride = kNaN;
+    lc.keepOwnFrame = false;
+  } else {
+    const uint64_t events = lc.floatEvents;
+    box.converted = false;
+    // Where the boxes taken out of the flow would have been is worked out again by this layout (what the last one left is in another frame by now).
+    if (!box.style->IsOutOfFlow()) box.staticX = box.staticY = 0;
+    ResetStatics(box);
+    LayoutMemo key;
+    key.cbWidth = cbWidth; key.cbHeight = cbHeight; key.forceWidth = lc.forceWidth; key.forceHeight = lc.forceHeight; key.availOverride = lc.availOverride; key.inlineCbHeight = lc.inlineCbHeight;
+    key.viewportWidth = lc.viewportWidth; key.viewportHeight = lc.viewportHeight; key.shrinkToFit = shrinkToFit; key.keepOwnFrame = lc.keepOwnFrame; key.keepScrollbars = lc.tree.keepScrollbars;
+    LayoutBlockLevelDetecting(lc, box, cbWidth, cbHeight, shrinkToFit);
+    memo.valid = false;
+    if (eligible && ((floatsEmpty && lc.floatEvents == events) || establishes)) {
+      memo = key;
+      memo.valid = true;
+      memo.x = box.x; memo.y = box.y; memo.width = box.width; memo.height = box.height; memo.ownWidth = box.ownWidth; memo.ownHeight = box.ownHeight;
+      memo.margin = box.margin; memo.border = box.border; memo.padding = box.padding; memo.scrollbar = box.scrollbar;
+      memo.scrollbarForce[0] = box.scrollbarForce[0]; memo.scrollbarForce[1] = box.scrollbarForce[1];
+      memo.topPositive = box.topPositive; memo.topNegative = box.topNegative; memo.bottomPositive = box.bottomPositive; memo.bottomNegative = box.bottomNegative;
+      memo.collapsedThrough = box.collapsedThrough;
+      memo.staticX = box.staticX; memo.staticY = box.staticY; memo.shiftX = box.shiftX; memo.shiftY = box.shiftY;
+      memo.baseline = box.baseline; memo.firstBaseline = box.firstBaseline; memo.minContent = box.minContent; memo.maxContent = box.maxContent;
+    }
+  }
   if (box.node && box.node->IsElement() && !box.anonymous) {
     dom::Element* element = static_cast<dom::Element*>(box.node);
     element->scrollbarSeen[0] = box.scrollbarForce[0];
@@ -650,6 +726,8 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
 
 void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cbHeight, bool shrinkToFit) {
   const BoxStyle& s = *box.style;
+  // (Where the box is is worked out again, without what sticky positioning did to it.)
+  box.stickyX = box.stickyY = 0;
   double forceWidth = lc.forceWidth, forceHeight = lc.forceHeight, availOverride = lc.availOverride;
   lc.forceWidth = lc.forceHeight = lc.availOverride = kNaN;
   const bool keepOwnFrame = lc.keepOwnFrame;

@@ -243,6 +243,8 @@ struct Element : Node {
   uint32_t childrenVersion = 0;   // its children changed, or the text in them
   uint32_t childAttrVersion = 0;  // an attribute of a child of it changed
   uint32_t animVersion = 0;       // what animations give it changed
+  uint32_t subtreeVersion = 0;    // anything in it, or it, changed (counted on it and on every element above)
+  uint32_t subtreeBuilt = UINT32_MAX;  // the count when layout last built its box
   // Layout's style of the element (a BoxStyle) and what it was made from.
   std::shared_ptr<const void> layoutStyle;
   struct LayoutStamp {
