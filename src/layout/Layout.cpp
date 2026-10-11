@@ -399,9 +399,9 @@ bool UsedValue(Tree& tree, dom::Element* element, const std::string& property, s
     // The used tracks of a grid container, with the names of the lines.
     const int axis = property == "grid-template-columns" ? 1 : 0;
     const GridLines& g = *box->gridLines;
-    // The tracks before the explicit ones and the explicit ones; those after are not in the value.
+    // All the tracks, the implicit ones before and after the explicit ones too.
     const size_t before = static_cast<size_t>(g.implicitBefore[axis]);
-    const size_t count = std::min(g.start[axis].size(), before + static_cast<size_t>(g.explicitCount[axis]));
+    const size_t count = g.start[axis].size();
     if (count == 0) return false;
     std::string text;
     const auto names = [&](size_t index) {

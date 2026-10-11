@@ -682,7 +682,8 @@ struct Grid {
     double minimum;
     const bool scroller = s.overflowX != Overflow::Visible && s.overflowX != Overflow::Clip;
     if (Known(minV)) minimum = std::max(0.0, minV);
-    else if (s.minWidth.IsAuto() && !scroller) minimum = Known(specified) ? std::min(specified, b.minContent) : b.minContent;
+    // (the content size suggestion is the min-content contribution of the box, which its own width gives)
+    else if (s.minWidth.IsAuto() && !scroller) minimum = Known(specified) ? std::min(specified, mn) : b.minContent;
     else minimum = 0;
     it.minContribution = minimum + extras;
   }

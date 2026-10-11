@@ -2908,8 +2908,6 @@ tests/wpt/css/css-grid/alignment/grid-justify-content-vertical-lr-001.html
 tests/wpt/css/css-grid/alignment/grid-justify-content-vertical-rl-001.html
 tests/wpt/css/css-grid/alignment/grid-self-alignment.html
 tests/wpt/css/css-grid/grid-definition/explicit-grid-size-001.html
-tests/wpt/css/css-grid/grid-definition/grid-inline-template-columns-rows-resolved-values-001.tentative.html
-tests/wpt/css/css-grid/grid-definition/grid-template-columns-rows-resolved-values-001.tentative.html
 tests/wpt/css/css-grid/grid-definition/grid-template-columns-rows-resolved-values-003.html
 tests/wpt/css/css-grid/grid-items/grid-items-relative-offsets-001.html
 tests/wpt/css/css-grid/grid-items/grid-items-relative-offsets-002.html
