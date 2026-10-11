@@ -494,11 +494,16 @@ bool Gatherer::Matches(const ComplexSelector& selector, Specificity& extra) {
 
 // ---- The resolver ----
 
+// What was worked out for an element; elements that are styled the same way and inherit from the same share it.
+struct Memo {
+  std::unordered_map<std::string, std::string> computed;
+  std::unordered_map<std::string, std::optional<std::string>> custom;
+};
+
 struct ElementStyle {
   uint64_t version = 0;
   std::map<std::string, Winner> cascade;
-  std::unordered_map<std::string, std::string> computed;
-  std::unordered_map<std::string, std::optional<std::string>> custom;
+  std::shared_ptr<Memo> memo = std::make_shared<Memo>();
   std::set<std::string> resolving;
   std::vector<std::vector<DeclarationEntry>> storage;  // the style attribute's declarations
   bool built = false;
@@ -516,10 +521,13 @@ std::unordered_map<dom::Element*, StyleEntry>& Cache() {
   return cache;
 }
 
+void ClearShared();
+
 ElementStyle& StyleOf(dom::Element* element, const std::string& pseudo = "") {
   static uint64_t cachedVersion = 0;
   const uint64_t version = dom::TreeVersion() * 1000003 + g_styleVersion;
   if (cachedVersion != version) {
+    ClearShared();
     Cache().clear();
     cachedVersion = version;
   }
@@ -567,6 +575,92 @@ double ViewportScrollbarsWith(dom::Document* document, const std::function<std::
     else horizontal = thickness * (both ? 2 : 1);
   }
   return verticalBar;
+}
+
+// ---- Sharing what was worked out ----
+
+// Elements that the same declarations apply to, with the same tag and a parent whose computed values are shared, have the same
+// computed values: they are worked out once. (What looks at more than the declarations and the parent is left out: attr(), the
+// sizes of containers, the siblings, the animations.)
+struct SharedKey {
+  const Memo* parent = nullptr;
+  const std::string* localName = nullptr;
+  const std::string* namespaceUri = nullptr;
+  const ElementStyle* style = nullptr;
+};
+
+std::unordered_map<uint64_t, std::vector<SharedKey>>& SharedStyles() {
+  static std::unordered_map<uint64_t, std::vector<SharedKey>> shared;
+  return shared;
+}
+
+std::unordered_map<const DeclarationEntry*, bool>& EntrySafety() {
+  static std::unordered_map<const DeclarationEntry*, bool> safety;
+  return safety;
+}
+
+void ClearShared() {
+  SharedStyles().clear();
+  EntrySafety().clear();
+}
+
+bool SafeToShare(const DeclarationEntry* entry) {
+  const auto found = EntrySafety().find(entry);
+  if (found != EntrySafety().end()) return found->second;
+  bool safe = true;
+  for (const std::string* text : {&entry->value, &entry->pendingText}) {
+    for (const char* word : {"attr(", "cq", "sibling-", "anchor", "random(", "element(", "if(", "inherit(", "container"}) {
+      if (text->find(word) != std::string::npos) safe = false;
+    }
+  }
+  EntrySafety()[entry] = safe;
+  return safe;
+}
+
+void Share(dom::Element* element, ElementStyle& style) {
+  if (!style.memo->computed.empty() || !style.memo->custom.empty() || !style.storage.empty()) return;
+  if (element->animVersion != 0 || dom::HasShadowTrees() || !element->parentNode || !element->parentNode->IsElement()) return;
+  if (element->nodeDocument && element->nodeDocument->adoptedStyleSheets) return;
+  if (element->FindAttribute("", "style")) return;
+  dom::Element* parent = static_cast<dom::Element*>(element->parentNode);
+  if (parent->animVersion != 0) return;
+  ElementStyle& parentStyle = StyleOf(parent);
+  uint64_t hash = std::hash<const void*>()(parentStyle.memo.get());
+  hash = hash * 1000003 + std::hash<std::string>()(element->localName);
+  hash = hash * 1000003 + std::hash<std::string>()(element->namespaceUri);
+  for (const auto& [name, winner] : style.cascade) {
+    if (!winner.rest.empty() || !SafeToShare(winner.entry)) return;
+    hash = hash * 1000003 + std::hash<std::string>()(name);
+    hash = hash * 1000003 + std::hash<const void*>()(winner.entry);
+    hash = hash * 1000003 + static_cast<uint64_t>(winner.origin * 31 + winner.layer);
+  }
+  std::vector<SharedKey>& bucket = SharedStyles()[hash];
+  for (const SharedKey& other : bucket) {
+    if (other.parent != parentStyle.memo.get() || *other.localName != element->localName || *other.namespaceUri != element->namespaceUri) continue;
+    const auto& a = other.style->cascade;
+    const auto& b = style.cascade;
+    if (a.size() != b.size()) continue;
+    bool same = true;
+    for (auto i = a.begin(), j = b.begin(); i != a.end(); ++i, ++j) {
+      if (i->first != j->first || i->second.entry != j->second.entry || i->second.origin != j->second.origin || i->second.layer != j->second.layer) {
+        same = false;
+        break;
+      }
+    }
+    if (!same) continue;
+    style.memo = other.style->memo;
+    return;
+  }
+  bucket.push_back({parentStyle.memo.get(), &element->localName, &element->namespaceUri, &style});
+}
+
+// The cascade of an element is made, and what is shared with others of the same style is found.
+void Prepare(dom::Element* element) {
+  ElementStyle& style = StyleOf(element);
+  if (style.built) return;
+  if (element->parentNode && element->parentNode->IsElement()) Prepare(static_cast<dom::Element*>(element->parentNode));
+  Build(element, style, "");
+  Share(element, style);
 }
 
 // Whether a property that is not inherited applies to ::first-letter or ::first-line (https://www.w3.org/TR/css-pseudo-4/#first-line-styling).
@@ -1001,8 +1095,8 @@ std::optional<RegisteredProperty> RegistrationOf(dom::Element* element, const st
 std::optional<std::string> Resolver::Custom(dom::Element* element, const std::string& name, const std::string& pseudo) {
   ElementStyle& style = StyleOf(element, pseudo);
   Build(element, style, pseudo);
-  const auto cached = style.custom.find(name);
-  if (cached != style.custom.end()) return cached->second;
+  const auto cached = style.memo->custom.find(name);
+  if (cached != style.memo->custom.end()) return cached->second;
   if (style.resolving.count(name)) return std::nullopt;  // a cycle
   style.resolving.insert(name);
   const std::optional<RegisteredProperty> registration = RegistrationOf(element, name);
@@ -1051,7 +1145,7 @@ std::optional<std::string> Resolver::Custom(dom::Element* element, const std::st
         if (cycleHit_) {
           // It depends on a value that depends on it.
           style.resolving.erase(name);
-          style.custom[name] = std::nullopt;
+          style.memo->custom[name] = std::nullopt;
           return std::nullopt;
         }
         if (MatchSyntax(registration->matcherSyntax, Trimmed(ParseComponentValues(*text)), match, &context)) result = SerializeValue(match.normalized);
@@ -1070,7 +1164,7 @@ std::optional<std::string> Resolver::Custom(dom::Element* element, const std::st
   if (useInitial) result = initialOf();
   else if (inherit) result = (pseudo.empty() && !FlatParent(element)) ? initialOf() : inheritedValue();
   style.resolving.erase(name);
-  style.custom[name] = result;
+  style.memo->custom[name] = result;
   return result;
 }
 
@@ -1342,10 +1436,14 @@ std::string Resolver::Compute(dom::Element* element, const std::string& property
     initialOnly = true;
     name = property.substr(9);
   }
+  if (!initialOnly && pseudo.empty() && !AnimatedValuesSuppressed() && !StartingStyleFor(element, pseudo)) {
+    dom::Node* tree = dom::ShadowIncludingRoot(element);
+    if (tree && tree->IsDocument()) Prepare(element);
+  }
   ElementStyle& style = StyleOf(element, pseudo);
   if (!initialOnly) {
-    const auto cached = style.computed.find(name);
-    if (cached != style.computed.end()) return cached->second;
+    const auto cached = style.memo->computed.find(name);
+    if (cached != style.memo->computed.end()) return cached->second;
   }
   if (name.starts_with("--")) {
     std::optional<std::string> value = Custom(element, name, pseudo);
@@ -1375,14 +1473,14 @@ std::string Resolver::Compute(dom::Element* element, const std::string& property
   if (!initialOnly && plainInherit_ && valid) {
     plainInherit_ = false;
     style.resolving.erase("\x02" + name);
-    StyleOf(element, pseudo).computed[name] = specified;
+    StyleOf(element, pseudo).memo->computed[name] = specified;
     return specified;
   }
   plainInherit_ = false;
   if (specified == "initial") {
     if (const std::string* fast = FastInitial(*definition)) {
       style.resolving.erase("\x02" + name);
-      if (!initialOnly) StyleOf(element, pseudo).computed[name] = *fast;
+      if (!initialOnly) StyleOf(element, pseudo).memo->computed[name] = *fast;
       return *fast;
     }
   }
@@ -1390,7 +1488,7 @@ std::string Resolver::Compute(dom::Element* element, const std::string& property
   std::string result = Finish(element, name, *definition, specified, context, pseudo);
   if (specified == "initial") NoteInitial(*definition, result);
   style.resolving.erase("\x02" + name);
-  if (!initialOnly) StyleOf(element, pseudo).computed[name] = result;
+  if (!initialOnly) StyleOf(element, pseudo).memo->computed[name] = result;
   return result;
 }
 
@@ -1722,12 +1820,12 @@ std::string ResolvedValue(Quanta::Context& ctx, dom::Element* element, const std
       bool rendered = true;
       if (property != "display") {
         const ElementStyle& made = StyleOf(element, pseudo);
-        const auto display = made.computed.find("display");
-        rendered = display == made.computed.end() || display->second != "none";
+        const auto display = made.memo->computed.find("display");
+        rendered = display == made.memo->computed.end() || display->second != "none";
         if (rendered && !pseudo.empty()) {
           const ElementStyle& owner = StyleOf(element, "");
-          const auto ownerDisplay = owner.computed.find("display");
-          rendered = ownerDisplay == owner.computed.end() || ownerDisplay->second != "none";
+          const auto ownerDisplay = owner.memo->computed.find("display");
+          rendered = ownerDisplay == owner.memo->computed.end() || ownerDisplay->second != "none";
         }
       }
       if (rendered) element->lastRead[pseudo][property] = computed;
