@@ -6,6 +6,7 @@
 #include <map>
 
 #include "Internal.h"
+#include "solar/css/MediaQuery.h"
 #include "solar/css/Style.h"
 #include "solar/css/Syntax.h"
 #include "solar/css/Tokenizer.h"
@@ -190,6 +191,13 @@ class Builder {
     Box* initial = root.get();
     lc_.tree.root = std::move(root);
     dom::Element* html = document->DocumentElement();
+    reuse_ = css::StyleReuseFor(document);
+    {
+      // (What is kept of the styles is checked against the animations, which are brought up to date by asking for a style.)
+      const css::MediaEnvironment env = css::EnvironmentFor(document);
+      environmentKey_ = std::hash<double>()(env.width) * 31 + std::hash<double>()(env.height) * 17 + std::hash<double>()(env.resolution) * 7 + std::hash<std::string>()(env.colorScheme);
+    }
+    if (html) css::ComputedValue(lc_.ctx, html, "display");
     if (html) BuildElement(*initial, html);
     Normalize(*initial);
     ApplyFirstLetters(lc_, *initial);
@@ -200,6 +208,9 @@ class Builder {
 
  private:
   LayoutContext& lc_;
+  solar::css::StyleReuse reuse_;
+  uint64_t environmentKey_ = 0;
+  bool dirtyBelow_ = false;  // the style of an element above was made again
   std::unique_ptr<CounterStyles> styles_;
 
   // ---- Counters (https://www.w3.org/TR/css-lists-3/#counters) ----
@@ -445,6 +456,32 @@ class Builder {
     }
   }
 
+  // The style layout reads of an element: what was made of it before, while nothing it depends on has changed, and else worked out again.
+  std::shared_ptr<const BoxStyle> StyleFor(dom::Element* element, bool& recomputed) {
+    const dom::Node* parent = element->parentNode;
+    const dom::Element* parentElement = parent && parent->IsElement() ? static_cast<const dom::Element*>(parent) : nullptr;
+    dom::Element::LayoutStamp want;
+    want.author = css::SheetsVersion();
+    want.environment = environmentKey_;
+    want.parent = parent;
+    want.attr = element->attrVersion;
+    want.anim = element->animVersion;
+    want.children = reuse_.structural ? element->childrenVersion : 0;
+    want.parentChildren = reuse_.structural && parentElement ? parentElement->childrenVersion : 0;
+    want.parentChildAttr = reuse_.sibling && parentElement ? parentElement->childAttrVersion : 0;
+    const dom::Element::LayoutStamp& have = element->layoutStamp;
+    if (reuse_.allowed && !dirtyBelow_ && element->layoutStyle && have.author == want.author && have.environment == want.environment && have.parent == want.parent &&
+        have.attr == want.attr && have.anim == want.anim && have.children == want.children && have.parentChildren == want.parentChildren && have.parentChildAttr == want.parentChildAttr) {
+      recomputed = false;
+      return std::static_pointer_cast<const BoxStyle>(element->layoutStyle);
+    }
+    std::shared_ptr<const BoxStyle> style = Logicalize(ReadStyle(lc_.ctx, element));
+    element->layoutStyle = style;
+    element->layoutStamp = want;
+    recomputed = true;
+    return style;
+  }
+
   void BuildGenerated(Box& parent, dom::Element* element, const char* pseudo) {
     // Without a rule for it there is nothing generated: the style of it is not worth working out.
     if (!solar::css::HasPseudoStyle(element, pseudo)) return;
@@ -472,7 +509,15 @@ class Builder {
   }
 
   void BuildElement(Box& parent, dom::Element* element) {
-    std::shared_ptr<const BoxStyle> style = Logicalize(ReadStyle(lc_.ctx, element));
+    bool recomputed = false;
+    std::shared_ptr<const BoxStyle> style = StyleFor(element, recomputed);
+    // What an element's style is made again from, its children's is too (they inherit).
+    struct Below {
+      Builder* builder;
+      bool saved;
+      ~Below() { builder->dirtyBelow_ = saved; }
+    } below{this, dirtyBelow_};
+    dirtyBelow_ = dirtyBelow_ || recomputed;
     if (style->display == Display::None) return;
     // Style containment keeps the counters of its subtree to itself.
     struct Scope {

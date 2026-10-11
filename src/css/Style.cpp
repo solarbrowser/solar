@@ -1547,6 +1547,83 @@ void NoteAnimatedStyleChange() { ++g_styleVersion; }
 uint64_t AuthorStyleVersion() { return dom::TreeVersion() * 1000003 + g_authorVersion; }
 uint64_t StyleVersion() { return g_styleVersion; }
 
+namespace {
+
+struct SelectorFeatures {
+  bool dynamic = false;     // depends on the state of elements (hover, focus, checked...) that no change of the tree tells of
+  bool has = false;         // :has(): an element depends on what is under it
+  bool structural = false;  // depends on the place among the siblings
+  bool sibling = false;     // + and ~
+};
+
+void ScanComplex(const ComplexSelector& selector, SelectorFeatures& f);
+
+void ScanList(const SelectorList& list, SelectorFeatures& f) {
+  for (const ComplexSelector& s : list) ScanComplex(s, f);
+}
+
+void ScanComplex(const ComplexSelector& selector, SelectorFeatures& f) {
+  for (const Combinator c : selector.combinators) if (c == Combinator::NextSibling || c == Combinator::SubsequentSibling) f.sibling = true;
+  if (selector.leading == Combinator::NextSibling || selector.leading == Combinator::SubsequentSibling) f.sibling = true;
+  for (const CompoundSelector& compound : selector.compounds) {
+    for (const SimpleSelector& simple : compound.simples) {
+      switch (simple.kind) {
+        case SimpleSelector::Kind::Pseudo:
+          switch (simple.pseudo) {
+            case PseudoClass::Root: case PseudoClass::Scope: case PseudoClass::Link: case PseudoClass::AnyLink: case PseudoClass::Defined: break;
+            case PseudoClass::Empty: case PseudoClass::FirstChild: case PseudoClass::LastChild: case PseudoClass::OnlyChild:
+            case PseudoClass::FirstOfType: case PseudoClass::LastOfType: case PseudoClass::OnlyOfType: f.structural = true; break;
+            default: f.dynamic = true; break;
+          }
+          break;
+        case SimpleSelector::Kind::Has: f.has = true; if (simple.list) ScanList(*simple.list, f); break;
+        case SimpleSelector::Kind::Nth: f.structural = true; if (simple.list) ScanList(*simple.list, f); break;
+        case SimpleSelector::Kind::Not: case SimpleSelector::Kind::Is: case SimpleSelector::Kind::Where: case SimpleSelector::Kind::Nesting:
+          if (simple.list) ScanList(*simple.list, f);
+          break;
+        case SimpleSelector::Kind::Host: f.dynamic = true; break;
+        default: break;
+      }
+    }
+  }
+}
+
+void ScanRules(const std::vector<CssRule*>& rules, SelectorFeatures& f, int depth) {
+  if (depth > 12) { f.dynamic = true; return; }
+  for (const CssRule* rule : rules) {
+    if (rule->selectors) ScanList(*rule->selectors, f);
+    if (rule->scopeStart) ScanList(*rule->scopeStart, f);
+    if (rule->scopeEnd) ScanList(*rule->scopeEnd, f);
+    ScanRules(rule->rules, f, depth + 1);
+    if (rule->kind == RuleKind::Import && rule->importedSheet) ScanRules(rule->importedSheet->rules, f, depth + 1);
+  }
+}
+
+}  // namespace
+
+uint64_t SheetsVersion() { return g_authorVersion; }
+
+StyleReuse StyleReuseFor(dom::Document* document) {
+  struct Entry {
+    dom::Document* document = nullptr;
+    uint64_t author = 0;
+    std::vector<CssStyleSheet*> sheets;
+    StyleReuse reuse;
+  };
+  static Entry entry;
+  StyleReuse none;
+  if (!document || dom::HasShadowTrees() || document->adoptedStyleSheets) return none;
+  const std::vector<CssStyleSheet*> sheets = SheetsOfTree(document, document->context);
+  if (entry.document == document && entry.author == g_authorVersion && entry.sheets == sheets) return entry.reuse;
+  SelectorFeatures f;
+  for (const CssStyleSheet* sheet : sheets) ScanRules(sheet->rules, f, 0);
+  entry.document = document;
+  entry.author = g_authorVersion;
+  entry.sheets = sheets;
+  entry.reuse = {!f.dynamic && !f.has, f.structural, f.sibling};
+  return entry.reuse;
+}
+
 bool HasPseudoStyle(dom::Element* element, const std::string& pseudo) {
   ElementStyle& style = StyleOf(element, pseudo);
   Build(element, style, pseudo);

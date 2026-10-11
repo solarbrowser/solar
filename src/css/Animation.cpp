@@ -251,6 +251,7 @@ void SetAnimatedValues(dom::Element* element, const std::string& pseudo, Animate
       at->second = std::move(values);
     }
   }
+  ++element->animVersion;
   NoteAnimatedStyleChange();
 }
 

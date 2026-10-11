@@ -59,6 +59,17 @@ DamageTracker* DamageOf(Node* node) {
 }
 
 void NoteDamage(Node* node, uint8_t flags) {
+  // What is kept of the style of an element is kept while these are the same (see Element::layoutStamp).
+  if (node && node->IsElement()) {
+    Element* element = static_cast<Element*>(node);
+    if (flags & kDamageAttributes) {
+      ++element->attrVersion;
+      if (element->parentNode && element->parentNode->IsElement()) ++static_cast<Element*>(element->parentNode)->childAttrVersion;
+    }
+    if (flags & kDamageChildren) ++element->childrenVersion;
+  } else if (node && (flags & kDamageText) && node->parentNode && node->parentNode->IsElement()) {
+    ++static_cast<Element*>(node->parentNode)->childrenVersion;
+  }
   if (DamageTracker* tracker = DamageOf(node)) tracker->Note(node, flags);
 }
 

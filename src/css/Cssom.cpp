@@ -399,11 +399,13 @@ std::string CssDeclarations::Remove(Context& ctx, const std::string& propertyNam
 }
 
 void CssDeclarations::Changed(Context& ctx) {
-  NoteStyleChange();
   if (ownerElement && !updatingAttribute) {
+    // The style attribute is an attribute of the element: the change of it is that element's alone.
     updatingAttribute = true;
     dom::SetAttribute(ctx, ownerElement, "style", Serialize());
     updatingAttribute = false;
+  } else {
+    NoteStyleChange();
   }
 }
 

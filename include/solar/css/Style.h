@@ -13,6 +13,16 @@ namespace solar::css {
 // in a document, or a property that has no such value.
 // Whether a declaration of content-visibility: auto has been read: then layout has the work of finding which elements are skipped.
 extern bool g_contentVisibilityAutoMentioned;
+// Whether what layout made of an element's style can be kept while the element, its parent and its sheets are not changed, and what else it depends on:
+// the position among siblings (structural pseudo-classes) and attributes of the siblings before it (sibling combinators).
+struct StyleReuse {
+  bool allowed = false;
+  bool structural = false;
+  bool sibling = false;
+};
+StyleReuse StyleReuseFor(dom::Document* document);
+// Changes when a style sheet or what the cascade depends on besides the elements does.
+uint64_t SheetsVersion();
 // Whether any rule gives the pseudo-element of the element a style.
 bool HasPseudoStyle(dom::Element* element, const std::string& pseudo);
 // The width the vertical scrollbar or gutter of the viewport takes, and the height of the horizontal one.

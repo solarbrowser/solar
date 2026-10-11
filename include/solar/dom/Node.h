@@ -238,6 +238,18 @@ struct Element : Node {
   double lastRenderedWidth = -1, lastRenderedHeight = -1;  // the content box it had when its contents were last rendered (contain-intrinsic-size: auto)
   bool contentVisible = false;  // content-visibility: auto: its contents are relevant to the user (on screen, focused...), so they are not skipped
   bool scrollbarSeen[2] = {false, false};  // the scrollbars the last layout gave it: kept while container queries are settled, so they do not flicker
+  // What changed in and around the element, counted: what layout keeps of its style is good while the counts are what they were.
+  uint32_t attrVersion = 0;       // an attribute of it changed
+  uint32_t childrenVersion = 0;   // its children changed, or the text in them
+  uint32_t childAttrVersion = 0;  // an attribute of a child of it changed
+  uint32_t animVersion = 0;       // what animations give it changed
+  // Layout's style of the element (a BoxStyle) and what it was made from.
+  std::shared_ptr<const void> layoutStyle;
+  struct LayoutStamp {
+    uint64_t author = 0, environment = 0;
+    const Node* parent = nullptr;
+    uint32_t attr = 0, anim = 0, children = 0, parentChildren = 0, parentChildAttr = 0;
+  } layoutStamp;
   // The computed values script last read (pseudo-element name → property → value): the style from before a change, for transitions.
   std::map<std::string, std::map<std::string, std::string>> lastRead;
 

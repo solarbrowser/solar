@@ -672,6 +672,7 @@ std::optional<DomError> ReplaceData(CharacterData* node, uint32_t offset, uint32
   units.replace(offset, count, inserted);
   node->data = FromUtf16(units);
   NoteDamage(node, kDamageText);
+  NoteTreeChange();  // (the lines of text it is in are not what they were)
   if (HasLiveRanges()) RangesReplaceData(node, offset, count, static_cast<uint32_t>(inserted.size()));
   if (g_hooks.childrenChanged && node->parentNode) g_hooks.childrenChanged(node->parentNode);
   return std::nullopt;
@@ -685,6 +686,7 @@ void SetCharacterData(CharacterData* node, std::string data) {
   if (HasMutationObservers()) QueueCharacterDataRecord(node, node->data);
   node->data = std::move(data);
   NoteDamage(node, kDamageText);
+  NoteTreeChange();
   if (g_hooks.childrenChanged && node->parentNode) g_hooks.childrenChanged(node->parentNode);
 }
 
@@ -696,6 +698,7 @@ void AppendCharacterData(CharacterData* node, std::string_view data) {
   if (HasMutationObservers()) QueueCharacterDataRecord(node, node->data);
   node->data += data;
   NoteDamage(node, kDamageText);
+  NoteTreeChange();
 }
 
 void SetAttrValue(Attr* attribute, std::string value) {
