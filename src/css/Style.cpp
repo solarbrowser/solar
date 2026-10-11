@@ -575,6 +575,10 @@ bool AppliesToFirstPseudo(const std::string& property, bool letter) {
   return false;
 }
 
+// What the initial value of a property computes to, for the properties it is the same for whatever the element (a plain keyword or a number of px).
+const std::string* FastInitial(const PropertyDefinition& definition);
+void NoteInitial(const PropertyDefinition& definition, const std::string& computed);
+
 class Resolver {
  public:
   explicit Resolver(Quanta::Context& ctx) : ctx_(ctx) {}
@@ -583,6 +587,7 @@ class Resolver {
   std::optional<std::string> Custom(dom::Element* element, const std::string& name, const std::string& pseudo = "");
 
  private:
+  bool plainInherit_ = false;  // Specified answered with the parent's value
   std::optional<std::string> Substitute(dom::Element* element, const std::string& pseudo, const std::string& text, int depth, std::set<std::string>& stack);
   bool SubstituteValues(dom::Element* element, const std::string& pseudo, const ComponentValues& in, ComponentValues& out, int depth, std::set<std::string>& stack);
   ComputeContext ContextFor(dom::Element* element, const std::string& property, const std::string& pseudo, const std::string& text);
@@ -1188,6 +1193,7 @@ ComputeContext Resolver::ContextFor(dom::Element* element, const std::string& pr
 // The specified value text of a property for the element: the declared one, or the inherited or initial one.
 std::string Resolver::Specified(dom::Element* element, const std::string& property, const PropertyDefinition& definition, bool& valid, const std::string& pseudo) {
   valid = true;
+  plainInherit_ = false;
   ElementStyle& style = StyleOf(element, pseudo);
   Build(element, style, pseudo);
   const Parent parent = ParentOf(element, pseudo);
@@ -1239,7 +1245,11 @@ std::string Resolver::Specified(dom::Element* element, const std::string& proper
     }
   }
   if (winner == style.cascade.end()) {
-    if (definition.inherited && parent.element) return fromParent();
+    if (definition.inherited && parent.element) {
+      std::string inherited = fromParent();
+      plainInherit_ = true;  // (it is what the parent has, finished already)
+      return inherited;
+    }
     return "initial";
   }
   const DeclarationEntry& entry = *winner->second.entry;
@@ -1265,6 +1275,55 @@ std::string Resolver::Specified(dom::Element* element, const std::string& proper
 }
 
 std::string TextOfComputed(const ValueMatch& match) { return SerializeValue(match.normalized); }
+
+namespace {
+std::unordered_map<const PropertyDefinition*, std::string>& InitialComputed() {
+  static std::unordered_map<const PropertyDefinition*, std::string> cache;
+  return cache;
+}
+
+// Whether the initial value of the property comes to the same for every element: only keywords that mean one thing, and numbers.
+bool ContextFreeInitial(const PropertyDefinition& definition) {
+  const std::string name = definition.name;
+  if (name.size() >= 6 && name.compare(name.size() - 6, 6, "-width") == 0) return false;
+  if (name.rfind("font", 0) == 0 || name.rfind("line-height", 0) == 0 || name.rfind("outline", 0) == 0 || name.rfind("text-decoration", 0) == 0 || name.rfind("-webkit", 0) == 0) return false;
+  const std::string text = InitialValueText(definition);
+  if (text.empty() || text == "initial") return false;
+  static const std::set<std::string> keywords = {"auto", "none", "normal", "visible", "static", "baseline", "start", "stretch", "row", "nowrap", "ltr", "horizontal-tb", "inline", "block", "repeat",
+                                                 "scroll", "padding-box", "border-box", "content-box", "transparent", "separate", "outside", "clip", "default", "wrap", "ease", "flex-start", "0",
+                                                 "left", "top", "stroke", "butt", "miter", "evenodd", "nonzero", "fill", "visiblepainted", "match-parent", "space-around", "manipulation", "disc"};
+  size_t i = 0;
+  while (i < text.size()) {
+    while (i < text.size() && text[i] == ' ') ++i;
+    size_t j = i;
+    while (j < text.size() && text[j] != ' ') ++j;
+    if (j == i) break;
+    const std::string token = text.substr(i, j - i);
+    i = j;
+    if (keywords.count(token)) continue;
+    // A number, in px or a percentage.
+    size_t k = 0;
+    if (k < token.size() && (token[k] == '-' || token[k] == '+')) ++k;
+    const size_t digits = k;
+    while (k < token.size() && ((token[k] >= '0' && token[k] <= '9') || token[k] == '.')) ++k;
+    if (k == digits) return false;
+    const std::string unit = token.substr(k);
+    if (!(unit.empty() || unit == "px" || unit == "%")) return false;
+  }
+  return true;
+}
+}  // namespace
+
+const std::string* FastInitial(const PropertyDefinition& definition) {
+  const auto found = InitialComputed().find(&definition);
+  return found == InitialComputed().end() ? nullptr : &found->second;
+}
+
+void NoteInitial(const PropertyDefinition& definition, const std::string& computed) {
+  if (!(&definition >= kPropertyDefinitions && &definition < kPropertyDefinitions + kPropertyDefinitionCount)) return;
+  if (computed.empty() || InitialComputed().count(&definition)) return;
+  if (ContextFreeInitial(definition)) InitialComputed()[&definition] = computed;
+}
 
 std::string Resolver::Compute(dom::Element* element, const std::string& property, const std::string& pseudo) {
   if (!element) return "";
@@ -1304,8 +1363,24 @@ std::string Resolver::Compute(dom::Element* element, const std::string& property
   style.resolving.insert("\x02" + name);
   bool valid = true;
   std::string specified = initialOnly ? "initial" : Specified(element, name, *definition, valid, pseudo);
+  // A value nothing was declared for is the parent's, as it was finished there, or the initial one: neither is worked out again for each element.
+  if (!initialOnly && plainInherit_ && valid) {
+    plainInherit_ = false;
+    style.resolving.erase("\x02" + name);
+    StyleOf(element, pseudo).computed[name] = specified;
+    return specified;
+  }
+  plainInherit_ = false;
+  if (specified == "initial") {
+    if (const std::string* fast = FastInitial(*definition)) {
+      style.resolving.erase("\x02" + name);
+      if (!initialOnly) StyleOf(element, pseudo).computed[name] = *fast;
+      return *fast;
+    }
+  }
   ComputeContext context = ContextFor(element, name, pseudo, specified == "initial" ? InitialValueText(*definition) : specified);
   std::string result = Finish(element, name, *definition, specified, context, pseudo);
+  if (specified == "initial") NoteInitial(*definition, result);
   style.resolving.erase("\x02" + name);
   if (!initialOnly) StyleOf(element, pseudo).computed[name] = result;
   return result;
