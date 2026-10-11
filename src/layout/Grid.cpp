@@ -928,6 +928,13 @@ struct Grid {
     }
   }
 
+  // Whether the item's size in an axis is a keyword for the size of its contents (min-content, max-content, fit-content): it is not stretched.
+  bool ContentSized(const GridItem& it, int axis) const {
+    const BoxStyle& s = *it.box->style;
+    const Length::Kind k = (axis == 0 ? s.height : s.width).kind;
+    return k == Length::Kind::MinContent || k == Length::Kind::MaxContent || k == Length::Kind::FitContent;
+  }
+
   // The size property of the item in an axis resolved to a content-box length, or NaN.
   double SpecifiedSize(const GridItem& it, int axis, double basis) const {
     const BoxStyle& s = *it.box->style;
@@ -1021,7 +1028,7 @@ struct Grid {
     const Align::Kind jk = SelfAlign(it, 1);
     double forceWidth = kNaN;
     const double specified = SpecifiedSize(it, 1, areaWidth);
-    if (!Known(specified) && !it.autoMarginStart[1] && !it.autoMarginEnd[1] && (jk == Align::Kind::Normal || jk == Align::Kind::Stretch) && !b.replaced) {
+    if (!Known(specified) && !ContentSized(it, 1) && !it.autoMarginStart[1] && !it.autoMarginEnd[1] && (jk == Align::Kind::Normal || jk == Align::Kind::Stretch) && !b.replaced) {
       forceWidth = std::max(0.0, areaWidth - it.marginStart[1] - it.marginEnd[1] - it.padBorder[1]);
     }
     lc.forceWidth = forceWidth;
@@ -1509,7 +1516,7 @@ void LayoutGridLanes(LayoutContext& lc, Box& container, double contentWidth, dou
     const Align::Kind kind = grid.SelfAlign(it, L);
     const double specified = grid.SpecifiedSize(it, L, L == 0 ? heightBasis : contentWidth);
     const bool stretch = (kind == Align::Kind::Normal || kind == Align::Kind::Stretch) && !it.autoMarginStart[L] && !it.autoMarginEnd[L] && !b.replaced;
-    if (!Known(specified) && stretch) forced[L] = std::max(0.0, area - it.marginStart[L] - it.marginEnd[L] - it.padBorder[L]);
+    if (!Known(specified) && !grid.ContentSized(it, L) && stretch) forced[L] = std::max(0.0, area - it.marginStart[L] - it.marginEnd[L] - it.padBorder[L]);
     lc.forceWidth = forced[1];
     lc.forceHeight = forced[0];
     lc.cbX = 0;
@@ -1594,7 +1601,7 @@ void LayoutGridLanes(LayoutContext& lc, Box& container, double contentWidth, dou
     {
       const double specified = grid.SpecifiedSize(it, L, L == 0 ? heightBasis : contentWidth);
       const bool stretch = (kind == Align::Kind::Normal || kind == Align::Kind::Stretch) && !it.autoMarginStart[L] && !it.autoMarginEnd[L] && !b.replaced;
-      if (!Known(specified) && stretch) forced[L] = std::max(0.0, area - it.marginStart[L] - it.marginEnd[L] - it.padBorder[L]);
+      if (!Known(specified) && !grid.ContentSized(it, L) && stretch) forced[L] = std::max(0.0, area - it.marginStart[L] - it.marginEnd[L] - it.padBorder[L]);
     }
     // A grid container that is a subgrid in the axis of the lanes takes the lanes it spans.
     if (IsGridDisplay(st.display) && grid.IsSubgridIn(b, L)) {
@@ -1655,7 +1662,8 @@ void LayoutGridLanes(LayoutContext& lc, Box& container, double contentWidth, dou
     slots.push_back({&it, lane, span, start, flowOuter, windowStart + offset, area, forced[L]});
     const double end = start + flowOuter + grid.gap[F];
     for (int i = lane; i < lane + span; ++i) {
-      laneEnd[static_cast<size_t>(i)] = dense ? std::max(laneEnd[static_cast<size_t>(i)], end) : end;
+      // (A negative margin does not take the end of the lane back.)
+      laneEnd[static_cast<size_t>(i)] = std::max(laneEnd[static_cast<size_t>(i)], end);
       occupied[static_cast<size_t>(i)].push_back({start, end});
     }
   }
@@ -1745,7 +1753,17 @@ void LayoutGridLanes(LayoutContext& lc, Box& container, double contentWidth, dou
     lines->names[a] = grid.lineNames[a];
   }
   container.gridLines = lines;
+  // The baselines of the container are those of the item that is first (the one at the top, and of those the one at the left) and last in the container.
   container.firstBaseline = container.baseline = -1;
+  Box* top = nullptr;
+  Box* bottom = nullptr;
+  for (Slot& slot : slots) {
+    Box* b = slot.item->box;
+    if (!top || b->y < top->y - 0.01 || (std::fabs(b->y - top->y) <= 0.01 && b->x < top->x)) top = b;
+    if (!bottom || b->y + b->height > bottom->y + bottom->height + 0.01 || (std::fabs(b->y + b->height - bottom->y - bottom->height) <= 0.01 && b->x > bottom->x)) bottom = b;
+  }
+  if (top) container.firstBaseline = top->y - top->shiftY - originY + (top->firstBaseline >= 0 ? top->firstBaseline : top->height) + originY;
+  if (bottom) container.baseline = bottom->y - bottom->shiftY - originY + (bottom->baseline >= 0 ? bottom->baseline : bottom->height) + originY;
 }
 
 void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double heightBasis, double& contentHeight) {
@@ -1887,7 +1905,7 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
     for (int a = 0; a < 2; ++a) {
       const double specified = grid.SpecifiedSize(it, a, a == 0 ? heightBasis : contentWidth);
       const bool stretch = (kinds[a] == Align::Kind::Normal || kinds[a] == Align::Kind::Stretch) && !it.autoMarginStart[a] && !it.autoMarginEnd[a] && !b.replaced;
-      if (!Known(specified) && stretch) {
+      if (!Known(specified) && !grid.ContentSized(it, a) && stretch) {
         forced[a] = std::max(0.0, area[a] - it.marginStart[a] - it.marginEnd[a] - it.padBorder[a]);
         // The size it is stretched to stays within its minimum and maximum, which are of the area.
         const BoxStyle& bs = *b.style;
@@ -2086,8 +2104,72 @@ bool GridAreaOf(const Box& grid, const BoxStyle& absStyle, double paddingWidth, 
   return true;
 }
 
+// The widths of grid lanes whose lanes are rows: the items run along them, one after another in the lane that is shortest.
+static void GridLanesRowSizes(LayoutContext& lc, Box& container, double& minContent, double& maxContent) {
+  const BoxStyle& s = *container.style;
+  Grid grid(lc, container, 0, kNaN);
+  const double colGap = ResolveSize(s.columnGap, 0);
+  grid.gap[1] = Known(colGap) ? colGap : 0;
+  grid.gap[0] = 0;
+  std::vector<Box*> boxes;
+  for (auto& c : container.children) if (!c->style->IsOutOfFlow()) boxes.push_back(c.get());
+  std::stable_sort(boxes.begin(), boxes.end(), [](const Box* a, const Box* b) { return a->style->order < b->style->order; });
+  grid.items.resize(boxes.size());
+  for (size_t i = 0; i < boxes.size(); ++i) grid.items[i].box = boxes[i];
+  grid.ParseTemplates(kNaN, kNaN);
+  int lanes = std::max<int>(1, static_cast<int>(grid.tracks[0].size()));
+  for (GridItem& it : grid.items) {
+    grid.ResolveLines(it);
+    it.span[0] = std::max(1, it.span[0]);
+    lanes = std::max(lanes, it.definite[0] ? it.pos[0] + it.span[0] : it.span[0]);
+  }
+  for (GridItem& it : grid.items) grid.ItemEdges(it, 0);
+  std::vector<double> end(static_cast<size_t>(lanes), 0.0);
+  const double tolerance = s.flowTolerance == "infinite" ? kInf : (s.flowTolerance == "normal" || s.flowTolerance.empty()) ? s.fontSize : std::atof(s.flowTolerance.c_str());
+  int cursor = 0;
+  minContent = 0;
+  for (GridItem& it : grid.items) {
+    ComputeContentSizes(lc, *it.box);
+    const double extras = it.padBorder[1] + it.marginStart[1] + it.marginEnd[1];
+    const double specified = grid.SpecifiedSize(it, 1, 0);
+    const double outerMax = (Known(specified) ? specified : it.box->maxContent) + extras;
+    minContent = std::max(minContent, (Known(specified) ? specified : it.box->minContent) + extras);
+    const int span = std::min(lanes, std::max(1, it.span[0]));
+    int lane = it.definite[0] ? std::min(it.pos[0], lanes - span) : 0;
+    if (!it.definite[0]) {
+      const int windows = lanes - span + 1;
+      const auto endOf = [&](int w) {
+        double e = 0;
+        for (int i = w; i < w + span; ++i) e = std::max(e, end[static_cast<size_t>(i)]);
+        return e;
+      };
+      double best = kInf;
+      for (int w = 0; w < windows; ++w) best = std::min(best, endOf(w));
+      for (int k = 0; k < windows; ++k) {
+        const int w = cursor + k < windows ? cursor + k : cursor + k - windows - std::max(0, cursor - windows);
+        if (w >= 0 && w < windows && endOf(w) <= best + tolerance) { lane = w; break; }
+      }
+      cursor = lane + span >= lanes ? 0 : lane + span;
+    }
+    double start = 0;
+    for (int i = lane; i < lane + span; ++i) start = std::max(start, end[static_cast<size_t>(i)]);
+    for (int i = lane; i < lane + span; ++i) end[static_cast<size_t>(i)] = start + outerMax + grid.gap[1];
+  }
+  maxContent = 0;
+  for (double e : end) maxContent = std::max(maxContent, e);
+  if (!grid.items.empty()) maxContent = std::max(0.0, maxContent - grid.gap[1]);
+  minContent = std::min(minContent, maxContent);
+}
+
 void GridContentSizes(LayoutContext& lc, Box& container, double& minContent, double& maxContent) {
   const BoxStyle& s = *container.style;
+  if (s.gridLanes) {
+    const std::string direction = Lower(s.gridLanesDirection);
+    if (direction.rfind("row", 0) == 0 || (direction.rfind("normal", 0) == 0 && Lower(s.gridTemplateColumns) == "none" && Lower(s.gridTemplateRows) != "none")) {
+      GridLanesRowSizes(lc, container, minContent, maxContent);
+      return;
+    }
+  }
   for (int pass = 0; pass < 2; ++pass) {
     Grid grid(lc, container, 0, kNaN);
     const double colGap = ResolveSize(s.columnGap, 0);
