@@ -258,7 +258,7 @@ struct GridItem {
   // the margin edge of that side the baseline is, and how much room that group leaves it before the margin edge.
   int baselineKind[2] = {0, 0};
   bool baselineMin[2] = {true, true};
-  double baselineDistance[2] = {0, 0}, shim[2] = {0, 0};
+  double baselineDistance[2] = {0, 0}, shim[2] = {0, 0}, baselineGroup[2] = {0, 0};  // (baselineGroup: how far the baseline of the group is from the side it reads from)
 };
 
 // The way the frame of a writing mode runs, physically: x (along the lines) and y (from block start to block end), as (right, down).
@@ -869,18 +869,20 @@ struct Grid {
       } else {
         // Synthesized: the border box's edge that is under the text of the writing mode the others in the group go by.
         distance = atMin ? it.marginStart[axis] : it.marginEnd[axis];
+        // (A group with no baseline of its own goes by the writing mode of the grid.)
         const auto ref = reference.find(key);
-        if (ref != reference.end()) {
-          const WritingMode refMode = ref->second->box->Mode();
-          const PhysDir under = refMode == WritingMode::HorizontalTb ? PhysDir{0, 1} : refMode == WritingMode::SidewaysLr ? PhysDir{1, 0} : PhysDir{-1, 0};
-          const int toward = under.x * along.x + under.y * along.y;
-          if (toward != 0 && (toward < 0) != atMin) distance += std::max(0.0, sizeAlong(it));
-        }
+        const WritingMode refMode = ref != reference.end() ? ref->second->box->Mode() : mode;
+        const PhysDir under = refMode == WritingMode::HorizontalTb ? PhysDir{0, 1} : refMode == WritingMode::SidewaysLr ? PhysDir{1, 0} : PhysDir{-1, 0};
+        const int toward = under.x * along.x + under.y * along.y;
+        if (toward != 0 && (toward < 0) != atMin) distance += std::max(0.0, sizeAlong(it));
       }
       it.baselineDistance[axis] = distance;
       widest[key] = std::max(widest[key], distance);
     }
-    for (GridItem* it : members) it->shim[axis] = widest[Key{it->pos[axis], it->baselineMin[axis], it->baselineKind[axis]}] - it->baselineDistance[axis];
+    for (GridItem* it : members) {
+      it->baselineGroup[axis] = widest[Key{it->pos[axis], it->baselineMin[axis], it->baselineKind[axis]}];
+      it->shim[axis] = it->baselineGroup[axis] - it->baselineDistance[axis];
+    }
   }
 
   // The size property of the item in an axis resolved to a content-box length, or NaN.
@@ -1367,7 +1369,8 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
 
   // Place the items.
   const double originX = container.ContentLeft(), originY = container.ContentTop();
-  double firstBaseline = -1;
+  double firstBaseline = -1, lastBaseline = -1;
+  int firstColumn = std::numeric_limits<int>::max(), lastColumn = -1;
   // The item laid out in its grid area.
   const auto layoutAtArea = [&](GridItem& it) {
     Box& b = *it.box;
@@ -1472,10 +1475,33 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
     b.margin.right = it.marginEnd[1];
     b.x = originX + areaX + offsets[1] + b.shiftX;
     b.y = originY + areaY + offsets[0] + b.shiftY;
-    if (firstBaseline < 0 && it.pos[0] == 0 && b.firstBaseline >= 0) firstBaseline = b.y - b.shiftY - originY + b.firstBaseline;
+    // (The first item in grid order, which runs along the rows, is the one in the first column of the row; the last is the one in the last column.)
+    // (An item without a baseline has the one its border box gives: its bottom edge.)
+    if (it.pos[0] == 0 && it.pos[1] < firstColumn) {
+      firstColumn = it.pos[1];
+      firstBaseline = b.y - b.shiftY - originY + (b.firstBaseline >= 0 ? b.firstBaseline : b.height);
+    }
+    if (it.pos[0] + it.span[0] == static_cast<int>(grid.tracks[0].size()) && it.pos[1] >= lastColumn) {
+      lastColumn = it.pos[1];
+      lastBaseline = b.y - b.shiftY - originY + (b.baseline >= 0 ? b.baseline : b.height);
+    }
+  }
+  // The baselines of the container: those of the items that line up in the first row (and in the last), where they line up; else those of the first item in the first row (the last in the last).
+  {
+    const int rows = static_cast<int>(grid.tracks[0].size());
+    double first = -1, last = -1;
+    for (GridItem& it : grid.items) {
+      if (!it.baselineKind[0]) continue;
+      const double rowStart = grid.tracks[0][it.pos[0]].position, rowSize = grid.tracks[0][it.pos[0]].base;
+      const double at = it.baselineMin[0] ? rowStart + it.baselineGroup[0] : rowStart + rowSize - it.baselineGroup[0];
+      if (it.baselineKind[0] == 1 && it.pos[0] == 0 && first < 0) first = at;
+      if (it.baselineKind[0] == 2 && it.pos[0] == rows - 1 && last < 0) last = at;
+    }
+    if (first >= 0) firstBaseline = first;
+    if (last >= 0) lastBaseline = last;
   }
   container.firstBaseline = firstBaseline >= 0 ? firstBaseline + originY : -1;
-  container.baseline = container.firstBaseline;
+  container.baseline = lastBaseline >= 0 ? lastBaseline + originY : container.firstBaseline;
   auto lines = std::make_shared<GridLines>();
   for (int a = 0; a < 2; ++a) {
     // (positions relative to the container's padding box)

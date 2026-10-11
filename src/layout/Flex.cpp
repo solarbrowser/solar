@@ -42,6 +42,7 @@ struct Item {
   bool frozen = false;
   bool crossAuto = true;   // the cross size property is auto
   double baselineOffset = 0;  // from the item's margin-box cross start
+  double lastAbove = 0;       // an item that lines up on its last baseline: from the start of its margin box to the baseline
   double posMain = 0, posCross = 0;  // margin box start, in the line's coordinates
   double OuterMain() const { return mainSize + padBorderMain + marginMainStart + marginMainEnd; }
   double OuterHypothetical() const { return hypothetical + padBorderMain + marginMainStart + marginMainEnd; }
@@ -53,6 +54,7 @@ struct Line {
   double crossSize = 0;  // outer
   double crossPos = 0;
   double mainUsed = 0;
+  double lastBelow = 0;  // the room the items that line up on their last baselines need after them
 };
 
 struct Flex {
@@ -369,11 +371,18 @@ struct Flex {
     // ---- Line cross sizes ----
     const bool singleLineFixed = !wraps && Known(crossAvailable);
     for (Line& line : lines) {
-      double maxAbove = 0, maxBelow = 0, maxOuter = 0;
-      bool anyBaseline = false;
+      double maxAbove = 0, maxBelow = 0, maxOuter = 0, maxAboveLast = 0, maxBelowLast = 0;
+      bool anyBaseline = false, anyLast = false;
       for (Item* it : line.items) {
         const Align::Kind a = AlignOf(*it);
         const double outer = it->OuterCross();
+        if (a == Align::Kind::LastBaseline && row && !it->autoCrossStart && !it->autoCrossEnd) {
+          const double base = it->box->baseline >= 0 ? it->box->baseline : it->box->height;
+          it->lastAbove = it->marginCrossStart + base;
+          maxAboveLast = std::max(maxAboveLast, it->lastAbove);
+          maxBelowLast = std::max(maxBelowLast, outer - it->lastAbove);
+          anyLast = true;
+        }
         if (a == Align::Kind::Baseline && row && !it->autoCrossStart && !it->autoCrossEnd) {
           const double base = it->box->firstBaseline >= 0 ? it->box->firstBaseline : it->box->height;
           const double above = it->marginCrossStart + base;
@@ -385,6 +394,10 @@ struct Flex {
         maxOuter = std::max(maxOuter, outer);
       }
       line.crossSize = std::max(maxOuter, anyBaseline ? maxAbove + maxBelow : 0.0);
+      if (anyLast) {
+        line.crossSize = std::max(line.crossSize, maxAboveLast + maxBelowLast);
+        line.lastBelow = maxBelowLast;
+      }
       if (anyBaseline) {
         for (Item* it : line.items) if (AlignOf(*it) == Align::Kind::Baseline && row && !it->autoCrossStart && !it->autoCrossEnd) it->baselineOffset = maxAbove - it->baselineOffset;
       }
@@ -504,7 +517,7 @@ struct Flex {
     }
     // ---- Cross alignment and final placement ----
     const double originX = container.ContentLeft(), originY = container.ContentTop();
-    double firstBaseline = -1;
+    double firstBaseline = -1, lastBaselineOut = -1;
     for (size_t li = 0; li < lines.size(); ++li) {
       Line& line = lines[li];
       for (Item* it : line.items) {
@@ -523,7 +536,7 @@ struct Flex {
             case Align::Kind::FlexEnd: cross = freeCross; break;
             case Align::Kind::Center: cross = freeCross / 2; break;
             case Align::Kind::Baseline: cross = row ? it->baselineOffset : 0; break;
-            case Align::Kind::LastBaseline: cross = freeCross; break;
+            case Align::Kind::LastBaseline: cross = row ? line.crossSize - line.lastBelow - it->lastAbove : freeCross; break;
             default: break;
           }
           if (freeCross < 0 && it->box->style->alignSelf.safe && (a == Align::Kind::Center || a == Align::Kind::FlexEnd)) cross = 0;
@@ -559,12 +572,68 @@ struct Flex {
         }
         b.x += b.shiftX;
         b.y += b.shiftY;
-        if (firstBaseline < 0 && li == 0 && b.firstBaseline >= 0) firstBaseline = b.y - b.shiftY - originY + b.firstBaseline;
+      }
+    }
+    // ---- The baselines of the container (css-flexbox-1 §8.5) ----
+    // The first is that of the items on the first line (the one at the start of the block axis) that line up on a baseline, or else of the startmost item (along the
+    // inline axis) of that line; the last, of the last line and the endmost item. A column's lines are the columns, and its items are one under another.
+    {
+      const bool rtl = style.direction == Direction::Rtl;
+      const auto baselineOf = [&](const Item& it, bool last) {
+        const Box& b = *it.box;
+        return b.y - b.shiftY - originY + (last ? (b.baseline >= 0 ? b.baseline : b.height) : (b.firstBaseline >= 0 ? b.firstBaseline : b.height));
+      };
+      const auto lineCoordinate = [&](const Line& line) {
+        double v = 1e30;
+        for (const Item* it : line.items) v = std::min(v, row ? it->box->y - it->box->shiftY : it->box->x - it->box->shiftX);
+        return v;
+      };
+      if (!lines.empty()) {
+        // The lines that are first and last where they are on the page: on the top and bottom for rows, at the inline start and end for columns.
+        size_t firstLine = 0, lastLine = 0;
+        for (size_t i = 1; i < lines.size(); ++i) {
+          const double v = lineCoordinate(lines[i]);
+          const bool before = row || !rtl ? v < lineCoordinate(lines[firstLine]) : v > lineCoordinate(lines[firstLine]);
+          const bool after = row || !rtl ? v > lineCoordinate(lines[lastLine]) : v < lineCoordinate(lines[lastLine]);
+          if (before) firstLine = i;
+          if (after) lastLine = i;
+        }
+        for (int pass = 0; pass < 2; ++pass) {
+          const bool last = pass == 1;
+          const Line& line = lines[last ? lastLine : firstLine];
+          double found = -1;
+          bool shared = false;
+          if (row) {
+            // (Items that line up on the other kind of baseline have a shared baseline too, which counts when none line up on this kind.)
+            for (int preference = 0; preference < 2 && !shared; ++preference) {
+              const Align::Kind wanted = (last != (preference == 1)) ? Align::Kind::LastBaseline : Align::Kind::Baseline;
+              for (const Item* it : line.items) {
+                if (AlignOf(*it) == wanted && !it->autoCrossStart && !it->autoCrossEnd) {
+                  found = baselineOf(*it, wanted == Align::Kind::LastBaseline);
+                  shared = true;
+                  break;
+                }
+              }
+            }
+          }
+          if (!shared && !line.items.empty()) {
+            // The item at the start (or the end) of the line along the inline axis for a row, along the block axis for a column.
+            const Item* pick = nullptr;
+            for (const Item* it : line.items) {
+              if (!pick) { pick = it; continue; }
+              const double a = row ? it->box->x : it->box->y, b = row ? pick->box->x : pick->box->y;
+              const bool lowFirst = !row || !rtl;  // (the start is at the low coordinate, but for rows that run right to left)
+              if (last ? (lowFirst ? a > b : a < b) : (lowFirst ? a < b : a > b)) pick = it;
+            }
+            found = baselineOf(*pick, last);
+          }
+          (last ? lastBaselineOut : firstBaseline) = found;
+        }
       }
     }
     contentHeightOut = row ? containerCross : mainSize;
     container.firstBaseline = firstBaseline >= 0 ? firstBaseline + originY : -1;
-    container.baseline = container.firstBaseline;
+    container.baseline = lastBaselineOut >= 0 ? lastBaselineOut + originY : container.firstBaseline;
   }
   double contentHeightOut = 0;
 };

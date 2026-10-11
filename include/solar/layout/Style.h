@@ -119,6 +119,7 @@ struct BoxStyle {
   std::string content = "normal";
   // Containment (css-contain): layout and paint containment make a box its own formatting context; size containment lets its contents count for
   // nothing in the sizes it asks for. content-visibility: hidden skips the contents altogether.
+  bool sidewaysText = false;  // text-orientation: sideways (vertical text with the alphabetic baseline; otherwise the central one)
   bool containLayout = false, containPaint = false, containSizeInline = false, containSizeBlock = false;
   bool sizeContainer = false;  // container-type: size or inline-size: container queries look at its size
   bool skipContents = false;

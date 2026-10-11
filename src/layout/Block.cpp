@@ -1076,6 +1076,11 @@ void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cb
     else if (Known(bottom)) box.shiftY = -bottom;
   }
 
+  // The baselines of a scroll container are kept within its border box: what overflows it does not count.
+  if (s.overflowY != Overflow::Visible && s.overflowY != Overflow::Clip && !box.replaced) {
+    if (box.firstBaseline >= 0) box.firstBaseline = std::min(std::max(box.firstBaseline, 0.0), box.height);
+    if (box.baseline >= 0) box.baseline = std::min(std::max(box.baseline, 0.0), box.height);
+  }
   box.ownFirstBaseline = box.firstBaseline;
   box.ownLastBaseline = box.baseline;
   // In vertical-lr the line is over at the right but the block starts at the left: from the start of the block a baseline is as far as the line is thick without the room over it.

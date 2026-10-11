@@ -299,6 +299,7 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
     s.unicodeBidi = bidi == "embed" ? UnicodeBidi::Embed : bidi == "isolate" ? UnicodeBidi::Isolate : bidi == "bidi-override" ? UnicodeBidi::BidiOverride :
                     bidi == "isolate-override" ? UnicodeBidi::IsolateOverride : bidi == "plaintext" ? UnicodeBidi::Plaintext : UnicodeBidi::Normal;
   }
+  s.sidewaysText = get("text-orientation") == "sideways";
   s.writingMode = Pick<WritingMode>(get("writing-mode"), {{"vertical-rl", WritingMode::VerticalRl}, {"vertical-lr", WritingMode::VerticalLr}, {"sideways-rl", WritingMode::SidewaysRl}, {"sideways-lr", WritingMode::SidewaysLr}}, WritingMode::HorizontalTb);
 
   s.width = ParseLength(get("width"));

@@ -602,7 +602,12 @@ struct Extent {
 
 Metrics BoxMetrics(LayoutContext& lc, const BoxStyle& style, double& lineHeight) {
   const FontSet& set = FontsOf(lc, style);
-  const Metrics m = MetricsFor(set.faces.empty() ? nullptr : set.faces[0].get(), style.fontSize);
+  Metrics m = MetricsFor(set.faces.empty() ? nullptr : set.faces[0].get(), style.fontSize);
+  // Vertical text whose glyphs stand up (or are mixed) sits on the central baseline: as much of the em box on either side.
+  if ((style.writingMode == WritingMode::VerticalRl || style.writingMode == WritingMode::VerticalLr) && !style.sidewaysText) {
+    const double half = (m.ascent + m.descent) / 2;
+    m.ascent = m.descent = half;
+  }
   if (style.lineHeight.IsAuto()) lineHeight = m.ascent + m.descent + m.lineGap;
   else lineHeight = style.lineHeight.value;
   return m;
@@ -1324,9 +1329,16 @@ double LayoutInlineContentOnce(LayoutContext& lc, Box& container, double width, 
           relativeSum(piece.relX, piece.relY);
           const double parentShift = open.empty() ? rootShift : open.back().shift;
           // The baseline of the atomic inline: its own, or the bottom margin edge.
-          const double baselineInBox = b.baseline >= 0 && b.style->overflowY == Overflow::Visible && !b.style->containLayout ? b.baseline : b.height;
-          const double aboveBase = b.margin.top + baselineInBox + b.rubyOver;
-          const double belowBase = b.height - baselineInBox + b.margin.bottom + b.rubyUnder;
+          // (An inline-block has the baseline of its last line, a flex or grid container the first one of its items.)
+          const bool firstOnes = b.style->display == Display::InlineFlex || b.style->display == Display::InlineGrid || b.style->display == Display::InlineTable;
+          const double ownBaseline = firstOnes && b.firstBaseline >= 0 ? b.firstBaseline : b.baseline;
+          const double baselineInBox = ownBaseline >= 0 && b.style->overflowY == Overflow::Visible && !b.style->containLayout ? ownBaseline : b.height;
+          // (On the central baseline of vertical text, a box that has none of its own has it in the middle of its margin box.)
+          const BoxStyle& lineStyle = *piece.inlineParent->style;
+          const bool central = (lineStyle.writingMode == WritingMode::VerticalRl || lineStyle.writingMode == WritingMode::VerticalLr) && !lineStyle.sidewaysText && !(ownBaseline >= 0);
+          const double middle = (b.margin.top + b.height + b.margin.bottom) / 2;
+          const double aboveBase = central ? middle + b.rubyOver : b.margin.top + baselineInBox + b.rubyOver;
+          const double belowBase = central ? b.margin.top + b.height + b.margin.bottom - middle + b.rubyUnder : b.height - baselineInBox + b.margin.bottom + b.rubyUnder;
           double shift = parentShift;
           const BoxStyle& s = *b.style;
           double lh = 0;
