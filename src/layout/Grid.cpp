@@ -364,10 +364,21 @@ struct Grid {
       for (int axis = 0; axis < 2; ++axis) {
         const size_t need = (axis == 0 ? rows.size() : columns) + 1;
         if (lineNames[axis].size() < need) lineNames[axis].resize(need);
+        // The rows and columns the areas ask for beyond the template are sized as the implicit ones are: by grid-auto-rows and grid-auto-columns.
+        std::vector<TrackDef> pattern;
+        {
+          const std::string& autoText = axis == 0 ? style.gridAutoRows : style.gridAutoColumns;
+          bool ok = true;
+          Segment seg;
+          if (Lower(autoText) != "auto" && !autoText.empty()) ParseSegmentInto(solar::css::ParseComponentValues(autoText), seg, ok, false, nullptr);
+          if (ok) pattern = seg.tracks;
+        }
+        const size_t listed = tracks[axis].size();
         while (tracks[axis].size() + 1 < need) {
           Track t;
           t.implicit = false;
           t.def.min = t.def.max = Fn();
+          if (!pattern.empty()) t.def = pattern[(tracks[axis].size() - listed) % pattern.size()];
           tracks[axis].push_back(t);
         }
         if (lineNames[axis].size() < tracks[axis].size() + 1) lineNames[axis].resize(tracks[axis].size() + 1);
@@ -968,6 +979,27 @@ struct Grid {
 
 }  // namespace
 
+namespace {
+
+// Whether the start of the box's own writing mode, in the physical axis that `axis` of the grid (0 the rows, 1 the columns) is along, is at the same end as the grid's start:
+// self-start and self-end are about the box's own sides.
+bool StartsWithContainer(const BoxStyle& container, const BoxStyle& item, int axis) {
+  const auto vertical = [](WritingMode m) { return m != WritingMode::HorizontalTb; };
+  const auto inlineAtMin = [](const BoxStyle& s) { return s.writingMode == WritingMode::SidewaysLr ? s.direction == Direction::Rtl : s.direction == Direction::Ltr; };
+  // The start of the block axis of a vertical mode is at the right, but for vertical-lr and sideways-lr.
+  const auto blockAtMin = [&](WritingMode m) { return !vertical(m) || m == WritingMode::VerticalLr || m == WritingMode::SidewaysLr; };
+  const bool containerVertical = vertical(container.writingMode);
+  // The physical axis (true: vertical) the axis of the grid is along, and which end the grid starts it at.
+  const bool physicalVertical = axis == 1 ? containerVertical : !containerVertical;
+  const bool containerAtMin = axis == 1 ? inlineAtMin(container) : blockAtMin(container.writingMode);
+  bool itemAtMin;
+  if (vertical(item.writingMode) == physicalVertical) itemAtMin = inlineAtMin(item);  // that axis is the inline axis of the item
+  else itemAtMin = blockAtMin(item.writingMode);
+  return itemAtMin == containerAtMin;
+}
+
+}  // namespace
+
 void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double heightBasis, double& contentHeight) {
   Grid grid(lc, container, contentWidth, heightBasis);
   const BoxStyle& s = *container.style;
@@ -994,8 +1026,9 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
   for (GridItem& it : grid.items) grid.ColumnContributions(it, contentWidth);
   grid.SizeTracks(1, contentWidth, false);
   // The widths of the item areas, for the rows.
+  double spread[2] = {0, 0};  // what content distribution adds to the gap between two tracks: an area that spans tracks has it too
   const auto areaSize = [&](const GridItem& it, int axis) {
-    double size = grid.gap[axis] * (it.span[axis] - 1);
+    double size = (grid.gap[axis] + spread[axis]) * (it.span[axis] - 1);
     for (int i = it.pos[axis]; i < it.pos[axis] + it.span[axis]; ++i) size += grid.tracks[axis][i].base;
     return size;
   };
@@ -1017,7 +1050,8 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
     switch (k) {
       case Align::Kind::End: case Align::Kind::FlexEnd: offset = free; break;
       case Align::Kind::Center: offset = free / 2; break;
-      case Align::Kind::Right: offset = axis == 1 ? free : 0; break;
+      case Align::Kind::Right: offset = axis == 1 ? (s.direction == Direction::Rtl ? 0 : free) : 0; break;
+      case Align::Kind::Left: offset = axis == 1 && s.direction == Direction::Rtl ? free : 0; break;
       case Align::Kind::SpaceBetween: between = n > 1 ? free / (n - 1) : 0; break;
       case Align::Kind::SpaceAround: between = free / n; offset = between / 2; break;
       case Align::Kind::SpaceEvenly: between = free / (n + 1); offset = between; break;
@@ -1028,13 +1062,19 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
   {
     const auto [offset, between] = contentOffset(1, contentWidth);
     double pos = offset;
+    spread[1] = between;
     for (Track& t : grid.tracks[1]) { t.position = pos; pos += t.base + grid.gap[1] + between; }
+    // Right to left: the columns start at the right edge.
+    if (s.direction == Direction::Rtl && Known(contentWidth)) {
+      for (Track& t : grid.tracks[1]) t.position = contentWidth - t.position - t.base;
+    }
   }
   const double usedRows = grid.TrackSum(0);
   const double rowContainer = Known(heightBasis) ? heightBasis : usedRows;
   {
     const auto [offset, between] = contentOffset(0, rowContainer);
     double pos = offset;
+    spread[0] = between;
     for (Track& t : grid.tracks[0]) { t.position = pos; pos += t.base + grid.gap[0] + between; }
   }
   contentHeight = rowContainer;
@@ -1089,8 +1129,12 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
         it.marginEnd[a] = me;
       } else {
         Align::Kind k = kinds[a];
+        if (k == Align::Kind::SelfStart || k == Align::Kind::SelfEnd) {
+          const bool same = StartsWithContainer(s, st, a);
+          k = (k == Align::Kind::SelfStart) == same ? Align::Kind::Start : Align::Kind::End;
+        }
         if (k == Align::Kind::Normal || k == Align::Kind::Stretch) k = b.replaced || Known(grid.SpecifiedSize(it, a, a == 0 ? heightBasis : contentWidth)) ? Align::Kind::Start : Align::Kind::Start;
-        const bool rtl = st.direction == Direction::Rtl && a == 1;
+        const bool rtl = s.direction == Direction::Rtl && a == 1;  // (the columns of the grid start at the right)
         switch (k) {
           case Align::Kind::End: case Align::Kind::FlexEnd: case Align::Kind::SelfEnd: start += rtl ? 0 : free; break;
           case Align::Kind::Center: start += free / 2; break;
@@ -1098,7 +1142,8 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
           case Align::Kind::Baseline:
             if (a == 0) start = rowAscent[it.pos[0]] - (b.firstBaseline >= 0 ? b.firstBaseline : b.height);
             break;
-          case Align::Kind::Start: case Align::Kind::SelfStart: case Align::Kind::Left: case Align::Kind::FlexStart:
+          case Align::Kind::Left: break;
+          case Align::Kind::Start: case Align::Kind::SelfStart: case Align::Kind::FlexStart:
             if (rtl) start += free;
             break;
           default: break;

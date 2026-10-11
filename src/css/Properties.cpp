@@ -30,6 +30,9 @@ const std::unordered_map<std::string_view, std::string_view>& Aliases() {
   static const std::unordered_map<std::string_view, std::string_view> aliases = {
       {"font-stretch", "font-width"},
       {"word-wrap", "overflow-wrap"},
+      {"grid-gap", "gap"},
+      {"grid-row-gap", "row-gap"},
+      {"grid-column-gap", "column-gap"},
       {"-webkit-align-content", "align-content"},
       {"-webkit-align-items", "align-items"},
       {"-webkit-align-self", "align-self"},

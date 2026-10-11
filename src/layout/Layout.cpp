@@ -395,6 +395,33 @@ bool UsedValue(Tree& tree, dom::Element* element, const std::string& property, s
       return true;
     }
   }
+  if ((property == "grid-template-columns" || property == "grid-template-rows") && box->gridLines) {
+    // The used tracks of a grid container, with the names of the lines.
+    const int axis = property == "grid-template-columns" ? 1 : 0;
+    const GridLines& g = *box->gridLines;
+    // The tracks before the explicit ones and the explicit ones; those after are not in the value.
+    const size_t before = static_cast<size_t>(g.implicitBefore[axis]);
+    const size_t count = std::min(g.start[axis].size(), before + static_cast<size_t>(g.explicitCount[axis]));
+    if (count == 0) return false;
+    std::string text;
+    const auto names = [&](size_t index) {
+      if (index < before) return;
+      const size_t line = index - before;
+      if (line >= g.names[axis].size() || g.names[axis][line].empty()) return;
+      if (!text.empty()) text += ' ';
+      text += '[';
+      for (size_t k = 0; k < g.names[axis][line].size(); ++k) text += (k ? " " : "") + g.names[axis][line][k];
+      text += ']';
+    };
+    for (size_t i = 0; i < count; ++i) {
+      names(i);
+      if (!text.empty()) text += ' ';
+      text += Px(g.end[axis][i] - g.start[axis][i]);
+    }
+    names(count);
+    out = text;
+    return true;
+  }
   if (property == "transform") {
     if (isInline || box->style->transform == "none") return false;
     Matrix m;
@@ -436,10 +463,15 @@ bool ResolvedHook(Quanta::Context& ctx, dom::Element* element, const std::string
   const std::string physical = css::PhysicalOf(given, {css::ComputedValue(ctx, element, "writing-mode"), css::ComputedValue(ctx, element, "direction")});
   if (!physical.empty()) property = physical;
   static const char* const names[] = {"width", "height", "min-width", "min-height", "margin-top", "margin-right", "margin-bottom", "margin-left", "padding-top",
-                                      "padding-right", "padding-bottom", "padding-left", "top", "right", "bottom", "left", "transform"};
+                                      "padding-right", "padding-bottom", "padding-left", "top", "right", "bottom", "left", "transform", "grid-template-columns", "grid-template-rows"};
   bool relevant = false;
   for (const char* n : names) if (property == n) relevant = true;
   if (!relevant) return false;
+  // Only a grid container has used tracks: for the rest the computed value is the answer, and no layout is needed to know it.
+  if (property == "grid-template-columns" || property == "grid-template-rows") {
+    const std::string display = css::ComputedValue(ctx, element, "display");
+    if (display != "grid" && display != "inline-grid") return false;
+  }
   Tree* tree = UpdateLayout(ctx, element->nodeDocument);
   return tree && UsedValue(*tree, element, property, out);
 }
