@@ -95,6 +95,8 @@ double LayoutInlineContentOnce(LayoutContext& lc, Box& container, double width, 
 // FirstLine.cpp: the ::first-line of the blocks, found when the tree is made, and applied to the first line of a block as it is laid out.
 void ApplyFirstLines(LayoutContext& lc, Box& root);
 void InlineContentSizes(LayoutContext& lc, Box& container, double& minContent, double& maxContent);
+// (The first word, if asked: the width of the piece before the first place a line may end.)
+void InlineContentSizesOnce(LayoutContext& lc, Box& container, double& minContent, double& maxContent, double* firstWord);
 
 // Image.cpp: the size an image file says it has (width and height negative where it gives none, the ratio 0 where it has none).
 bool ReadImageMetrics(const std::string& data, double& width, double& height, double& ratio);

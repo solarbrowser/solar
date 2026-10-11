@@ -34,3 +34,11 @@ test(() => {
   assert_true(h > 30, "first line is 30px tall: " + h);
 }, "line-height of the first line and an inline box across its end");
 </script>
+<div id="s" style="float: left; font: 10px/1 monospace"><span id="sp" class="x">aaaa bbbb</span></div>
+<style>#s::first-line { font-size: 20px }</style>
+<script>
+test(() => {
+  // max-content: all of "aaaa bbbb" (9 characters) on the first line at 12px a character
+  assert_equals(document.getElementById("s").offsetWidth, 108);
+}, "the shrink-to-fit width is of the text in the font of the first line");
+</script>

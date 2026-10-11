@@ -3,6 +3,7 @@
 // where it broke: the pieces on the line keep the style, the rest are as they were. The split is undone before the block is laid out again.
 #include <algorithm>
 #include <functional>
+#include <map>
 
 #include "Internal.h"
 #include "solar/css/Selectors.h"
@@ -236,6 +237,44 @@ double LayoutInlineContent(LayoutContext& lc, Box& container, double width, doub
   Split(lc, container, *leaf, offset);
   applyVariants(leaf);
   return LayoutInlineContentOnce(lc, container, width, baselineOut);
+}
+
+// The sizes of the contents: all of them are on the first line when it does not break, and only the first word is when it does.
+void InlineContentSizes(LayoutContext& lc, Box& container, double& minContent, double& maxContent) {
+  if (!container.firstLineStyle) {
+    InlineContentSizesOnce(lc, container, minContent, maxContent, nullptr);
+    return;
+  }
+  // (The boxes may be split and styled already, by a layout; they are left as they are, and the styles are put back.)
+  std::map<const Box*, std::shared_ptr<const BoxStyle>> original;
+  for (const FirstLineEdit& e : container.firstLineEdits) if (!e.tail && !original.count(e.box)) original[e.box] = e.style;
+  std::vector<Box*> boxes;
+  std::vector<std::shared_ptr<const BoxStyle>> current;
+  bool stop = false;
+  Visit(container, [&](Box& b) {
+    if (b.kind == Box::Kind::Text || b.kind == Box::Kind::Inline) {
+      boxes.push_back(&b);
+      current.push_back(b.style);
+    }
+    return true;
+  }, stop);
+  const auto setStyles = [&](bool line) {
+    for (size_t i = 0; i < boxes.size(); ++i) {
+      const auto found = original.find(boxes[i]);
+      const BoxStyle& base = found != original.end() ? *found->second : *current[i];
+      boxes[i]->style = line ? Variant(base, *container.style, *container.firstLineStyle) : (found != original.end() ? found->second : current[i]);
+    }
+  };
+  double normalMin, normalMax;
+  setStyles(false);
+  InlineContentSizesOnce(lc, container, normalMin, normalMax, nullptr);
+  double lineMin, lineMax, firstWord = 0;
+  setStyles(true);
+  InlineContentSizesOnce(lc, container, lineMin, lineMax, &firstWord);
+  for (size_t i = 0; i < boxes.size(); ++i) boxes[i]->style = current[i];
+  maxContent = lineMax;
+  minContent = std::max(normalMin, firstWord);
+  if (!container.style->wrap) minContent = maxContent;
 }
 
 void ApplyFirstLines(LayoutContext& lc, Box& root) {

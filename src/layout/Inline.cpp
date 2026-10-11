@@ -1444,7 +1444,7 @@ double LayoutInlineContentOnce(LayoutContext& lc, Box& container, double width, 
   return lineTop;
 }
 
-void InlineContentSizes(LayoutContext& lc, Box& container, double& minContent, double& maxContent) {
+void InlineContentSizesOnce(LayoutContext& lc, Box& container, double& minContent, double& maxContent, double* firstWord) {
   Collector collector(lc, container);
   collector.Collect(container);
   collector.Finish();
@@ -1453,6 +1453,12 @@ void InlineContentSizes(LayoutContext& lc, Box& container, double& minContent, d
   std::vector<char> breaks;
   FindBreaks(collector.all, *container.style, breaks);
   double line = 0, word = 0;  // the max-content line so far, the min-content unbreakable piece so far
+  bool firstDone = false;
+  const auto flushWord = [&] {
+    if (firstWord && !firstDone) *firstWord = word;
+    firstDone = true;
+    minContent = std::max(minContent, word);
+  };
   for (size_t i = 0; i < collector.atoms.size(); ++i) {
     Atom a = collector.atoms[i];
     const size_t base = collector.atomStart[i];
@@ -1480,10 +1486,10 @@ void InlineContentSizes(LayoutContext& lc, Box& container, double& minContent, d
           word += w - trailing;
           if (newline) {
             maxContent = std::max(maxContent, line);
-            minContent = std::max(minContent, word);
+            flushWord();
             line = word = 0;
           } else if ((brk && wraps) || (brk && false)) {
-            minContent = std::max(minContent, word);
+            flushWord();
             word = 0;
           } else if (!wraps) {
             // not breakable at all
@@ -1508,17 +1514,17 @@ void InlineContentSizes(LayoutContext& lc, Box& container, double& minContent, d
       word += mn + extras;
       const size_t at = base + 3;
       if (at < breaks.size() && breaks[at]) {
-        minContent = std::max(minContent, word);
+        flushWord();
         word = 0;
       }
     } else if (a.kind == Atom::Kind::Break) {
       maxContent = std::max(maxContent, line);
-      minContent = std::max(minContent, word);
+      flushWord();
       line = word = 0;
     }
   }
   maxContent = std::max(maxContent, line);
-  minContent = std::max(minContent, word);
+  flushWord();
   if (!container.style->wrap) minContent = maxContent;
   // overflow-wrap: anywhere breaks everywhere for the minimum.
   (void)lc;
