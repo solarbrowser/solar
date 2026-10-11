@@ -251,6 +251,11 @@ void ComputeContentSizes(LayoutContext& lc, Box& box) {
     return;
   }
   if (s.containSizeInline && !IsGridDisplay(s.display)) {  // its contents count for nothing
+    const dom::Element* element = box.element();
+    if ((s.containIntrinsicWidthAuto || s.contentVisibilityAuto) && element && element->lastRenderedWidth >= 0) {
+      box.minContent = box.maxContent = element->lastRenderedWidth;
+      return;
+    }
     box.minContent = box.maxContent = s.containIntrinsicWidthSet ? s.containIntrinsicWidth.value : (box.emptyWidth >= 0 ? box.emptyWidth : 0);
     return;
   }
@@ -855,6 +860,7 @@ void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cb
   double usedHeight;
   if (Known(specifiedHeight)) usedHeight = specifiedHeight;
   else if (Known(ratioHeight)) usedHeight = ratioHeight;
+  else if (s.containSizeBlock && !IsGridDisplay(s.display) && (s.containIntrinsicHeightAuto || s.contentVisibilityAuto) && box.element() && box.element()->lastRenderedHeight >= 0) usedHeight = box.element()->lastRenderedHeight;
   else usedHeight = s.containSizeBlock && !IsGridDisplay(s.display) ? (s.containIntrinsicHeightSet ? s.containIntrinsicHeight.value : (box.emptyHeight >= 0 ? box.emptyHeight : box.formControl ? box.naturalHeight : 0)) : (box.formControl ? box.naturalHeight : contentHeight);
   if (!Known(forceHeight)) {
     const double maxH = ResolveSize(s.maxHeight, cbHeight);
@@ -875,6 +881,8 @@ void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cb
     if (offset != 0) ShiftContents(box, offset);
   }
 
+  // Layout containment: the box has no baseline of its own to give (https://www.w3.org/TR/css-contain-2/#containment-layout).
+  if (s.containLayout) box.baseline = box.firstBaseline = -1;
   // Empty: the margins collapse through it.
   box.collapsedThrough = !establishes && !box.replaced && heightIsAuto && usedHeight == 0 && box.border.Vertical() == 0 && box.padding.Vertical() == 0 && minH == 0 && !hasContent;
   if (box.collapsedThrough) {

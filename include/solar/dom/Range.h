@@ -28,6 +28,9 @@ struct Range : Quanta::DOMObject {
   bool Collapsed() const { return startNode == endNode && startOffset == endOffset; }
 };
 
+// The range of the selection of the document, if it has one.
+Range* SelectionRangeOf(Document* document);
+
 // The prototypes of Range and StaticRange in the realm.
 Quanta::Object* RangePrototype(Quanta::Context& ctx);
 Quanta::Object* StaticRangePrototype(Quanta::Context& ctx);

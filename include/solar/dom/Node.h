@@ -234,6 +234,9 @@ struct Element : Node {
   std::map<std::string, std::map<std::string, std::string>> animatedValues;
   // The content box of an element that is a size container, as layout found it (negative: not known), for container queries.
   double containerWidth = -1, containerHeight = -1;
+  signed char contentVisibilityReported = -1;  // the state a contentvisibilityautostatechange event last told: 0 not skipped, 1 skipped, -1 none yet
+  double lastRenderedWidth = -1, lastRenderedHeight = -1;  // the content box it had when its contents were last rendered (contain-intrinsic-size: auto)
+  bool contentVisible = false;  // content-visibility: auto: its contents are relevant to the user (on screen, focused...), so they are not skipped
   bool scrollbarSeen[2] = {false, false};  // the scrollbars the last layout gave it: kept while container queries are settled, so they do not flicker
   // The computed values script last read (pseudo-element name → property → value): the style from before a change, for transitions.
   std::map<std::string, std::map<std::string, std::string>> lastRead;
@@ -291,8 +294,12 @@ struct Document : Node {
   bool animationStyleSeen = false;
   // Whether a style has asked for the size of a container: only then is layout done before a computed style is read.
   bool containerQueriesSeen = false;
+  // Whether a style has been read with content-visibility: auto: only then is the relevance of such elements worked out after layout.
+  bool contentVisibilityAutoSeen = false;
   // The function that asks for a frame, which parsing something that declares animations or transitions calls.
   Quanta::Object* animationWake = nullptr;
+  // The function that asks for a frame to send the contentvisibilityautostatechange events in.
+  Quanta::Object* contentVisibilityWake = nullptr;
   // For an about: document whose iframe is gone: the address it was resolving against, which is the origin it keeps.
   std::string inheritedBase;
   // The Content-Security-Policy values that apply to the document (the header's, and its meta elements').
@@ -373,6 +380,10 @@ Attr* NewAttr(Quanta::Context& ctx, Document* document, std::string_view namespa
 // A number that changes whenever any tree does, which the live collections check to know whether what
 // they have found is still so.
 uint64_t TreeVersion();
+// Called when the tree changes: layout asks for a frame, where the elements that came to be skipped are found.
+extern void (*g_treeChangeHook)();
+// Set by layout: whether the element is being rendered (has a box, or is display: contents, and is not in contents that content-visibility: hidden skips). Null: the markup decides.
+extern bool (*g_beingRenderedHook)(Element* element);
 // The document base URL, which the html module works out (a base element, a frame's parent): the address by default.
 std::string DocumentBaseUri(const Document* document);
 void SetDocumentBaseUriProvider(std::string (*provider)(const Document*));

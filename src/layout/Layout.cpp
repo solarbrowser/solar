@@ -10,6 +10,7 @@
 #include "solar/css/Logical.h"
 #include "solar/css/MediaQuery.h"
 #include "solar/css/Style.h"
+#include "solar/dom/Range.h"
 
 namespace solar::layout {
 
@@ -26,6 +27,52 @@ bool UpdateContainerSizes(Tree& tree) {
       if (std::fabs(element->containerWidth - w) > 0.005 || std::fabs(element->containerHeight - h) > 0.005) {
         element->containerWidth = w;
         element->containerHeight = h;
+        changed = true;
+      }
+    }
+    for (const auto& child : box.children) self(self, *child);
+  };
+  if (tree.root) walk(walk, *tree.root);
+  return changed;
+}
+
+// content-visibility: auto: the contents matter to the user when the box is near the viewport (within half of it on each side) or has the focus in it.
+// True if one is not what the last layout was made with.
+bool UpdateContentVisibility(Tree& tree, dom::Document* document, bool& eventsPending) {
+  bool changed = false;
+  double scrollX = 0, scrollY = 0;
+  const auto root = tree.scroll.find(document);
+  if (root != tree.scroll.end()) {
+    scrollX = root->second.first;
+    scrollY = root->second.second;
+  }
+  const double left = scrollX - tree.viewportWidth / 2, right = scrollX + tree.viewportWidth * 1.5;
+  const double top = scrollY - tree.viewportHeight / 2, bottom = scrollY + tree.viewportHeight * 1.5;
+  const auto walk = [&](auto&& self, const Box& box) -> void {
+    // The size of what is rendered is what a skipped box has next, if it asks for the last size (contain-intrinsic-size: auto, and content-visibility: auto).
+    if (box.kind == Box::Kind::Block && box.node && box.node->IsElement() && box.style && !box.style->skipContents &&
+        (box.style->containIntrinsicWidthAuto || box.style->containIntrinsicHeightAuto || box.style->contentVisibilityAuto)) {
+      dom::Element* element = static_cast<dom::Element*>(box.node);
+      element->lastRenderedWidth = std::max(0.0, box.width - box.border.Horizontal() - box.padding.Horizontal());
+      element->lastRenderedHeight = std::max(0.0, box.height - box.border.Vertical() - box.padding.Vertical());
+    }
+    if (box.kind == Box::Kind::Block && box.node && box.node->IsElement() && box.style && box.style->contentVisibilityAuto) {
+      dom::Element* element = static_cast<dom::Element*>(box.node);
+      if (element->contentVisibilityReported != (element->contentVisible ? 0 : 1)) eventsPending = true;
+      const Rect r = AbsoluteBorderBox(box);
+      bool relevant = r.x <= right && r.x + r.width >= left && r.y <= bottom && r.y + r.height >= top;
+      for (dom::Node* focus = document->focusedElement; focus && !relevant; focus = focus->parentNode) relevant = focus == element;
+      // A selection with something of the element in it.
+      if (!relevant && element->parentNode) {
+        if (const dom::Range* selection = dom::SelectionRangeOf(document); selection && !selection->Collapsed() && selection->startNode && selection->endNode) {
+          uint32_t index = 0;
+          for (const dom::Node* n = element->previousSibling; n; n = n->previousSibling) ++index;
+          relevant = dom::ComparePoints(selection->startNode, selection->startOffset, element->parentNode, index + 1) < 0 &&
+                     dom::ComparePoints(selection->endNode, selection->endOffset, element->parentNode, index) > 0;
+        }
+      }
+      if (relevant != element->contentVisible) {
+        element->contentVisible = relevant;
         changed = true;
       }
     }
@@ -54,7 +101,18 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
       }
     }
   }
-  const auto versionNow = [&] { return (dom::TreeVersion() * 1000003 + css::StyleVersion()) * 1000003 + static_cast<uint64_t>(environment.width * 7 + environment.height); };
+  const auto versionNow = [&] {
+    uint64_t v = (dom::TreeVersion() * 1000003 + css::StyleVersion()) * 1000003 + static_cast<uint64_t>(environment.width * 7 + environment.height);
+    // What is relevant to the user of content-visibility: auto depends on the focus and the selection.
+    if (document->contentVisibilityAutoSeen) {
+      v = v * 1000003 + reinterpret_cast<uintptr_t>(document->focusedElement);
+      if (const dom::Range* selection = dom::SelectionRangeOf(document)) {
+        v = v * 1000003 + reinterpret_cast<uintptr_t>(selection->startNode) + selection->startOffset * 31;
+        v = v * 1000003 + reinterpret_cast<uintptr_t>(selection->endNode) + selection->endOffset * 37;
+      }
+    }
+    return v;
+  };
   if (document->layoutTree && document->layoutTree->builtFor == versionNow() && document->layoutTree->root) return document->layoutTree.get();
   static std::set<const dom::Document*> inside;
   // (Asked for again while it is being made, from a style that needs the size of a container: what is there is answered.)
@@ -62,6 +120,7 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
   inside.insert(document);
   std::shared_ptr<Tree> tree;
   // The styles that depend on the size of containers are made from the sizes of the last pass; layout is done again until they stop changing.
+  bool eventsPending = false;
   for (int pass = 0; pass < 5; ++pass) {
     tree = std::make_shared<Tree>();
     tree->keepScrollbars = pass > 0;
@@ -72,10 +131,25 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
     LayoutContext lc{ctx, *tree, tree->viewportWidth, tree->viewportHeight};
     BuildTree(lc, document);
     LayoutRoot(lc);
-    if (!document->containerQueriesSeen || !UpdateContainerSizes(*tree)) break;
-    css::NoteStyleChange();
+    const bool containers = document->containerQueriesSeen && UpdateContainerSizes(*tree);
+    // (What the scroll position was is kept for the new tree, as the relevance of boxes is worked out from it.)
+    if (document->layoutTree) {
+      for (const auto& entry : document->layoutTree->scroll) tree->scroll.emplace(entry);
+    }
+    const bool visibility = document->contentVisibilityAutoSeen && UpdateContentVisibility(*tree, document, eventsPending);
+    if (!containers && !visibility) break;
+    if (containers) css::NoteStyleChange();
   }
   inside.erase(document);
+  // The events of the elements whose contents were skipped or not are sent in a frame of their own.
+  if (eventsPending && document->contentVisibilityWake) {
+    static bool waking = false;
+    if (!waking) {
+      waking = true;
+      Quanta::Embed::Call(ctx, Quanta::Embed::FromObject(document->contentVisibilityWake), Quanta::Embed::Undefined());
+      waking = false;
+    }
+  }
   const uint64_t version = versionNow();
   tree->builtFor = version;
   if (document->layoutTree) {

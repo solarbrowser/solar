@@ -31,6 +31,11 @@ struct JsSelection : DOMObject {
   }
 };
 
+Range* SelectionRangeOf(Document* document) {
+  if (!document || !document->selection) return nullptr;
+  return static_cast<JsSelection*>(document->selection)->range;
+}
+
 namespace {
 
 JsSelection* ThisSelection(Context& ctx, const Value& t) {

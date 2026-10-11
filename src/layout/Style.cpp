@@ -483,14 +483,15 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
     const std::string contain = get("contain");
     const auto has = [&](const char* word) { return (" " + contain + " ").find(std::string(" ") + word + " ") != std::string::npos; };
     const bool strict = has("strict"), content = has("content");
+    s.containStyle = strict || content || has("style");
     s.containLayout = strict || content || has("layout");
     s.containPaint = strict || content || has("paint");
     s.containSizeInline = strict || has("size") || has("inline-size");
     s.containSizeBlock = strict || has("size");
     const std::string type = get("container-type");
     s.sizeContainer = type.find("size") != std::string::npos;
-    if (type == "size") { s.containLayout = true; s.containSizeInline = s.containSizeBlock = true; }
-    else if (type == "inline-size") { s.containLayout = true; s.containSizeInline = true; }
+    if (type == "size") { s.containLayout = s.containStyle = true; s.containSizeInline = s.containSizeBlock = true; }
+    else if (type == "inline-size") { s.containLayout = s.containStyle = true; s.containSizeInline = true; }
     const auto none = [&](const char* property) { const std::string v = get(property); return v.empty() || v == "none"; };
     const std::string willChange = get("will-change");
     const bool willTransform = willChange.find("transform") != std::string::npos || willChange.find("perspective") != std::string::npos || willChange.find("filter") != std::string::npos;
@@ -501,18 +502,26 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
     const bool positionedZ = s.position != Position::Static && get("z-index") != "auto";
     s.stackingContext = positionedZ || s.position == Position::Fixed || s.position == Position::Sticky || s.opacity < 1 || s.containsPositioned || get("isolation") == "isolate" ||
                         get("mix-blend-mode") != "normal" || !none("clip-path") || !none("mask-image") || willChange.find("opacity") != std::string::npos;
-    const auto intrinsic = [&](const char* property, Length& l, bool& set) {
+    const auto intrinsic = [&](const char* property, Length& l, bool& set, bool& automatic) {
       std::string v = get(property);
+      if (v.rfind("auto", 0) == 0) automatic = true;
       if (v.rfind("auto ", 0) == 0) v = v.substr(5);
       if (v == "none" || v.empty()) return;
       l = ParseLength(v);
       set = l.kind == Length::Kind::Px;
     };
-    intrinsic("contain-intrinsic-width", s.containIntrinsicWidth, s.containIntrinsicWidthSet);
-    intrinsic("contain-intrinsic-height", s.containIntrinsicHeight, s.containIntrinsicHeightSet);
-    if (get("content-visibility") == "hidden") {
+    intrinsic("contain-intrinsic-width", s.containIntrinsicWidth, s.containIntrinsicWidthSet, s.containIntrinsicWidthAuto);
+    intrinsic("contain-intrinsic-height", s.containIntrinsicHeight, s.containIntrinsicHeightSet, s.containIntrinsicHeightAuto);
+    const std::string visibility = get("content-visibility");
+    if (visibility == "hidden") {
       s.containLayout = s.containPaint = s.containSizeInline = s.containSizeBlock = true;
+      s.containStyle = s.containsPositioned = s.stackingContext = true;
       s.skipContents = true;
+    } else if (visibility == "auto") {
+      // Layout and paint containment always; size containment and skipped contents when the user has no use of them (Build, from where the box is).
+      s.containLayout = s.containPaint = s.containStyle = true;
+      s.containsPositioned = s.stackingContext = true;
+      s.contentVisibilityAuto = true;
     }
   }
   return style;

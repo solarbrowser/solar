@@ -48,6 +48,7 @@ void Document::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(adoptedStyleSheets);
   visitor.Mark(styleFlush);
   visitor.Mark(animationWake);
+  visitor.Mark(contentVisibilityWake);
   visitor.Mark(frameElement);
 }
 
@@ -98,7 +99,12 @@ std::string (*g_baseUriProvider)(const Document*) = nullptr;
 }
 void SetDocumentBaseUriProvider(std::string (*provider)(const Document*)) { g_baseUriProvider = provider; }
 std::string DocumentBaseUri(const Document* document) { return g_baseUriProvider ? g_baseUriProvider(document) : document->url; }
-void NoteTreeChange() { ++g_treeVersion; }
+void (*g_treeChangeHook)() = nullptr;
+bool (*g_beingRenderedHook)(Element* element) = nullptr;
+void NoteTreeChange() {
+  ++g_treeVersion;
+  if (g_treeChangeHook) g_treeChangeHook();
+}
 
 namespace {
 

@@ -119,8 +119,11 @@ struct BoxStyle {
   bool containLayout = false, containPaint = false, containSizeInline = false, containSizeBlock = false;
   bool sizeContainer = false;  // container-type: size or inline-size: container queries look at its size
   bool skipContents = false;
+  bool contentVisibilityAuto = false;
+  bool containStyle = false;  // style containment: counters changed inside do not change outside
   Length containIntrinsicWidth, containIntrinsicHeight;  // px, or none (Auto kind with value 0)
   bool containIntrinsicWidthSet = false, containIntrinsicHeightSet = false;
+  bool containIntrinsicWidthAuto = false, containIntrinsicHeightAuto = false;  // 'auto': the last size it was rendered at, if it was
   // What makes a box the containing block of the positioned boxes inside it (besides being positioned), and a stacking context.
   bool containsPositioned = false;
   bool stackingContext = false;

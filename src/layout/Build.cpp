@@ -212,13 +212,14 @@ class Builder {
     for (size_t i = 0; i < values.size(); ++i) {
       if (!values[i].IsIdent()) continue;
       int value = defaultValue;
+      const size_t nameAt = i;
       size_t j = i + 1;
       while (j < values.size() && values[j].IsWhitespace()) ++j;
       if (j < values.size() && values[j].IsToken(solar::css::Token::Type::Number)) {
         value = static_cast<int>(values[j].token.number);
         i = j;
       }
-      out.push_back({values[i - (i == j ? 0 : 0)].token.value, value});
+      out.push_back({values[nameAt].token.value, value});
     }
     return out;
   }
@@ -469,6 +470,18 @@ class Builder {
   void BuildElement(Box& parent, dom::Element* element) {
     std::shared_ptr<const BoxStyle> style = Logicalize(ReadStyle(lc_.ctx, element));
     if (style->display == Display::None) return;
+    // Style containment keeps the counters of its subtree to itself.
+    struct Scope {
+      Builder* b;
+      bool on;
+      std::map<std::string, std::vector<int>> counters;
+      int quotes;
+      ~Scope() {
+        if (!on) return;
+        b->counters_ = std::move(counters);
+        b->quoteDepth_ = quotes;
+      }
+    } scope{this, style->containStyle, style->containStyle ? counters_ : std::map<std::string, std::vector<int>>(), quoteDepth_};
     ApplyCounters(*style, style->display == Display::ListItem, element);
     const int listValue = counters_["list-item"].empty() ? 0 : counters_["list-item"].back();
     if (style->display == Display::Contents) {
@@ -476,6 +489,15 @@ class Builder {
       BuildChildren(parent, element, style);
       BuildGenerated(parent, element, "after");
       return;
+    }
+    if (style->contentVisibilityAuto) {
+      if (element->nodeDocument) element->nodeDocument->contentVisibilityAutoSeen = true;
+      if (!element->contentVisible) {
+        auto skipped = std::make_shared<BoxStyle>(*style);
+        skipped->containSizeInline = skipped->containSizeBlock = true;
+        skipped->skipContents = true;
+        style = skipped;
+      }
     }
     auto box = std::make_unique<Box>();
     box->node = element;

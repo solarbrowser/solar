@@ -11,6 +11,8 @@ namespace solar::css {
 
 // The computed value of a longhand property for an element, as getComputedStyle answers: empty for an element that is not
 // in a document, or a property that has no such value.
+// Whether a declaration of content-visibility: auto has been read: then layout has the work of finding which elements are skipped.
+extern bool g_contentVisibilityAutoMentioned;
 // Whether any rule gives the pseudo-element of the element a style.
 bool HasPseudoStyle(dom::Element* element, const std::string& pseudo);
 // The width the vertical scrollbar or gutter of the viewport takes, and the height of the horizontal one.

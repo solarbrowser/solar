@@ -168,7 +168,11 @@ Value Scroll(Context& ctx, Value, qe::Args args, Value) {
   }
   position.first = std::max(minX, std::min(position.first, maxX));
   position.second = std::max(minY, std::min(position.second, maxY));
-  if (args.size() >= 4 && qe::ToBoolean(args[1])) ApplySticky(*tree);
+  if (args.size() >= 4 && qe::ToBoolean(args[1])) {
+    ApplySticky(*tree);
+    // What is near the viewport is worked out from where it is scrolled to.
+    if (document->contentVisibilityAutoSeen) tree->builtFor = 0;
+  }
   qe::ArrayPush(ctx, out, qe::FromNumber(position.first));
   qe::ArrayPush(ctx, out, qe::FromNumber(position.second));
   qe::ArrayPush(ctx, out, qe::FromNumber(maxX));
@@ -215,6 +219,10 @@ Value ProcessedText(Context& ctx, Value, qe::Args args, Value) {
   bool any = false;
   for (Box* box : BoxesOf(*tree, node)) {
     if (box->kind != Box::Kind::Text) continue;
+    // Contents that are skipped (content-visibility) are not rendered text.
+    bool skipped = false;
+    for (const Box* p = box->parent; p; p = p->parent) if (p->style && p->style->skipContents) skipped = true;
+    if (skipped) continue;
     out += box->processed;
     any = true;
   }
@@ -272,7 +280,73 @@ Value RangeRects(Context& ctx, Value, qe::Args args, Value) {
 void InstallResolvedHook();
 
 
+namespace {
+Context* g_cvContext = nullptr;
+bool g_cvRequested = false;
+}  // namespace
+
+// A change of the tree, where content-visibility: auto is in use: a frame is asked for, as the rendering is updated after it.
+void AskForContentVisibilityFrame() {
+  if (g_cvRequested || !css::g_contentVisibilityAutoMentioned || !g_cvContext) return;
+  dom::Document* document = dom::AssociatedDocument(*g_cvContext);
+  if (!document || !document->contentVisibilityWake) return;
+  g_cvRequested = true;
+  Quanta::Embed::Call(*g_cvContext, qe::FromObject(document->contentVisibilityWake), qe::Undefined());
+}
+
+// __solarLayoutSetCvWake(function): the function that asks for a frame to send the contentvisibilityautostatechange events in.
+Value SetCvWake(Context& ctx, Value, qe::Args args, Value) {
+  dom::Document* document = dom::AssociatedDocument(ctx);
+  if (document) {
+    document->contentVisibilityWake = !args.empty() && qe::IsObject(args[0]) ? args[0].as_object() : nullptr;
+    document->NoteWrite();
+  }
+  return qe::Undefined();
+}
+
+// __solarLayoutCvTake(): [element, skipped, ...] for the content-visibility: auto elements whose state is not what the last event told.
+Value CvTake(Context& ctx, Value, qe::Args, Value) {
+  g_cvRequested = false;
+  Value out = qe::NewArray(ctx);
+  dom::Document* document = dom::AssociatedDocument(ctx);
+  if (!document || !(document->contentVisibilityAutoSeen || css::g_contentVisibilityAutoMentioned)) return out;
+  Tree* tree = UpdateLayout(ctx, document);
+  const auto walk = [&](auto&& self, const Box& box) -> void {
+    if (box.kind == Box::Kind::Block && box.node && box.node->IsElement() && box.style && box.style->contentVisibilityAuto) {
+      dom::Element* element = static_cast<dom::Element*>(box.node);
+      const signed char state = element->contentVisible ? 0 : 1;
+      if (element->contentVisibilityReported != state) {
+        element->contentVisibilityReported = state;
+        qe::ArrayPush(ctx, out, qe::FromObject(element));
+        qe::ArrayPush(ctx, out, qe::FromBool(state == 1));
+      }
+    }
+    for (const auto& child : box.children) self(self, *child);
+  };
+  if (tree && tree->root) walk(walk, *tree->root);
+  return out;
+}
+
+bool BeingRendered(dom::Element* element) {
+  dom::Document* document = element->nodeDocument;
+  if (!g_cvContext || !document || document != dom::AssociatedDocument(*g_cvContext)) return true;
+  Tree* tree = UpdateLayout(*g_cvContext, document);
+  if (!tree) return true;
+  const std::vector<Box*>& boxes = BoxesOf(*tree, element);
+  if (boxes.empty()) {
+    // (display: contents has no box of its own, and is rendered.)
+    return solar::css::ComputedValue(*g_cvContext, element, "display") == "contents";
+  }
+  for (const Box* p = boxes[0]->parent; p; p = p->parent) {
+    if (p->style && p->style->skipContents && !p->style->contentVisibilityAuto) return false;
+  }
+  return true;
+}
+
 void InstallLayoutNatives(Context& ctx) {
+  dom::g_beingRenderedHook = BeingRendered;
+  g_cvContext = &ctx;
+  dom::g_treeChangeHook = AskForContentVisibilityFrame;
   InstallResolvedHook();
   qe::DefineGlobalFunction(ctx, "__solarLayoutMetrics", Metrics, 1);
   qe::DefineGlobalFunction(ctx, "__solarLayoutRects", ClientRectsNative, 1);
@@ -282,6 +356,8 @@ void InstallLayoutNatives(Context& ctx) {
   qe::DefineGlobalFunction(ctx, "__solarLayoutDump", Dump, 0);
   qe::DefineGlobalFunction(ctx, "__solarLayoutRangeRects", RangeRects, 3);
   qe::DefineGlobalFunction(ctx, "__solarLayoutProcessedText", ProcessedText, 1);
+  qe::DefineGlobalFunction(ctx, "__solarLayoutSetCvWake", SetCvWake, 1);
+  qe::DefineGlobalFunction(ctx, "__solarLayoutCvTake", CvTake, 0);
 }
 
 }  // namespace solar::layout

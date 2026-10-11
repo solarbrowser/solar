@@ -683,10 +683,13 @@ const char* const kWindowScript = R"JS(
   };
   const reportLater = (error) => setTimeout(() => { throw error; }, 0);
   let frameBusy = false;
+  // Other steps of "update the rendering" (layout's: the events of content-visibility: auto), which run before the animations.
+  const frameSteps = [];
   function runFrame() {
     frameTimer = null;
     frameBusy = true;
     const now = performance.now();
+    for (const step of frameSteps) { try { step(now); } catch (error) { reportLater(error); } }
     if (animationFrame.run) { try { animationFrame.run(now); } catch (error) { reportLater(error); } }
     // The promise jobs and the events of the animations have their turn before the callbacks do.
     setTimeout(() => runCallbacks(now), 0);
@@ -703,6 +706,7 @@ const char* const kWindowScript = R"JS(
     frameBusy = false;
     if (more) scheduleFrame();
   }
+  Object.defineProperty(globalThis, "__solarAddFrameStep", { value: function (step) { frameSteps.push(step); }, configurable: true });
   Object.defineProperty(globalThis, "__solarFrameHook", { value: function (run, end, wants) {
     animationFrame.run = run; animationFrame.end = end; animationFrame.wants = wants;
     return scheduleFrame;

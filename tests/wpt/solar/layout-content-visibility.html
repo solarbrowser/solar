@@ -1,0 +1,49 @@
+<!doctype html>
+<title>content-visibility: auto and hidden</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<style>
+  body { margin: 0; }
+  .spacer { height: 3000px; }
+  .cv { content-visibility: auto; contain-intrinsic-size: 50px 100px; }
+  .cv > div { width: 20px; height: 10px; }
+  #hid { content-visibility: hidden; contain-intrinsic-size: auto 40px; }
+  #hid > div { width: 20px; height: 10px; }
+  .set { counter-set: c 9; }
+  .inc { counter-increment: c; }
+  #cnt::after { content: counter(c); }
+</style>
+<div id="near" class="cv"><div></div></div>
+<div class="spacer"></div>
+<div id="far" class="cv"><div id="inner"></div></div>
+<div id="hid"><div></div></div>
+<div class="set"></div><div id="cvc" style="content-visibility: hidden"><span class="inc"></span></div><span id="cnt"></span>
+<script>
+test(() => {
+  assert_equals(near.getBoundingClientRect().height, 10, "near the viewport: rendered");
+  assert_equals(far.getBoundingClientRect().height, 100, "far: contained at the intrinsic size");
+}, "auto is rendered only near the viewport");
+test(() => {
+  window.scrollTo(0, 3000);
+  assert_equals(far.getBoundingClientRect().height, 10, "scrolled to: rendered");
+  window.scrollTo(0, 0);
+  assert_equals(far.getBoundingClientRect().height, 10, "the last size is kept when skipped again");
+}, "scrolling shows it, and the size it had is kept");
+test(() => {
+  assert_equals(hid.getBoundingClientRect().height, 40);
+  assert_equals(far.innerText, "", "skipped contents are not rendered text");
+}, "hidden uses the intrinsic size");
+test(() => {
+  assert_equals(getComputedStyle(cnt, "::after").content, "counter(c)");
+  assert_equals(cnt.getBoundingClientRect().width > 0, true);
+}, "style containment keeps the counter inside");
+promise_test(async () => {
+  const log = [];
+  const div = document.createElement("div");
+  div.style.contentVisibility = "auto";
+  div.addEventListener("contentvisibilityautostatechange", (e) => log.push(e.skipped));
+  near.parentNode.insertBefore(div, near);
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  assert_array_equals(log, [false]);
+}, "an event tells the first state");
+</script>

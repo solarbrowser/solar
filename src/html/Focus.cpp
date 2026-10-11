@@ -106,6 +106,7 @@ bool IsFocusable(dom::Element* element) {
   if (!Connected(element)) return false;
   if (AncestorHas(element, "inert") || AncestorHas(element, "hidden")) return false;
   if (IsDisabled(element)) return false;
+  if (dom::g_beingRenderedHook && !dom::g_beingRenderedHook(element)) return false;
   long ignored = 0;
   return ParseTabIndex(element, ignored) || NativelyFocusable(element);
 }
@@ -151,6 +152,8 @@ void MoveFocus(Context& ctx, dom::Document* document, dom::Element* target) {
   }
   document->focusedElement = target;
   document->NoteWrite();
+  // (:focus and the like match differently now.)
+  dom::NoteTreeChange();
   // An iframe holds the focus of its parent while an element in it does.
   if (document->frameElement && document->frameElement->nodeDocument && target) {
     document->frameElement->nodeDocument->focusedElement = document->frameElement;
