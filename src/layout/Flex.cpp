@@ -31,6 +31,7 @@ struct Item {
   int index = 0;
   // Axes: "main" is the flex container's main axis. All sizes below are content-box unless said.
   double padBorderMain = 0, padBorderCross = 0;
+  double scrollbarMain = 0, scrollbarCross = 0;  // the part of padBorder that is scrollbars
   double marginMainStart = 0, marginMainEnd = 0, marginCrossStart = 0, marginCrossEnd = 0;
   bool autoMainStart = false, autoMainEnd = false, autoCrossStart = false, autoCrossEnd = false;
   double baseSize = 0, hypothetical = 0;  // content-box
@@ -91,6 +92,9 @@ struct Flex {
     const double cb = containerWidth;
     b.border = {s.border[0], s.border[1], s.border[2], s.border[3]};
     b.padding = {std::max(0.0, s.padding[0].Resolve(cb)), std::max(0.0, s.padding[1].Resolve(cb)), std::max(0.0, s.padding[2].Resolve(cb)), std::max(0.0, s.padding[3].Resolve(cb))};
+    ReserveScrollbarsFor(b);
+    it.scrollbarMain = row ? b.scrollbar.Horizontal() : b.scrollbar.Vertical();
+    it.scrollbarCross = row ? b.scrollbar.Vertical() : b.scrollbar.Horizontal();
     const auto margin = [&](int side, bool& isAuto) {
       isAuto = s.margin[side].IsAuto();
       return isAuto ? 0.0 : s.margin[side].Resolve(cb);
@@ -122,12 +126,23 @@ struct Flex {
   // Lays the item out at the given content sizes (NaN: its own), and returns the box.
   void LayoutItem(Item& it, double forceMain, double forceCross, bool fill = false) {
     Box& b = *it.box;
-    lc.forceWidth = row ? forceMain : forceCross;
-    lc.forceHeight = row ? forceCross : forceMain;
-    lc.cbX = 0;
-    lc.boxY = 0;
     (void)fill;
-    LayoutBlockLevel(lc, b, containerWidth, containerHeight, true);
+    for (int attempt = 0; attempt < 2; ++attempt) {
+      lc.forceWidth = row ? forceMain : forceCross;
+      lc.forceHeight = row ? forceCross : forceMain;
+      lc.cbX = 0;
+      lc.boxY = 0;
+      LayoutBlockLevel(lc, b, containerWidth, containerHeight, true);
+      const double sbMain = row ? b.scrollbar.Horizontal() : b.scrollbar.Vertical(), sbCross = row ? b.scrollbar.Vertical() : b.scrollbar.Horizontal();
+      const double dMain = sbMain - it.scrollbarMain, dCross = sbCross - it.scrollbarCross;
+      it.scrollbarMain = sbMain;
+      it.scrollbarCross = sbCross;
+      it.padBorderMain += dMain;
+      it.padBorderCross += dCross;
+      if (attempt == 1 || (dMain == 0 && dCross == 0)) break;
+      if (Known(forceMain)) forceMain = std::max(0.0, forceMain - dMain);
+      if (Known(forceCross)) forceCross = std::max(0.0, forceCross - dCross);
+    }
   }
 
   // The item's content size in its main axis for max-content (and the cross size to lay out at, for a column).
@@ -575,6 +590,7 @@ void FlexContentSizes(LayoutContext& lc, Box& container, double& minContent, dou
     const BoxStyle& cs = *c->style;
     c->border = {cs.border[0], cs.border[1], cs.border[2], cs.border[3]};
     c->padding = {std::max(0.0, cs.padding[0].Resolve(0)), std::max(0.0, cs.padding[1].Resolve(0)), std::max(0.0, cs.padding[2].Resolve(0)), std::max(0.0, cs.padding[3].Resolve(0))};
+    ReserveScrollbarsFor(*c);
     const double extras = c->border.Horizontal() + c->padding.Horizontal() + (cs.margin[1].IsAuto() ? 0 : cs.margin[1].Resolve(0)) + (cs.margin[3].IsAuto() ? 0 : cs.margin[3].Resolve(0));
     double mn = c->minContent, mx = c->maxContent;
     const double fixed = ResolveSize(cs.width, kNaN);

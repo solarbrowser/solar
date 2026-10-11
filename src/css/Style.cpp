@@ -494,6 +494,43 @@ ElementStyle& StyleOf(dom::Element* element, const std::string& pseudo = "") {
 
 void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo);
 
+// The room the scrollbars and the gutter of the viewport take: the overflow is that of the root element, or of the body when the root's is visible.
+double ViewportScrollbarsWith(dom::Document* document, const std::function<std::string(dom::Element*, const char*)>& get, double& horizontal) {
+  horizontal = 0;
+  dom::Element* root = document ? document->DocumentElement() : nullptr;
+  if (!root) return 0;
+  const auto visible = [&](dom::Element* e) {
+    const std::string x = get(e, "overflow-x"), y = get(e, "overflow-y");
+    return (x == "visible" || x == "clip") && (y == "visible" || y == "clip");
+  };
+  dom::Element* source = root;
+  if (visible(root)) {
+    source = nullptr;
+    for (dom::Node* child = root->firstChild; child; child = child->nextSibling) {
+      if (child->IsElement() && static_cast<dom::Element*>(child)->IsHtml("body")) source = static_cast<dom::Element*>(child);
+    }
+    if (!source || visible(source)) return 0;
+  }
+  std::string ox = get(source, "overflow-x"), oy = get(source, "overflow-y");
+  if (ox == "clip") ox = "hidden";
+  if (oy == "clip") oy = "hidden";
+  if (ox == "visible") ox = "auto";
+  if (oy == "visible") oy = "auto";
+  const std::string width = get(root, "scrollbar-width"), gutter = get(root, "scrollbar-gutter");
+  const double thickness = width == "none" ? 0.0 : width == "thin" ? 8.0 : 15.0;
+  const bool stable = gutter.find("stable") != std::string::npos, both = gutter.find("both-edges") != std::string::npos;
+  const std::string mode = get(source, "writing-mode");
+  const bool vertical = mode.starts_with("vertical") || mode.starts_with("sideways");
+  double verticalBar = 0;
+  if (oy == "scroll") verticalBar = thickness;
+  if (ox == "scroll") horizontal = thickness;
+  if (stable) {
+    if (!vertical) verticalBar = thickness * (both ? 2 : 1);
+    else horizontal = thickness * (both ? 2 : 1);
+  }
+  return verticalBar;
+}
+
 class Resolver {
  public:
   explicit Resolver(Quanta::Context& ctx) : ctx_(ctx) {}
@@ -981,6 +1018,13 @@ ComputeContext Resolver::ContextFor(dom::Element* element, const std::string& pr
   const MediaEnvironment& media = CurrentMediaEnvironment();
   c.viewportWidth = media.width;
   c.viewportHeight = media.height;
+  const bool viewportUnits = hasDigit && (lowered.find("vw") != std::string::npos || lowered.find("vh") != std::string::npos || lowered.find("vi") != std::string::npos || lowered.find("vb") != std::string::npos || lowered.find("vmin") != std::string::npos || lowered.find("vmax") != std::string::npos);
+  if (viewportUnits && property != "scrollbar-gutter" && property != "scrollbar-width" && !property.starts_with("overflow") && property != "writing-mode") {
+    double bar = 0;
+    const double barWidth = ViewportScrollbarsWith(element->nodeDocument, [&](dom::Element* e, const char* p) { return Compute(e, p); }, bar);
+    c.viewportWidth -= barWidth;
+    c.viewportHeight -= bar;
+  }
   c.colorScheme = media.colorScheme;
   dom::Document* document = element->nodeDocument;
   dom::Element* root = document ? document->DocumentElement() : nullptr;
@@ -1318,6 +1362,10 @@ void NoteStyleChangeForRegistry() { NoteStyleChange(); }
 void NoteAnimatedStyleChange() { ++g_styleVersion; }
 uint64_t AuthorStyleVersion() { return dom::TreeVersion() * 1000003 + g_authorVersion; }
 uint64_t StyleVersion() { return g_styleVersion; }
+
+void ViewportScrollbars(Quanta::Context& ctx, dom::Document* document, double& vertical, double& horizontal) {
+  vertical = ViewportScrollbarsWith(document, [&](dom::Element* e, const char* p) { return ComputedValue(ctx, e, p); }, horizontal);
+}
 
 std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std::string& property, const std::string& pseudo) {
   // An adopted sheets array can be changed in place, which nothing tells us of: styles are made again when there is one.

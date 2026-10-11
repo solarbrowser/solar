@@ -83,6 +83,7 @@ void AdaptToParentFrame(Box& box) {
   box.margin = across(box.margin);
   box.border = across(box.border);
   box.padding = across(box.padding);
+  box.scrollbar = across(box.scrollbar);
   if (turn) std::swap(box.width, box.height);
   box.x = box.margin.left;
   double px, py, fx, fy;
@@ -113,6 +114,7 @@ void ConvertSelf(Box& b, WritingMode mode, double fw, double fh) {
   b.margin = EdgesToPhysical(mode, b.margin);
   b.border = EdgesToPhysical(mode, b.border);
   b.padding = EdgesToPhysical(mode, b.padding);
+  b.scrollbar = EdgesToPhysical(mode, b.scrollbar);
   double px, py;
   VectorToPhysical(mode, b.shiftX, b.shiftY, px, py);
   b.shiftX = px;
@@ -219,6 +221,7 @@ void ConvertPlaced(Box& b, WritingMode frameMode, double fw, double fh, const Re
   b.margin = EdgesToPhysical(b.Mode(), b.margin);
   b.border = EdgesToPhysical(b.Mode(), b.border);
   b.padding = EdgesToPhysical(b.Mode(), b.padding);
+  b.scrollbar = EdgesToPhysical(b.Mode(), b.scrollbar);
   double px, py;
   VectorToPhysical(b.Mode(), b.shiftX, b.shiftY, px, py);
   b.shiftX = px;

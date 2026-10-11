@@ -31,12 +31,12 @@ test(() => {
 }, "translate and scale");
 test(() => {
   const s = document.getElementById("s");
-  assert_equals(s.scrollWidth, 300); assert_equals(s.clientWidth, 100);
+  assert_equals(s.scrollWidth, 300); assert_equals(s.clientWidth, 85);
   s.scrollTop = 40; s.scrollLeft = 10;
   assert_equals(s.scrollTop, 40);
   assert_equals(r("sc").top, r("s").top - 40);
   s.scrollTop = 1000;
-  assert_equals(s.scrollTop, 300 - 50);
+  assert_equals(s.scrollTop, 300 - 35);
 }, "scrolling");
 test(() => {
   assert_equals(document.elementFromPoint(60, 60).id, "p");

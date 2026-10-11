@@ -275,6 +275,7 @@ void ComputeContentSizes(LayoutContext& lc, Box& box) {
     ComputeContentSizes(lc, *child);
     const BoxStyle& cs = *child->style;
     ResolveEdges(*child, 0);
+    ReserveScrollbarsFor(*child);
     double extras = ExtrasHorizontal(*child) + MarginOf(cs, 1, 0) + MarginOf(cs, 3, 0);
     double mn = child->minContent, mx = child->maxContent;
     const double fixed = ResolveSize(cs.width, kNaN);
@@ -490,7 +491,117 @@ void LayoutBlockFlow(LayoutContext& lc, Box& box, double contentWidth, size_t fi
   LayoutBlockChildren(lc, box, contentWidth, kNaN, false, false, 0, 0, contentHeight, first, last);
 }
 
+namespace {
+
+// The room the scrollbars and gutters of a box take, on the sides they are on: part of its padding (https://www.w3.org/TR/css-overflow-4/#scrollbar-gutter-property).
+void ReserveScrollbars(Box& box) {
+  box.scrollbar = Edges();
+  if (box.replaced || box.kind != Box::Kind::Block) return;
+  const BoxStyle& p = box.style->Physical();
+  const auto scrollable = [](Overflow o) { return o != Overflow::Visible && o != Overflow::Clip; };
+  if (!scrollable(p.overflowX) && !scrollable(p.overflowY)) return;
+  if (IsTableDisplay(box.style->display)) return;
+  const double thickness = p.scrollbarWidth == BoxStyle::ScrollbarWidth::Auto ? 15.0 : p.scrollbarWidth == BoxStyle::ScrollbarWidth::Thin ? 8.0 : 0.0;
+  if (thickness == 0) return;
+  const bool horizontalMode = p.writingMode == WritingMode::HorizontalTb;
+  const bool rtl = p.direction == Direction::Rtl;
+  double top = 0, right = 0, bottom = 0, left = 0;
+  // The scrollbar of the vertical axis is on the right (the left, for right to left text in a horizontal mode); the one of the horizontal axis at the bottom.
+  if ((scrollable(p.overflowY) && p.overflowY == Overflow::Scroll) || box.scrollbarForce[0]) (horizontalMode && rtl ? left : right) = thickness;
+  if ((scrollable(p.overflowX) && p.overflowX == Overflow::Scroll) || box.scrollbarForce[1]) bottom = thickness;
+  // A stable gutter keeps room at the end of the line whether or not there is something to scroll.
+  if (p.gutterStable) {
+    if (horizontalMode && scrollable(p.overflowY)) {
+      (rtl ? left : right) = thickness;
+      if (p.gutterBothEdges) (rtl ? right : left) = thickness;
+    } else if (!horizontalMode && scrollable(p.overflowX)) {
+      bottom = thickness;
+      if (p.gutterBothEdges) top = thickness;
+    }
+  }
+  const WritingMode mode = p.writingMode;
+  double logical[4] = {0, 0, 0, 0};
+  logical[LogicalSideOf(mode, 0)] += top;
+  logical[LogicalSideOf(mode, 1)] += right;
+  logical[LogicalSideOf(mode, 2)] += bottom;
+  logical[LogicalSideOf(mode, 3)] += left;
+  box.scrollbar = {logical[0], logical[1], logical[2], logical[3]};
+  box.padding.top += logical[0];
+  box.padding.right += logical[1];
+  box.padding.bottom += logical[2];
+  box.padding.left += logical[3];
+}
+
+// How far the contents of a box reach, in the box's frame (relative to its border box).
+void ContentReach(const Box& box, double ox, double oy, double& right, double& bottom) {
+  for (const Line& line : box.lines) {
+    for (const LineItem& item : line.items) {
+      right = std::max(right, ox + item.rect.Right());
+      bottom = std::max(bottom, oy + item.rect.Bottom());
+    }
+  }
+  for (const auto& childPtr : box.children) {
+    const Box& c = *childPtr;
+    if (c.kind != Box::Kind::Block || (c.style->IsOutOfFlow() && !c.style->IsFloating())) continue;
+    if (c.inlineLevel) continue;
+    right = std::max(right, ox + c.x + c.width);
+    bottom = std::max(bottom, oy + c.y + c.height);
+    if (c.style->overflowX == Overflow::Visible && c.style->overflowY == Overflow::Visible) ContentReach(c, ox + c.x, oy + c.y, right, bottom);
+  }
+}
+
+}  // namespace
+
+void ReserveScrollbarsFor(Box& box) { ReserveScrollbars(box); }
+
+void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cbHeight, bool shrinkToFit);
+
+// A box whose overflow is auto has a scrollbar when its contents overflow it, which is known once they are laid out: then it is laid out again with room for it.
+static void LayoutBlockLevelDetecting(LayoutContext& lc, Box& box, double cbWidth, double cbHeight, bool shrinkToFit) {
+  const double forceWidth = lc.forceWidth, forceHeight = lc.forceHeight, availOverride = lc.availOverride;
+  const bool keepOwnFrame = lc.keepOwnFrame;
+  dom::Element* const element = box.node && box.node->IsElement() ? static_cast<dom::Element*>(box.node) : nullptr;
+  box.scrollbarForce[0] = box.scrollbarForce[1] = false;
+  if (element && lc.tree.keepScrollbars) {
+    box.scrollbarForce[0] = element->scrollbarSeen[0];
+    box.scrollbarForce[1] = element->scrollbarSeen[1];
+  }
+  LayoutBlockLevelOnce(lc, box, cbWidth, cbHeight, shrinkToFit);
+  const BoxStyle& p = box.style->Physical();
+  if ((p.overflowX != Overflow::Auto && p.overflowY != Overflow::Auto) || box.replaced || box.kind != Box::Kind::Block) return;
+  const WritingMode mode = box.Mode();
+  const Box* frameBox = box.parent;
+  while (frameBox && frameBox->kind != Box::Kind::Block) frameBox = frameBox->parent;
+  if (!keepOwnFrame && frameBox && Orthogonal(frameBox->Mode(), mode)) return;
+  for (int pass = 0; pass < 3; ++pass) {
+    double right = 0, bottom = 0;
+    ContentReach(box, 0, 0, right, bottom);
+    const double contentRight = box.ContentLeft() + box.ContentWidth() + 0.01, contentBottom = box.ContentTop() + box.ContentHeight() + 0.01;
+    const bool inlineOverflow = right > contentRight, blockOverflow = bottom > contentBottom;
+    const bool horizontalMode = mode == WritingMode::HorizontalTb;
+    const bool needVertical = (horizontalMode ? blockOverflow : inlineOverflow) && p.overflowY == Overflow::Auto;
+    const bool needHorizontal = (horizontalMode ? inlineOverflow : blockOverflow) && p.overflowX == Overflow::Auto;
+    if ((!needVertical || box.scrollbarForce[0]) && (!needHorizontal || box.scrollbarForce[1])) return;
+    if (needVertical) box.scrollbarForce[0] = true;
+    if (needHorizontal) box.scrollbarForce[1] = true;
+    lc.forceWidth = forceWidth;
+    lc.forceHeight = forceHeight;
+    lc.availOverride = availOverride;
+    lc.keepOwnFrame = keepOwnFrame;
+    LayoutBlockLevelOnce(lc, box, cbWidth, cbHeight, shrinkToFit);
+  }
+}
+
 void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeight, bool shrinkToFit) {
+  LayoutBlockLevelDetecting(lc, box, cbWidth, cbHeight, shrinkToFit);
+  if (box.node && box.node->IsElement() && !box.anonymous) {
+    dom::Element* element = static_cast<dom::Element*>(box.node);
+    element->scrollbarSeen[0] = box.scrollbarForce[0];
+    element->scrollbarSeen[1] = box.scrollbarForce[1];
+  }
+}
+
+void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cbHeight, bool shrinkToFit) {
   const BoxStyle& s = *box.style;
   double forceWidth = lc.forceWidth, forceHeight = lc.forceHeight, availOverride = lc.availOverride;
   lc.forceWidth = lc.forceHeight = lc.availOverride = kNaN;
@@ -514,7 +625,8 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
   const double savedContainerX = lc.containerX, savedContainerY = lc.containerY;
 
   ResolveEdges(box, cbWidth);
-  const double extrasH = ExtrasHorizontal(box);
+  ReserveScrollbars(box);
+  const double extrasH = ExtrasHorizontal(box), sbH = box.scrollbar.Horizontal(), sbV = box.scrollbar.Vertical();
   const double extrasV = ExtrasVertical(box);
   const bool borderBox = s.boxSizing == BoxSizing::BorderBox;
   const bool autoLeft = s.margin[3].IsAuto(), autoRight = s.margin[1].IsAuto();
@@ -525,7 +637,7 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
   const double availableWidth = Known(availOverride) ? availOverride : cbWidth;
 
   // ---- width ----
-  const auto contentFromSpecified = [&](double specified) { return borderBox ? std::max(0.0, specified - extrasH) : std::max(0.0, specified); };
+  const auto contentFromSpecified = [&](double specified) { return borderBox ? std::max(0.0, specified - extrasH) : std::max(0.0, specified - sbH); };
   double width = kNaN;
   bool widthAuto = true;
   if (Known(forceWidth)) {
@@ -552,9 +664,9 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
   const auto clampWidth = [&](double w) {
     if (Known(forceWidth)) return w;
     const double maxW = ResolveSize(s.maxWidth, cbWidth);
-    if (Known(maxW)) w = std::min(w, borderBox ? std::max(0.0, maxW - extrasH) : maxW);
+    if (Known(maxW)) w = std::min(w, std::max(0.0, maxW - (borderBox ? extrasH : sbH)));
     const double minW = ResolveSize(s.minWidth, cbWidth);
-    if (Known(minW)) w = std::max(w, borderBox ? std::max(0.0, minW - extrasH) : minW);
+    if (Known(minW)) w = std::max(w, std::max(0.0, minW - (borderBox ? extrasH : sbH)));
     else if (s.minWidth.kind == Length::Kind::MinContent || s.minWidth.kind == Length::Kind::MaxContent) {
       ComputeContentSizes(lc, box);
       w = std::max(w, s.minWidth.kind == Length::Kind::MinContent ? box.minContent : box.maxContent);
@@ -618,7 +730,7 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
 
   // ---- height basis for the children ----
   double specifiedHeight = Known(forceHeight) ? forceHeight : ResolveSize(s.height, cbHeight);
-  if (Known(specifiedHeight) && !Known(forceHeight)) specifiedHeight = borderBox ? std::max(0.0, specifiedHeight - extrasV) : specifiedHeight;
+  if (Known(specifiedHeight) && !Known(forceHeight)) specifiedHeight = std::max(0.0, specifiedHeight - (borderBox ? extrasV : sbV));
   // aspect-ratio gives a height from the width.
   double ratioHeight = kNaN;
   if (!box.replaced && s.aspectRatio > 0 && !Known(specifiedHeight) && !s.aspectRatioAuto) ratioHeight = width / s.aspectRatio;
@@ -649,7 +761,7 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
   const bool heightIsAuto = !Known(specifiedHeight) && !Known(ratioHeight);
   const double minH = [&] {
     const double v = ResolveSize(s.minHeight, cbHeight);
-    return Known(v) ? (borderBox ? std::max(0.0, v - extrasV) : v) : 0.0;
+    return Known(v) ? std::max(0.0, v - (borderBox ? extrasV : sbV)) : 0.0;
   }();
   // A box's top margin is the first child's too if nothing is between them.
   const bool topOpen = !establishes && box.border.top == 0 && box.padding.top == 0;
@@ -697,6 +809,7 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
     hasContent = !box.children.empty();
   } else if (box.hasInlineContent) {
     double baseline = -1;
+    lc.inlineCbHeight = heightForChildren;
     contentHeight = LayoutInlineContent(lc, box, width, baseline);
     box.baseline = baseline >= 0 ? box.ContentTop() + baseline : -1;
     hasContent = !box.lines.empty();
@@ -740,7 +853,7 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
   else usedHeight = s.containSizeBlock && !IsGridDisplay(s.display) ? (s.containIntrinsicHeightSet ? s.containIntrinsicHeight.value : 0) : contentHeight;
   if (!Known(forceHeight)) {
     const double maxH = ResolveSize(s.maxHeight, cbHeight);
-    if (Known(maxH)) usedHeight = std::min(usedHeight, borderBox ? std::max(0.0, maxH - extrasV) : maxH);
+    if (Known(maxH)) usedHeight = std::min(usedHeight, std::max(0.0, maxH - (borderBox ? extrasV : sbV)));
     usedHeight = std::max(usedHeight, minH);
   }
   usedHeight = std::max(0.0, usedHeight);

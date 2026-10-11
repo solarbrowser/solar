@@ -36,10 +36,10 @@ void Apply(Tree& tree, Box& box) {
     double portX, portY, portWidth, portHeight, scrollX = 0, scrollY = 0;
     if (scroller) {
       const Rect abs = AbsoluteBorderBox(*scroller);
-      portX = abs.x + scroller->border.left;
-      portY = abs.y + scroller->border.top;
-      portWidth = scroller->width - scroller->border.Horizontal();
-      portHeight = scroller->height - scroller->border.Vertical();
+      portX = abs.x + scroller->border.left + scroller->scrollbar.left;
+      portY = abs.y + scroller->border.top + scroller->scrollbar.top;
+      portWidth = scroller->width - scroller->border.Horizontal() - scroller->scrollbar.Horizontal();
+      portHeight = scroller->height - scroller->border.Vertical() - scroller->scrollbar.Vertical();
       const auto found = scroller->node ? tree.scroll.find(scroller->node) : tree.scroll.end();
       if (found != tree.scroll.end()) {
         scrollX = found->second.first;
@@ -67,8 +67,9 @@ void Apply(Tree& tree, Box& box) {
     if (container) {
       content.x += container->border.left + container->padding.left;
       content.y += container->border.top + container->padding.top;
-      content.width = container->ContentWidth();
-      content.height = container->ContentHeight();
+      // A scrollbar takes no room from the block a sticky box is held in.
+      content.width = container->ContentWidth() + container->scrollbar.Horizontal();
+      content.height = container->ContentHeight() + container->scrollbar.Vertical();
     }
     // The part of the scroll container that is seen, and the sticky view rectangle inside it.
     const double viewLeft = portX + scrollX, viewTop = portY + scrollY, viewRight = viewLeft + portWidth, viewBottom = viewTop + portHeight;

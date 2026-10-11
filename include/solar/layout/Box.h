@@ -91,6 +91,8 @@ struct Box {
   // The border box, relative to the parent's border box (for an inline box: its first fragment, relative to the block container).
   double x = 0, y = 0, width = 0, height = 0;
   Edges margin, border, padding;
+  Edges scrollbar;  // the room scrollbars take, which is part of the padding (and gutters, which are kept whether or not a scrollbar is shown)
+  bool scrollbarForce[2] = {false, false};  // a scrollbar overflow: auto came to need: [0] the one on the right or left, [1] the one at the bottom
   // Inline boxes: where each piece of it fell, relative to the border box of the block container that holds the lines.
   std::vector<Rect> fragments;
   // Block containers with inline content: the lines, in the container's border box.
@@ -136,6 +138,7 @@ struct Tree {
   std::unique_ptr<Box> root;  // the initial containing block, anonymous, whose only child is the root element's box
   std::unordered_map<const dom::Node*, std::vector<Box*>> boxesOf;
   double viewportWidth = 800, viewportHeight = 600;
+  bool keepScrollbars = false;  // layout is being repeated for container queries: the scrollbars of the pass before stay
   Overflow viewportOverflowX = Overflow::Auto, viewportOverflowY = Overflow::Auto;  // the overflow of the viewport, the root element's or the body's
   uint64_t builtFor = 0;  // the versions of the tree and of style it was made from
   // How far elements (and the viewport, under the document) are scrolled; carried over when the tree is made again.

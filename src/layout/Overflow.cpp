@@ -190,11 +190,17 @@ Rect ScrollableOverflow(Tree& tree, const Box& scroller, dom::Element* rootEleme
   if (viewport) {
     padding = {0, 0, tree.viewportWidth, tree.viewportHeight};
   } else {
-    padding = {abs.x + scroller.border.left, abs.y + scroller.border.top, scroller.width - scroller.border.Horizontal(), scroller.height - scroller.border.Vertical()};
+    padding = {abs.x + scroller.border.left + scroller.scrollbar.left, abs.y + scroller.border.top + scroller.scrollbar.top, scroller.width - scroller.border.Horizontal() - scroller.scrollbar.Horizontal(), scroller.height - scroller.border.Vertical() - scroller.scrollbar.Vertical()};
   }
   // The direction the scrolling starts from is that of the box (of the root element, for the viewport).
   const BoxStyle* styleBox = &scroller.style->Physical();
   Edges padEdges = viewport ? Edges() : scroller.padding;
+  if (!viewport) {
+    padEdges.top -= scroller.scrollbar.top;
+    padEdges.right -= scroller.scrollbar.right;
+    padEdges.bottom -= scroller.scrollbar.bottom;
+    padEdges.left -= scroller.scrollbar.left;
+  }
   if (viewport && rootElement) {
     for (const Box* b : BoxesOf(tree, rootElement)) {
       if (b->kind == Box::Kind::Block) {

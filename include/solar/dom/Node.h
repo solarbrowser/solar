@@ -234,6 +234,7 @@ struct Element : Node {
   std::map<std::string, std::map<std::string, std::string>> animatedValues;
   // The content box of an element that is a size container, as layout found it (negative: not known), for container queries.
   double containerWidth = -1, containerHeight = -1;
+  bool scrollbarSeen[2] = {false, false};  // the scrollbars the last layout gave it: kept while container queries are settled, so they do not flicker
   // The computed values script last read (pseudo-element name → property → value): the style from before a change, for transitions.
   std::map<std::string, std::map<std::string, std::string>> lastRead;
 

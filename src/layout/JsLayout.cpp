@@ -63,8 +63,8 @@ Value Metrics(Context& ctx, Value, qe::Args args, Value) {
   const Rect abs = AbsoluteBorderBox(*box);
   const bool isRoot = ViewportElement(element->nodeDocument) == element;
   const bool inlineBox = box->kind != Box::Kind::Block;
-  double clientWidth = inlineBox ? 0 : box->width - box->border.Horizontal();
-  double clientHeight = inlineBox ? 0 : box->height - box->border.Vertical();
+  double clientWidth = inlineBox ? 0 : box->width - box->border.Horizontal() - box->scrollbar.Horizontal();
+  double clientHeight = inlineBox ? 0 : box->height - box->border.Vertical() - box->scrollbar.Vertical();
   if (isRoot) {
     clientWidth = tree->viewportWidth;
     clientHeight = tree->viewportHeight;
@@ -77,8 +77,8 @@ Value Metrics(Context& ctx, Value, qe::Args args, Value) {
     scrollWidth = std::max(clientWidth, overflow.width);
     scrollHeight = std::max(clientHeight, overflow.height);
   }
-  push(inlineBox ? 0 : box->border.top);
-  push(inlineBox ? 0 : box->border.left);
+  push(inlineBox ? 0 : box->border.top + box->scrollbar.top);
+  push(inlineBox ? 0 : box->border.left + box->scrollbar.left);
   push(clientWidth);
   push(clientHeight);
   push(inlineBox ? 0 : scrollWidth);

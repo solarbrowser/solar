@@ -402,6 +402,11 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
     const std::string count = get("column-count"), width = get("column-width");
     s.columnCount = count == "auto" || count.empty() ? 0 : std::max(0, static_cast<int>(Number(count, 0)));
     s.columnWidth = width == "auto" || width.empty() ? -1 : Number(width, -1);
+    const std::string scrollbarWidth = get("scrollbar-width");
+    s.scrollbarWidth = scrollbarWidth == "thin" ? BoxStyle::ScrollbarWidth::Thin : scrollbarWidth == "none" ? BoxStyle::ScrollbarWidth::None : BoxStyle::ScrollbarWidth::Auto;
+    const std::string gutter = get("scrollbar-gutter");
+    s.gutterStable = gutter.find("stable") != std::string::npos;
+    s.gutterBothEdges = gutter.find("both-edges") != std::string::npos;
     s.columnFillAuto = get("column-fill") == "auto";
     s.columnSpanAll = get("column-span") == "all";
     const auto breakKind = [&](const char* property) {

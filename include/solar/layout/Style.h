@@ -160,6 +160,9 @@ struct BoxStyle {
   bool columnSpanAll = false;
   BreakKind breakBefore = BreakKind::Auto, breakAfter = BreakKind::Auto, breakInside = BreakKind::Auto;
   int orphans = 2, widows = 2;
+  // Scrollbars (css-scrollbars, css-overflow-4): how thick they are, and whether room is kept for them whether or not they show.
+  enum class ScrollbarWidth : uint8_t { Auto, Thin, None } scrollbarWidth = ScrollbarWidth::Auto;
+  bool gutterStable = false, gutterBothEdges = false;
   bool IsMulticol() const { return columnCount > 0 || columnWidth >= 0; }
 
   // For a style in the logical frame of its writing mode (see Logicalize): the style as written, with the physical properties.

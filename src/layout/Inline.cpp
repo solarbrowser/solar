@@ -667,7 +667,9 @@ void MeasureAtom(LayoutContext& lc, Atom& a, double availableForAtomic) {
       break;
     }
     case Atom::Kind::Atomic: {
-      LayoutBlockLevel(lc, *a.box, availableForAtomic, std::numeric_limits<double>::quiet_NaN(), true);
+      const double cbHeight = lc.inlineCbHeight;
+      LayoutBlockLevel(lc, *a.box, availableForAtomic, cbHeight, true);
+      lc.inlineCbHeight = cbHeight;
       a.width = a.box->margin.left + a.box->width + a.box->margin.right;
       break;
     }

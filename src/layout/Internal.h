@@ -40,6 +40,7 @@ struct LayoutContext {
   // One-shot overrides for the box laid out next (positioned boxes whose sizes their offsets give).
   double forceWidth = std::numeric_limits<double>::quiet_NaN();   // content width
   double forceHeight = std::numeric_limits<double>::quiet_NaN();  // content height
+  double inlineCbHeight = std::numeric_limits<double>::quiet_NaN();  // the height inline-blocks resolve their percentages against
   bool keepOwnFrame = false;  // positioned boxes: left in their own frame, placed by PlaceOne
   // The width an auto-width box has to fit in when it is not the containing block's (beside floats).
   double availOverride = std::numeric_limits<double>::quiet_NaN();
@@ -56,6 +57,8 @@ void LayoutRoot(LayoutContext& lc);
 // Lays out a block-level box in a containing block `cbWidth` wide, and `cbHeight` high where that is known (NaN where not).
 // With `shrinkToFit` an auto width is the box's contents' preferred width, within what is available (floats, inline-blocks, positioned boxes).
 void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeight, bool shrinkToFit = false);
+// Adds the scrollbars and gutters a box is known to have (not the ones found by laying it out) to its padding, for the layouts that resolve the edges themselves.
+void ReserveScrollbarsFor(Box& box);
 // The block children [first, last) of a box laid out one under another in a column, from the origin of a formatting context of their own.
 void LayoutBlockFlow(LayoutContext& lc, Box& box, double contentWidth, size_t first, size_t last, double& contentHeight);
 // Columns.cpp: a multicol container's contents laid out in columns. Sets the box's content height.

@@ -64,9 +64,12 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
   // The styles that depend on the size of containers are made from the sizes of the last pass; layout is done again until they stop changing.
   for (int pass = 0; pass < 5; ++pass) {
     tree = std::make_shared<Tree>();
-    tree->viewportWidth = environment.width;
-    tree->viewportHeight = environment.height;
-    LayoutContext lc{ctx, *tree, environment.width, environment.height};
+    tree->keepScrollbars = pass > 0;
+    double barWidth = 0, barHeight = 0;
+    css::ViewportScrollbars(ctx, document, barWidth, barHeight);
+    tree->viewportWidth = environment.width - barWidth;
+    tree->viewportHeight = environment.height - barHeight;
+    LayoutContext lc{ctx, *tree, tree->viewportWidth, tree->viewportHeight};
     BuildTree(lc, document);
     LayoutRoot(lc);
     if (!document->containerQueriesSeen || !UpdateContainerSizes(*tree)) break;
@@ -348,11 +351,11 @@ bool UsedValue(Tree& tree, dom::Element* element, const std::string& property, s
   }
   if (isInline) return false;
   if (property == "width") {
-    out = Px(box->style->boxSizing == BoxSizing::BorderBox ? box->width : box->ContentWidth());
+    out = Px(box->style->boxSizing == BoxSizing::BorderBox ? box->width : box->ContentWidth() + box->scrollbar.Horizontal());
     return true;
   }
   if (property == "height") {
-    out = Px(box->style->boxSizing == BoxSizing::BorderBox ? box->height : box->ContentHeight());
+    out = Px(box->style->boxSizing == BoxSizing::BorderBox ? box->height : box->ContentHeight() + box->scrollbar.Vertical());
     return true;
   }
   return false;
@@ -548,8 +551,8 @@ void ScrollBounds(Tree& tree, dom::Element* element, double& minX, double& minY,
     if (!scrolls(p.overflowX) && !scrolls(p.overflowY)) return;
   }
   const Rect overflow = ScrollableOverflow(tree, *scroller, scroller == tree.root.get() ? document->DocumentElement() : nullptr);
-  const double clientW = scroller == tree.root.get() ? tree.viewportWidth : scroller->width - scroller->border.Horizontal();
-  const double clientH = scroller == tree.root.get() ? tree.viewportHeight : scroller->height - scroller->border.Vertical();
+  const double clientW = scroller == tree.root.get() ? tree.viewportWidth : scroller->width - scroller->border.Horizontal() - scroller->scrollbar.Horizontal();
+  const double clientH = scroller == tree.root.get() ? tree.viewportHeight : scroller->height - scroller->border.Vertical() - scroller->scrollbar.Vertical();
   minX = std::min(0.0, overflow.x);
   minY = std::min(0.0, overflow.y);
   maxX = std::max(0.0, overflow.Right() - clientW);
