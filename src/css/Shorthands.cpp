@@ -507,6 +507,99 @@ std::optional<std::string> SerializeGridTemplate(const std::string& rows, const 
   return out;
 }
 
+// ---- grid-lanes ----
+
+struct GridLanes {
+  std::string rows = "none", columns = "none", areas = "none", direction = "column";
+};
+
+// grid-lanes: the area string, the tracks and the direction, in any order; the tracks are those of the rows or of the columns as the direction says.
+std::optional<GridLanes> ParseGridLanes(const ComponentValues& values) {
+  const std::vector<ComponentValue> items = NonSpace(values);
+  GridLanes result;
+  if (items.empty()) return std::nullopt;
+  if (items.size() == 1 && items[0].IsIdent() && Lower(items[0].token.value) == "none") return result;
+  std::string base, area;
+  bool fill = false, track = false, haveArea = false, trackFirst = false;
+  ComponentValues tracks;
+  for (const ComponentValue& v : items) {
+    if (v.IsToken(T::String)) {
+      if (haveArea) return std::nullopt;
+      haveArea = true;
+      area = v.token.value;
+    } else if (v.IsIdent()) {
+      const std::string w = Lower(v.token.value);
+      if (w == "row" || w == "column" || w == "normal") {
+        if (!base.empty()) return std::nullopt;
+        base = w;
+      } else if (w == "fill-reverse") {
+        if (fill) return std::nullopt;
+        fill = true;
+        trackFirst = track && !trackFirst ? true : trackFirst;
+      } else if (w == "track-reverse") {
+        if (track) return std::nullopt;
+        track = true;
+      } else {
+        tracks.push_back(v);
+      }
+    } else {
+      tracks.push_back(v);
+    }
+  }
+  if ((fill || track) && (base.empty() || base == "normal")) return std::nullopt;
+  // (The flags stay in the order they were written.)
+  result.direction = base.empty() ? "column" : base + (trackFirst ? " track-reverse" : "") + (fill ? " fill-reverse" : "") + (track && !trackFirst ? " track-reverse" : "");
+  const std::string trackText = tracks.empty() ? "none" : SerializeValue(tracks);
+  (base == "row" ? result.rows : result.columns) = trackText;
+  if (haveArea) {
+    if (base == "row") {
+      // The cells of the string are rows, each its own string.
+      std::string word, cells;
+      for (size_t i = 0; i <= area.size(); ++i) {
+        if (i == area.size() || area[i] == ' ' || area[i] == '\t' || area[i] == '\n') {
+          if (!word.empty()) cells += (cells.empty() ? "" : " ") + SerializeString(word);
+          word.clear();
+        } else {
+          word += area[i];
+        }
+      }
+      result.areas = cells;
+    } else {
+      result.areas = SerializeString(area);
+    }
+  }
+  if (result.areas.empty()) return std::nullopt;
+  if (!ValidFor("grid-template-rows", result.rows) || !ValidFor("grid-template-columns", result.columns) || !ValidFor("grid-template-areas", result.areas)) return std::nullopt;
+  return result;
+}
+
+std::optional<std::string> SerializeGridLanes(const std::string& rows, const std::string& columns, const std::string& areas, const std::string& direction) {
+  const bool rowLanes = direction.rfind("row", 0) == 0;
+  std::string out;
+  if (areas != "none") {
+    std::vector<std::string> strings;
+    for (const ComponentValue& v : ParseComponentValues(areas)) {
+      if (v.IsToken(T::String)) strings.push_back(v.token.value);
+    }
+    if (strings.empty()) return std::nullopt;
+    if (rowLanes) {
+      std::string cells;
+      for (const std::string& s : strings) {
+        if (s.find(' ') != std::string::npos) return std::nullopt;
+        cells += (cells.empty() ? "" : " ") + s;
+      }
+      out = SerializeString(cells);
+    } else {
+      if (strings.size() != 1) return std::nullopt;
+      out = SerializeString(strings[0]);
+    }
+  }
+  const std::string& tracks = rowLanes ? rows : columns;
+  if (tracks != "none") out += (out.empty() ? "" : " ") + tracks;
+  out += (out.empty() ? "" : " ") + direction;
+  return out;
+}
+
 // grid: a template, or an implicit grid in one direction.
 bool ExpandGrid(const PropertyDefinition& property, const ComponentValues& values, std::vector<Longhand>& out) {
   const auto emit = [&](const GridTemplate& t, const std::string& autoRows, const std::string& autoColumns, const std::string& flow) {
@@ -596,6 +689,17 @@ bool ExpandShorthand(const PropertyDefinition& property, const ComponentValues& 
     ExpandLonghand("grid-template-columns", t->columns, mine);
     ExpandLonghand("grid-template-areas", t->areas, mine);
     for (Longhand& l : mine) out.push_back(std::move(l));
+    return true;
+  }
+  if (property.name == std::string("grid-lanes")) {
+    std::optional<GridLanes> l = ParseGridLanes(values);
+    if (!l) return false;
+    std::vector<Longhand> mine;
+    ExpandLonghand("grid-template-rows", l->rows, mine);
+    ExpandLonghand("grid-template-columns", l->columns, mine);
+    ExpandLonghand("grid-template-areas", l->areas, mine);
+    ExpandLonghand("grid-lanes-direction", l->direction, mine);
+    for (Longhand& l2 : mine) out.push_back(std::move(l2));
     return true;
   }
   if (property.name == std::string("grid")) {
@@ -991,6 +1095,11 @@ std::optional<std::string> SerializeShorthand(const PropertyDefinition& shorthan
     const std::optional<std::string> text = SerializeGridTemplate(input.values[0], input.values[1], input.values[2]);
     if (!text) return std::nullopt;
     candidate = *text;
+  } else if (name == "grid-lanes") {
+    if (n != 4) return std::nullopt;
+    const std::optional<std::string> text = SerializeGridLanes(input.values[0], input.values[1], input.values[2], input.values[3]);
+    if (!text) return std::nullopt;
+    candidate = *text;
   } else if (name == "grid") {
     if (n != 6) return std::nullopt;
     // rows, columns, areas, auto-rows, auto-columns, auto-flow
@@ -1096,6 +1205,8 @@ std::optional<std::string> SerializeShorthand(const PropertyDefinition& shorthan
     }
     if (candidate.empty()) candidate = input.values[0];
   }
+  // (Grid lanes leave out the axis that does not have the lanes: what is in it does not stop the rest being the shorthand.)
+  if (name == "grid-lanes") return candidate;
   // It is the shorthand only if it reads back as the same longhands.
   std::map<std::string, std::string> wanted;
   for (size_t i = 0; i < n; ++i) {

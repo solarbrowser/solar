@@ -660,6 +660,23 @@ class Builder {
     }
     const bool isReplaced = ReplacedSize(element, dom::DocumentBaseUri(element->nodeDocument), *box);
     const bool control = !isReplaced && ControlSize(lc_, element, *box);
+    // A form control is not a container of boxes: flex and grid are a block (or an inline-block) to it.
+    if (control) {
+      const Display d = box->style->display;
+      if (d == Display::Flex || d == Display::Grid || d == Display::InlineFlex || d == Display::InlineGrid) {
+        auto changed = std::make_shared<BoxStyle>(*box->style);
+        changed->display = (d == Display::Flex || d == Display::Grid) ? Display::Block : Display::InlineBlock;
+        changed->gridLanes = false;
+        if (changed->physicalStyle) {
+          auto physical = std::make_shared<BoxStyle>(*changed->physicalStyle);
+          physical->display = changed->display;
+          physical->gridLanes = false;
+          changed->physicalStyle = physical;
+        }
+        box->style = changed;
+        box->inlineLevel = changed->display == Display::InlineBlock && !box->style->IsOutOfFlow() && !box->style->IsFloating();
+      }
+    }
     // The table-internal displays do not apply to what is replaced or a control: it is inline.
     if (isReplaced || control) {
       const Display d = box->style->display;

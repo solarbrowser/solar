@@ -275,7 +275,7 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
   s.display = Pick<Display>(display, {
       {"none", Display::None}, {"contents", Display::Contents}, {"block", Display::Block}, {"flow-root", Display::FlowRoot}, {"inline", Display::Inline},
       {"inline-block", Display::InlineBlock}, {"inline flow-root", Display::InlineBlock}, {"list-item", Display::ListItem}, {"flex", Display::Flex},
-      {"inline-flex", Display::InlineFlex}, {"grid", Display::Grid}, {"inline-grid", Display::InlineGrid}, {"table", Display::Table},
+      {"inline-flex", Display::InlineFlex}, {"grid", Display::Grid}, {"inline-grid", Display::InlineGrid}, {"grid-lanes", Display::Grid}, {"inline-grid-lanes", Display::InlineGrid}, {"table", Display::Table},
       {"inline-table", Display::InlineTable}, {"table-row-group", Display::TableRowGroup}, {"table-header-group", Display::TableHeaderGroup},
       {"table-footer-group", Display::TableFooterGroup}, {"table-row", Display::TableRow}, {"table-cell", Display::TableCell},
       {"table-column", Display::TableColumn}, {"table-column-group", Display::TableColumnGroup}, {"table-caption", Display::TableCaption},
@@ -283,6 +283,7 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
       {"ruby-base-container", Display::RubyBaseContainer}, {"block flow", Display::Block}, {"inline flow", Display::Inline}, {"block flow-root", Display::FlowRoot},
       {"block flex", Display::Flex}, {"inline flex", Display::InlineFlex}, {"block grid", Display::Grid}, {"inline grid", Display::InlineGrid},
       {"block table", Display::Table}, {"inline table", Display::InlineTable}, {"list-item block flow", Display::ListItem}, {"block flow list-item", Display::ListItem}}, Display::Inline);
+  s.gridLanes = display == "grid-lanes" || display == "inline-grid-lanes" || display == "block grid-lanes" || display == "inline grid-lanes";
   s.position = Pick<Position>(get("position"), {{"relative", Position::Relative}, {"absolute", Position::Absolute}, {"fixed", Position::Fixed}, {"sticky", Position::Sticky}, {"-webkit-sticky", Position::Sticky}}, Position::Static);
   s.floating = Pick<Float>(get("float"), {{"left", Float::Left}, {"right", Float::Right}, {"inline-start", Float::InlineStart}, {"inline-end", Float::InlineEnd}}, Float::None);
   s.clear = Pick<Clear>(get("clear"), {{"left", Clear::Left}, {"right", Clear::Right}, {"both", Clear::Both}, {"inline-start", Clear::InlineStart}, {"inline-end", Clear::InlineEnd}}, Clear::None);
@@ -392,6 +393,11 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
     s.gridTemplateRows = get("grid-template-rows");
     s.gridTemplateAreas = get("grid-template-areas");
     s.gridAutoFlow = get("grid-auto-flow");
+    if (s.gridLanes) {
+      s.gridLanesDirection = get("grid-lanes-direction");
+      s.flowTolerance = get("flow-tolerance");
+      s.gridLanesDense = get("grid-lanes-pack") == "dense";
+    }
     s.gridAutoColumns = get("grid-auto-columns");
     s.gridAutoRows = get("grid-auto-rows");
     s.gridColumnStart = get("grid-column-start");

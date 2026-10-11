@@ -158,6 +158,10 @@ struct BoxStyle {
 
   // Grid (css-grid): the computed values as text, read where the grid is laid out.
   std::string gridTemplateColumns, gridTemplateRows, gridTemplateAreas, gridAutoFlow, gridAutoColumns, gridAutoRows;
+  // Grid lanes: a grid whose items are packed into the lanes of one axis (display: grid-lanes).
+  bool gridLanes = false;
+  std::string gridLanesDirection = "normal", flowTolerance = "normal";
+  bool gridLanesDense = false;
   std::string gridColumnStart, gridColumnEnd, gridRowStart, gridRowEnd;
   Length rowGap, columnGap;  // Auto: normal (0 in flex, the default in grid)
   // Multiple columns (css-multicol) and fragmentation (css-break).

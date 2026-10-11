@@ -1507,7 +1507,7 @@ void CanonicalDisplay(ValueMatch& match) {
   bool listItem = false;
   for (const std::string& w : words) {
     if (w == "block" || w == "inline" || w == "run-in") outside = w;
-    else if (w == "flow" || w == "flow-root" || w == "table" || w == "flex" || w == "grid" || w == "ruby") inside = w;
+    else if (w == "flow" || w == "flow-root" || w == "table" || w == "flex" || w == "grid" || w == "grid-lanes" || w == "ruby") inside = w;
     else if (w == "list-item") listItem = true;
     else return;  // a keyword of its own
   }

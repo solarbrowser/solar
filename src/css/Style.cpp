@@ -1529,9 +1529,15 @@ std::string Resolver::Finish(dom::Element* element, const std::string& property,
   // A subgrid is a grid container in a grid: elsewhere what it says of itself does not count.
   if ((property == "grid-template-columns" || property == "grid-template-rows") && values.size() >= 1 && values[0].IsIdent() && Lower(values[0].token.value) == "subgrid" && pseudo.empty()) {
     const std::string own = Compute(element, "display", pseudo);
-    if (own == "grid" || own == "inline-grid") {
+    if (own == "grid" || own == "inline-grid" || own == "grid-lanes" || own == "inline-grid-lanes") {
       const std::string up = parent.element ? Compute(parent.element, "display", "") : std::string();
-      if (up != "grid" && up != "inline-grid") return "none";
+      if (up != "grid" && up != "inline-grid" && up != "grid-lanes" && up != "inline-grid-lanes") return "none";
+      // The axis that grid lanes run along is not a grid of lines, so there is nothing to be a subgrid of.
+      if (up == "grid-lanes" || up == "inline-grid-lanes") {
+        const std::string direction = Compute(parent.element, "grid-lanes-direction", "");
+        const bool rowLanes = direction.rfind("row", 0) == 0 || (direction.rfind("normal", 0) == 0 && Compute(parent.element, "grid-template-columns", "") == "none" && Compute(parent.element, "grid-template-rows", "") != "none");
+        if ((property == "grid-template-columns") == rowLanes) return "none";
+      }
     }
   }
 
@@ -1555,6 +1561,19 @@ std::string Resolver::Finish(dom::Element* element, const std::string& property,
       if (word == "smaller") return FormatNumber(context.fontSize / 1.2) + "px";
     }
     if (values.size() == 1 && values[0].kind == Cv::Kind::Token && values[0].token.type == T::Percentage) return FormatNumber(context.fontSize * values[0].token.number / 100) + "px";
+  }
+  if (property == "grid-lanes-direction") {
+    // Computed, the reversals come in one order: fill-reverse, then track-reverse.
+    std::string base;
+    bool fill = false, track = false;
+    for (const ComponentValue& v : values) {
+      if (!v.IsIdent()) continue;
+      const std::string w = Lower(v.token.value);
+      if (w == "fill-reverse") fill = true;
+      else if (w == "track-reverse") track = true;
+      else base = w;
+    }
+    if (!base.empty()) return base + (fill ? " fill-reverse" : "") + (track ? " track-reverse" : "");
   }
   if (property == "font-weight" && values.size() == 1 && values[0].IsIdent()) {
     const std::string word = Lower(values[0].token.value);

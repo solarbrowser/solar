@@ -253,6 +253,7 @@ struct GridItem {
   // A subgrid does not size the tracks it spans by itself: the items inside it do, as if they were items of the grid it is in.
   bool subgridAxis[2] = {false, false};
   int onlyAxis = -1;  // such an item of a subgrid takes part in the sizing of the one axis only
+  bool lanesAuto = false;  // in grid lanes, an item with no lane of its own: it counts for the lanes it could be in
   bool hasColumns = false;  // (for the rows) its columns are known too
   // Baseline alignment in an axis: what the item lines up on (0 none, 1 first, 2 last), at which side of the axis (the minimum side) its baseline is read from, how far from
   // the margin edge of that side the baseline is, and how much room that group leaves it before the margin edge.
@@ -419,12 +420,13 @@ struct Grid {
     explicitCount[1] = static_cast<int>(tracks[1].size());
   }
 
+  int laneAxis = -1;  // grid lanes: the axis of the lanes
   std::vector<GridItem> virtualItems;  // the items inside the subgrids, for the sizing of the axis the subgrid shares
 
   // The items that size an axis: those that are not subgrids in it, and the items inside the subgrids that are.
   std::vector<GridItem*> SizingItems(int axis) {
     std::vector<GridItem*> out;
-    for (GridItem& it : items) if (!it.subgridAxis[axis]) out.push_back(&it);
+    for (GridItem& it : items) if (!it.subgridAxis[axis] && !(it.lanesAuto && axis == laneAxis)) out.push_back(&it);
     for (GridItem& it : virtualItems) if (it.onlyAxis == axis) out.push_back(&it);
     return out;
   }
@@ -523,13 +525,40 @@ struct Grid {
       lineNames[axis].resize(tracks[axis].size() + 1);
       // The names it gives lines itself, one list for each line from the start.
       const solar::css::ComponentValues values = solar::css::ParseComponentValues(*texts[axis]);
-      size_t line = 0;
+      // (repeat() in it repeats its names: a number of times, or as many as the lines it has room for.)
+      std::vector<std::vector<std::string>> written;
+      const auto namesOf = [&](const ComponentValue& block) {
+        std::vector<std::string> list;
+        for (const ComponentValue& name : block.children) if (name.IsIdent()) list.push_back(name.token.value);
+        return list;
+      };
+      size_t loose = 0;
+      for (const ComponentValue& v : values) if (v.IsBlock(T::LeftBracket)) ++loose;
       for (const ComponentValue& v : values) {
-        if (!v.IsBlock(T::LeftBracket)) continue;
-        if (line < lineNames[axis].size()) {
-          for (const ComponentValue& name : v.children) if (name.IsIdent()) lineNames[axis][line].push_back(name.token.value);
+        if (v.IsBlock(T::LeftBracket)) {
+          written.push_back(namesOf(v));
+        } else if (v.kind == ComponentValue::Kind::Function && Lower(v.name) == "repeat") {
+          std::string count;
+          std::vector<std::vector<std::string>> body;
+          bool afterComma = false;
+          for (const ComponentValue& c : v.children) {
+            if (c.IsToken(T::Comma)) afterComma = true;
+            else if (!afterComma && !c.IsWhitespace()) count = c.IsIdent() ? Lower(c.token.value) : std::to_string(static_cast<int>(c.token.number));
+            else if (afterComma && c.IsBlock(T::LeftBracket)) body.push_back(namesOf(c));
+          }
+          if (body.empty()) continue;
+          size_t reps = 1;
+          if (count == "auto-fill") {
+            const size_t room = lineNames[axis].size() > loose ? lineNames[axis].size() - loose : 0;
+            reps = room / body.size();
+          } else {
+            reps = static_cast<size_t>(std::max(0, std::atoi(count.c_str())));
+          }
+          for (size_t r = 0; r < reps; ++r) for (const auto& b : body) written.push_back(b);
         }
-        ++line;
+      }
+      for (size_t line = 0; line < written.size() && line < lineNames[axis].size(); ++line) {
+        for (const std::string& n : written[line]) lineNames[axis][line].push_back(n);
       }
       // Its areas name its lines too.
       for (const auto& [name, a] : areas) {
@@ -738,38 +767,43 @@ struct Grid {
     }
     // The tracks: implicit ones before, the explicit, implicit after.
     for (int a = 0; a < 2; ++a) {
-      std::vector<Track> all;
-      const std::string& autoText = a == 0 ? style.gridAutoRows : style.gridAutoColumns;
-      std::vector<TrackDef> pattern;
-      {
-        bool ok = true;
-        Segment seg;
-        if (Lower(autoText) != "auto" && !autoText.empty()) ParseSegmentInto(solar::css::ParseComponentValues(autoText), seg, ok, false, nullptr);
-        if (ok) pattern = seg.tracks;
-        if (pattern.empty()) pattern.push_back(TrackDef());
-      }
       int needed = a == 0 ? rows : cols;
       for (const GridItem& it : items) needed = std::max(needed, it.pos[a] + it.span[a]);
-      const int total = std::max(needed, explicitCount[a] + implicitBefore[a]);
-      for (int i = 0; i < implicitBefore[a]; ++i) {
-        Track t;
-        t.implicit = true;
-        t.def = pattern[(pattern.size() - 1 - (i % pattern.size()))];
-        all.push_back(t);
-      }
-      // (the implicit tracks before count backwards from the explicit start; the order is reversed below)
-      std::reverse(all.begin(), all.end());
-      for (const Track& t : tracks[a]) all.push_back(t);
-      int implicitIndex = 0;
-      while (static_cast<int>(all.size()) < total) {
-        Track t;
-        t.implicit = true;
-        t.def = pattern[implicitIndex % pattern.size()];
-        ++implicitIndex;
-        all.push_back(t);
-      }
-      tracks[a] = all;
+      BuildTracks(a, needed);
     }
+  }
+
+  // The tracks of an axis: the implicit ones before the explicit, the explicit, and the implicit ones after, up to `needed` in all.
+  void BuildTracks(int a, int needed) {
+    std::vector<Track> all;
+    const std::string& autoText = a == 0 ? style.gridAutoRows : style.gridAutoColumns;
+    std::vector<TrackDef> pattern;
+    {
+      bool ok = true;
+      Segment seg;
+      if (Lower(autoText) != "auto" && !autoText.empty()) ParseSegmentInto(solar::css::ParseComponentValues(autoText), seg, ok, false, nullptr);
+      if (ok) pattern = seg.tracks;
+      if (pattern.empty()) pattern.push_back(TrackDef());
+    }
+    const int total = std::max(needed, explicitCount[a] + implicitBefore[a]);
+    for (int i = 0; i < implicitBefore[a]; ++i) {
+      Track t;
+      t.implicit = true;
+      t.def = pattern[(pattern.size() - 1 - (i % pattern.size()))];
+      all.push_back(t);
+    }
+    // (the implicit tracks before count backwards from the explicit start; the order is reversed below)
+    std::reverse(all.begin(), all.end());
+    for (const Track& t : tracks[a]) all.push_back(t);
+    int implicitIndex = 0;
+    while (static_cast<int>(all.size()) < total) {
+      Track t;
+      t.implicit = true;
+      t.def = pattern[implicitIndex % pattern.size()];
+      ++implicitIndex;
+      all.push_back(t);
+    }
+    tracks[a] = all;
   }
 
   // ---- Items ----
@@ -936,7 +970,9 @@ struct Grid {
     // The automatic minimum size.
     double minimum;
     const bool scroller = s.overflowX != Overflow::Visible && s.overflowX != Overflow::Clip;
-    if (Known(minV)) minimum = std::max(0.0, minV);
+    // An item with a preferred size of its own is as small as that size lets it be (its minimum contribution is its min-content one).
+    if (Known(specified)) minimum = mn;
+    else if (Known(minV)) minimum = std::max(0.0, minV);
     // (the content size suggestion is the min-content contribution of the box, which its own width gives)
     else if (s.minWidth.IsAuto() && !scroller) minimum = Known(specified) ? std::min(specified, mn) : b.minContent;
     else minimum = 0;
@@ -969,7 +1005,8 @@ struct Grid {
     double minimum;
     const double minV = s.minHeight.IsPercentage() ? kNaN : ResolveSize(s.minHeight, heightBasis);
     const bool scroller = s.overflowY != Overflow::Visible && s.overflowY != Overflow::Clip;
-    if (Known(minV)) minimum = minV;
+    if (Known(specified)) minimum = Known(minV) ? std::max(specified, minV) : specified;  // (a preferred size of its own: as small as that)
+    else if (Known(minV)) minimum = minV;
     else if (s.minHeight.IsAuto() && !scroller) minimum = Known(specified) ? std::min(specified, height) : height;
     else minimum = 0;
     it.minContribution = minimum + extras;
@@ -1073,9 +1110,15 @@ struct Grid {
       }
     };
     // 12.5: intrinsic minimums, then maximums, by increasing span.
-    for (int phase = 0; phase < 4; ++phase) {
+    std::vector<int> levels;
+    for (GridItem* it : order) if (levels.empty() || levels.back() != it->span[axis]) levels.push_back(it->span[axis]);
+    // (Each span in turn: the minimums, then the maximums, before the next span: what the items of one span make of the limits is seen by the ones that follow.)
+    for (const int level : levels) for (int phase = 0; phase < 4; ++phase) {
       for (GridItem* it : order) {
-        if (spansFlexible(*it) && phase != 3) continue;
+        if (it->span[axis] != level) continue;
+        // (An item in one track counts for it whatever the track; one that spans several and crosses a flexible one is dealt with at the end.)
+        if (it->span[axis] > 1 && spansFlexible(*it) && phase != 3) continue;
+        if (phase == 3 && !(it->span[axis] > 1 && spansFlexible(*it))) continue;
         std::vector<int> intrinsicMin, intrinsicMax;
         double spanned = g * (it->span[axis] - 1);
         for (int i = it->pos[axis]; i < it->pos[axis] + it->span[axis]; ++i) {
@@ -1099,13 +1142,21 @@ struct Grid {
             if (which.empty()) continue;
             double current = g * (it->span[axis] - 1);
             for (int i = it->pos[axis]; i < it->pos[axis] + it->span[axis]; ++i) current += ts[i].base;
-            distribute(contribution - current, which, true, false);
+            distribute(contribution - current, which, true, true);
           }
         } else if (phase == 2) {
           // maximums: min-content max → min-content; max-content max (and auto) → max-content
           std::vector<int> which;
           for (int i : intrinsicMax) which.push_back(i);
           if (which.empty()) continue;
+          if (it->span[axis] == 1) {
+            // One track: its growth limit is the largest of what the items in it want (from nothing, not from its base).
+            Track& t = ts[it->pos[axis]];
+            const double want = t.def.max.k == Fn::K::MinContent ? it->minContentContribution : it->maxContentContribution;
+            t.limit = std::isinf(t.limit) ? want : std::max(t.limit, want);
+            if (t.limit < t.base) t.limit = t.base;
+            continue;
+          }
           double current = g * (it->span[axis] - 1);
           for (int i = it->pos[axis]; i < it->pos[axis] + it->span[axis]; ++i) current += std::isinf(ts[i].limit) ? ts[i].base : ts[i].limit;
           const bool anyMin = std::any_of(which.begin(), which.end(), [&](int i) { return ts[i].def.max.k == Fn::K::MinContent; });
@@ -1119,7 +1170,15 @@ struct Grid {
             distribute(contribution - current, which, false, false);
           }
         } else if (phase == 3) {
-          // items crossing flexible tracks add to those tracks' bases by their contributions (fr is then found from them)
+          // Items crossing flexible tracks: what they need beyond the tracks they span goes to the flexible ones.
+          std::vector<int> flexible;
+          double current = g * (it->span[axis] - 1);
+          for (int i = it->pos[axis]; i < it->pos[axis] + it->span[axis]; ++i) {
+            current += ts[i].base;
+            if (ts[i].def.max.k == Fn::K::Fr) flexible.push_back(i);
+          }
+          (void)current;
+          (void)flexible;
         }
       }
       if (phase == 1) {
@@ -1234,6 +1293,31 @@ struct Grid {
     return sum;
   }
 
+  std::pair<double, double> ContentOffset(int axis, double available) const {
+    // A subgridded axis has its tracks from the grid above: nothing of its own to distribute.
+    if (subgridded[axis]) return std::pair<double, double>{0, 0};
+    const double used = TrackSum(axis);
+    const double free = Known(available) ? available - used : 0;
+    Align a = axis == 1 ? style.justifyContent : style.alignContent;
+    Align::Kind k = a.kind;
+    double offset = 0, between = 0;
+    const double n = static_cast<double>(tracks[axis].size());
+    if (k == Align::Kind::SpaceBetween && free < 0) k = Align::Kind::Start;
+    if ((k == Align::Kind::SpaceAround || k == Align::Kind::SpaceEvenly) && free < 0) k = Align::Kind::Center;
+    if (a.safe && free < 0 && (k == Align::Kind::Center || k == Align::Kind::End || k == Align::Kind::FlexEnd)) k = Align::Kind::Start;
+    switch (k) {
+      case Align::Kind::End: case Align::Kind::FlexEnd: offset = free; break;
+      case Align::Kind::Center: offset = free / 2; break;
+      case Align::Kind::Right: offset = axis == 1 ? (style.direction == Direction::Rtl ? 0 : free) : 0; break;
+      case Align::Kind::Left: offset = axis == 1 && style.direction == Direction::Rtl ? free : 0; break;
+      case Align::Kind::SpaceBetween: between = n > 1 ? free / (n - 1) : 0; break;
+      case Align::Kind::SpaceAround: between = free / n; offset = between / 2; break;
+      case Align::Kind::SpaceEvenly: between = free / (n + 1); offset = between; break;
+      default: break;
+    }
+    return std::pair<double, double>{offset, between};
+  }
+
   void Positions(int axis, double offset) {
     double pos = offset;
     for (Track& t : tracks[axis]) {
@@ -1266,7 +1350,282 @@ bool StartsWithContainer(const BoxStyle& container, const BoxStyle& item, int ax
 
 }  // namespace
 
+// ---- Grid lanes (the items are packed into the lanes of one axis, each below the one before in the lane that is shortest) ----
+
+void LayoutGridLanes(LayoutContext& lc, Box& container, double contentWidth, double heightBasis, double& contentHeight) {
+  Grid grid(lc, container, contentWidth, heightBasis);
+  const BoxStyle& s = *container.style;
+  const std::string direction = Lower(s.gridLanesDirection);
+  // (With the direction normal, the lanes are those of the axis that has tracks; the columns when both have or none.)
+  const bool rowLanes = direction.rfind("row", 0) == 0 || (direction.rfind("normal", 0) == 0 && Lower(s.gridTemplateColumns) == "none" && Lower(s.gridTemplateRows) != "none");
+  const bool trackReverse = direction.find("track-reverse") != std::string::npos, fillReverse = direction.find("fill-reverse") != std::string::npos;
+  const int L = rowLanes ? 0 : 1, F = 1 - L;  // the axis of the lanes, and the one the items flow along
+  grid.laneAxis = L;
+  const double colGap = ResolveSize(s.columnGap, contentWidth), rowGap = ResolveSize(s.rowGap, heightBasis);
+  grid.gap[1] = Known(colGap) ? colGap : 0;
+  grid.gap[0] = Known(rowGap) ? rowGap : 0;
+  grid.gapGiven[1] = Known(colGap);
+  grid.gapGiven[0] = Known(rowGap);
+  std::vector<Box*> boxes;
+  for (auto& c : container.children) {
+    if (c->style->IsOutOfFlow()) {
+      c->staticX = container.ContentLeft();
+      c->staticY = container.ContentTop();
+      continue;
+    }
+    boxes.push_back(c.get());
+  }
+  std::stable_sort(boxes.begin(), boxes.end(), [](const Box* a, const Box* b) { return a->style->order < b->style->order; });
+  grid.items.resize(boxes.size());
+  for (size_t i = 0; i < boxes.size(); ++i) {
+    grid.items[i].box = boxes[i];
+    boxes[i]->subgrid[0].active = boxes[i]->subgrid[1].active = false;
+  }
+  grid.ParseTemplates(contentWidth, heightBasis);
+  // The axis the items flow along has no tracks.
+  grid.tracks[F].clear();
+  grid.explicitCount[F] = 0;
+  grid.lineNames[F].assign(1, {});
+  // Where the items are in the lanes (the ones that say).
+  int before = 0;
+  for (GridItem& it : grid.items) {
+    grid.ResolveLines(it);
+    it.definite[F] = false;
+    it.span[F] = 1;
+    it.pos[F] = 0;
+    if (it.definite[L]) before = std::max(before, -it.pos[L]);
+  }
+  grid.implicitBefore[L] = before;
+  grid.implicitBefore[F] = 0;
+  int needed = std::max(1, grid.explicitCount[L] + before);
+  for (GridItem& it : grid.items) {
+    if (it.definite[L]) it.pos[L] += before;
+    needed = std::max(needed, it.definite[L] ? it.pos[L] + it.span[L] : it.span[L]);
+  }
+  grid.BuildTracks(L, needed);
+  const int lanes = static_cast<int>(grid.tracks[L].size());
+  for (GridItem& it : grid.items) grid.ItemEdges(it, contentWidth);
+
+  // ---- The sizes of the lanes: an item with no lane of its own counts for every place it could be in. ----
+  for (GridItem& it : grid.items) {
+    if (it.definite[L]) continue;
+    it.lanesAuto = true;
+    for (int w = 0; w + it.span[L] <= lanes; ++w) {
+      GridItem v = it;
+      v.lanesAuto = false;
+      v.onlyAxis = L;
+      v.pos[L] = w;
+      grid.virtualItems.push_back(v);
+    }
+  }
+  const auto fitWidth = [&](GridItem& it) {
+    // An item that flows along the inline axis is as wide as its contents, within the room there is.
+    ComputeContentSizes(lc, *it.box);
+    const double extras = it.padBorder[1] + it.marginStart[1] + it.marginEnd[1];
+    const double mn = it.box->minContent, mx = it.box->maxContent;
+    const double specified = grid.SpecifiedSize(it, 1, contentWidth);
+    const double content = Known(specified) ? specified : std::min(mx, std::max(mn, contentWidth - extras));
+    return std::max(0.0, content) + extras;
+  };
+  if (L == 1) {
+    for (GridItem& it : grid.items) if (!it.lanesAuto) grid.ColumnContributions(it, contentWidth);
+    for (GridItem& v : grid.virtualItems) grid.ColumnContributions(v, contentWidth);
+    grid.SizeTracks(1, contentWidth, false);
+  } else {
+    for (GridItem& it : grid.items) if (!it.lanesAuto) grid.RowContributions(it, fitWidth(it));
+    for (GridItem& v : grid.virtualItems) grid.RowContributions(v, fitWidth(v));
+    grid.SizeTracks(0, heightBasis, true);
+  }
+  // The lanes where they are: distributed as the content is.
+  double laneExtent;  // the room along the axis of the lanes
+  {
+    const double used = grid.TrackSum(L);
+    laneExtent = Known(L == 1 ? contentWidth : heightBasis) ? (L == 1 ? contentWidth : heightBasis) : used;
+    const auto [offset, between] = grid.ContentOffset(L, laneExtent);
+    double pos = offset;
+    for (Track& t : grid.tracks[L]) {
+      t.position = pos;
+      pos += t.base + grid.gap[L] + between;
+    }
+    if (trackReverse || (L == 1 && s.direction == Direction::Rtl && Known(contentWidth))) {
+      const bool mirror = trackReverse != (L == 1 && s.direction == Direction::Rtl);
+      if (mirror) for (Track& t : grid.tracks[L]) t.position = laneExtent - t.position - t.base;
+    }
+  }
+  const auto areaOf = [&](const GridItem& it) {
+    double size = grid.gap[L] * (it.span[L] - 1);
+    for (int i = it.pos[L]; i < it.pos[L] + it.span[L]; ++i) size += grid.tracks[L][i].base;
+    return size;
+  };
+
+  // ---- The items, each in the lane (or the lanes) whose end is nearest the start. ----
+  std::vector<double> laneEnd(static_cast<size_t>(lanes), 0.0);
+  const double tolerance = [&] {
+    const std::string& t = s.flowTolerance;
+    if (t == "infinite") return kInf;
+    if (t == "normal" || t.empty()) return s.fontSize;
+    const double v = ResolveSize(Length(), kNaN);
+    (void)v;
+    char* end = nullptr;
+    const double number = std::strtod(t.c_str(), &end);
+    if (end == t.c_str()) return s.fontSize;
+    if (std::string(end) == "%") return (Known(L == 1 ? heightBasis : contentWidth) ? (L == 1 ? heightBasis : contentWidth) : 0.0) * number / 100;
+    return number;
+  }();
+  int cursor = 0;
+  const double originX = container.ContentLeft(), originY = container.ContentTop();
+  struct Slot {
+    GridItem* item;
+    double flowStart;  // the border box
+    double flowSize;
+  };
+  std::vector<Slot> slots;
+  for (GridItem& it : grid.items) {
+    int lane = it.pos[L];
+    const int span = it.span[L];
+    if (it.lanesAuto) {
+      const int windows = lanes - span + 1;
+      const auto endOf = [&](int w) {
+        double e = -kInf;
+        for (int i = w; i < w + span; ++i) e = std::max(e, laneEnd[static_cast<size_t>(i)]);
+        return e;
+      };
+      double best = kInf;
+      for (int w = 0; w < windows; ++w) best = std::min(best, endOf(w));
+      lane = 0;
+      for (int k = 0; k < windows; ++k) {
+        const int w = (cursor + k) % windows;
+        if (endOf(w) <= best + tolerance) {
+          lane = w;
+          break;
+        }
+      }
+      cursor = lane + span;
+      it.pos[L] = lane;
+    }
+    lane = std::min(lane, std::max(0, lanes - span));
+    double start = -kInf;
+    for (int i = lane; i < lane + span; ++i) start = std::max(start, laneEnd[static_cast<size_t>(i)]);
+    // Laid out in the room of its lanes.
+    Box& b = *it.box;
+    const BoxStyle& st = *b.style;
+    const double area = areaOf(it);
+    double forced[2] = {kNaN, kNaN};
+    const Align::Kind kind = grid.SelfAlign(it, L);
+    {
+      const double specified = grid.SpecifiedSize(it, L, L == 0 ? heightBasis : contentWidth);
+      const bool stretch = (kind == Align::Kind::Normal || kind == Align::Kind::Stretch) && !it.autoMarginStart[L] && !it.autoMarginEnd[L] && !b.replaced;
+      if (!Known(specified) && stretch) forced[L] = std::max(0.0, area - it.marginStart[L] - it.marginEnd[L] - it.padBorder[L]);
+    }
+    // A grid container that is a subgrid in the axis of the lanes takes the lanes it spans.
+    if (IsGridDisplay(st.display) && grid.IsSubgridIn(b, L)) {
+      SubgridTracks& sub = b.subgrid[L];
+      sub = SubgridTracks();
+      sub.active = true;
+      for (int i = lane; i < lane + span; ++i) sub.sizes.push_back(grid.tracks[L][i].base);
+      for (int i = lane; i <= lane + span; ++i) sub.names.push_back(static_cast<size_t>(i) < grid.lineNames[L].size() ? grid.lineNames[L][i] : std::vector<std::string>());
+      sub.gap = grid.gap[L];
+    }
+    lc.forceWidth = forced[1];
+    lc.forceHeight = forced[0];
+    lc.cbX = 0;
+    lc.boxY = 0;
+    LayoutBlockLevel(lc, b, L == 1 ? area : contentWidth, L == 0 ? area : heightBasis, true);
+    const double sizes[2] = {b.height, b.width};
+    const double flowOuter = sizes[F] + it.marginStart[F] + it.marginEnd[F];
+    // The place along the lanes (its margin box begins where the lanes end).
+    double offset = it.marginStart[L];
+    {
+      const double free = area - (sizes[L] + it.marginStart[L] + it.marginEnd[L]);
+      double ms = it.marginStart[L], me = it.marginEnd[L];
+      if (it.autoMarginStart[L] || it.autoMarginEnd[L]) {
+        if (free > 0) {
+          if (it.autoMarginStart[L] && it.autoMarginEnd[L]) { ms += free / 2; me += free / 2; }
+          else if (it.autoMarginStart[L]) ms += free;
+          else me += free;
+        }
+        offset = ms;
+        it.marginStart[L] = ms;
+        it.marginEnd[L] = me;
+      } else {
+        Align::Kind k = kind;
+        if (k == Align::Kind::SelfStart || k == Align::Kind::SelfEnd) {
+          const bool same = StartsWithContainer(s, st, L);
+          k = (k == Align::Kind::SelfStart) == same ? Align::Kind::Start : Align::Kind::End;
+        }
+        const bool rtl = s.direction == Direction::Rtl && L == 1;
+        switch (k) {
+          case Align::Kind::End: case Align::Kind::FlexEnd: case Align::Kind::SelfEnd: offset += rtl ? 0 : free; break;
+          case Align::Kind::Center: offset += free / 2; break;
+          case Align::Kind::Right: offset += L == 1 ? free : 0; break;
+          default:
+            if (rtl && k != Align::Kind::Left) offset += free;
+            break;
+        }
+        if (free < 0 && (st.alignSelf.safe || st.justifySelf.safe)) offset = it.marginStart[L];
+      }
+    }
+    b.margin.top = it.marginStart[0];
+    b.margin.bottom = it.marginEnd[0];
+    b.margin.left = it.marginStart[1];
+    b.margin.right = it.marginEnd[1];
+    const double laneStart = grid.tracks[L][lane].position;
+    // (The lane that starts the window, or the one at its far end when the lanes run the other way.)
+    double windowStart = laneStart;
+    for (int i = lane; i < lane + span; ++i) windowStart = std::min(windowStart, grid.tracks[L][i].position);
+    const double flowStart = start + it.marginStart[F];
+    slots.push_back({&it, flowStart, sizes[F]});
+    if (L == 1) {
+      b.x = originX + windowStart + offset + b.shiftX;
+      b.y = originY + flowStart + b.shiftY;
+    } else {
+      b.y = originY + windowStart + offset + b.shiftY;
+      b.x = originX + flowStart + b.shiftX;
+    }
+    const double end = start + flowOuter + grid.gap[F];
+    for (int i = lane; i < lane + span; ++i) laneEnd[static_cast<size_t>(i)] = end;
+  }
+  double flowTotal = 0;
+  for (double e : laneEnd) flowTotal = std::max(flowTotal, e);
+  if (!slots.empty()) flowTotal = std::max(0.0, flowTotal - grid.gap[F]);
+  // The size along the axis of the lanes is the lanes'; the other is as far as the items reach, but for a size it is given.
+  const double flowSize = F == 0 ? (Known(heightBasis) ? heightBasis : flowTotal) : (Known(contentWidth) ? contentWidth : flowTotal);
+  if (fillReverse) {
+    // The items begin at the far end and run back.
+    for (Slot& slot : slots) {
+      Box& b = *slot.item->box;
+      const double mirrored = flowSize - (slot.flowStart + slot.flowSize);
+      const double delta = mirrored - slot.flowStart;
+      if (F == 0) b.y += delta;
+      else b.x += delta;
+    }
+  }
+  contentHeight = L == 1 ? flowSize : (Known(heightBasis) ? heightBasis : grid.TrackSum(0));
+  auto lines = std::make_shared<GridLines>();
+  for (int a = 0; a < 2; ++a) {
+    const double offset = a == 0 ? container.padding.top : container.padding.left;
+    if (a == L) {
+      for (const Track& t : grid.tracks[a]) {
+        lines->start[a].push_back(t.position + offset);
+        lines->end[a].push_back(t.position + t.base + offset);
+      }
+    } else {
+      lines->start[a].push_back(offset);
+      lines->end[a].push_back(offset + (a == 0 ? contentHeight : contentWidth));
+    }
+    lines->explicitCount[a] = a == L ? grid.explicitCount[a] : 0;
+    lines->implicitBefore[a] = a == L ? grid.implicitBefore[a] : 0;
+    lines->names[a] = grid.lineNames[a];
+  }
+  container.gridLines = lines;
+  container.firstBaseline = container.baseline = -1;
+}
+
 void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double heightBasis, double& contentHeight) {
+  if (container.style->gridLanes) {
+    LayoutGridLanes(lc, container, contentWidth, heightBasis, contentHeight);
+    return;
+  }
   Grid grid(lc, container, contentWidth, heightBasis);
   const BoxStyle& s = *container.style;
   const double colGap = ResolveSize(s.columnGap, contentWidth), rowGap = ResolveSize(s.rowGap, heightBasis);
@@ -1365,30 +1724,7 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
   }
   grid.SizeTracks(0, Known(intrinsicRows) ? intrinsicRows : rowsAvailable, true);  // (a height that is auto is the max-content one)
   // align/justify-content positions.
-  const auto contentOffset = [&](int axis, double available) {
-    // A subgridded axis has its tracks from the grid above: nothing of its own to distribute.
-    if (grid.subgridded[axis]) return std::pair<double, double>{0, 0};
-    const double used = grid.TrackSum(axis);
-    const double free = Known(available) ? available - used : 0;
-    Align a = axis == 1 ? s.justifyContent : s.alignContent;
-    Align::Kind k = a.kind;
-    double offset = 0, between = 0;
-    const double n = static_cast<double>(grid.tracks[axis].size());
-    if (k == Align::Kind::SpaceBetween && free < 0) k = Align::Kind::Start;
-    if ((k == Align::Kind::SpaceAround || k == Align::Kind::SpaceEvenly) && free < 0) k = Align::Kind::Center;
-    if (a.safe && free < 0 && (k == Align::Kind::Center || k == Align::Kind::End || k == Align::Kind::FlexEnd)) k = Align::Kind::Start;
-    switch (k) {
-      case Align::Kind::End: case Align::Kind::FlexEnd: offset = free; break;
-      case Align::Kind::Center: offset = free / 2; break;
-      case Align::Kind::Right: offset = axis == 1 ? (s.direction == Direction::Rtl ? 0 : free) : 0; break;
-      case Align::Kind::Left: offset = axis == 1 && s.direction == Direction::Rtl ? free : 0; break;
-      case Align::Kind::SpaceBetween: between = n > 1 ? free / (n - 1) : 0; break;
-      case Align::Kind::SpaceAround: between = free / n; offset = between / 2; break;
-      case Align::Kind::SpaceEvenly: between = free / (n + 1); offset = between; break;
-      default: break;
-    }
-    return std::pair<double, double>{offset, between};
-  };
+  const auto contentOffset = [&](int axis, double available) { return grid.ContentOffset(axis, available); };
   {
     const auto [offset, between] = contentOffset(1, contentWidth);
     double pos = offset;

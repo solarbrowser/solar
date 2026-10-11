@@ -40,9 +40,18 @@ SUPPLEMENT = {
     "<size-keyword>": "fit-content | max-content | min-content",
 }
 
+# The names grid lanes had in the web platform tests (the data of the specification is behind them).
+EXTRA_PROPERTIES = {
+    "grid-lanes": {"value": "none | [ <string> || <track-list> || [ normal | [ row | column ] [ fill-reverse track-reverse? | track-reverse fill-reverse? ]? ] ]", "initial": "none", "inherited": "no",
+                   "longhands": ["grid-template-rows", "grid-template-columns", "grid-template-areas", "grid-lanes-direction"]},
+    "grid-lanes-direction": {"value": "normal | [ row | column ] [ fill-reverse track-reverse? | track-reverse fill-reverse? ]?", "initial": "normal", "inherited": "no"},
+    "grid-lanes-pack": {"value": "normal | dense", "initial": "normal", "inherited": "no"},
+}
+
 # Where the machine-readable syntax is not what browsers accept.
 OVERRIDE = {
     "<grid-line>": "auto | <grid-ident> | [ <integer> && <grid-ident>? ] | [ span && [ <integer> || <grid-ident> ] ]",
+    "<line-names>": "'[' <grid-ident>* ']'",
     "<paint>": "none | <color> | <url> [ none | <color> ]? | context-fill | context-stroke",
     # The legacy names of stretch.
     "<box-size>": "<length-percentage [0,∞]> | stretch | -webkit-fill-available | -moz-available | contain | min-content | max-content | fit-content | fit-content(<length-percentage [0,∞]>) | <calc-size()>",
@@ -99,11 +108,15 @@ for path in sorted(glob.glob(os.path.join(root, "ed/css/*.json"))):
 
 for name, syntax in OVERRIDE.items():
     types[name] = (99, syntax)
+types["<display-inside>"] = (99, types["<display-inside>"][1].replace(" | grid | ", " | grid | grid-lanes | "))
+types["<display-legacy>"] = (99, types["<display-legacy>"][1] + " | inline-grid-lanes")
 for name in ALIASED:
     props.pop(name, None)
 for entry in props.values():
     if "font-stretch" in entry[1].get("longhands", []):
         entry[1]["longhands"] = ["font-width" if x == "font-stretch" else x for x in entry[1]["longhands"]]
+for name, extra in EXTRA_PROPERTIES.items():
+    props[name] = (99, dict(extra, name=name))
 for name, patch in PROPERTY_PATCH.items():
     if name in props:
         props[name][1].update(patch)

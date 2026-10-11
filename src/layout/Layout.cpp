@@ -486,6 +486,20 @@ bool UsedValue(Tree& tree, dom::Element* element, const std::string& property, s
     // The used tracks of a grid container, with the names of the lines.
     const int axis = property == "grid-template-columns" ? 1 : 0;
     const GridLines& g = *box->gridLines;
+    // A subgrid has the lines of the grid above: its used value is subgrid, and the names of each line it spans.
+    if (box->subgrid[axis].active) {
+      std::string text = "subgrid";
+      const size_t lines = box->subgrid[axis].sizes.size() + 1;
+      for (size_t line = 0; line < lines; ++line) {
+        text += " [";
+        if (line < g.names[axis].size()) {
+          for (size_t k = 0; k < g.names[axis][line].size(); ++k) text += (k ? " " : "") + g.names[axis][line][k];
+        }
+        text += "]";
+      }
+      out = text;
+      return true;
+    }
     // All the tracks, the implicit ones before and after the explicit ones too.
     const size_t before = static_cast<size_t>(g.implicitBefore[axis]);
     const size_t count = g.start[axis].size();
@@ -562,7 +576,7 @@ bool ResolvedHook(Quanta::Context& ctx, dom::Element* element, const std::string
   // Only a grid container has used tracks: for the rest the computed value is the answer, and no layout is needed to know it.
   if (property == "grid-template-columns" || property == "grid-template-rows") {
     const std::string display = css::ComputedValue(ctx, element, "display");
-    if (display != "grid" && display != "inline-grid") return false;
+    if (display != "grid" && display != "inline-grid" && display != "grid-lanes" && display != "inline-grid-lanes") return false;
   }
   Tree* tree = UpdateLayout(ctx, element->nodeDocument);
   return tree && UsedValue(*tree, element, property, out);
