@@ -60,6 +60,15 @@ struct Line {
   std::vector<LineItem> items;
 };
 
+// What the layout of a ::first-line did to the boxes of a block container, to be undone before it is laid out again.
+struct FirstLineEdit {
+  Box* box = nullptr;
+  std::shared_ptr<const BoxStyle> style;  // the style the box had (when the edit is a change of style)
+  Box* tail = nullptr;                    // the box the rest of it was split off into (a split)
+  std::string text;                       // the text of a split text box, whole
+  size_t moved = 0;                       // the children of a split inline box that went to the tail
+};
+
 struct Box {
   enum class Kind : uint8_t { Block, Inline, Text, LineBreak };
   Kind kind = Kind::Block;
@@ -101,6 +110,8 @@ struct Box {
   std::vector<Rect> fragments;
   // Block containers with inline content: the lines, in the container's border box.
   std::vector<Line> lines;
+  std::shared_ptr<const BoxStyle> firstLineStyle;  // the style of its ::first-line, when it has one
+  std::vector<FirstLineEdit> firstLineEdits;
   bool hasInlineContent = false;  // the children are all inline-level
   std::shared_ptr<GridLines> gridLines;  // a grid container's, once laid out
   // Margin collapsing: the margins that go out through the top and bottom of the box as sums of the largest positive and most negative.

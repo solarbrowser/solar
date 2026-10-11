@@ -1,0 +1,36 @@
+<!doctype html>
+<title>::first-line</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<style>
+  body { margin: 0; font: 10px/1 monospace; }
+  p { margin: 0; width: 100px; }
+  #a::first-line { font-size: 20px; }
+  #b::first-line { color: green; }
+  #c::first-line { font-size: 20px; line-height: 30px; }
+</style>
+<p id="a">aaaa bbbb cccc dddd eeee ffff</p>
+<p id="b">aaaa bbbb cccc dddd eeee ffff</p>
+<p id="c">aaaa <b>bb bb</b> cccc dddd eeee ffff gggg hhhh</p>
+<script>
+const lineCount = (el) => { const r = document.createRange(); r.selectNodeContents(el); return new Set([...r.getClientRects()].map(x => Math.round(x.top))).size; };
+test(() => {
+  const a = document.getElementById("a");
+  // 20px monospace is 12px a character: "aaaa " fits 8 characters in 100px
+  assert_equals(a.firstChild.textContent.length, 29);
+  assert_equals(getComputedStyle(a, "::first-line").fontSize, "20px");
+  const lines = lineCount(a);
+  assert_equals(lines, 3, "the larger first line breaks after aaaa");
+  assert_equals(a.offsetHeight, 40, "20px for the first line, 10px for each other");
+}, "a larger first line breaks sooner");
+test(() => {
+  const b = document.getElementById("b");
+  assert_equals(b.offsetHeight, 20, "the same lines as without the pseudo-element: 2 x 10px");
+}, "a colour does not change the lines");
+test(() => {
+  const c = document.getElementById("c");
+  assert_equals(getComputedStyle(c, "::first-line").lineHeight, "30px");
+  const h = c.offsetHeight;
+  assert_true(h > 30, "first line is 30px tall: " + h);
+}, "line-height of the first line and an inline box across its end");
+</script>

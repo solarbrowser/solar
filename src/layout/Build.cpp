@@ -191,6 +191,7 @@ class Builder {
     if (html) BuildElement(*initial, html);
     Normalize(*initial);
     ApplyFirstLetters(lc_, *initial);
+    ApplyFirstLines(lc_, *initial);
     AttachMarkers(*initial);
     PropagateViewportOverflow(*initial, document);
   }

@@ -91,6 +91,9 @@ inline bool IsGridDisplay(Display d) { return d == Display::Grid || d == Display
 
 // Inline.cpp: the lines of a block container with inline content, in a content box `width` wide. Sets the box's content height.
 double LayoutInlineContent(LayoutContext& lc, Box& container, double width, double& baseline);
+double LayoutInlineContentOnce(LayoutContext& lc, Box& container, double width, double& baseline);
+// FirstLine.cpp: the ::first-line of the blocks, found when the tree is made, and applied to the first line of a block as it is laid out.
+void ApplyFirstLines(LayoutContext& lc, Box& root);
 void InlineContentSizes(LayoutContext& lc, Box& container, double& minContent, double& maxContent);
 
 // Image.cpp: the size an image file says it has (width and height negative where it gives none, the ratio 0 where it has none).

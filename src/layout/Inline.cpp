@@ -689,7 +689,7 @@ static void ClearFragments(Box& box) {
   }
 }
 
-double LayoutInlineContent(LayoutContext& lc, Box& container, double width, double& baselineOut) {
+double LayoutInlineContentOnce(LayoutContext& lc, Box& container, double width, double& baselineOut) {
   container.lines.clear();
   ClearFragments(container);
   baselineOut = -1;
@@ -803,10 +803,21 @@ double LayoutInlineContent(LayoutContext& lc, Box& container, double width, doub
   double lineHeightStrut = 0;
   double strutAbove = 0, strutBelow = 0;
   Metrics rootMetrics = BoxMetrics(lc, cs, lineHeightStrut);
+  double firstStrutAbove = 0, firstStrutBelow = 0;
   {
     const double halfLeading = (lineHeightStrut - (rootMetrics.ascent + rootMetrics.descent)) / 2;
     strutAbove = rootMetrics.ascent + halfLeading;
     strutBelow = rootMetrics.descent + halfLeading;
+    // The first line has the strut of its ::first-line.
+    firstStrutAbove = strutAbove;
+    firstStrutBelow = strutBelow;
+    if (container.firstLineStyle) {
+      double firstLineHeight = 0;
+      const Metrics m = BoxMetrics(lc, *container.firstLineStyle, firstLineHeight);
+      const double half = (firstLineHeight - (m.ascent + m.descent)) / 2;
+      firstStrutAbove = m.ascent + half;
+      firstStrutBelow = m.descent + half;
+    }
   }
   const double indent = cs.textIndent.Resolve(width);
   std::vector<StackEntry> stack;   // inline boxes open at the current point
@@ -1344,7 +1355,7 @@ double LayoutInlineContent(LayoutContext& lc, Box& container, double width, doub
     }
 
     // ---- Vertical ----
-    double above = strutAbove, below = strutBelow;
+    double above = isFirstLine ? firstStrutAbove : strutAbove, below = isFirstLine ? firstStrutBelow : strutBelow;
     for (const BoxExtent& be : extents) {
       if (!be.used || be.top || be.bottom) continue;
       above = std::max(above, be.shift + be.above);
