@@ -349,6 +349,10 @@ Value CvTake(Context& ctx, Value, qe::Args, Value) {
       element->lastRenderedWidth = std::max(0.0, box.width - box.border.Horizontal() - box.padding.Horizontal());
       element->lastRenderedHeight = std::max(0.0, box.height - box.border.Vertical() - box.padding.Vertical());
     }
+    // Without the keyword there is nothing to remember: what was remembered is gone.
+    if (box.kind == Box::Kind::Block && box.node && box.node->IsElement() && box.style && !box.style->containIntrinsicWidthAuto && !box.style->containIntrinsicHeightAuto && !box.style->contentVisibilityAuto) {
+      static_cast<dom::Element*>(box.node)->lastRenderedWidth = static_cast<dom::Element*>(box.node)->lastRenderedHeight = -1;
+    }
     if (box.kind == Box::Kind::Block && box.node && box.node->IsElement() && box.style && box.style->contentVisibilityAuto) {
       dom::Element* element = static_cast<dom::Element*>(box.node);
       const signed char state = element->contentVisible ? 0 : 1;
@@ -380,7 +384,16 @@ bool BeingRendered(dom::Element* element) {
   return true;
 }
 
+// What a box remembered of its size (contain-intrinsic-size: auto) goes with it when it leaves the document.
+void ForgetRenderedSizes(dom::Node* node) {
+  if (!css::g_contentVisibilityAutoMentioned) return;
+  for (dom::Node* n = node; n; n = n->NextInTree(node)) {
+    if (dom::Element* e = dom::AsElement(n)) e->lastRenderedWidth = e->lastRenderedHeight = -1;
+  }
+}
+
 void InstallLayoutNatives(Context& ctx) {
+  dom::g_nodeRemovedHook = ForgetRenderedSizes;
   dom::g_beingRenderedHook = BeingRendered;
   g_cvContext = &ctx;
   dom::g_treeChangeHook = AskForContentVisibilityFrame;

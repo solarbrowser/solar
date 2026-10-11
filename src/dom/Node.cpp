@@ -101,6 +101,7 @@ void SetDocumentBaseUriProvider(std::string (*provider)(const Document*)) { g_ba
 std::string DocumentBaseUri(const Document* document) { return g_baseUriProvider ? g_baseUriProvider(document) : document->url; }
 void (*g_treeChangeHook)() = nullptr;
 bool (*g_beingRenderedHook)(Element* element) = nullptr;
+void (*g_nodeRemovedHook)(Node* node) = nullptr;
 void NoteTreeChange() {
   ++g_treeVersion;
   if (g_treeChangeHook) g_treeChangeHook();
@@ -436,6 +437,7 @@ void RemoveImpl(Node* node, bool suppress) {
   Element* wasAssignedTo = node->assignedSlot;
   const bool wasConnected = (HasCustomDefinitions() || g_hooks.afterRemove) && ShadowIncludingRoot(parent)->IsDocument();
   Unlink(node);
+  if (g_nodeRemovedHook && !g_moving) g_nodeRemovedHook(node);
   if (wasConnected && !g_moving) {
     CustomAfterRemove(node, true);
     if (g_hooks.afterRemove) g_hooks.afterRemove(node, true);

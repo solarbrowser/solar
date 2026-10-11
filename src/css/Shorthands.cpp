@@ -554,6 +554,29 @@ bool ExpandGrid(const PropertyDefinition& property, const ComponentValues& value
 }
 
 bool ExpandShorthand(const PropertyDefinition& property, const ComponentValues& values, std::vector<Longhand>& out) {
+  if (property.name == std::string("contain-intrinsic-size")) {
+    // One or two sizes, each a length or none with an auto in front of it if it asks for the last remembered size.
+    std::vector<std::string> sizes;
+    std::vector<ComponentValue> words = NonSpace(values);
+    for (size_t i = 0; i < words.size();) {
+      std::string item;
+      if (words[i].IsIdent() && Lower(words[i].token.value) == "auto") {
+        item = "auto ";
+        ++i;
+        if (i >= words.size()) return false;
+      }
+      ComponentValues one = {words[i]};
+      item += SerializeValue(one);
+      ++i;
+      sizes.push_back(item);
+    }
+    if (sizes.empty() || sizes.size() > 2) return false;
+    std::vector<Longhand> mine;
+    ExpandLonghand("contain-intrinsic-width", sizes[0], mine);
+    ExpandLonghand("contain-intrinsic-height", sizes.size() == 2 ? sizes[1] : sizes[0], mine);
+    for (Longhand& l : mine) out.push_back(std::move(l));
+    return true;
+  }
   if (property.name == std::string("grid-template")) {
     std::optional<GridTemplate> t = ParseGridTemplate(values);
     if (!t) return false;

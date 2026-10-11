@@ -384,6 +384,8 @@ uint64_t TreeVersion();
 extern void (*g_treeChangeHook)();
 // Set by layout: whether the element is being rendered (has a box, or is display: contents, and is not in contents that content-visibility: hidden skips). Null: the markup decides.
 extern bool (*g_beingRenderedHook)(Element* element);
+// Called with a node that was taken out of its tree.
+extern void (*g_nodeRemovedHook)(Node* node);
 // The document base URL, which the html module works out (a base element, a frame's parent): the address by default.
 std::string DocumentBaseUri(const Document* document);
 void SetDocumentBaseUriProvider(std::string (*provider)(const Document*));

@@ -272,7 +272,7 @@ void ComputeContentSizes(LayoutContext& lc, Box& box) {
   if (s.containSizeInline && !IsGridDisplay(s.display)) {  // its contents count for nothing
     const dom::Element* element = box.element();
     // (content-visibility: auto keeps the block size it had, not the inline size, as the engines that sized the tests do.)
-    if (s.containIntrinsicWidthAuto && element && element->lastRenderedWidth >= 0) {
+    if (s.containIntrinsicWidthAuto && s.skipContents && element && element->lastRenderedWidth >= 0) {
       box.minContent = box.maxContent = element->lastRenderedWidth;
       return;
     }
@@ -600,6 +600,10 @@ static void LayoutBlockLevelDetecting(LayoutContext& lc, Box& box, double cbWidt
   const double forceWidth = lc.forceWidth, forceHeight = lc.forceHeight, availOverride = lc.availOverride;
   const bool keepOwnFrame = lc.keepOwnFrame;
   dom::Element* const element = box.node && box.node->IsElement() ? static_cast<dom::Element*>(box.node) : nullptr;
+  // Without the keyword there is no last remembered size.
+  if (element && element->lastRenderedWidth >= 0 && !box.style->containIntrinsicWidthAuto && !box.style->containIntrinsicHeightAuto && !box.style->contentVisibilityAuto) {
+    element->lastRenderedWidth = element->lastRenderedHeight = -1;
+  }
   box.scrollbarForce[0] = box.scrollbarForce[1] = false;
   if (element && lc.tree.keepScrollbars) {
     box.scrollbarForce[0] = element->scrollbarSeen[0];
@@ -935,7 +939,7 @@ void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cb
   double usedHeight;
   if (Known(specifiedHeight)) usedHeight = specifiedHeight;
   else if (Known(ratioHeight)) usedHeight = ratioHeight;
-  else if (s.containSizeBlock && !IsGridDisplay(s.display) && (s.containIntrinsicHeightAuto || s.contentVisibilityAuto) && box.element() && box.element()->lastRenderedHeight >= 0) usedHeight = box.element()->lastRenderedHeight;
+  else if (s.containSizeBlock && !IsGridDisplay(s.display) && (s.containIntrinsicHeightAuto || s.contentVisibilityAuto) && s.skipContents && box.element() && box.element()->lastRenderedHeight >= 0) usedHeight = box.element()->lastRenderedHeight;
   else usedHeight = s.containSizeBlock && !IsGridDisplay(s.display) ? (s.containIntrinsicHeightSet ? s.containIntrinsicHeight.value : (box.emptyHeight >= 0 ? box.emptyHeight : box.formControl ? box.naturalHeight : 0)) : (box.formControl ? box.naturalHeight : contentHeight);
   if (!Known(forceHeight)) {
     const double maxH = ResolveSize(s.maxHeight, cbHeight);
