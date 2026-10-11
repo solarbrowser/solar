@@ -1571,6 +1571,18 @@ void InlineContentSizesOnce(LayoutContext& lc, Box& container, double& minConten
         flushWord();
         word = 0;
       }
+    } else if (a.kind == Atom::Kind::OutOfFlow && a.box->style->IsFloating() && !a.box->style->IsOutOfFlow()) {
+      // A float is beside the line it is on: it adds to the width of that line, and the narrowest the content can be is as wide as it.
+      ComputeContentSizes(lc, *a.box);
+      const BoxStyle& s = *a.box->style;
+      Box& b = *a.box;
+      b.padding = {std::max(0.0, s.padding[0].Resolve(0)), std::max(0.0, s.padding[1].Resolve(0)), std::max(0.0, s.padding[2].Resolve(0)), std::max(0.0, s.padding[3].Resolve(0))};
+      b.border = {s.border[0], s.border[1], s.border[2], s.border[3]};
+      const double extras = b.padding.Horizontal() + b.border.Horizontal() + (s.margin[1].IsAuto() ? 0 : s.margin[1].Resolve(0)) + (s.margin[3].IsAuto() ? 0 : s.margin[3].Resolve(0));
+      double mn = b.minContent, mx = b.maxContent;
+      if (s.width.kind == Length::Kind::Px) mn = mx = s.boxSizing == BoxSizing::BorderBox ? std::max(0.0, s.width.value - b.padding.Horizontal() - b.border.Horizontal()) : s.width.value;
+      line += mx + extras;
+      minContent = std::max(minContent, mn + extras);
     } else if (a.kind == Atom::Kind::Break) {
       maxContent = std::max(maxContent, line);
       flushWord();

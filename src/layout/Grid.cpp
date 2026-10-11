@@ -123,7 +123,7 @@ TrackDef ParseTrack(const ComponentValue& v, bool& ok) {
         Fn limit = ParseFn(arg[0], ok);
         t.max = limit;
         t.max.k = Fn::K::FitContent;
-        t.max.calc = limit.k == Fn::K::Percent ? "%" + std::to_string(limit.value) : "";
+        t.max.calc = limit.k == Fn::K::Percent ? "%" + std::to_string(limit.value) : limit.k == Fn::K::Calc ? limit.calc : "";
         if (limit.k == Fn::K::Percent) t.max.value = limit.value;
         return t;
       }
@@ -294,6 +294,8 @@ struct Grid {
   std::vector<GridItem> items;
   std::map<std::string, std::array<int, 4>> areas;  // name -> rowStart, rowEnd, colStart, colEnd (explicit line numbers, 1-based)
   Template templates[2];
+
+  bool sizingTracks_ = false;
 
   Grid(LayoutContext& l, Box& c, double w, double h) : lc(l), container(c), style(*c.style), contentWidth(w), heightBasis(h) {}
 
@@ -817,6 +819,13 @@ struct Grid {
   // An item lines up on a baseline in an axis when it asks for it, spans one track there, and has no auto margins in it.
   int BaselineKindOf(const GridItem& it, int axis) const {
     if (it.span[axis] != 1 || it.autoMarginStart[axis] || it.autoMarginEnd[axis] || it.subgridAxis[axis] || it.onlyAxis >= 0) return 0;
+    // An item whose size is a percentage of a track that is sized by its contents would size the track by what the track gives it: it does not line up on a baseline.
+    const BoxStyle& s = *it.box->style;
+    if ((axis == 0 ? s.height : s.width).IsPercentage() && static_cast<size_t>(it.pos[axis]) < tracks[axis].size()) {
+      const TrackDef& def = tracks[axis][it.pos[axis]].def;
+      const auto definite = [](const Fn& f) { return f.k == Fn::K::Length || f.k == Fn::K::Percent; };
+      if (!definite(def.min) || !definite(def.max)) return 0;
+    }
     const Align::Kind k = SelfAlign(it, axis);
     return k == Align::Kind::Baseline ? 1 : k == Align::Kind::LastBaseline ? 2 : 0;
   }
@@ -889,6 +898,8 @@ struct Grid {
   double SpecifiedSize(const GridItem& it, int axis, double basis) const {
     const BoxStyle& s = *it.box->style;
     const Length& l = axis == 0 ? s.height : s.width;
+    // (A percentage is of the grid area, which is not known while the tracks are sized: it is as auto.)
+    if (sizingTracks_ && l.IsPercentage() && !it.box->replaced) return kNaN;
     double v = ResolveSize(l, basis);
     if (!Known(v)) return kNaN;
     return s.boxSizing == BoxSizing::BorderBox ? std::max(0.0, v - it.padBorder[axis]) : v;
@@ -902,17 +913,22 @@ struct Grid {
       it.minContribution = it.minContentContribution = it.maxContentContribution = 0;
       return;
     }
+    struct Sizing {
+      bool& flag;
+      explicit Sizing(bool& f) : flag(f) { flag = true; }
+      ~Sizing() { flag = false; }
+    } sizing(sizingTracks_);
     ComputeContentSizes(lc, b);
     double mn = b.minContent, mx = b.maxContent;
     const double specified = SpecifiedSize(it, 1, columnBasis);
     if (Known(specified)) mn = mx = specified;
-    else if (s.width.IsPercentage()) mn = 0;
+    else if (s.width.IsPercentage() && b.replaced) mn = 0;  // (a replaced box with a percentage width can be squeezed to nothing)
     const double maxW = SpecifiedSize(it, 1, columnBasis);
     (void)maxW;
     const Length& maxLen = s.maxWidth;
-    const double maxV = ResolveSize(maxLen, columnBasis);
+    const double maxV = maxLen.IsPercentage() ? kNaN : ResolveSize(maxLen, columnBasis);
     if (Known(maxV)) { const double m = s.boxSizing == BoxSizing::BorderBox ? std::max(0.0, maxV - it.padBorder[1]) : maxV; mn = std::min(mn, m); mx = std::min(mx, m); }
-    const double minV = ResolveSize(s.minWidth, columnBasis);
+    const double minV = s.minWidth.IsPercentage() ? kNaN : ResolveSize(s.minWidth, columnBasis);
     if (Known(minV)) { const double m = s.boxSizing == BoxSizing::BorderBox ? std::max(0.0, minV - it.padBorder[1]) : minV; mn = std::max(mn, m); mx = std::max(mx, m); }
     const double extras = it.padBorder[1] + it.marginStart[1] + it.marginEnd[1];
     it.minContentContribution = mn + extras;
@@ -936,6 +952,11 @@ struct Grid {
       return;
     }
     const double extras = it.padBorder[0] + it.marginStart[0] + it.marginEnd[0];
+    struct Sizing {
+      bool& flag;
+      explicit Sizing(bool& f) : flag(f) { flag = true; }
+      ~Sizing() { flag = false; }
+    } sizing(sizingTracks_);
     double height;
     const double specified = SpecifiedSize(it, 0, heightBasis);
     if (Known(specified)) {
@@ -946,13 +967,13 @@ struct Grid {
     }
     it.minContentContribution = it.maxContentContribution = height + extras;
     double minimum;
-    const double minV = ResolveSize(s.minHeight, heightBasis);
+    const double minV = s.minHeight.IsPercentage() ? kNaN : ResolveSize(s.minHeight, heightBasis);
     const bool scroller = s.overflowY != Overflow::Visible && s.overflowY != Overflow::Clip;
     if (Known(minV)) minimum = minV;
     else if (s.minHeight.IsAuto() && !scroller) minimum = Known(specified) ? std::min(specified, height) : height;
     else minimum = 0;
     it.minContribution = minimum + extras;
-    const double maxV = ResolveSize(s.maxHeight, heightBasis);
+    const double maxV = s.maxHeight.IsPercentage() ? kNaN : ResolveSize(s.maxHeight, heightBasis);
     if (Known(maxV)) { it.minContentContribution = std::min(it.minContentContribution, maxV + extras); it.maxContentContribution = std::min(it.maxContentContribution, maxV + extras); }
   }
 
@@ -971,7 +992,7 @@ struct Grid {
     lc.cbX = 0;
     lc.boxY = 0;
     (void)s;
-    LayoutBlockLevel(lc, b, areaWidth, heightBasis, true);
+    LayoutBlockLevel(lc, b, areaWidth, sizingTracks_ && !Orthogonal(container.Mode(), b.Mode()) ? kNaN : heightBasis, true);
   }
 
   // ---- Track sizing (css-grid-1 §12) ----
@@ -1111,7 +1132,12 @@ struct Grid {
         const double cap = t.def.max.calc.empty() ? t.def.max.value : t.def.max.value;
         double limitValue = kNaN;
         if (t.def.max.calc.empty()) limitValue = t.def.max.value;
-        else if (Known(available)) limitValue = available * t.def.max.value / 100;
+        else if (t.def.max.calc[0] == '%') { if (Known(available)) limitValue = available * t.def.max.value / 100; }
+        else {
+          Fn expression = t.def.max;
+          expression.k = Fn::K::Calc;
+          limitValue = Resolve(expression, available);
+        }
         if (Known(limitValue)) { t.limit = std::max(t.base, std::min(t.limit, std::max(limitValue, t.base))); (void)cap; }
       }
       if (t.limit < t.base) t.limit = t.base;
@@ -1321,7 +1347,23 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
     it.maxContentContribution += it.shim[0];
   }
   const double rowsAvailable = heightBasis;
-  grid.SizeTracks(0, rowsAvailable, true);  // (a height that is auto is the max-content one)
+  // Rows that are percentages of a height that is not known are auto ones for the height of the grid, and are worked out against that height after.
+  double intrinsicRows = kNaN;
+  if (!Known(rowsAvailable) && !grid.subgridded[0]) {
+    bool percentages = false;
+    for (const Track& t : grid.tracks[0]) percentages = percentages || t.def.min.k == Fn::K::Percent || t.def.max.k == Fn::K::Percent || !t.def.min.calc.empty() || !t.def.max.calc.empty();
+    if (percentages) {
+      std::vector<TrackDef> defs;
+      for (Track& t : grid.tracks[0]) {
+        defs.push_back(t.def);
+        for (Fn* f : {&t.def.min, &t.def.max}) if (f->k == Fn::K::Percent || !f->calc.empty()) *f = Fn();
+      }
+      grid.SizeTracks(0, rowsAvailable, true);
+      intrinsicRows = grid.TrackSum(0);
+      for (size_t i = 0; i < defs.size(); ++i) grid.tracks[0][i].def = defs[i];
+    }
+  }
+  grid.SizeTracks(0, Known(intrinsicRows) ? intrinsicRows : rowsAvailable, true);  // (a height that is auto is the max-content one)
   // align/justify-content positions.
   const auto contentOffset = [&](int axis, double available) {
     // A subgridded axis has its tracks from the grid above: nothing of its own to distribute.
@@ -1358,7 +1400,7 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
     }
   }
   const double usedRows = grid.TrackSum(0);
-  const double rowContainer = Known(heightBasis) ? heightBasis : usedRows;
+  const double rowContainer = Known(heightBasis) ? heightBasis : Known(intrinsicRows) ? intrinsicRows : usedRows;
   {
     const auto [offset, between] = contentOffset(0, rowContainer);
     double pos = offset;
@@ -1382,7 +1424,15 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
     for (int a = 0; a < 2; ++a) {
       const double specified = grid.SpecifiedSize(it, a, a == 0 ? heightBasis : contentWidth);
       const bool stretch = (kinds[a] == Align::Kind::Normal || kinds[a] == Align::Kind::Stretch) && !it.autoMarginStart[a] && !it.autoMarginEnd[a] && !b.replaced;
-      if (!Known(specified) && stretch) forced[a] = std::max(0.0, area[a] - it.marginStart[a] - it.marginEnd[a] - it.padBorder[a]);
+      if (!Known(specified) && stretch) {
+        forced[a] = std::max(0.0, area[a] - it.marginStart[a] - it.marginEnd[a] - it.padBorder[a]);
+        // The size it is stretched to stays within its minimum and maximum, which are of the area.
+        const BoxStyle& bs = *b.style;
+        const double minSize = ResolveSize(a == 0 ? bs.minHeight : bs.minWidth, area[a]), maxSize = ResolveSize(a == 0 ? bs.maxHeight : bs.maxWidth, area[a]);
+        const bool borderBox = bs.boxSizing == BoxSizing::BorderBox;
+        if (Known(maxSize)) forced[a] = std::min(forced[a], std::max(0.0, borderBox ? maxSize - it.padBorder[a] : maxSize));
+        if (Known(minSize)) forced[a] = std::max(forced[a], std::max(0.0, borderBox ? minSize - it.padBorder[a] : minSize));
+      }
     }
     // A grid container that is a subgrid takes the tracks it spans.
     if (IsGridDisplay(st.display)) {

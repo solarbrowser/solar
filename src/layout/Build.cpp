@@ -540,6 +540,12 @@ class Builder {
     if (!solar::css::HasPseudoStyle(element, pseudo)) return;
     std::shared_ptr<const BoxStyle> style = Logicalize(ReadStyle(lc_.ctx, element, pseudo));
     if (style->display == Display::None) return;
+    // Floating and positioning blockify a generated box as they do any (https://www.w3.org/TR/CSS22/visuren.html#dis-pos-flo).
+    if ((style->IsOutOfFlow() || style->IsFloating()) && (style->display == Display::Inline || style->display == Display::InlineBlock)) {
+      auto changed = std::make_shared<BoxStyle>(*style);
+      changed->display = Display::Block;
+      style = changed;
+    }
     // Counters change for the pseudo-element as for any.
     ApplyCounters(*style, style->display == Display::ListItem, nullptr);
     std::string text;
