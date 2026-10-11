@@ -505,8 +505,14 @@ struct ElementStyle {
   bool hasLogical = false;  // a logical property is declared for the element
 };
 
-std::map<std::pair<dom::Element*, std::string>, ElementStyle>& Cache() {
-  static std::map<std::pair<dom::Element*, std::string>, ElementStyle> cache;
+// The styles of an element: the plain one, and those of its pseudo-elements and of the variants (animations suppressed, the starting style).
+struct StyleEntry {
+  ElementStyle plain;
+  std::map<std::string, ElementStyle> others;
+};
+
+std::unordered_map<dom::Element*, StyleEntry>& Cache() {
+  static std::unordered_map<dom::Element*, StyleEntry> cache;
   return cache;
 }
 
@@ -517,7 +523,9 @@ ElementStyle& StyleOf(dom::Element* element, const std::string& pseudo = "") {
     Cache().clear();
     cachedVersion = version;
   }
-  ElementStyle& style = Cache()[{element, (AnimatedValuesSuppressed() ? pseudo + "\x03" : pseudo) + (StartingStyleFor(element, pseudo) ? "\x04" : "")}];
+  StyleEntry& entry = Cache()[element];
+  const bool suppressed = AnimatedValuesSuppressed(), starting = StartingStyleFor(element, pseudo);
+  ElementStyle& style = pseudo.empty() && !suppressed && !starting ? entry.plain : entry.others[(suppressed ? pseudo + "\x03" : pseudo) + (starting ? "\x04" : "")];
   style.version = version;
   return style;
 }
