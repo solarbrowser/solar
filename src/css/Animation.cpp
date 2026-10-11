@@ -269,6 +269,18 @@ void SuppressAnimatedValues(bool suppressed) {
 
 bool AnimatedValuesSuppressed() { return g_suppressed; }
 
+namespace {
+const dom::Element* g_startingElement = nullptr;
+std::string g_startingPseudo;
+}  // namespace
+
+void SetStartingStyleElement(const dom::Element* element, const std::string& pseudo) {
+  g_startingElement = element;
+  g_startingPseudo = pseudo;
+}
+
+bool StartingStyleFor(const dom::Element* element, const std::string& pseudo) { return g_startingElement && element == g_startingElement && pseudo == g_startingPseudo; }
+
 // ---- Combining values ----
 
 std::optional<std::string> InterpolateValues(const std::string& property, const std::string& from, const std::string& to, double progress) {

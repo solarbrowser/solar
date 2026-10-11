@@ -26,9 +26,12 @@ test(() => {
 test(() => {
   window.scrollTo(0, 3000);
   assert_equals(far.getBoundingClientRect().height, 10, "scrolled to: rendered");
+}, "scrolling shows it");
+promise_test(async () => {
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
   window.scrollTo(0, 0);
   assert_equals(far.getBoundingClientRect().height, 10, "the last size is kept when skipped again");
-}, "scrolling shows it, and the size it had is kept");
+}, "the size it had in a frame is kept");
 test(() => {
   assert_equals(hid.getBoundingClientRect().height, 40);
   assert_equals(far.innerText, "", "skipped contents are not rendered text");

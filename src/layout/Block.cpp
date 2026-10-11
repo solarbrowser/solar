@@ -252,7 +252,8 @@ void ComputeContentSizes(LayoutContext& lc, Box& box) {
   }
   if (s.containSizeInline && !IsGridDisplay(s.display)) {  // its contents count for nothing
     const dom::Element* element = box.element();
-    if ((s.containIntrinsicWidthAuto || s.contentVisibilityAuto) && element && element->lastRenderedWidth >= 0) {
+    // (content-visibility: auto keeps the block size it had, not the inline size, as the engines that sized the tests do.)
+    if (s.containIntrinsicWidthAuto && element && element->lastRenderedWidth >= 0) {
       box.minContent = box.maxContent = element->lastRenderedWidth;
       return;
     }

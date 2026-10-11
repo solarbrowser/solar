@@ -167,6 +167,7 @@ struct Gatherer {
   std::map<std::string, int> layerRank;
   std::string layerPath;
   bool collecting = false;  // only finding the layers
+  bool startingMode = false;  // the starting style of the element is being made: @starting-style rules count
   int anonymousLayers = 0;  // the anonymous layers are numbered as they are met, the same in both passes
   MediaEnvironment media = EnvironmentFor(element->nodeDocument);
   bool hostScoped = false;  // the rules are of a shadow tree and the element is its host: author rules of the outer tree win
@@ -325,6 +326,10 @@ struct Gatherer {
           proximity = savedProximity;
           break;
         }
+        case RuleKind::StartingStyle:
+          // (The layers it names are the document's, whether or not it is the starting style that is being made.)
+          if (startingMode || collecting) Rules(rule->rules, layer, outer);
+          break;
         case RuleKind::Media:
           if (!rule->media || MediaListMatches(rule->media->queries, media)) Rules(rule->rules, layer, outer);
           break;
@@ -498,7 +503,7 @@ ElementStyle& StyleOf(dom::Element* element, const std::string& pseudo = "") {
     Cache().clear();
     cachedVersion = version;
   }
-  ElementStyle& style = Cache()[{element, AnimatedValuesSuppressed() ? pseudo + "\x03" : pseudo}];
+  ElementStyle& style = Cache()[{element, (AnimatedValuesSuppressed() ? pseudo + "\x03" : pseudo) + (StartingStyleFor(element, pseudo) ? "\x04" : "")}];
   style.version = version;
   return style;
 }
@@ -625,6 +630,7 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
   MatchContext matchContext;
   matchContext.pseudoElement = pseudo.empty() ? nullptr : &pseudo;
   Gatherer gatherer{element, matchContext, style.cascade};
+  gatherer.startingMode = StartingStyleFor(element, pseudo);
   // The user agent's rules first, then the author's.
   for (const UserAgentRule& rule : UserAgentRules()) {
     Specificity best;
@@ -668,6 +674,7 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
   // A shadow host also takes the :host rules of its shadow tree, below the rules of the tree it is in.
   if (element->shadowRoot && pseudo.empty()) {
     Gatherer inner{element, gatherer.matchContext, style.cascade};
+    inner.startingMode = gatherer.startingMode;
     inner.matchContext.host = element;
     inner.order = gatherer.order;
     inner.ruleSerial = gatherer.ruleSerial + 1000000;
@@ -1288,6 +1295,17 @@ std::string Resolver::Finish(dom::Element* element, const std::string& property,
   if (IsCssWideKeyword(values)) return Lower(values[0].token.value);
   const Parent parent = ParentOf(element, pseudo);
 
+  // The legend of a fieldset is block-level (https://html.spec.whatwg.org/multipage/rendering.html#fieldset-and-legend): its display is blockified.
+  if (property == "display" && pseudo.empty() && element->IsHtml("legend") &&
+      values.size() == 1 && values[0].IsIdent()) {
+    const std::string word = Lower(values[0].token.value);
+    if (word == "inline") return "block";
+    if (word == "inline-block") return "flow-root";
+    if (word == "inline-flex") return "flex";
+    if (word == "inline-grid") return "grid";
+    if (word == "inline-table") return "table";
+  }
+
   // Properties whose computed values are not got by working through their types.
   if (property == "font-size") {
     if (values.size() == 1 && values[0].IsIdent()) {
@@ -1480,7 +1498,22 @@ std::string ResolvedValue(Quanta::Context& ctx, dom::Element* element, const std
   const std::string computed = ComputedValue(ctx, element, property, pseudo);
   if (element && !computed.empty() && element->nodeDocument) {
     const PropertyDefinition* definition = FindProperty(property);
-    if (definition && !IsShorthand(*definition)) element->lastRead[pseudo][property] = computed;
+    if (definition && !IsShorthand(*definition)) {
+      // An element with no box has no style to change from: what it has is a first style once it is rendered again. (Only styles already made are looked at.)
+      bool rendered = true;
+      if (property != "display") {
+        const ElementStyle& made = StyleOf(element, pseudo);
+        const auto display = made.computed.find("display");
+        rendered = display == made.computed.end() || display->second != "none";
+        if (rendered && !pseudo.empty()) {
+          const ElementStyle& owner = StyleOf(element, "");
+          const auto ownerDisplay = owner.computed.find("display");
+          rendered = ownerDisplay == owner.computed.end() || ownerDisplay->second != "none";
+        }
+      }
+      if (rendered) element->lastRead[pseudo][property] = computed;
+      else element->lastRead.erase(pseudo);
+    }
   }
   if (g_resolvedHook && pseudo.empty() && element && element->nodeDocument && g_resolvedHook(ctx, element, property, pseudo, used)) return used;
   return computed;

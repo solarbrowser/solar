@@ -49,13 +49,6 @@ bool UpdateContentVisibility(Tree& tree, dom::Document* document, bool& eventsPe
   const double left = scrollX - tree.viewportWidth / 2, right = scrollX + tree.viewportWidth * 1.5;
   const double top = scrollY - tree.viewportHeight / 2, bottom = scrollY + tree.viewportHeight * 1.5;
   const auto walk = [&](auto&& self, const Box& box) -> void {
-    // The size of what is rendered is what a skipped box has next, if it asks for the last size (contain-intrinsic-size: auto, and content-visibility: auto).
-    if (box.kind == Box::Kind::Block && box.node && box.node->IsElement() && box.style && !box.style->skipContents &&
-        (box.style->containIntrinsicWidthAuto || box.style->containIntrinsicHeightAuto || box.style->contentVisibilityAuto)) {
-      dom::Element* element = static_cast<dom::Element*>(box.node);
-      element->lastRenderedWidth = std::max(0.0, box.width - box.border.Horizontal() - box.padding.Horizontal());
-      element->lastRenderedHeight = std::max(0.0, box.height - box.border.Vertical() - box.padding.Vertical());
-    }
     if (box.kind == Box::Kind::Block && box.node && box.node->IsElement() && box.style && box.style->contentVisibilityAuto) {
       dom::Element* element = static_cast<dom::Element*>(box.node);
       if (element->contentVisibilityReported != (element->contentVisible ? 0 : 1)) eventsPending = true;

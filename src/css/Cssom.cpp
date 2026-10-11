@@ -72,7 +72,7 @@ void AddOrReplace(std::vector<DeclarationEntry>& items, DeclarationEntry entry) 
       entry.name.rfind("-webkit-transition", 0) == 0) {
     NoteAnimationMention();
   }
-  if (entry.name == "content-visibility" && entry.value.find("auto") != std::string::npos) g_contentVisibilityAutoMentioned = true;
+  if ((entry.name == "content-visibility" || entry.name.rfind("contain-intrinsic", 0) == 0) && entry.value.find("auto") != std::string::npos) g_contentVisibilityAutoMentioned = true;
   for (DeclarationEntry& existing : items) {
     if (existing.name == entry.name) {
       existing = std::move(entry);

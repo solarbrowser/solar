@@ -85,6 +85,7 @@ void CollectFaceRules(const std::vector<CssRule*>& rules, const std::string& bas
       }
       case RuleKind::Media:
       case RuleKind::Supports:
+      case RuleKind::StartingStyle:
       case RuleKind::LayerBlock:
         CollectFaceRules(rule->rules, base, out, depth + 1);
         break;

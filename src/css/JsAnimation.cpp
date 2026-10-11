@@ -107,6 +107,29 @@ Value Read(Context& ctx, Value, qe::Args args, Value) {
   return qe::FromWtf8(ctx, ComputedValue(ctx, element, StringArg(ctx, args, 2), StringArg(ctx, args, 1)));
 }
 
+// __solarAnimStarting(element, pseudo, property): the computed value in the starting style (the @starting-style rules in the cascade).
+Value Starting(Context& ctx, Value, qe::Args args, Value) {
+  dom::Element* element = args.size() > 0 ? DOMObject::Cast<dom::Element>(args[0]) : nullptr;
+  if (!element || args.size() < 3) return qe::Null();
+  const std::string pseudo = StringArg(ctx, args, 1);
+  NoStyleFlush noFlush;
+  // (Layout is brought up to date first, as it is made of the styles that are not the starting ones.)
+  ComputedValue(ctx, element, "display", pseudo);
+  SuppressAnimatedValues(true);
+  SetStartingStyleElement(element, pseudo);
+  const std::string value = ComputedValue(ctx, element, StringArg(ctx, args, 2), pseudo);
+  SetStartingStyleElement(nullptr, "");
+  SuppressAnimatedValues(false);
+  return qe::FromWtf8(ctx, value);
+}
+
+// __solarAnimForget(element): what script read of the element is not what it changes from any more (it has left the document).
+Value Forget(Context&, Value, qe::Args args, Value) {
+  dom::Element* element = args.size() > 0 ? DOMObject::Cast<dom::Element>(args[0]) : nullptr;
+  if (element) element->lastRead.clear();
+  return qe::Undefined();
+}
+
 // __solarAnimLastRead(element, pseudo, property): the computed value that script last read, or null.
 Value LastRead(Context& ctx, Value, qe::Args args, Value) {
   dom::Element* element = args.size() > 0 ? DOMObject::Cast<dom::Element>(args[0]) : nullptr;
@@ -220,6 +243,8 @@ void InstallAnimationNatives(Context& ctx) {
   qe::DefineGlobalFunction(ctx, "__solarAnimOnWake", OnWake, 1);
   qe::DefineGlobalFunction(ctx, "__solarAnimCandidates", Candidates, 1);
   qe::DefineGlobalFunction(ctx, "__solarAnimLastRead", LastRead, 3);
+  qe::DefineGlobalFunction(ctx, "__solarAnimStarting", Starting, 3);
+  qe::DefineGlobalFunction(ctx, "__solarAnimForget", Forget, 1);
   qe::DefineGlobalFunction(ctx, "__solarAuthorVersion", AuthorVersion, 0);
   qe::DefineGlobalFunction(ctx, "__solarAnimPropertyKind", Kind, 1);
 }

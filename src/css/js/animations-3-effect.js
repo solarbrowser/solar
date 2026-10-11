@@ -20,12 +20,14 @@
     read: globalThis.__solarAnimRead,
     mentions: globalThis.__solarAnimMentions,
     lastRead: globalThis.__solarAnimLastRead,
+    starting: globalThis.__solarAnimStarting,
+    forget: globalThis.__solarAnimForget,
     candidates: globalThis.__solarAnimCandidates,
     onWake: globalThis.__solarAnimOnWake,
     interpolable: globalThis.__solarAnimInterpolable,
   };
   S.natives = natives;
-  for (const name of ['__solarAnimInterpolate', '__solarAnimAdd', '__solarAnimScale', '__solarAnimSet', '__solarAnimComputed', '__solarAnimCompute', '__solarAnimExpand', '__solarAnimPropertyKind', '__solarAuthorVersion', '__solarAnimOnFlush', '__solarAnimRead', '__solarAnimMentions', '__solarAnimLastRead', '__solarAnimCandidates', '__solarAnimOnWake', '__solarAnimInterpolable']) delete globalThis[name];
+  for (const name of ['__solarAnimInterpolate', '__solarAnimAdd', '__solarAnimScale', '__solarAnimSet', '__solarAnimComputed', '__solarAnimCompute', '__solarAnimExpand', '__solarAnimPropertyKind', '__solarAuthorVersion', '__solarAnimOnFlush', '__solarAnimRead', '__solarAnimMentions', '__solarAnimLastRead', '__solarAnimStarting', '__solarAnimForget', '__solarAnimCandidates', '__solarAnimOnWake', '__solarAnimInterpolable']) delete globalThis[name];
 
   // ---- Property names ----
 

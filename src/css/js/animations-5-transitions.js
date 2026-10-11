@@ -214,6 +214,8 @@
       if (run) before = S.appliedValue(el, pseudo, property);
       if (before === undefined || before === null) before = seenMap.has(property) ? seenMap.get(property) : N.lastRead(el, pseudo, property);
       seenMap.set(property, after);
+      // No style before this one (the first, or the element had no box): the starting style, if @starting-style gives one, is what it was.
+      if ((before === null || before === undefined) && !run && N.starting(el, pseudo, 'display') !== 'none') before = N.starting(el, pseudo, property);
       if (before === null || before === undefined) continue;
       if (run) {
         if (S.slotOf(run).transition.endValue === after) continue;
@@ -246,6 +248,8 @@
       for (const runMap of byPseudo.values()) for (const animation of runMap.values()) if (isRunning(animation)) cancelTransition(animation);
       running.delete(el);
       seen.delete(el);
+      // What was read of it before is not what it changes from when it comes back.
+      if (!el.isConnected) N.forget(el);
     }
   };
 })();

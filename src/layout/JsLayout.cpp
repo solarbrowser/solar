@@ -312,6 +312,13 @@ Value CvTake(Context& ctx, Value, qe::Args, Value) {
   if (!document || !(document->contentVisibilityAutoSeen || css::g_contentVisibilityAutoMentioned)) return out;
   Tree* tree = UpdateLayout(ctx, document);
   const auto walk = [&](auto&& self, const Box& box) -> void {
+    // The size of what is rendered in a frame is what a skipped box has next, if it asks for the last size (contain-intrinsic-size: auto, and content-visibility: auto).
+    if (box.kind == Box::Kind::Block && box.node && box.node->IsElement() && box.style && !box.style->skipContents &&
+        (box.style->containIntrinsicWidthAuto || box.style->containIntrinsicHeightAuto || box.style->contentVisibilityAuto)) {
+      dom::Element* element = static_cast<dom::Element*>(box.node);
+      element->lastRenderedWidth = std::max(0.0, box.width - box.border.Horizontal() - box.padding.Horizontal());
+      element->lastRenderedHeight = std::max(0.0, box.height - box.border.Vertical() - box.padding.Vertical());
+    }
     if (box.kind == Box::Kind::Block && box.node && box.node->IsElement() && box.style && box.style->contentVisibilityAuto) {
       dom::Element* element = static_cast<dom::Element*>(box.node);
       const signed char state = element->contentVisible ? 0 : 1;

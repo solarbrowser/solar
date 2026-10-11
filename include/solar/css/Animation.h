@@ -20,6 +20,9 @@ const std::string* AnimatedValue(dom::Element* element, const std::string& pseud
 // While suppressed computed styles are the ones without animations (the value an effect adds to or interpolates from).
 void SuppressAnimatedValues(bool suppressed);
 bool AnimatedValuesSuppressed();
+// While set, the style of that element (or its pseudo-element) is its starting style: the rules in @starting-style are in the cascade.
+void SetStartingStyleElement(const dom::Element* element, const std::string& pseudo);
+bool StartingStyleFor(const dom::Element* element, const std::string& pseudo);
 
 // While one of these is alive, reading a computed style does not bring what animations give up to date first (the animations are
 // themselves reading styles).
