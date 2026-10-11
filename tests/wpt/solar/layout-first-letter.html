@@ -1,0 +1,32 @@
+<!doctype html>
+<title>::first-letter boxes</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<style>
+  body { margin: 0; font: 20px/1 monospace; }
+  p { margin: 0; width: 400px; }
+  #a::first-letter { font-size: 40px; }
+  #b::first-letter { float: left; font-size: 40px; }
+  #c::first-letter { color: green; }
+</style>
+<p id="a">"Hello" world</p>
+<p id="b">Float letter here</p>
+<p id="c"><span>Inner</span> text</p>
+<script>
+const range = (el, start, end) => { const r = document.createRange(); r.setStart(el.firstChild, start); r.setEnd(el.firstChild, end); return r.getBoundingClientRect(); };
+test(() => {
+  const a = document.getElementById("a");
+  assert_equals(getComputedStyle(a, "::first-letter").fontSize, "40px");
+  assert_equals(a.offsetHeight, 40, "the larger letter makes the line taller");
+}, "punctuation, letter and punctuation after it are one box");
+test(() => {
+  const b = document.getElementById("b");
+  assert_equals(getComputedStyle(b, "::first-letter").display, "block");
+  assert_equals(getComputedStyle(b, "::first-letter").float, "left");
+}, "a floated first letter is a block");
+test(() => {
+  const c = document.getElementById("c");
+  assert_equals(getComputedStyle(c, "::first-letter").color, "rgb(0, 128, 0)");
+  assert_equals(c.offsetHeight, 20);
+}, "the first letter is found in an inline child");
+</script>

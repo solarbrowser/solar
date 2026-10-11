@@ -2,18 +2,33 @@
 """Runs WPT pages in parallel and writes one line per page: path, exit code, passed/total, the first failure.
 
 usage: tools/wptrun.py OUTPUT DIR...   (runs every .html page below tests/wpt/DIR that is not a support file)
-       tools/wptrun.py --check LIST    (runs the pages the file lists, each in a process of its own, and fails if one fails)
+       tools/wptrun.py --check LIST...  (runs the pages the file lists, each in a process of its own, and fails if one fails)
 """
 import os
 import re
+import json
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 SKIP = re.compile(r"/resources/|/support/|-support|-ref\.html|-frame|-iframe|\.part\.html|-subframe|/tmp/")
 
 
+TIMES = "build/wpt-times.json"
+
+
 def run(path):
+    started = time.time()
+    line = run_page(path)
+    TIMING[path] = time.time() - started
+    return line
+
+
+TIMING = {}
+
+
+def run_page(path):
     try:
         out = subprocess.run(["bash", "-c", f"ulimit -v 4000000; timeout 60 ./build/WptTest {path}"], capture_output=True, text=True, errors="replace", timeout=90)
         text = out.stdout + out.stderr
@@ -26,10 +41,24 @@ def run(path):
     return f"{path} :: rc={code} {s}" + (f" | {first[:200]}" if first else "")
 
 
-def check(listing):
-    pages = [l.strip() for l in open(listing) if l.strip()]
+def check(listings):
+    pages = []
+    for listing in listings:
+        pages += [l.strip() for l in open(listing) if l.strip()]
+    # The slowest pages of the last run go first, so that none is left running alone at the end.
+    try:
+        known = json.load(open(TIMES))
+    except (OSError, ValueError):
+        known = {}
+    pages.sort(key=lambda p: -known.get(p, 1.0))
     with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
         lines = list(pool.map(run, pages))
+    try:
+        known.update(TIMING)
+        os.makedirs(os.path.dirname(TIMES), exist_ok=True)
+        json.dump(known, open(TIMES, "w"))
+    except OSError:
+        pass
     failed = [l for l in lines if not re.search(r"rc=0 (\d+)/\1 passed", l)]
     for l in failed:
         print(l)
@@ -39,7 +68,7 @@ def check(listing):
 
 def main():
     if sys.argv[1] == "--check":
-        check(sys.argv[2])
+        check(sys.argv[2:])
     output, dirs = sys.argv[1], sys.argv[2:]
     pages = []
     for d in dirs:

@@ -7,6 +7,9 @@
 
 namespace solar::css {
 
+bool g_firstLetterSeen = false, g_firstLineSeen = false;
+
+
 namespace {
 
 struct ParseError {};
@@ -451,6 +454,8 @@ class Parser {
         if (std::find_if(std::begin(kPseudoElements), std::end(kPseudoElements), [&](const char* known) { return name == known; }) == std::end(kPseudoElements)) throw ParseError();
         simple.kind = SimpleSelector::Kind::PseudoElement;
         simple.name = name;
+        if (name == "first-letter") g_firstLetterSeen = true;
+        if (name == "first-line") g_firstLineSeen = true;
         return simple;
       }
       if (name == "host") {

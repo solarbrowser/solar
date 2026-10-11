@@ -93,6 +93,8 @@ using SelectorList = std::vector<ComplexSelector>;
 
 // Parses a selector list as querySelector does: nullopt if it is not valid (a SyntaxError). `forgiving`
 // is for the lists of :is() and :where(), where what is invalid is dropped.
+// Whether a selector with the pseudo-element has been read: a document with none has no first lines and letters to look for.
+extern bool g_firstLetterSeen, g_firstLineSeen;
 std::optional<SelectorList> ParseSelectorList(std::string_view text);
 // The same for the selector of a style rule, which may use the prefixes of @namespace rules (checked by the sheet).
 std::optional<SelectorList> ParseSelectorListForRule(std::string_view text);

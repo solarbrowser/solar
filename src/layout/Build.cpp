@@ -190,6 +190,7 @@ class Builder {
     dom::Element* html = document->DocumentElement();
     if (html) BuildElement(*initial, html);
     Normalize(*initial);
+    ApplyFirstLetters(lc_, *initial);
     AttachMarkers(*initial);
     PropagateViewportOverflow(*initial, document);
   }

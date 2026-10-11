@@ -71,6 +71,7 @@ struct Box {
   Box* parent = nullptr;
   std::vector<std::unique_ptr<Box>> children;
 
+  size_t textOffset = 0;      // Text: where the characters are in the node's data, when the node's text is in more than one box
   std::string text;           // Text: the characters of the node
   std::string processed;      // Text: after white space and text-transform, as shaped
   std::vector<uint32_t> processedSource;  // Text: for each byte of `processed` the byte of `text` it came from (one more at the end)

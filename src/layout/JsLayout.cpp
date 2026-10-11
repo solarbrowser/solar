@@ -246,7 +246,7 @@ Value RangeRects(Context& ctx, Value, qe::Args args, Value) {
         for (const font::Glyph& g : item.text.glyphs) {
           const size_t processed = item.text.begin + g.cluster;
           const double width = g.advance * item.text.fontSize;
-          const size_t source = processed < box->processedSource.size() ? box->processedSource[processed] : box->text.size();
+          const size_t source = processed < box->processedSource.size() ? box->processedSource[processed] + box->textOffset : box->textOffset + box->text.size();
           if (source >= from && source < to) {
             if (!any) low = pen;
             any = true;

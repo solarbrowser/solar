@@ -542,6 +542,20 @@ double ViewportScrollbarsWith(dom::Document* document, const std::function<std::
   return verticalBar;
 }
 
+// Whether a property that is not inherited applies to ::first-letter or ::first-line (https://www.w3.org/TR/css-pseudo-4/#first-line-styling).
+bool AppliesToFirstPseudo(const std::string& property, bool letter) {
+  const auto starts = [&](const char* prefix) { return property.rfind(prefix, 0) == 0; };
+  if (property.rfind("--", 0) == 0 || property == "display" || property == "content" || property == "opacity" || property == "vertical-align" || property == "unicode-bidi" || property == "all") return true;
+  if (starts("background") || starts("text-decoration") || starts("text-underline") || starts("-webkit-text") || starts("-webkit-background") || starts("mix-blend") || starts("text-emphasis")) return true;
+  if (starts("font") || starts("line-height") || starts("-webkit-font") || property == "color" || property == "letter-spacing" || property == "word-spacing" || property == "text-transform" ||
+      property == "text-shadow" || property == "text-justify") return true;
+  if (letter) {
+    if (starts("margin") || starts("padding") || starts("border") || starts("-webkit-border") || starts("-webkit-margin") || starts("-webkit-padding")) return true;
+    if (property == "float" || property == "box-shadow" || property == "-webkit-box-shadow" || starts("initial-letter") || property == "clear" || property == "text-box-trim" || starts("text-box")) return true;
+  }
+  return false;
+}
+
 class Resolver {
  public:
   explicit Resolver(Quanta::Context& ctx) : ctx_(ctx) {}
@@ -1124,6 +1138,13 @@ std::string Resolver::Specified(dom::Element* element, const std::string& proper
     if (parent.element) return Compute(parent.element, property, parent.pseudo);
     return Compute(element, "\x01initial:" + property, pseudo);
   };
+  // These two are inline, or a block when floated.
+  if (property == "display" && (pseudo == "first-letter" || pseudo == "first-line")) {
+    if (pseudo == "first-letter" && Compute(element, "float", pseudo) != "none") return "block";
+    return "inline";
+  }
+  // The properties that do not apply to ::first-letter and ::first-line are the initial ones, if they are not inherited.
+  if ((pseudo == "first-letter" || pseudo == "first-line") && !AppliesToFirstPseudo(property, pseudo == "first-letter")) return definition.inherited ? fromParent() : "initial";
   // What the rest of a declared value comes to: var() substituted, a CSS-wide keyword answered.
   const auto fromText = [&](std::string text) -> std::string {
     if (ContainsSubstitution(ParseComponentValues(text))) {
@@ -1373,6 +1394,12 @@ void NoteStyleChangeForRegistry() { NoteStyleChange(); }
 void NoteAnimatedStyleChange() { ++g_styleVersion; }
 uint64_t AuthorStyleVersion() { return dom::TreeVersion() * 1000003 + g_authorVersion; }
 uint64_t StyleVersion() { return g_styleVersion; }
+
+bool HasPseudoStyle(dom::Element* element, const std::string& pseudo) {
+  ElementStyle& style = StyleOf(element, pseudo);
+  Build(element, style, pseudo);
+  return !style.cascade.empty();
+}
 
 void ViewportScrollbars(Quanta::Context& ctx, dom::Document* document, double& vertical, double& horizontal) {
   vertical = ViewportScrollbarsWith(document, [&](dom::Element* e, const char* p) { return ComputedValue(ctx, e, p); }, horizontal);

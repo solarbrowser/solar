@@ -285,9 +285,12 @@ test: $(addprefix $(BUILD_DIR)/,$(TESTS)) $(if $(filter linux,$(PLATFORM)),$(BUI
 ifeq ($(PLATFORM),linux)
 	@for t in $(NET_TESTS) FetchBindingsTest; do SOLAR_LOOP_BACKEND=readiness $(BUILD_DIR)/$$t || exit 1; done
 	@$(BUILD_DIR)/WptTest $(wildcard tests/wpt/url/*.any.js) $(WPT_DOM) $(WPT_FETCH) $(WPT_STREAMS)
-	@python3 tools/wptrun.py --check tests/wpt/dom/passing.txt
-	@python3 tools/wptrun.py --check tests/wpt/css/passing.txt
+	@python3 tools/wptrun.py --check tests/wpt/dom/passing.txt tests/wpt/css/passing.txt
 endif
+
+# Only the WPT pages of the passing lists (DOM and CSS), the part that changes with the engine: no unit tests.
+test-wpt: $(BUILD_DIR)/WptTest
+	@python3 tools/wptrun.py --check tests/wpt/dom/passing.txt tests/wpt/css/passing.txt
 
 # The WPT tests and the fetch binding tests again with the collector run at every allocation. Quanta
 # is tested that way itself, so this is for what Solar's own bindings keep alive (Persistents, Visit).

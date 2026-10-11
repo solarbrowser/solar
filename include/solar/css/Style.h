@@ -11,6 +11,8 @@ namespace solar::css {
 
 // The computed value of a longhand property for an element, as getComputedStyle answers: empty for an element that is not
 // in a document, or a property that has no such value.
+// Whether any rule gives the pseudo-element of the element a style.
+bool HasPseudoStyle(dom::Element* element, const std::string& pseudo);
 // The width the vertical scrollbar or gutter of the viewport takes, and the height of the horizontal one.
 void ViewportScrollbars(Quanta::Context& ctx, dom::Document* document, double& vertical, double& horizontal);
 std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std::string& property, const std::string& pseudo = "");
