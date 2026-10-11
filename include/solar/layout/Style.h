@@ -105,6 +105,9 @@ struct BoxStyle {
   double letterSpacing = 0, wordSpacing = 0;
   TextTransform textTransform = TextTransform::None;
   OverflowWrap overflowWrap = OverflowWrap::Normal;
+  bool rubyUnder = false;   // ruby-position: under (else over; with alternate, where the first annotation is)
+  bool rubyAlternate = false;  // ruby-position: alternate (the annotation containers of a ruby go over and under in turn)
+  bool rubyStart = false;   // ruby-align: start (else the annotation and the base are centered in their column)
   int lineBreak = 0;  // line-break: 0 auto/normal, 1 loose, 2 strict, 3 anywhere
   std::string lang;   // the language of the element (the nearest lang attribute), lowercase
   WordBreak wordBreak = WordBreak::Normal;

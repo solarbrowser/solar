@@ -158,6 +158,9 @@ void ConvertPlaced(Box& b, WritingMode frameMode, double fw, double fh, const Re
 
 // Fonts of a box's style.
 std::shared_ptr<font::Face> PrimaryFace(LayoutContext& lc, const Box& box);
+// Ruby.cpp: a ruby is laid out as columns, each a base with the annotations over it and under it.
+void LayoutRuby(LayoutContext& lc, Box& box, double contentWidth, double& contentHeight);
+void RubyContentSizes(LayoutContext& lc, Box& box, double& minContent, double& maxContent);
 // FirstLetter.cpp: the first letters of the blocks, split off as boxes of their own.
 void ApplyFirstLetters(LayoutContext& lc, Box& root);
 // Controls.cpp: the natural size of a form control, if the element is one that is replaced by a control.

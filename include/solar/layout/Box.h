@@ -93,6 +93,8 @@ struct Box {
   std::string processed;      // Text: after white space and text-transform, as shaped
   std::vector<uint32_t> processedSource;  // Text: for each byte of `processed` the byte of `text` it came from (one more at the end)
   int listValue = 0;           // a list item's counter
+  double rubyOver = 0, rubyUnder = 0;  // a ruby: how far its annotations reach above and below it, which the line it is on makes room for
+  uint8_t rubyRole = 0;        // in a ruby: 1 a base, 2 an annotation over it, 3 one under it
   bool outsideMarker = false;  // a list item's marker, outside its principal box
   std::string pseudo;         // "::before", "::after", "::marker" for generated content
 

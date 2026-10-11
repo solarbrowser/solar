@@ -2926,3 +2926,17 @@ tests/wpt/css/css-grid/subgrid/grid-template-valid.html
 tests/wpt/css/css-grid/subgrid/placement-invalidation-001.html
 tests/wpt/css/css-grid/subgrid/subgrid-baseline-011.html
 tests/wpt/css/css-grid/subgrid/subgridded-axis-content-distribution-001.html
+tests/wpt/css/css-ruby/inheritance.html
+tests/wpt/css/css-ruby/parsing/ruby-align-invalid.html
+tests/wpt/css/css-ruby/parsing/ruby-align-valid.html
+tests/wpt/css/css-ruby/parsing/ruby-merge-invalid.html
+tests/wpt/css/css-ruby/parsing/ruby-merge-valid.html
+tests/wpt/css/css-ruby/parsing/ruby-overhang-invalid.html
+tests/wpt/css/css-ruby/parsing/ruby-position-invalid.html
+tests/wpt/css/css-ruby/parsing/ruby-position-valid.html
+tests/wpt/css/css-ruby/position-relative.html
+tests/wpt/css/css-ruby/rt-display-blockified.html
+tests/wpt/css/css-ruby/ruby-overhang-no-overlap.html
+tests/wpt/css/css-ruby/ruby-overhang-spaces-no-overlap.html
+tests/wpt/css/css-ruby/ruby-position-alternate.html
+tests/wpt/css/css-ruby/ruby-position.html

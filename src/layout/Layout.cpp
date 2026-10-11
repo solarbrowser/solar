@@ -422,6 +422,11 @@ bool UsedValue(Tree& tree, dom::Element* element, const std::string& property, s
     out = text;
     return true;
   }
+  // A number for the line height is a length once the font size is known; normal stays what it is.
+  if (property == "line-height" && !box->style->lineHeight.IsAuto() && box->style->lineHeightNumber >= 0) {
+    out = Px(box->style->lineHeight.value);
+    return true;
+  }
   if (property == "transform") {
     if (isInline || box->style->transform == "none") return false;
     Matrix m;
@@ -463,7 +468,7 @@ bool ResolvedHook(Quanta::Context& ctx, dom::Element* element, const std::string
   const std::string physical = css::PhysicalOf(given, {css::ComputedValue(ctx, element, "writing-mode"), css::ComputedValue(ctx, element, "direction")});
   if (!physical.empty()) property = physical;
   static const char* const names[] = {"width", "height", "min-width", "min-height", "margin-top", "margin-right", "margin-bottom", "margin-left", "padding-top",
-                                      "padding-right", "padding-bottom", "padding-left", "top", "right", "bottom", "left", "transform", "grid-template-columns", "grid-template-rows"};
+                                      "padding-right", "padding-bottom", "padding-left", "top", "right", "bottom", "left", "transform", "grid-template-columns", "grid-template-rows", "line-height"};
   bool relevant = false;
   for (const char* n : names) if (property == n) relevant = true;
   if (!relevant) return false;

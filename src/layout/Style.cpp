@@ -458,6 +458,9 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
   s.letterSpacing = get("letter-spacing") == "normal" ? 0 : Number(get("letter-spacing"));
   s.wordSpacing = get("word-spacing") == "normal" ? 0 : Number(get("word-spacing"));
   s.textTransform = Pick<TextTransform>(get("text-transform"), {{"capitalize", TextTransform::Capitalize}, {"uppercase", TextTransform::Uppercase}, {"lowercase", TextTransform::Lowercase}}, TextTransform::None);
+  s.rubyUnder = get("ruby-position").find("under") != std::string::npos;
+  s.rubyAlternate = get("ruby-position").find("alternate") != std::string::npos;
+  s.rubyStart = get("ruby-align") == "start";
   s.overflowWrap = Pick<OverflowWrap>(get("overflow-wrap"), {{"break-word", OverflowWrap::BreakWord}, {"anywhere", OverflowWrap::Anywhere}}, OverflowWrap::Normal);
   s.wordBreak = Pick<WordBreak>(get("word-break"), {{"break-all", WordBreak::BreakAll}, {"keep-all", WordBreak::KeepAll}, {"break-word", WordBreak::BreakWord}}, WordBreak::Normal);
   s.tabSize = static_cast<int>(Number(get("tab-size"), 8));

@@ -512,6 +512,8 @@ class Builder {
         case Display::InlineFlex: changed->display = Display::Flex; break;
         case Display::InlineGrid: changed->display = Display::Grid; break;
         case Display::InlineTable: changed->display = Display::Table; break;
+        // (a ruby annotation or base that floats or is positioned is a block: it is not part of the ruby any more)
+        case Display::RubyText: case Display::RubyBase: case Display::RubyTextContainer: case Display::RubyBaseContainer: changed->display = Display::Block; break;
         default: break;
       }
       box->style = changed;
@@ -641,6 +643,117 @@ class Builder {
   }
 
   // The children of a flex or grid container are its items: each element, and each run of text as an anonymous one.
+  // The base and the annotations of a ruby, in the order of its columns: a base, then what is over it and under it.
+  void NormalizeRuby(Box& ruby) {
+    std::vector<std::unique_ptr<Box>> old = std::move(ruby.children);
+    ruby.children.clear();
+    struct Column {
+      std::unique_ptr<Box> base;
+      std::vector<std::unique_ptr<Box>> annotations;
+    };
+    std::vector<Column> columns;
+    const auto block = [&](std::unique_ptr<Box> box, int role) {
+      auto style = std::make_shared<BoxStyle>(*box->style);
+      style->display = Display::Block;
+      // (a base or an annotation is a box of the ruby: it does not float or sit somewhere else)
+      style->floating = Float::None;
+      if (style->position == Position::Absolute || style->position == Position::Fixed) style->position = Position::Static;
+      if (!ruby.style->rubyStart) style->textAlign = TextAlign::Center;
+      if (style->physicalStyle) {
+        auto physical = std::make_shared<BoxStyle>(*style->physicalStyle);
+        physical->display = Display::Block;
+        physical->floating = Float::None;
+        if (physical->position == Position::Absolute || physical->position == Position::Fixed) physical->position = Position::Static;
+        style->physicalStyle = physical;
+      }
+      box->style = style;
+      box->inlineLevel = false;
+      box->kind = Box::Kind::Block;
+      box->rubyRole = static_cast<uint8_t>(role);
+      return box;
+    };
+    std::vector<std::unique_ptr<Box>> pending;
+    int containers = 0;
+    bool lastUnder = false;
+    const auto flush = [&] {
+      bool significant = false;
+      for (auto& p : pending) if (!(p->kind == Box::Kind::Text && OnlyCollapsibleSpace(*p))) significant = true;
+      if (significant) {
+        auto base = std::make_unique<Box>();
+        base->kind = Box::Kind::Block;
+        base->anonymous = true;
+        base->style = AnonymousStyle(*ruby.style, Display::Block);
+        if (!ruby.style->rubyStart) {
+          auto centered = std::make_shared<BoxStyle>(*base->style);
+          centered->textAlign = TextAlign::Center;
+          base->style = centered;
+        }
+        base->rubyRole = 1;
+        for (auto& p : pending) base->AddChild(std::move(p));
+        columns.push_back({std::move(base), {}});
+      }
+      pending.clear();
+    };
+    const auto annotate = [&](size_t column, std::unique_ptr<Box> note) {
+      while (columns.size() <= column) {
+        auto base = std::make_unique<Box>();
+        base->kind = Box::Kind::Block;
+        base->anonymous = true;
+        base->style = AnonymousStyle(*ruby.style, Display::Block);
+        base->rubyRole = 1;
+        columns.push_back({std::move(base), {}});
+      }
+      const int role = note->style->rubyUnder ? 3 : 2;
+      columns[column].annotations.push_back(block(std::move(note), role));
+    };
+    for (auto& child : old) {
+      switch (child->style->display) {
+        case Display::RubyBase:
+          flush();
+          columns.push_back({block(std::move(child), 1), {}});
+          break;
+        case Display::RubyText: {
+          flush();
+          // The side is the ruby's, whatever the annotation says of itself.
+          auto style = std::make_shared<BoxStyle>(*child->style);
+          style->rubyUnder = ruby.style->rubyUnder;
+          child->style = style;
+          annotate(columns.empty() ? 0 : columns.size() - 1, std::move(child));
+          break;
+        }
+        case Display::RubyTextContainer: {
+          flush();
+          // Where it is: as it says, or, when it alternates, the other side from the container before (the first is over unless the ruby starts under).
+          bool under = child->style->rubyUnder;
+          if (child->style->rubyAlternate) under = containers == 0 ? ruby.style->rubyUnder && ruby.style->rubyAlternate : !lastUnder;
+          lastUnder = under;
+          ++containers;
+          size_t j = 0;
+          std::vector<std::unique_ptr<Box>> notes = std::move(child->children);
+          for (auto& n : notes) {
+            if (n->style->display != Display::RubyText) continue;
+            n->parent = nullptr;
+            auto style = std::make_shared<BoxStyle>(*n->style);
+            style->rubyUnder = under;
+            n->style = style;
+            annotate(j++, std::move(n));
+          }
+          break;
+        }
+        default:
+          pending.push_back(std::move(child));
+          break;
+      }
+    }
+    flush();
+    for (Column& c : columns) {
+      ruby.AddChild(std::move(c.base));
+      for (auto& a : c.annotations) ruby.AddChild(std::move(a));
+    }
+    ruby.hasInlineContent = false;
+    for (auto& c : ruby.children) Normalize(*c);
+  }
+
   void NormalizeItems(Box& container) {
     std::vector<std::unique_ptr<Box>> old = std::move(container.children);
     container.children.clear();
@@ -867,6 +980,12 @@ class Builder {
       case Display::Flex: case Display::InlineFlex: case Display::Grid: case Display::InlineGrid:
         if (container.kind == Box::Kind::Block && !container.replaced) {
           NormalizeItems(container);
+          return;
+        }
+        break;
+      case Display::Ruby:
+        if (container.kind == Box::Kind::Block && !container.replaced) {
+          NormalizeRuby(container);
           return;
         }
         break;

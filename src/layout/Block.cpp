@@ -283,6 +283,10 @@ void ComputeContentSizes(LayoutContext& lc, Box& box) {
     box.minContent = box.maxContent = box.naturalWidth;
     return;
   }
+  if (s.display == Display::Ruby && !box.children.empty() && box.children[0]->rubyRole != 0) {
+    RubyContentSizes(lc, box, box.minContent, box.maxContent);
+    return;
+  }
   if (IsFlexDisplay(s.display)) {
     FlexContentSizes(lc, box, box.minContent, box.maxContent);
     return;
@@ -880,6 +884,10 @@ void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cb
   if (box.replaced) {
     contentHeight = Known(specifiedHeight) ? specifiedHeight : 0;
     hasContent = true;
+  } else if (s.display == Display::Ruby && !box.children.empty() && box.children[0]->rubyRole != 0) {
+    lc.cbX = contentLeftBfc;
+    LayoutRuby(lc, box, width, contentHeight);
+    hasContent = true;
   } else if (IsFlexDisplay(s.display)) {
     lc.cbX = contentLeftBfc;
     LayoutFlex(lc, box, width, heightForChildren, contentHeight);
@@ -909,7 +917,7 @@ void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cb
       if (!c->style->IsOutOfFlow() && !c->style->IsFloating() && !c->collapsedThrough) hasContent = true;
     }
   }
-  if (!IsFlexDisplay(s.display) && !IsGridDisplay(s.display)) {
+  if (!IsFlexDisplay(s.display) && !IsGridDisplay(s.display) && !(s.display == Display::Ruby && box.baseline >= 0)) {
     box.firstBaseline = -1;
     if (box.hasInlineContent && !box.lines.empty()) {
       box.firstBaseline = box.lines[0].rect.y + box.lines[0].baseline;

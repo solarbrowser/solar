@@ -52,7 +52,7 @@ table { display: table; } caption { display: table-caption; } colgroup, colgroup
 thead, thead[hidden] { display: table-header-group; } tbody, tbody[hidden] { display: table-row-group; } tfoot, tfoot[hidden] { display: table-footer-group; }
 tr, tr[hidden] { display: table-row; } td, th, td[hidden], th[hidden] { display: table-cell; }
 input, select, button, textarea, meter, progress { display: inline-block; }
-ruby { display: ruby; } rt { display: ruby-text; } slot { display: contents; }
+ruby { display: ruby; } rb { display: ruby-base; } rt { display: ruby-text; font-size: 50%; white-space: nowrap; } rtc { display: ruby-text-container; } slot { display: contents; }
 body { margin: 8px; }
 p, dl, multicol { margin-block: 1em; }
 blockquote, figure { margin-block: 1em; margin-inline: 40px; }

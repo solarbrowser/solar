@@ -1106,6 +1106,7 @@ double LayoutInlineContentOnce(LayoutContext& lc, Box& container, double width, 
       double above = 0, below = 0;
       double shift = 0;  // from the line's baseline, up positive
       bool top = false, bottom = false;
+      double relX = 0, relY = 0;  // position: relative on the inline boxes it is in
     };
     std::vector<Piece> pieces;
     struct BoxExtent {
@@ -1113,6 +1114,7 @@ double LayoutInlineContentOnce(LayoutContext& lc, Box& container, double width, 
       double xStart, xEnd;
       double lo = 1e300, hi = -1e300;  // the extent of everything of it on the line, as laid out left to right
       double shift;
+      double relX = 0, relY = 0;  // position: relative on it and on the inline boxes around it
       double above, below;  // of the inline box (line-height)
       double contentAscent, contentDescent;
       bool top, bottom;
@@ -1124,8 +1126,29 @@ double LayoutInlineContentOnce(LayoutContext& lc, Box& container, double width, 
       Box* box;
       size_t extentIndex;
       double shift;
+      double ownX = 0, ownY = 0;  // its own position: relative offset
     };
     std::vector<OpenBox> open;
+    // position: relative on an inline box moves what is in it.
+    const auto relativeOffset = [&](const Box* b, double& dx, double& dy) {
+      dx = dy = 0;
+      if (b->style->position != Position::Relative) return;
+      const BoxStyle& st = *b->style;
+      const auto length = [&](const Length& l, double basis, double& out) {
+        if (l.IsAuto() || l.kind == Length::Kind::MinContent || l.kind == Length::Kind::MaxContent || l.kind == Length::Kind::FitContent || l.kind == Length::Kind::Stretch) return false;
+        out = l.Resolve(basis);
+        return true;
+      };
+      double left = 0, right = 0, topV = 0, bottomV = 0;
+      if (length(st.inset[3], width, left)) dx = left;
+      else if (length(st.inset[1], width, right)) dx = -right;
+      if (length(st.inset[0], 0.0, topV)) dy = topV;
+      else if (length(st.inset[2], 0.0, bottomV)) dy = -bottomV;
+    };
+    const auto relativeSum = [&](double& sx, double& sy) {
+      sx = sy = 0;
+      for (const OpenBox& o : open) { sx += o.ownX; sy += o.ownY; }
+    };
     const auto metricsOfBox = [&](Box* b, double& lineHeight) { return BoxMetrics(lc, *b->style, lineHeight); };
     const auto shiftOf = [&](Box* b, double parentShift, Box* parentBox, const Metrics& m, double aboveOfBox, double belowOfBox, bool& top, bool& bottom) {
       const BoxStyle& s = *b->style;
@@ -1178,6 +1201,8 @@ double LayoutInlineContentOnce(LayoutContext& lc, Box& container, double width, 
       be.used = false;
       extents.push_back(be);
       open.push_back({e.box, extents.size() - 1, be.shift});
+      relativeOffset(e.box, open.back().ownX, open.back().ownY);
+      relativeSum(extents.back().relX, extents.back().relY);
     }
     stack.clear();
     const auto markUsed = [&] {
@@ -1212,6 +1237,8 @@ double LayoutInlineContentOnce(LayoutContext& lc, Box& container, double width, 
           be.used = p.width != 0 || a.box->border.Horizontal() > 0 || a.box->padding.Horizontal() > 0;
           extents.push_back(be);
           open.push_back({a.box, extents.size() - 1, be.shift});
+          relativeOffset(a.box, open.back().ownX, open.back().ownY);
+          relativeSum(extents.back().relX, extents.back().relY);
           extents.back().lo = x;
           extents.back().hi = x + p.width;
           touch(x, x + p.width);
@@ -1274,6 +1301,7 @@ double LayoutInlineContentOnce(LayoutContext& lc, Box& container, double width, 
           piece.item.rect = {x, 0, w, 0};
           piece.inlineParent = parentBox;
           piece.shift = shift;
+          relativeSum(piece.relX, piece.relY);
           double lh = 0;
           const Metrics m = metricsOfBox(parentBox, lh);
           const double half = (lh - (m.ascent + m.descent)) / 2;
@@ -1293,11 +1321,12 @@ double LayoutInlineContentOnce(LayoutContext& lc, Box& container, double width, 
           touch(x, x + p.width);
           piece.item.rect = {x + ml, 0, b.width, b.height};
           piece.inlineParent = open.empty() ? &container : open.back().box;
+          relativeSum(piece.relX, piece.relY);
           const double parentShift = open.empty() ? rootShift : open.back().shift;
           // The baseline of the atomic inline: its own, or the bottom margin edge.
           const double baselineInBox = b.baseline >= 0 && b.style->overflowY == Overflow::Visible && !b.style->containLayout ? b.baseline : b.height;
-          const double aboveBase = b.margin.top + baselineInBox;
-          const double belowBase = b.height - baselineInBox + b.margin.bottom;
+          const double aboveBase = b.margin.top + baselineInBox + b.rubyOver;
+          const double belowBase = b.height - baselineInBox + b.margin.bottom + b.rubyUnder;
           double shift = parentShift;
           const BoxStyle& s = *b.style;
           double lh = 0;
@@ -1395,10 +1424,10 @@ double LayoutInlineContentOnce(LayoutContext& lc, Box& container, double width, 
       if (be.bottom) top = lineHeight - (be.above + be.below) + (be.above + be.below - heightOfContent) / 2;
       // The border box includes the padding and border of the box on the ends that this fragment has.
       Rect r;
-      r.x = originX + be.xStart + b.margin.left * 0;
+      r.x = originX + be.xStart + b.margin.left * 0 + be.relX;
       r.width = be.xEnd - be.xStart;
       // the margin is outside the border box: drop it from the ends this fragment has
-      r.y = originY + top - b.padding.top - b.border.top;
+      r.y = originY + top - b.padding.top - b.border.top + be.relY;
       r.height = heightOfContent + b.padding.Vertical() + b.border.Vertical();
       // (Open's width included the left margin; Close's the right.)
       b.fragments.push_back(r);
@@ -1413,8 +1442,8 @@ double LayoutInlineContentOnce(LayoutContext& lc, Box& container, double width, 
         if (p.top) top = 0;
         else if (p.bottom) top = lineHeight - (m.ascent + m.descent);
         else top = baselineY - p.shift - m.ascent;
-        item.rect.x += originX;
-        item.rect.y = originY + top;
+        item.rect.x += originX + p.relX;
+        item.rect.y = originY + top + p.relY;
         item.rect.height = m.ascent + m.descent;
         item.text.x = item.rect.x;
         item.text.baselineShift = p.shift;
@@ -1426,9 +1455,13 @@ double LayoutInlineContentOnce(LayoutContext& lc, Box& container, double width, 
         else top = baselineY - p.shift - p.above;
         // `above` holds the margin top plus baseline offset; the border box starts after the margin.
         item.rect.x += originX;
-        item.rect.y = originY + top + item.box->margin.top;
-        item.box->x = item.rect.x;
-        item.box->y = item.rect.y;
+        // (what a ruby has over it is outside its box: the box starts below that)
+        item.rect.y = originY + top + item.box->margin.top + item.box->rubyOver;
+        // position: relative moves it (and its contents with it) from where it was put.
+        item.rect.x += p.relX;
+        item.rect.y += p.relY;
+        item.box->x = item.rect.x + item.box->shiftX;
+        item.box->y = item.rect.y + item.box->shiftY;
         // (relative to the container's border box)
       }
       line.items.push_back(std::move(item));
