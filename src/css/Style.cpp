@@ -541,8 +541,9 @@ ElementStyle& StyleOf(dom::Element* element, const std::string& pseudo = "") {
 void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo);
 
 // The room the scrollbars and the gutter of the viewport take: the overflow is that of the root element, or of the body when the root's is visible.
-double ViewportScrollbarsWith(dom::Document* document, const std::function<std::string(dom::Element*, const char*)>& get, double& horizontal) {
+double ViewportScrollbarsWith(dom::Document* document, const std::function<std::string(dom::Element*, const char*)>& get, double& horizontal, ViewportAuto* autos = nullptr) {
   horizontal = 0;
+  if (autos) *autos = ViewportAuto();
   dom::Element* root = document ? document->DocumentElement() : nullptr;
   if (!root) return 0;
   const auto visible = [&](dom::Element* e) {
@@ -555,7 +556,7 @@ double ViewportScrollbarsWith(dom::Document* document, const std::function<std::
     for (dom::Node* child = root->firstChild; child; child = child->nextSibling) {
       if (child->IsElement() && static_cast<dom::Element*>(child)->IsHtml("body")) source = static_cast<dom::Element*>(child);
     }
-    if (!source || visible(source)) return 0;
+    if (!source || visible(source)) source = root;  // (the overflow of the viewport is auto when it is visible)
   }
   std::string ox = get(source, "overflow-x"), oy = get(source, "overflow-y");
   if (ox == "clip") ox = "hidden";
@@ -567,6 +568,11 @@ double ViewportScrollbarsWith(dom::Document* document, const std::function<std::
   const bool stable = gutter.find("stable") != std::string::npos, both = gutter.find("both-edges") != std::string::npos;
   const std::string mode = get(source, "writing-mode");
   const bool vertical = mode.starts_with("vertical") || mode.starts_with("sideways");
+  if (autos) {
+    autos->x = ox == "auto";
+    autos->y = oy == "auto";
+    autos->thickness = thickness;
+  }
   double verticalBar = 0;
   if (oy == "scroll") verticalBar = thickness;
   if (ox == "scroll") horizontal = thickness;
@@ -1755,8 +1761,8 @@ bool HasPseudoStyle(dom::Element* element, const std::string& pseudo) {
   return !style.cascade.empty();
 }
 
-void ViewportScrollbars(Quanta::Context& ctx, dom::Document* document, double& vertical, double& horizontal) {
-  vertical = ViewportScrollbarsWith(document, [&](dom::Element* e, const char* p) { return ComputedValue(ctx, e, p); }, horizontal);
+void ViewportScrollbars(Quanta::Context& ctx, dom::Document* document, double& vertical, double& horizontal, ViewportAuto* autos) {
+  vertical = ViewportScrollbarsWith(document, [&](dom::Element* e, const char* p) { return ComputedValue(ctx, e, p); }, horizontal, autos);
 }
 
 std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std::string& property, const std::string& pseudo) {

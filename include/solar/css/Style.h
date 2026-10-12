@@ -26,7 +26,12 @@ uint64_t SheetsVersion();
 // Whether any rule gives the pseudo-element of the element a style.
 bool HasPseudoStyle(dom::Element* element, const std::string& pseudo);
 // The width the vertical scrollbar or gutter of the viewport takes, and the height of the horizontal one.
-void ViewportScrollbars(Quanta::Context& ctx, dom::Document* document, double& vertical, double& horizontal);
+// Whether the overflow of the viewport is auto on each axis (a scrollbar of that thickness comes when the contents overflow).
+struct ViewportAuto {
+  bool x = false, y = false;
+  double thickness = 0;
+};
+void ViewportScrollbars(Quanta::Context& ctx, dom::Document* document, double& vertical, double& horizontal, ViewportAuto* autos = nullptr);
 std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std::string& property, const std::string& pseudo = "");
 
 // What getComputedStyle answers: the used value where the property has one that layout works out (the width of a box, margins in px),

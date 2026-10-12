@@ -204,12 +204,27 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
     tree = std::make_shared<Tree>();
     tree->keepScrollbars = pass > 0;
     double barWidth = 0, barHeight = 0;
-    css::ViewportScrollbars(ctx, document, barWidth, barHeight);
-    tree->viewportWidth = environment.width - barWidth;
-    tree->viewportHeight = environment.height - barHeight;
+    css::ViewportAuto autos;
+    css::ViewportScrollbars(ctx, document, barWidth, barHeight, &autos);
+    // An overflow of auto has a scrollbar when the contents overflow: the layout is done again with the room it takes.
+    double extraWidth = 0, extraHeight = 0;
+    for (int attempt = 0;; ++attempt) {
+      if (attempt > 0) tree = std::make_shared<Tree>(), tree->keepScrollbars = pass > 0;
+      tree->viewportWidth = environment.width - barWidth - extraWidth;
+      tree->viewportHeight = environment.height - barHeight - extraHeight;
+      LayoutContext lc{ctx, *tree, tree->viewportWidth, tree->viewportHeight};
+      BuildTree(lc, document, attempt == 0 && pass == 0 && previous && previous->root ? previous.get() : nullptr);
+      LayoutRoot(lc);
+      if (attempt >= 2 || autos.thickness <= 0 || (!autos.x && !autos.y) || !tree->root) break;
+      const Rect overflow = ScrollableOverflow(*tree, *tree->root, document->DocumentElement());
+      const bool needY = autos.y && barWidth == 0 && overflow.Bottom() > tree->viewportHeight + 0.01;
+      const bool needX = autos.x && barHeight == 0 && overflow.Right() > tree->viewportWidth + 0.01;
+      const double wantWidth = needY ? autos.thickness : 0, wantHeight = needX ? autos.thickness : 0;
+      if (wantWidth <= extraWidth && wantHeight <= extraHeight) break;
+      extraWidth = std::max(extraWidth, wantWidth);
+      extraHeight = std::max(extraHeight, wantHeight);
+    }
     LayoutContext lc{ctx, *tree, tree->viewportWidth, tree->viewportHeight};
-    BuildTree(lc, document, pass == 0 && previous && previous->root ? previous.get() : nullptr);
-    LayoutRoot(lc);
     const bool containers = document->containerQueriesSeen && UpdateContainerSizes(*tree);
     // (What the scroll position was is kept for the new tree, as the relevance of boxes is worked out from it.)
     if (document->layoutTree) {
