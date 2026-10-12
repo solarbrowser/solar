@@ -489,6 +489,24 @@ bool UsedValue(Tree& tree, dom::Element* element, const std::string& property, s
       out = Px(v);
       return true;
     }
+    if (property == side && !isInline && (box->style->position == Position::Absolute || box->style->position == Position::Fixed)) {
+      out = Px(AbsoluteInset(*box, i, tree.viewportWidth, tree.viewportHeight));
+      return true;
+    }
+    if (property == side && !isInline && box->style->position == Position::Sticky) {
+      // The offsets of a sticky box are as they were given, in pixels (a percentage is of the containing block).
+      const Length& given = box->style->Physical().inset[i];
+      if (given.IsAuto()) return false;
+      // (A percentage is of the content box of the scroll container the box sticks in, or of the viewport.)
+      const Box* holder = box->parent;
+      while (holder && (holder->kind != Box::Kind::Block || !holder->parent || (holder->style->Physical().overflowX == Overflow::Visible && holder->style->Physical().overflowY == Overflow::Visible))) holder = holder->parent;
+      if (holder && !holder->parent) holder = nullptr;
+      const double basis = !holder ? (i % 2 == 0 ? tree.viewportHeight : tree.viewportWidth) : (i % 2 == 0 ? holder->height - holder->border.Vertical() - holder->padding.Vertical()
+                                                       : holder->width - holder->border.Horizontal() - holder->padding.Horizontal());
+      const double v = std::isnan(basis) && given.kind != Length::Kind::Px ? std::nan("") : given.Resolve(std::isnan(basis) ? 0 : basis);
+      if (!std::isnan(v)) { out = Px(v); return true; }
+      return false;
+    }
     if (property == side && (box->style->position == Position::Relative || box->style->position == Position::Sticky)) {
       const bool horizontal = i == 1 || i == 3;
       const double shift = horizontal ? box->shiftX : box->shiftY;

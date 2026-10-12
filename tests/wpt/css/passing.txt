@@ -1357,9 +1357,13 @@ tests/wpt/css/cssom/getComputedStyle-display-none-shadow-invalidation.html
 tests/wpt/css/cssom/getComputedStyle-dynamic-subdoc.html
 tests/wpt/css/cssom/getComputedStyle-getter-v-properties.tentative.html
 tests/wpt/css/cssom/getComputedStyle-important.html
+tests/wpt/css/cssom/getComputedStyle-insets-absolute.html
 tests/wpt/css/cssom/getComputedStyle-insets-absolute-roundtrip.html
+tests/wpt/css/cssom/getComputedStyle-insets-fixed.html
 tests/wpt/css/cssom/getComputedStyle-insets-nobox.html
 tests/wpt/css/cssom/getComputedStyle-insets-static.html
+tests/wpt/css/cssom/getComputedStyle-insets-sticky-container-for-abspos.html
+tests/wpt/css/cssom/getComputedStyle-insets-sticky.html
 tests/wpt/css/cssom/getComputedStyle-layout-dependent-removed-ib-sibling.html
 tests/wpt/css/cssom/getComputedStyle-layout-dependent-replaced-into-ib-split.html
 tests/wpt/css/cssom/getComputedStyle-live.html

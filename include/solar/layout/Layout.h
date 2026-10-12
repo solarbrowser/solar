@@ -31,6 +31,7 @@ bool TransformOf(const Box& box, Matrix& out);
 
 // A box's border box in the coordinates of the document (the initial containing block's origin).
 Rect AbsoluteBorderBox(const Box& box);
+double AbsoluteInset(const Box& box, int side, double viewportWidth, double viewportHeight);
 // The rectangles of an element as getClientRects gives them, in the coordinates of the viewport, and their union.
 std::vector<Rect> ClientRects(Tree& tree, dom::Element* element);
 

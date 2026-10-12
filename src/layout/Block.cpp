@@ -1153,6 +1153,44 @@ CbRect ContainingBlockOf(LayoutContext& lc, const Box& box) {
   return {0, 0, lc.viewportWidth, lc.viewportHeight, nullptr};
 }
 
+// The inset of an absolutely positioned box on a side (top, right, bottom, left) as getComputedStyle gives it: an offset that is not auto is the length in
+// pixels, one that is auto is the distance that came out from the padding edge of the containing block to the margin edge of the box.
+}  // namespace
+
+double AbsoluteInset(const Box& box, int side, double viewportWidth, double viewportHeight) {
+  const Box* holder = nullptr;
+  double cx = 0, cy = 0, cw = viewportWidth, ch = viewportHeight;
+  const bool fixed = box.style->position == Position::Fixed;
+  for (const Box* p = box.parent; p; p = p->parent) {
+    if (p->parent == nullptr) break;
+    if (!(fixed ? p->style->containsPositioned : (IsPositioned(*p) || p->style->containsPositioned))) continue;
+    if (p->kind != Box::Kind::Block) continue;
+    const Rect r = AbsoluteBorderBox(*p);
+    cx = r.x + p->border.left;
+    cy = r.y + p->border.top;
+    cw = r.width - p->border.Horizontal();
+    ch = r.height - p->border.Vertical();
+    holder = p;
+    break;
+  }
+  (void)holder;
+  const Length& given = box.style->Physical().inset[side];
+  const double basis = side % 2 == 0 ? ch : cw;
+  if (!given.IsAuto()) {
+    const double v = ResolveSize(given, basis);
+    if (Known(v)) return v;
+  }
+  const Rect r = AbsoluteBorderBox(box);
+  switch (side) {
+    case 0: return r.y - box.margin.top - cy;
+    case 1: return cx + cw - (r.x + r.width + box.margin.right);
+    case 2: return cy + ch - (r.y + r.height + box.margin.bottom);
+    default: return r.x - box.margin.left - cx;
+  }
+}
+
+namespace {
+
 // ---- Alignment of positioned boxes (css-align-3 §5.3, css-flexbox-1 §4.1, css-grid-1 §9) ----
 
 // Physical directions of the axes of a writing mode: (1,0) is rightwards, (0,1) downwards.
