@@ -250,6 +250,8 @@ struct GridItem {
   double marginStart[2] = {0, 0}, marginEnd[2] = {0, 0};
   bool autoMarginStart[2] = {false, false}, autoMarginEnd[2] = {false, false};
   double minContribution = 0, minContentContribution = 0, maxContentContribution = 0;
+  double minimumExtras[2] = {0, 0};  // the margins, borders and padding in the minimum contribution
+  bool automaticMinimum[2] = {false, false};  // the minimum contribution is the content size suggestion (which a fixed maximum of the tracks limits)
   // A subgrid does not size the tracks it spans by itself: the items inside it do, as if they were items of the grid it is in.
   bool subgridAxis[2] = {false, false};
   int onlyAxis = -1;  // such an item of a subgrid takes part in the sizing of the one axis only
@@ -928,17 +930,23 @@ struct Grid {
     }
   }
 
+  // An item in another writing mode than the grid's has its inline size along the rows and its block size along the columns.
+  bool Orth(const GridItem& it) const { return Orthogonal(container.Mode(), it.box->Mode()); }
+  // The size, minimum and maximum of the item along an axis of the grid (the properties are those of the frame of the item).
+  const Length& SizeLen(const GridItem& it, int axis) const { const BoxStyle& s = *it.box->style; return (axis == 0) != Orth(it) ? s.height : s.width; }
+  const Length& MinLen(const GridItem& it, int axis) const { const BoxStyle& s = *it.box->style; return (axis == 0) != Orth(it) ? s.minHeight : s.minWidth; }
+  const Length& MaxLen(const GridItem& it, int axis) const { const BoxStyle& s = *it.box->style; return (axis == 0) != Orth(it) ? s.maxHeight : s.maxWidth; }
+
   // Whether the item's size in an axis is a keyword for the size of its contents (min-content, max-content, fit-content): it is not stretched.
   bool ContentSized(const GridItem& it, int axis) const {
-    const BoxStyle& s = *it.box->style;
-    const Length::Kind k = (axis == 0 ? s.height : s.width).kind;
+    const Length::Kind k = SizeLen(it, axis).kind;
     return k == Length::Kind::MinContent || k == Length::Kind::MaxContent || k == Length::Kind::FitContent;
   }
 
   // The size property of the item in an axis resolved to a content-box length, or NaN.
   double SpecifiedSize(const GridItem& it, int axis, double basis) const {
     const BoxStyle& s = *it.box->style;
-    const Length& l = axis == 0 ? s.height : s.width;
+    const Length& l = SizeLen(it, axis);
     // (A percentage is of the grid area, which is not known while the tracks are sized: it is as auto.)
     if (sizingTracks_ && l.IsPercentage() && !it.box->replaced) return kNaN;
     double v = ResolveSize(l, basis);
@@ -960,30 +968,69 @@ struct Grid {
       ~Sizing() { flag = false; }
     } sizing(sizingTracks_);
     ComputeContentSizes(lc, b);
+    const bool orth = Orth(it);
     double mn = b.minContent, mx = b.maxContent;
-    const double specified = SpecifiedSize(it, 1, columnBasis);
+    // (The percentage width of a replaced box is of the area, which is not known: its contribution is that of its natural size.)
+    const bool compressible = SizeLen(it, 1).IsPercentage() && b.replaced && !style.gridLanes;
+    const double specified = compressible ? kNaN : SpecifiedSize(it, 1, columnBasis);
+    if (orth && !Known(specified)) {
+      // The columns are the block axis of the item: its size there is what it comes to when laid out as wide (along the rows) as it would be.
+      mn = mx = MeasuredAcross(it, columnBasis);
+    }
     if (Known(specified)) mn = mx = specified;
-    else if (s.width.IsPercentage() && b.replaced) mn = 0;  // (a replaced box with a percentage width can be squeezed to nothing)
-    const double maxW = SpecifiedSize(it, 1, columnBasis);
-    (void)maxW;
-    const Length& maxLen = s.maxWidth;
+    else if (compressible) mn = 0;  // (a replaced box with a percentage width can be squeezed to nothing)
+    const Length& maxLen = MaxLen(it, 1);
     const double maxV = maxLen.IsPercentage() ? kNaN : ResolveSize(maxLen, columnBasis);
     if (Known(maxV)) { const double m = s.boxSizing == BoxSizing::BorderBox ? std::max(0.0, maxV - it.padBorder[1]) : maxV; mn = std::min(mn, m); mx = std::min(mx, m); }
-    const double minV = s.minWidth.IsPercentage() ? kNaN : ResolveSize(s.minWidth, columnBasis);
+    const double minV = MinLen(it, 1).IsPercentage() ? kNaN : ResolveSize(MinLen(it, 1), columnBasis);
     if (Known(minV)) { const double m = s.boxSizing == BoxSizing::BorderBox ? std::max(0.0, minV - it.padBorder[1]) : minV; mn = std::max(mn, m); mx = std::max(mx, m); }
     const double extras = it.padBorder[1] + it.marginStart[1] + it.marginEnd[1];
     it.minContentContribution = mn + extras;
     it.maxContentContribution = mx + extras;
     // The automatic minimum size.
     double minimum;
-    const bool scroller = s.overflowX != Overflow::Visible && s.overflowX != Overflow::Clip;
+    const bool scroller = (orth ? s.overflowY : s.overflowX) != Overflow::Visible && (orth ? s.overflowY : s.overflowX) != Overflow::Clip;
     // An item with a preferred size of its own is as small as that size lets it be (its minimum contribution is its min-content one).
     if (Known(specified)) minimum = mn;
     else if (Known(minV)) minimum = std::max(0.0, minV);
+    else if (compressible) minimum = 0;  // (a replaced box with a percentage width is compressible)
     // (the content size suggestion is the min-content contribution of the box, which its own width gives)
-    else if (s.minWidth.IsAuto() && !scroller) minimum = Known(specified) ? std::min(specified, mn) : b.minContent;
+    else if (MinLen(it, 1).IsAuto() && !scroller) { minimum = Known(specified) ? std::min(specified, mn) : (orth ? mn : b.minContent); it.automaticMinimum[1] = !Known(specified) && !ContentSized(it, 1); it.minimumExtras[1] = extras; }
     else minimum = 0;
     it.minContribution = minimum + extras;
+  }
+
+  static constexpr double g_noRoom = -1;
+  // The size across the columns of an item in another writing mode than the grid's, which is its block size: it is laid out as long (along the rows) as its
+  // size says, or as its contents would have it within the height there is.
+  double MeasuredAcross(GridItem& it, double columnBasis) {
+    Box& b = *it.box;
+    double inlineSize = SpecifiedSize(it, 0, heightBasis);
+    // Rows of fixed sizes give the room it has along them.
+    double fixedRoom = g_noRoom;
+    {
+      double sum = gap[0] * (it.span[0] - 1);
+      bool fixed = it.pos[0] >= 0 && static_cast<size_t>(it.pos[0] + it.span[0]) <= tracks[0].size();
+      for (int i = it.pos[0]; fixed && i < it.pos[0] + it.span[0]; ++i) {
+        const TrackDef& d = tracks[0][i].def;
+        if (d.min.k == Fn::K::Length && d.max.k == Fn::K::Length) sum += d.max.value;
+        else fixed = false;
+      }
+      if (fixed) fixedRoom = sum;
+    }
+    if (!Known(inlineSize) && fixedRoom != g_noRoom && !ContentSized(it, 0) && (SelfAlign(it, 0) == Align::Kind::Normal || SelfAlign(it, 0) == Align::Kind::Stretch)) {
+      inlineSize = std::max(0.0, fixedRoom - it.marginStart[0] - it.marginEnd[0] - it.padBorder[0]);
+    }
+    if (!Known(inlineSize)) {
+      double room = Known(heightBasis) ? std::max(0.0, heightBasis - it.marginStart[0] - it.marginEnd[0] - it.padBorder[0]) : kInf;
+      inlineSize = std::min(std::max(b.minContent, room), b.maxContent);
+    }
+    lc.forceWidth = kNaN;
+    lc.forceHeight = inlineSize;
+    lc.cbX = 0;
+    lc.boxY = 0;
+    LayoutBlockLevel(lc, b, columnBasis, heightBasis, true);
+    return std::max(0.0, b.width - it.padBorder[1]);
   }
 
   // The contributions to rows: the item laid out at the width its columns give it.
@@ -1001,7 +1048,28 @@ struct Grid {
       ~Sizing() { flag = false; }
     } sizing(sizingTracks_);
     double height;
+    const bool orth = Orth(it);
     const double specified = SpecifiedSize(it, 0, heightBasis);
+    if (orth) {
+      // The rows are the inline axis of the item: the contributions are the sizes of its contents.
+      ComputeContentSizes(lc, b);
+      height = b.maxContent;
+      double smallest = b.minContent;
+      if (Known(specified)) height = smallest = specified;
+      it.minContentContribution = smallest + extras;
+      it.maxContentContribution = height + extras;
+      double minimum;
+      const double minV = MinLen(it, 0).IsPercentage() ? kNaN : ResolveSize(MinLen(it, 0), heightBasis);
+      const bool scroller = s.overflowX != Overflow::Visible && s.overflowX != Overflow::Clip;
+      if (Known(specified)) minimum = Known(minV) ? std::max(specified, minV) : specified;
+      else if (Known(minV)) minimum = minV;
+      else if (MinLen(it, 0).IsAuto() && !scroller) { minimum = smallest; it.automaticMinimum[0] = !ContentSized(it, 0); it.minimumExtras[0] = extras; }
+      else minimum = 0;
+      it.minContribution = minimum + extras;
+      const double maxV = MaxLen(it, 0).IsPercentage() ? kNaN : ResolveSize(MaxLen(it, 0), heightBasis);
+      if (Known(maxV)) { it.minContentContribution = std::min(it.minContentContribution, maxV + extras); it.maxContentContribution = std::min(it.maxContentContribution, maxV + extras); }
+      return;
+    }
     if (Known(specified)) {
       height = specified;
     } else {
@@ -1014,7 +1082,7 @@ struct Grid {
     const bool scroller = s.overflowY != Overflow::Visible && s.overflowY != Overflow::Clip;
     if (Known(specified)) minimum = Known(minV) ? std::max(specified, minV) : specified;  // (a preferred size of its own: as small as that)
     else if (Known(minV)) minimum = minV;
-    else if (s.minHeight.IsAuto() && !scroller) minimum = Known(specified) ? std::min(specified, height) : height;
+    else if (s.minHeight.IsAuto() && !scroller) { minimum = Known(specified) ? std::min(specified, height) : height; it.automaticMinimum[0] = !Known(specified) && !ContentSized(it, 0); it.minimumExtras[0] = extras; }
     else minimum = 0;
     it.minContribution = minimum + extras;
     const double maxV = s.maxHeight.IsPercentage() ? kNaN : ResolveSize(s.maxHeight, heightBasis);
@@ -1142,7 +1210,21 @@ struct Grid {
             double contribution = 0;
             for (int i : intrinsicMin) {
               const Fn::K k = ts[i].def.min.k;
-              if (pass == 0 && k == Fn::K::Auto) { which.push_back(i); contribution = it->minContribution; }
+              if (pass == 0 && k == Fn::K::Auto) {
+                which.push_back(i);
+                contribution = it->minContribution;
+                // (The content size suggestion of an item in tracks that all have a fixed maximum does not go past the area they make.)
+                if (it->automaticMinimum[axis]) {
+                  double area = g * (it->span[axis] - 1);
+                  bool fixed = true;
+                  for (int j = it->pos[axis]; j < it->pos[axis] + it->span[axis]; ++j) {
+                    const Fn::K mk = ts[j].def.max.k;
+                    if ((mk != Fn::K::Length && mk != Fn::K::Percent) || std::isinf(ts[j].limit)) fixed = false;
+                    area += ts[j].limit;
+                  }
+                  if (fixed) contribution = std::min(contribution, std::max(area, it->minimumExtras[axis]));
+                }
+              }
               else if (pass == 1 && k == Fn::K::MinContent) { which.push_back(i); contribution = it->minContentContribution; }
               else if (pass == 2 && k == Fn::K::MaxContent) { which.push_back(i); contribution = it->maxContentContribution; }
             }
@@ -1905,6 +1987,8 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
   }
   const double usedRows = grid.TrackSum(0);
   const double rowContainer = Known(heightBasis) ? heightBasis : Known(intrinsicRows) ? intrinsicRows : usedRows;
+  // A gap that is a percentage of a height that is not known was nothing for the sizes of the rows: it is of the height they came to.
+  if (!Known(heightBasis) && s.rowGap.IsPercentage() && !grid.subgridded[0]) grid.gap[0] = ResolveSize(s.rowGap, rowContainer);
   {
     const auto [offset, between] = contentOffset(0, rowContainer);
     double pos = offset;
@@ -1932,7 +2016,7 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
         forced[a] = std::max(0.0, area[a] - it.marginStart[a] - it.marginEnd[a] - it.padBorder[a]);
         // The size it is stretched to stays within its minimum and maximum, which are of the area.
         const BoxStyle& bs = *b.style;
-        const double minSize = ResolveSize(a == 0 ? bs.minHeight : bs.minWidth, area[a]), maxSize = ResolveSize(a == 0 ? bs.maxHeight : bs.maxWidth, area[a]);
+        const double minSize = ResolveSize(grid.MinLen(it, a), area[a]), maxSize = ResolveSize(grid.MaxLen(it, a), area[a]);
         const bool borderBox = bs.boxSizing == BoxSizing::BorderBox;
         if (Known(maxSize)) forced[a] = std::min(forced[a], std::max(0.0, borderBox ? maxSize - it.padBorder[a] : maxSize));
         if (Known(minSize)) forced[a] = std::max(forced[a], std::max(0.0, borderBox ? minSize - it.padBorder[a] : minSize));
