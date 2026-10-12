@@ -2110,17 +2110,29 @@ bool GridAreaOf(const Box& grid, const BoxStyle& absStyle, double paddingWidth, 
     if (a.k == LineSpec::K::Span && e >= 0) s = e - std::max(1, a.n);
     if (b.k == LineSpec::K::Span && s >= 0) e = s + std::max(1, b.n);
     const double total = axis == 0 ? paddingHeight : paddingWidth;
+    // A start line is where its track begins, an end line where the track before it ends (the gutter is not in the area); lines past the last are the edges.
+    // (The tracks of the inline axis are mirrored in the frame for right to left; the positions are worked out from the start and mirrored back.)
+    const bool mirrored = axis == 1 && grid.style->direction == Direction::Rtl;
+    const auto trackStart = [&](int i) { return mirrored ? total - g.end[axis][i] : g.start[axis][i]; };
+    const auto trackEnd = [&](int i) { return mirrored ? total - g.start[axis][i] : g.end[axis][i]; };
     const auto position = [&](int index, bool isEnd) {
-      (void)isEnd;
       if (index < 0) return isEnd ? total : 0.0;
       if (count == 0) return total;
-      if (index == 0) return g.start[axis][0];
-      if (index >= count) return g.end[axis][count - 1];
-      return (g.end[axis][index - 1] + g.start[axis][index]) / 2;  // a line is in the middle of the gap
+      if (isEnd) {
+        if (index == 0) return trackStart(0);
+        return index > count ? total : trackEnd(index - 1);
+      }
+      if (index < count) return trackStart(index);
+      return index == count ? trackEnd(count - 1) : 0.0;
     };
     edges[axis][0] = position(s, false);
     edges[axis][1] = position(e, true);
     if (edges[axis][1] < edges[axis][0]) std::swap(edges[axis][0], edges[axis][1]);
+    if (mirrored) {
+      const double a0 = total - edges[axis][1], a1 = total - edges[axis][0];
+      edges[axis][0] = a0;
+      edges[axis][1] = a1;
+    }
   }
   // rows are the block axis, columns the inline
   out = {edges[1][0], edges[0][0], edges[1][1] - edges[1][0], edges[0][1] - edges[0][0]};

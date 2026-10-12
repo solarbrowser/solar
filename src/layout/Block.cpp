@@ -1267,6 +1267,8 @@ void PlaceOne(LayoutContext& lc, Box& a) {
   const BoxStyle& s = *a.style;
   const WritingMode mode = a.Mode();
   CbRect cbPhys = ContainingBlockOf(lc, a);
+  bool inGridArea = false;
+  const Box* cbGrid = cbPhys.box;
   // Inside a grid container, the grid-placement properties name the area that is the containing block.
   if (cbPhys.box && IsGridDisplay(cbPhys.box->style->display) && cbPhys.box->gridLines) {
     const Box& g = *cbPhys.box;
@@ -1277,6 +1279,7 @@ void PlaceOne(LayoutContext& lc, Box& a) {
       Rect physical;
       FrameToPhysical(g.Mode(), paddingW, paddingH, area.x, area.y, area.width, area.height, physical);
       cbPhys = {cbPhys.x + physical.x, cbPhys.y + physical.y, physical.width, physical.height, nullptr};
+      inGridArea = true;
     }
   }
   // The containing block in the box's own frame: its inline size is the physical extent along the box's lines.
@@ -1321,6 +1324,11 @@ void PlaceOne(LayoutContext& lc, Box& a) {
     double rx, ry, rw, rh;
     PhysicalToFrame(mode, cw, ch, content, rx, ry, rw, rh);
     spL = rx; spR = rx + rw; spT = ry; spB = ry + rh;
+    if (inGridArea && IsGridDisplay(staticParent->style->display) && staticParent == cbGrid) {
+      // (The static position rectangle of a box in a grid area is the area.)
+      spL = 0; spR = cw; spT = 0; spB = ch;
+      staticLeft = 0; staticTop = 0;
+    }
   }
   const WritingMode cbMode = cbPhys.box ? cbPhys.box->Mode() : lc.tree.root->Mode();
   const bool orthogonalToCb = Orthogonal(cbMode, mode);
