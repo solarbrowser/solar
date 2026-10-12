@@ -337,10 +337,35 @@ struct Grid {
         double repeatSize = 0;
         for (const TrackDef& t : tmpl.repeated.tracks) repeatSize += trackSize(t);
         const double count0 = static_cast<double>(tmpl.before.tracks.size() + tmpl.after.tracks.size());
+        const auto bound = [&](const Length& l) {
+          double v = ResolveSize(l, kNaN);
+          if (Known(v) && style.boxSizing == BoxSizing::BorderBox) v = std::max(0.0, v - (axis == 1 ? container.border.Horizontal() + container.padding.Horizontal() : container.border.Vertical() + container.padding.Vertical()));
+          return v;
+        };
+        // (A size within the minimum and maximum there are.)
+        double room0 = available[axis];
+        if (Known(room0)) {
+          const double hi = bound(axis == 1 ? style.maxWidth : style.maxHeight), lo = bound(axis == 1 ? style.minWidth : style.minHeight);
+          if (Known(hi)) room0 = std::min(room0, hi);
+          if (Known(lo)) room0 = std::max(room0, lo);
+        }
         int count = 1;
-        if (Known(available[axis]) && repeatSize + gaps[axis] * tmpl.repeated.tracks.size() > 0) {
+        if (!Known(available[axis]) && repeatSize + gaps[axis] * tmpl.repeated.tracks.size() > 0) {
+          // Without a size to fill, the largest number that stays within a definite maximum, else the smallest that reaches a definite minimum.
+          const double maxSize = bound(axis == 1 ? style.maxWidth : style.maxHeight), minSize = bound(axis == 1 ? style.minWidth : style.minHeight);
           const double perRepeat = repeatSize + gaps[axis] * tmpl.repeated.tracks.size();
-          const double room = available[axis] - fixed - gaps[axis] * count0;
+          const double count0 = static_cast<double>(tmpl.before.tracks.size() + tmpl.after.tracks.size());
+          if (Known(maxSize)) {
+            const double room = maxSize - fixed - gaps[axis] * count0;
+            count = std::max(1, static_cast<int>(std::floor((room + gaps[axis]) / perRepeat + 1e-9)));
+          } else if (Known(minSize)) {
+            const double room = minSize - fixed - gaps[axis] * count0;
+            count = std::max(1, static_cast<int>(std::ceil((room + gaps[axis]) / perRepeat - 1e-9)));
+          }
+        }
+        if (Known(room0) && repeatSize + gaps[axis] * tmpl.repeated.tracks.size() > 0) {
+          const double perRepeat = repeatSize + gaps[axis] * tmpl.repeated.tracks.size();
+          const double room = room0 - fixed - gaps[axis] * count0;
           count = std::max(1, static_cast<int>(std::floor((room + gaps[axis]) / perRepeat + 1e-9)));
           if (room < perRepeat - 1e-9 && room + gaps[axis] < perRepeat) count = 1;
         }

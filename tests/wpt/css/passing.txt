@@ -857,6 +857,7 @@ tests/wpt/css/css-grid/grid-definition/flex-content-resolution-columns-001.html
 tests/wpt/css/css-grid/grid-definition/flex-content-resolution-columns-002.html
 tests/wpt/css/css-grid/grid-definition/flex-factor-sum-less-than-1-001.html
 tests/wpt/css/css-grid/grid-definition/grid-auto-repeat-intrinsic-001.html
+tests/wpt/css/css-grid/grid-definition/grid-auto-repeat-min-size-001.html
 tests/wpt/css/css-grid/grid-definition/grid-auto-repeat-min-size-003.html
 tests/wpt/css/css-grid/grid-definition/grid-change-intrinsic-size-with-auto-repeat-tracks-001.html
 tests/wpt/css/css-grid/grid-definition/grid-inline-template-columns-rows-resolved-values-001.html
