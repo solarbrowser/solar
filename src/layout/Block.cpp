@@ -747,6 +747,7 @@ void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cb
       cbWidth = inlineSize;
       std::swap(forceWidth, forceHeight);
       availOverride = kNaN;
+      shrinkToFit = true;  // (The inline size of a box in another writing mode than its parent's is fit to its contents within the room there is.)
     }
   }
   Bfc* const savedBfc = lc.bfc;

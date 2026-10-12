@@ -704,6 +704,8 @@ tests/wpt/css/css-grid/alignment/grid-align-content.html
 tests/wpt/css/css-grid/alignment/grid-align-content-vertical-lr.html
 tests/wpt/css/css-grid/alignment/grid-align-content-vertical-rl.html
 tests/wpt/css/css-grid/alignment/grid-align-justify-margin-border-padding.html
+tests/wpt/css/css-grid/alignment/grid-align-justify-margin-border-padding-vertical-lr.html
+tests/wpt/css/css-grid/alignment/grid-align-justify-margin-border-padding-vertical-rl.html
 tests/wpt/css/css-grid/alignment/grid-alignment-implies-size-change-001.html
 tests/wpt/css/css-grid/alignment/grid-alignment-implies-size-change-002.html
 tests/wpt/css/css-grid/alignment/grid-alignment-implies-size-change-003.html
@@ -775,6 +777,8 @@ tests/wpt/css/css-grid/alignment/grid-item-auto-margins-alignment.html
 tests/wpt/css/css-grid/alignment/grid-item-auto-margins-and-specified-margins-001.html
 tests/wpt/css/css-grid/alignment/grid-item-stretch-dynamic-size-margin-change-001.html
 tests/wpt/css/css-grid/alignment/grid-item-stretch-margin-border-padding-001.html
+tests/wpt/css/css-grid/alignment/grid-item-stretch-margin-border-padding-vertical-lr-001.html
+tests/wpt/css/css-grid/alignment/grid-item-stretch-margin-border-padding-vertical-rl-001.html
 tests/wpt/css/css-grid/alignment/grid-justify-content-001.html
 tests/wpt/css/css-grid/alignment/grid-justify-content-distribution-001.html
 tests/wpt/css/css-grid/alignment/grid-justify-content-distribution-vertical-lr-001.html
