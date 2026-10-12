@@ -2277,6 +2277,12 @@ void GridContentSizes(LayoutContext& lc, Box& container, double& minContent, dou
       it.minContentContribution += it.shim[1];
       it.maxContentContribution += it.shim[1];
     }
+    // (Columns that are percentages of a width that is not known are auto ones.)
+    if (!grid.subgridded[1]) {
+      for (Track& t : grid.tracks[1]) {
+        for (Fn* f : {&t.def.min, &t.def.max}) if (f->k == Fn::K::Percent || !f->calc.empty()) *f = Fn();
+      }
+    }
     grid.SizeTracks(1, kNaN, pass == 1);
     (pass == 0 ? minContent : maxContent) = grid.TrackSum(1);
   }

@@ -1507,6 +1507,7 @@ void InlineContentSizesOnce(LayoutContext& lc, Box& container, double& minConten
   std::vector<char> breaks;
   FindBreaks(collector.all, *container.style, breaks);
   double line = 0, word = 0;  // the max-content line so far, the min-content unbreakable piece so far
+  double hanging = 0;         // the collapsible space at the end of the line so far: it does not count when the line ends
   bool firstDone = false;
   const auto flushWord = [&] {
     if (firstWord && !firstDone) *firstWord = word;
@@ -1538,10 +1539,13 @@ void InlineContentSizesOnce(LayoutContext& lc, Box& container, double& minConten
           }
           line += w;
           word += w - trailing;
+          const bool inMarker = a.box->pseudo == "marker";
+          const bool removed = (mode == WhiteSpaceCollapse::Collapse || mode == WhiteSpaceCollapse::PreserveBreaks) && !inMarker;  // (preserved spaces, and those of a marker, are in the width of the line)
+          hanging = !removed ? 0 : (w > trailing ? trailing : hanging + trailing);
           if (newline) {
-            maxContent = std::max(maxContent, line);
+            maxContent = std::max(maxContent, line - hanging);
             flushWord();
-            line = word = 0;
+            line = word = hanging = 0;
           } else if ((brk && wraps) || (brk && false)) {
             flushWord();
             word = 0;
@@ -1555,6 +1559,7 @@ void InlineContentSizesOnce(LayoutContext& lc, Box& container, double& minConten
       MeasureAtom(lc, a, 0);
       line += a.width;
       word += a.width;
+      if (a.width > 0) hanging = 0;
     } else if (a.kind == Atom::Kind::Atomic) {
       ComputeContentSizes(lc, *a.box);
       const BoxStyle& s = *a.box->style;
@@ -1566,6 +1571,7 @@ void InlineContentSizesOnce(LayoutContext& lc, Box& container, double& minConten
       if (s.width.kind == Length::Kind::Px) mn = mx = s.boxSizing == BoxSizing::BorderBox ? std::max(0.0, s.width.value - b.padding.Horizontal() - b.border.Horizontal()) : s.width.value;
       line += mx + extras;
       word += mn + extras;
+      hanging = 0;
       const size_t at = base + 3;
       if (at < breaks.size() && breaks[at]) {
         flushWord();
@@ -1582,14 +1588,15 @@ void InlineContentSizesOnce(LayoutContext& lc, Box& container, double& minConten
       double mn = b.minContent, mx = b.maxContent;
       if (s.width.kind == Length::Kind::Px) mn = mx = s.boxSizing == BoxSizing::BorderBox ? std::max(0.0, s.width.value - b.padding.Horizontal() - b.border.Horizontal()) : s.width.value;
       line += mx + extras;
+      hanging = 0;
       minContent = std::max(minContent, mn + extras);
     } else if (a.kind == Atom::Kind::Break) {
-      maxContent = std::max(maxContent, line);
+      maxContent = std::max(maxContent, line - hanging);
       flushWord();
-      line = word = 0;
+      line = word = hanging = 0;
     }
   }
-  maxContent = std::max(maxContent, line);
+  maxContent = std::max(maxContent, line - hanging);
   flushWord();
   if (!container.style->wrap) minContent = maxContent;
   // overflow-wrap: anywhere breaks everywhere for the minimum.

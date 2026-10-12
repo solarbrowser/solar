@@ -968,6 +968,7 @@ class Builder {
     textBox->inlineLevel = true;
     textBox->style = AnonymousStyle(*markerStyle, Display::Inline);
     textBox->text = text;
+    textBox->pseudo = "marker";
     if (box.style->listStyleInside) {
       Box* target = nullptr;
       if (box.hasInlineContent) target = &box;

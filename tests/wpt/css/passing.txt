@@ -884,6 +884,8 @@ tests/wpt/css/css-grid/implicit-grids/grid-item-placed-in-trailing-implicit-colu
 tests/wpt/css/css-grid/inheritance.html
 tests/wpt/css/css-grid/layout-algorithm/flex-sizing-columns-min-max-width-001.html
 tests/wpt/css/css-grid/layout-algorithm/grid-auto-rows-content-resolution-001.html
+tests/wpt/css/css-grid/layout-algorithm/grid-container-percentage-001.html
+tests/wpt/css/css-grid/layout-algorithm/grid-container-percentage-002.html
 tests/wpt/css/css-grid/layout-algorithm/grid-content-distribution-must-account-for-track-sizing-003.html
 tests/wpt/css/css-grid/layout-algorithm/grid-find-fr-size-gutters-001.html
 tests/wpt/css/css-grid/layout-algorithm/grid-find-fr-size-gutters-002.html
