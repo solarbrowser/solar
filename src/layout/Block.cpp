@@ -311,6 +311,8 @@ void ComputeContentSizes(LayoutContext& lc, Box& box) {
     ReserveScrollbarsFor(*child);
     double extras = ExtrasHorizontal(*child) + MarginOf(cs, 1, 0) + MarginOf(cs, 3, 0);
     double mn = child->minContent, mx = child->maxContent;
+    // (The natural width of a text area has the room of a scrollbar in it, which is not there twice when it has one.)
+    if (child->formControl && child->scrollbar.Horizontal() > 0) { mn = std::max(0.0, mn - child->scrollbar.Horizontal()); mx = std::max(0.0, mx - child->scrollbar.Horizontal()); }
     const double fixed = ResolveSize(cs.width, kNaN);
     if (Known(fixed)) {
       const double w = cs.boxSizing == BoxSizing::BorderBox ? std::max(0.0, fixed - ExtrasHorizontal(*child)) : fixed;
@@ -855,8 +857,9 @@ void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cb
   if (widthAuto) {
     if (shrinkToFit || box.formControl) {
       ComputeContentSizes(lc, box);
+      const double twice = box.formControl ? std::min(sbH, box.maxContent) : 0;
       const double available = std::max(0.0, availableWidth - ml - mr - extrasH);
-      width = std::min(std::max(box.minContent, available), box.maxContent);
+      width = std::min(std::max(box.minContent - twice, available), box.maxContent - twice);
     } else {
       width = std::max(0.0, availableWidth - ml - mr - extrasH);
     }

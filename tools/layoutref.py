@@ -41,7 +41,11 @@ function paintPicture(doc) {{
   entries.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
   const clipOf = e => {{
     let x0 = 0, y0 = 0, x1 = W, y1 = H;
+    const root = doc.documentElement, body = doc.body;
+    // (The overflow of the root, or of the body when the root's is visible, is the viewport's: it clips nothing here.)
+    const viewportBox = w.getComputedStyle(root).overflowX === 'visible' && w.getComputedStyle(root).overflowY === 'visible' ? body : null;
     for (let n = e.parentElement; n; n = n.parentElement) {{
+      if (n === root || n === viewportBox) continue;
       const cs = w.getComputedStyle(n);
       if (cs.overflowX !== 'visible' || cs.overflowY !== 'visible') {{
         const r = n.getBoundingClientRect();
