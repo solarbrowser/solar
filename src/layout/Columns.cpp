@@ -311,6 +311,17 @@ void LayoutMulticol(LayoutContext& lc, Box& box, double contentWidth, double hei
       const Box* previous = nullptr;
       for (size_t i = seg.first; i < seg.last; ++i) {
         const Box& child = *box.children[i];
+        // A float below all that comes before it may begin a column (the columns break at it as at a box).
+        if (child.kind == Box::Kind::Block && child.style->IsFloating() && !child.outsideMarker && previous) {
+          const double floatTop = child.y - originY, fit = previous->y - originY + previous->height;
+          if (floatTop >= fit - kEps && (candidates.empty() || candidates.back().start < floatTop - kEps)) {
+            Candidate c;
+            c.fit = fit;
+            c.start = floatTop;
+            candidates.push_back(c);
+          }
+          continue;
+        }
         if (!InFlowBlock(child) || child.collapsedThrough) continue;
         const double top = child.y - originY;
         if (previous) {
