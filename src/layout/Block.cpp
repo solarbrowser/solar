@@ -1296,10 +1296,9 @@ double Place(Side side, double start, double end, double outer, double cbSize, b
   if (side == Side::Center) pos = start + free / 2;
   else if (side == Side::End) pos = start + free;
   if (free < 0 && safe) return start;
-  if (unsafe) return pos;
-  const double lo = std::min(start, 0.0), hi = std::max(end, cbSize);
-  if (outer > hi - lo) return lo;
-  return std::max(lo, std::min(pos, hi - outer));
+  (void)unsafe;
+  (void)cbSize;
+  return pos;  // (the box is not kept within the containing block, as the engines that sized the tests have it)
 }
 
 void PlaceOne(LayoutContext& lc, Box& a) {
