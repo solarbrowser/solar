@@ -866,6 +866,14 @@ struct Grid {
     it.marginEnd[1] = margin.right;
   }
 
+  // Whether the alignment of the item in an axis (its own, or that of the container's items) is safe.
+  bool SafeAlign(const GridItem& it, int axis) const {
+    const BoxStyle& s = *it.box->style;
+    const Align& self = axis == 0 ? s.alignSelf : s.justifySelf;
+    const Align& items = axis == 0 ? style.alignItems : style.justifyItems;
+    return (self.kind == Align::Kind::Auto ? items : self).safe;
+  }
+
   Align::Kind SelfAlign(const GridItem& it, int axis) const {
     const BoxStyle& s = *it.box->style;
     // axis 0: rows (align-*), axis 1: columns (justify-*)
@@ -1756,7 +1764,7 @@ void LayoutGridLanes(LayoutContext& lc, Box& container, double contentWidth, dou
             if (rtl && k != Align::Kind::Left) offset += free;
             break;
         }
-        if (free < 0 && (st.alignSelf.safe || st.justifySelf.safe)) offset = it.marginStart[L];
+        if (free < 0 && grid.SafeAlign(it, L)) offset = it.marginStart[L];
       }
     }
     b.margin.top = it.marginStart[0];
@@ -2036,7 +2044,7 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
     const double area[2] = {areaH, areaW};
     for (int a = 0; a < 2; ++a) {
       const double specified = grid.SpecifiedSize(it, a, a == 0 ? heightBasis : contentWidth);
-      const bool stretch = (kinds[a] == Align::Kind::Normal || kinds[a] == Align::Kind::Stretch) && !it.autoMarginStart[a] && !it.autoMarginEnd[a] && !b.replaced;
+      const bool stretch = (kinds[a] == Align::Kind::Stretch || (kinds[a] == Align::Kind::Normal && !b.replaced)) && !it.autoMarginStart[a] && !it.autoMarginEnd[a];
       if (!Known(specified) && !grid.ContentSized(it, a) && stretch) {
         forced[a] = std::max(0.0, area[a] - it.marginStart[a] - it.marginEnd[a] - it.padBorder[a]);
         // The size it is stretched to stays within its minimum and maximum, which are of the area.
@@ -2128,7 +2136,7 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
             break;
           default: break;
         }
-        if (free < 0 && (st.alignSelf.safe || st.justifySelf.safe)) start = it.marginStart[a];
+        if (free < 0 && grid.SafeAlign(it, a)) start = it.marginStart[a];
       }
       offsets[a] = start;
     }

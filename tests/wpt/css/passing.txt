@@ -731,6 +731,7 @@ tests/wpt/css/css-grid/alignment/grid-align-content-vertical-rl.html
 tests/wpt/css/css-grid/alignment/grid-align-justify-margin-border-padding.html
 tests/wpt/css/css-grid/alignment/grid-align-justify-margin-border-padding-vertical-lr.html
 tests/wpt/css/css-grid/alignment/grid-align-justify-margin-border-padding-vertical-rl.html
+tests/wpt/css/css-grid/alignment/grid-align-justify-overflow.html
 tests/wpt/css/css-grid/alignment/grid-alignment-implies-size-change-001.html
 tests/wpt/css/css-grid/alignment/grid-alignment-implies-size-change-002.html
 tests/wpt/css/css-grid/alignment/grid-alignment-implies-size-change-003.html
@@ -741,8 +742,13 @@ tests/wpt/css/css-grid/alignment/grid-alignment-implies-size-change-007.html
 tests/wpt/css/css-grid/alignment/grid-alignment-implies-size-change-008.html
 tests/wpt/css/css-grid/alignment/grid-alignment-implies-size-change-009.html
 tests/wpt/css/css-grid/alignment/grid-alignment-implies-size-change-010.html
+tests/wpt/css/css-grid/alignment/grid-alignment-implies-size-change-011.html
+tests/wpt/css/css-grid/alignment/grid-alignment-implies-size-change-012.html
+tests/wpt/css/css-grid/alignment/grid-alignment-implies-size-change-013.html
+tests/wpt/css/css-grid/alignment/grid-alignment-implies-size-change-014.html
 tests/wpt/css/css-grid/alignment/grid-alignment-implies-size-change-015.html
 tests/wpt/css/css-grid/alignment/grid-alignment-implies-size-change-016.html
+tests/wpt/css/css-grid/alignment/grid-alignment-implies-size-change-017.html
 tests/wpt/css/css-grid/alignment/grid-alignment-implies-size-change-019.html
 tests/wpt/css/css-grid/alignment/grid-alignment-implies-size-change-020.html
 tests/wpt/css/css-grid/alignment/grid-alignment-implies-size-change-021.html
@@ -771,6 +777,7 @@ tests/wpt/css/css-grid/alignment/grid-alignment-style-changes-005.html
 tests/wpt/css/css-grid/alignment/grid-alignment-style-changes-006.html
 tests/wpt/css/css-grid/alignment/grid-alignment-style-changes-007.html
 tests/wpt/css/css-grid/alignment/grid-alignment-style-changes-008.html
+tests/wpt/css/css-grid/alignment/grid-align-stretching-replaced-items.html
 tests/wpt/css/css-grid/alignment/grid-block-axis-alignment-auto-margins-001.html
 tests/wpt/css/css-grid/alignment/grid-block-axis-alignment-auto-margins-002.html
 tests/wpt/css/css-grid/alignment/grid-block-axis-alignment-auto-margins-003.html

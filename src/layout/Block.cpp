@@ -777,6 +777,13 @@ void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cb
     double rw, rh;
     ReplacedContentSize(box, cbWidth, cbHeight, rw, rh);
     width = rw;
+    // A height it is given (stretched in a grid) with an automatic width gives the width by the ratio.
+    if (Known(forceHeight) && s.width.IsAuto() && !s.containSizeInline) {
+      double ratio = box.naturalRatio;
+      if (ratio <= 0 && box.naturalWidth > 0 && box.naturalHeight > 0) ratio = box.naturalWidth / box.naturalHeight;
+      if (s.aspectRatio > 0 && !s.aspectRatioAuto) ratio = s.aspectRatio;
+      if (ratio > 0) width = std::max(0.0, forceHeight) * ratio;
+    }
     widthAuto = false;
   } else if (s.width.kind == Length::Kind::MinContent || s.width.kind == Length::Kind::MaxContent || s.width.kind == Length::Kind::FitContent) {
     ComputeContentSizes(lc, box);
