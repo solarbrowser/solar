@@ -1498,6 +1498,7 @@ void LayoutGridLanes(LayoutContext& lc, Box& container, double contentWidth, dou
     double marginStart;  // where its margin box begins along the lanes
     double outer;        // the margin box's size there
     double across;       // where its border box begins across the lanes
+    double windowStart;  // where the room it has across the lanes begins
     double area;         // the room across the lanes
     double forcedAcross; // the size across the lanes it was laid out at, if it was given one
     double flowStart = 0, flowSize = 0;  // the border box, along the lanes
@@ -1641,7 +1642,7 @@ void LayoutGridLanes(LayoutContext& lc, Box& container, double contentWidth, dou
         }
         const bool rtl = s.direction == Direction::Rtl && L == 1;
         switch (k) {
-          case Align::Kind::End: case Align::Kind::FlexEnd: case Align::Kind::SelfEnd: offset += rtl ? 0 : free; break;
+          case Align::Kind::End: case Align::Kind::FlexEnd: case Align::Kind::SelfEnd: case Align::Kind::LastBaseline: offset += rtl ? 0 : free; break;
           case Align::Kind::Center: offset += free / 2; break;
           case Align::Kind::Right: offset += L == 1 ? free : 0; break;
           default:
@@ -1659,7 +1660,7 @@ void LayoutGridLanes(LayoutContext& lc, Box& container, double contentWidth, dou
     // (The lane that starts the window, or the one at its far end when the lanes run the other way.)
     double windowStart = laneStart;
     for (int i = lane; i < lane + span; ++i) windowStart = std::min(windowStart, grid.tracks[L][i].position);
-    slots.push_back({&it, lane, span, start, flowOuter, windowStart + offset, area, forced[L]});
+    slots.push_back({&it, lane, span, start, flowOuter, windowStart + offset, windowStart, area, forced[L]});
     const double end = start + flowOuter + grid.gap[F];
     for (int i = lane; i < lane + span; ++i) {
       // (A negative margin does not take the end of the lane back.)
@@ -1672,6 +1673,21 @@ void LayoutGridLanes(LayoutContext& lc, Box& container, double contentWidth, dou
   if (!slots.empty()) flowTotal = std::max(0.0, flowTotal - grid.gap[F]);
   // The size along the axis of the lanes is the lanes'; the other is as far as the items reach, but for a size it is given.
   const double flowSize = F == 0 ? (Known(heightBasis) ? heightBasis : flowTotal) : (Known(contentWidth) ? contentWidth : flowTotal);
+  // Items that line up on a baseline in a lane do so with the others in it (the room they ask for is not added to the lane).
+  {
+    bool any = false;
+    for (GridItem& it : grid.items) any = any || grid.BaselineKindOf(it, L);
+    if (any) {
+      grid.ComputeBaselines(L, nullptr, [&](const GridItem& it) { return L == 0 ? it.box->height : it.box->width; });
+      for (Slot& slot : slots) {
+        GridItem& it = *slot.item;
+        if (!it.baselineKind[L]) continue;
+        Box& b = *it.box;
+        const double size = L == 0 ? b.height : b.width;
+        slot.across = slot.windowStart + (it.baselineMin[L] ? it.marginStart[L] + it.shim[L] : slot.area - size - it.marginEnd[L] - it.shim[L]);
+      }
+    }
+  }
   // Along the lanes an item has the room from where it begins to where the next item in its lanes does (or the end): where it is in that is up to its alignment.
   {
     std::vector<std::vector<size_t>> inLane(static_cast<size_t>(lanes));
@@ -1708,7 +1724,7 @@ void LayoutGridLanes(LayoutContext& lc, Box& container, double contentWidth, dou
         b.margin.right = it.marginEnd[1];
         size = F == 0 ? b.height : b.width;
         free = 0;
-      } else if (kind == Align::Kind::End || kind == Align::Kind::FlexEnd || kind == Align::Kind::SelfEnd) {
+      } else if (kind == Align::Kind::End || kind == Align::Kind::FlexEnd || kind == Align::Kind::SelfEnd || kind == Align::Kind::LastBaseline) {
         shift = free;
       } else if (kind == Align::Kind::Center) {
         shift = free / 2;
@@ -1753,17 +1769,24 @@ void LayoutGridLanes(LayoutContext& lc, Box& container, double contentWidth, dou
     lines->names[a] = grid.lineNames[a];
   }
   container.gridLines = lines;
-  // The baselines of the container are those of the item that is first (the one at the top, and of those the one at the left) and last in the container.
+  // The baselines of the container: the first is that of the first item of the first lane that has any, the last that of the last item of the last lane.
   container.firstBaseline = container.baseline = -1;
-  Box* top = nullptr;
-  Box* bottom = nullptr;
+  Slot* first = nullptr;
+  Slot* last = nullptr;
   for (Slot& slot : slots) {
-    Box* b = slot.item->box;
-    if (!top || b->y < top->y - 0.01 || (std::fabs(b->y - top->y) <= 0.01 && b->x < top->x)) top = b;
-    if (!bottom || b->y + b->height > bottom->y + bottom->height + 0.01 || (std::fabs(b->y + b->height - bottom->y - bottom->height) <= 0.01 && b->x > bottom->x)) bottom = b;
+    if (!first || slot.lane < first->lane || (slot.lane == first->lane && slot.marginStart < first->marginStart)) first = &slot;
+    const int lastLane = slot.lane + slot.span - 1;
+    const int bestLane = last ? last->lane + last->span - 1 : -1;
+    if (!last || lastLane > bestLane || (lastLane == bestLane && slot.marginStart + slot.outer > last->marginStart + last->outer)) last = &slot;
   }
-  if (top) container.firstBaseline = top->y - top->shiftY - originY + (top->firstBaseline >= 0 ? top->firstBaseline : top->height) + originY;
-  if (bottom) container.baseline = bottom->y - bottom->shiftY - originY + (bottom->baseline >= 0 ? bottom->baseline : bottom->height) + originY;
+  if (first) {
+    Box* b = first->item->box;
+    container.firstBaseline = b->y - b->shiftY - originY + (b->firstBaseline >= 0 ? b->firstBaseline : b->height) + originY;
+  }
+  if (last) {
+    Box* b = last->item->box;
+    container.baseline = b->y - b->shiftY - originY + (b->baseline >= 0 ? b->baseline : b->height) + originY;
+  }
 }
 
 void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double heightBasis, double& contentHeight) {
@@ -2161,14 +2184,67 @@ static void GridLanesRowSizes(LayoutContext& lc, Box& container, double& minCont
   minContent = std::min(minContent, maxContent);
 }
 
+// The widths of grid lanes whose lanes are columns: those of the lanes, with the items that have no lane of their own counted for every one they could be in.
+static void GridLanesColumnSizes(LayoutContext& lc, Box& container, double& minContent, double& maxContent) {
+  const BoxStyle& s = *container.style;
+  for (int pass = 0; pass < 2; ++pass) {
+    Grid grid(lc, container, 0, kNaN);
+    grid.laneAxis = 1;
+    const double colGap = ResolveSize(s.columnGap, 0);
+    grid.gap[1] = Known(colGap) ? colGap : 0;
+    grid.gap[0] = 0;
+    std::vector<Box*> boxes;
+    for (auto& c : container.children) if (!c->style->IsOutOfFlow()) boxes.push_back(c.get());
+    grid.items.resize(boxes.size());
+    for (size_t i = 0; i < boxes.size(); ++i) grid.items[i].box = boxes[i];
+    grid.ParseTemplates(kNaN, kNaN);
+    grid.tracks[0].clear();
+    grid.explicitCount[0] = 0;
+    int before = 0;
+    for (GridItem& it : grid.items) {
+      grid.ResolveLines(it);
+      it.definite[0] = false;
+      it.span[0] = 1;
+      it.pos[0] = 0;
+      if (it.definite[1]) before = std::max(before, -it.pos[1]);
+    }
+    grid.implicitBefore[1] = before;
+    int needed = std::max(1, grid.explicitCount[1] + before);
+    for (GridItem& it : grid.items) {
+      if (it.definite[1]) it.pos[1] += before;
+      needed = std::max(needed, it.definite[1] ? it.pos[1] + it.span[1] : it.span[1]);
+    }
+    grid.BuildTracks(1, needed);
+    const int lanes = static_cast<int>(grid.tracks[1].size());
+    for (GridItem& it : grid.items) grid.ItemEdges(it, 0);
+    for (GridItem& it : grid.items) {
+      if (it.definite[1]) continue;
+      it.lanesAuto = true;
+      for (int w = 0; w + it.span[1] <= lanes; ++w) {
+        GridItem v = it;
+        v.lanesAuto = false;
+        v.onlyAxis = 1;
+        v.pos[1] = w;
+        grid.virtualItems.push_back(v);
+      }
+    }
+    for (GridItem& it : grid.items) if (!it.lanesAuto) grid.ColumnContributions(it, kNaN);
+    for (GridItem& v : grid.virtualItems) grid.ColumnContributions(v, kNaN);
+    grid.SizeTracks(1, kNaN, pass == 1);
+    (pass == 0 ? minContent : maxContent) = grid.TrackSum(1);
+  }
+}
+
 void GridContentSizes(LayoutContext& lc, Box& container, double& minContent, double& maxContent) {
   const BoxStyle& s = *container.style;
   if (s.gridLanes) {
     const std::string direction = Lower(s.gridLanesDirection);
     if (direction.rfind("row", 0) == 0 || (direction.rfind("normal", 0) == 0 && Lower(s.gridTemplateColumns) == "none" && Lower(s.gridTemplateRows) != "none")) {
       GridLanesRowSizes(lc, container, minContent, maxContent);
-      return;
+    } else {
+      GridLanesColumnSizes(lc, container, minContent, maxContent);
     }
+    return;
   }
   for (int pass = 0; pass < 2; ++pass) {
     Grid grid(lc, container, 0, kNaN);
