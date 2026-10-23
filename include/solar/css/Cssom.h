@@ -126,6 +126,11 @@ struct CssRule : Quanta::DOMObject {
   // Style rule: its selector list as written (serialized), and parsed. Page rule: the selector text.
   std::string selectorText;
   std::shared_ptr<SelectorList> selectors;
+  // What a style rule needs of an element at the least, one key (an id, a class or a type) for each of its selectors: worked out when it is first looked at.
+  std::vector<uint64_t> quickKeys;
+  std::vector<uint64_t> quickMarkers;  // and the pseudo-element each selector ends in (0: none)
+  std::vector<std::vector<uint64_t>> quickAncestors;  // for each selector, the keys the elements around the one it is for must have
+  uint8_t quickState = 0;  // 0: not worked out; 1: every selector has a key; 2: some has none
   // Grouping rules (media, supports, layer, container, scope, starting-style, style rules with nested rules,
   // keyframes, page rules with margin rules): the rules in them.
   std::vector<CssRule*> rules;

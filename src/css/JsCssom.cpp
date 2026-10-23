@@ -554,6 +554,7 @@ Value StyleRuleSetSelectorText(Context& ctx, Value t, qe::Args args, Value) {
   std::optional<SelectorList> list = nested ? ParseNestedSelectorList(selectorSource, nesting, inScope) : ParseSelectorListForRule(selectorSource);
   if (!list || !ResolveNamespaces(*list, self->parentSheet)) return qe::Undefined();
   // In place: the rules nested in this one hold the very list that & stands for.
+  self->quickState = 0;
   if (self->selectors) *self->selectors = std::move(*list);
   else self->selectors = std::make_shared<SelectorList>(std::move(*list));
   self->selectorText = SerializeSelectorList(*self->selectors);

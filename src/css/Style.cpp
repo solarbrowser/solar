@@ -37,6 +37,7 @@ std::string Lower(std::string_view text) {
 }
 
 uint64_t g_styleVersion = 1;
+uint64_t g_authorVersion = 1;  // changed when the rules do
 LayoutHook g_layoutHook = nullptr;
 Quanta::Context* g_activeContext = nullptr;  // the realm a style is being worked out in, for what a rule's condition needs of other elements
 
@@ -154,6 +155,212 @@ bool Beats(const Winner& a, const Winner& b) {
   return a.order > b.order;
 }
 
+// ---- Rejecting a style rule at a glance ----
+
+uint64_t KeyHash(uint8_t kind, std::string_view text, bool lower) {
+  uint64_t h = 1469598103934665603ull ^ kind;
+  for (char c : text) {
+    if (lower && c >= 'A' && c <= 'Z') c = static_cast<char>(c + 32);
+    h = (h ^ static_cast<unsigned char>(c)) * 1099511628211ull;
+  }
+  return h;
+}
+
+// The keys of an element: its id, its classes and its name. A style rule whose selectors all need a key the element has not can not match it.
+struct ElementKeys {
+  std::vector<uint64_t> keys;
+  bool usable = false;
+  explicit ElementKeys(const dom::Element* element) {
+    // (Class names and ids are matched without regard to case in quirks mode: no key is used there.)
+    if (!element->nodeDocument || element->nodeDocument->mode == dom::Document::Mode::Quirks) return;
+    usable = true;
+    keys.push_back(KeyHash(3, element->localName, true));
+    if (const dom::Attr* id = element->FindAttribute("id")) keys.push_back(KeyHash(1, id->value, false));
+    if (const dom::Attr* cls = element->FindAttribute("class")) {
+      const std::string& v = cls->value;
+      size_t i = 0;
+      while (i < v.size()) {
+        while (i < v.size() && (v[i] == ' ' || v[i] == '\t' || v[i] == '\n' || v[i] == '\r' || v[i] == '\f')) ++i;
+        size_t j = i;
+        while (j < v.size() && !(v[j] == ' ' || v[j] == '\t' || v[j] == '\n' || v[j] == '\r' || v[j] == '\f')) ++j;
+        if (j > i) keys.push_back(KeyHash(2, std::string_view(v).substr(i, j - i), false));
+        i = j;
+      }
+    }
+  }
+  bool Has(uint64_t key) const {
+    for (uint64_t k : keys) if (k == key) return true;
+    return false;
+  }
+};
+
+// A selector that ends in a pseudo-element is only for that one (and for the element it is of), one that does not is only for the elements themselves.
+uint64_t PseudoMarker(const std::string* pseudoElement) { return pseudoElement ? KeyHash(9, *pseudoElement, false) | 1 : 0; }
+
+// The keys that the elements around the subject of a selector must have: those of the compounds before a descendant or child combinator.
+void AncestorKeysOf(const ComplexSelector& selector, std::vector<uint64_t>& out) {
+  for (size_t i = 0; i + 1 < selector.compounds.size() && i < selector.combinators.size(); ++i) {
+    if (selector.combinators[i] != Combinator::Descendant && selector.combinators[i] != Combinator::Child) continue;
+    uint64_t key = 0;
+    bool found = false;
+    const CompoundSelector& compound = selector.compounds[i];
+    for (const SimpleSelector& simple : compound.simples) {
+      if (simple.kind == SimpleSelector::Kind::Host || simple.kind == SimpleSelector::Kind::Unknown) { found = false; break; }
+    }
+    for (const SimpleSelector& simple : compound.simples) {
+      if (simple.kind == SimpleSelector::Kind::Id) { key = KeyHash(1, simple.name, false); found = true; break; }
+    }
+    if (!found) for (const SimpleSelector& simple : compound.simples) {
+      if (simple.kind == SimpleSelector::Kind::Class) { key = KeyHash(2, simple.name, false); found = true; break; }
+    }
+    if (!found) for (const SimpleSelector& simple : compound.simples) {
+      if (simple.kind == SimpleSelector::Kind::Type && !simple.name.empty() && simple.name != "*") { key = KeyHash(3, simple.name, true); found = true; break; }
+    }
+    if (found) out.push_back(key);
+  }
+}
+
+// What the elements above an element have, as a Bloom filter: a selector with a key that is not in it can not match.
+struct Bloom {
+  uint64_t words[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+  void Add(uint64_t key) { const uint64_t bit = (key >> 7) & 511; words[bit >> 6] |= 1ull << (bit & 63); }
+  bool Has(uint64_t key) const { const uint64_t bit = (key >> 7) & 511; return words[bit >> 6] >> (bit & 63) & 1; }
+  void Merge(const Bloom& other) { for (int i = 0; i < 8; ++i) words[i] |= other.words[i]; }
+};
+
+const dom::Element* UpperElement(const dom::Element* element) {
+  const dom::Node* parent = element->parentNode;
+  if (!parent) return nullptr;
+  if (parent->IsElement()) return static_cast<const dom::Element*>(parent);
+  if (parent->IsFragment() && static_cast<const dom::DocumentFragment*>(parent)->isShadowRoot) return static_cast<const dom::DocumentFragment*>(parent)->host;
+  return nullptr;
+}
+
+// The keys of the element and the ones above it.
+const Bloom& BloomWithSelf(const dom::Element* element) {
+  static std::unordered_map<const dom::Element*, Bloom> memo;
+  static uint64_t version = 0;
+  const uint64_t now = dom::TreeVersion();
+  if (version != now) { memo.clear(); version = now; }
+  const auto found = memo.find(element);
+  if (found != memo.end()) return found->second;
+  std::vector<const dom::Element*> chain;
+  const dom::Element* up = element;
+  while (up && memo.find(up) == memo.end()) { chain.push_back(up); up = UpperElement(up); }
+  for (size_t i = chain.size(); i-- > 0;) {
+    Bloom bloom;
+    const dom::Element* above = UpperElement(chain[i]);
+    if (above) bloom = memo[above];
+    const ElementKeys own{chain[i]};
+    for (uint64_t key : own.keys) bloom.Add(key);
+    memo[chain[i]] = bloom;
+  }
+  return memo[element];
+}
+
+void WorkOutQuickKeys(CssRule& rule);
+
+// A conditional group (@media, @supports) is for the elements that any of the style rules in it is for.
+void WorkOutGroupKeys(CssRule& rule) {
+  rule.quickKeys.clear();
+  rule.quickMarkers.clear();
+  rule.quickState = 1;
+  for (CssRule* inner : rule.rules) {
+    if (inner->kind != RuleKind::Style && inner->kind != RuleKind::Media && inner->kind != RuleKind::Supports) {
+      // (Comments and the like are not rules; anything else the group holds is looked at every time.)
+      rule.quickState = 2; rule.quickKeys.clear(); rule.quickMarkers.clear(); return;
+    }
+    if (inner->kind == RuleKind::Style && (!inner->rules.empty() || !inner->selectors || !inner->style)) { rule.quickState = 2; rule.quickKeys.clear(); rule.quickMarkers.clear(); return; }
+    if (inner->quickState == 0) WorkOutQuickKeys(*inner);
+    if (inner->quickState != 1) { rule.quickState = 2; rule.quickKeys.clear(); rule.quickMarkers.clear(); return; }
+    rule.quickKeys.insert(rule.quickKeys.end(), inner->quickKeys.begin(), inner->quickKeys.end());
+    rule.quickMarkers.insert(rule.quickMarkers.end(), inner->quickMarkers.begin(), inner->quickMarkers.end());
+  }
+}
+
+// The key of each selector of a list (see above), or false when one of them has none.
+bool KeysOf(const SelectorList& list, std::vector<uint64_t>& keys, std::vector<uint64_t>& markers) {
+  keys.clear();
+  markers.clear();
+  for (const ComplexSelector& selector : list) {
+    uint64_t key = 0, marker = 0;
+    bool found = false, awkward = selector.compounds.empty();
+    if (!awkward) {
+      const CompoundSelector& last = selector.compounds.back();
+      int pseudoElements = 0;
+      for (const SimpleSelector& simple : last.simples) {
+        if (simple.kind == SimpleSelector::Kind::PseudoElement) { ++pseudoElements; marker = PseudoMarker(&simple.name); }
+        if (simple.kind == SimpleSelector::Kind::Host || simple.kind == SimpleSelector::Kind::Unknown) awkward = true;
+      }
+      if (pseudoElements > 1) awkward = true;
+      if (!awkward) {
+        // An id says most, then a class; a type is the last resort.
+        for (const SimpleSelector& simple : last.simples) {
+          if (simple.kind == SimpleSelector::Kind::Id) { key = KeyHash(1, simple.name, false); found = true; break; }
+        }
+        if (!found) for (const SimpleSelector& simple : last.simples) {
+          if (simple.kind == SimpleSelector::Kind::Class) { key = KeyHash(2, simple.name, false); found = true; break; }
+        }
+        if (!found) for (const SimpleSelector& simple : last.simples) {
+          if (simple.kind == SimpleSelector::Kind::Type && !simple.name.empty() && simple.name != "*") { key = KeyHash(3, simple.name, true); found = true; break; }
+        }
+        if (!found && marker) found = true;  // (a pseudo-element on its own: the pseudo-element is the key)
+      }
+    }
+    if (awkward || !found) { keys.clear(); markers.clear(); return false; }
+    keys.push_back(key ^ marker);
+    markers.push_back(marker);
+  }
+  return true;
+}
+
+void WorkOutQuickKeys(CssRule& rule) {
+  if (rule.kind == RuleKind::Media || rule.kind == RuleKind::Supports) { WorkOutGroupKeys(rule); return; }
+  rule.quickState = rule.selectors && KeysOf(*rule.selectors, rule.quickKeys, rule.quickMarkers) ? 1 : 2;
+  if (rule.quickState == 2) { rule.quickKeys.clear(); rule.quickMarkers.clear(); }
+  rule.quickAncestors.clear();
+  if (rule.selectors) {
+    for (const ComplexSelector& selector : *rule.selectors) {
+      rule.quickAncestors.emplace_back();
+      AncestorKeysOf(selector, rule.quickAncestors.back());
+    }
+  }
+}
+
+// The style rules of a long list of rules, sorted by the key they need of an element: an element only looks at the rules it could match.
+struct RuleIndex {
+  uint64_t version = 0;
+  size_t size = 0;
+  std::vector<uint32_t> always;  // the rules that can not be told by a key (not style rules, nested rules, selectors with no key)
+  std::unordered_map<uint64_t, std::vector<uint32_t>> buckets;
+};
+
+const RuleIndex& IndexOf(const std::vector<CssRule*>& rules) {
+  static std::unordered_map<const void*, RuleIndex> indexes;
+  const uint64_t version = dom::TreeVersion() * 1000003 + g_authorVersion;
+  RuleIndex& index = indexes[&rules];
+  if (index.version == version && index.size == rules.size()) return index;
+  index = RuleIndex();
+  index.version = version;
+  index.size = rules.size();
+  for (uint32_t i = 0; i < rules.size(); ++i) {
+    CssRule* rule = rules[i];
+    const bool group = rule->kind == RuleKind::Media || rule->kind == RuleKind::Supports;
+    if (!group && (rule->kind != RuleKind::Style || !rule->selectors || !rule->style || !rule->rules.empty())) { index.always.push_back(i); continue; }
+    if (rule->quickState == 0) WorkOutQuickKeys(*rule);
+    if (rule->quickState != 1) { index.always.push_back(i); continue; }
+    std::vector<uint64_t> done;
+    for (uint64_t key : rule->quickKeys) {
+      if (std::find(done.begin(), done.end(), key) != done.end()) continue;
+      done.push_back(key);
+      index.buckets[key].push_back(i);
+    }
+  }
+  if (getenv("SOLAR_RULESTATS")) { size_t b = 0, m = 0; for (auto& kv : index.buckets) { b += kv.second.size(); m = std::max(m, kv.second.size()); } fprintf(stderr, "INDEX rules %zu always %zu buckets %zu entries %zu biggest %zu\n", rules.size(), index.always.size(), index.buckets.size(), b, m); }
+  if (indexes.size() > 4096) { indexes.clear(); return IndexOf(rules); }
+  return index;
+}
+
 // Whether an @supports condition holds: what is supported does not change, so the answer for a text is kept.
 bool SupportsText(const std::string& text) {
   static std::unordered_map<std::string, bool> answers;
@@ -188,6 +395,18 @@ struct Gatherer {
   const dom::Element* partHost = nullptr;   // Part: the host whose shadow tree the element is in
   std::vector<std::string> partNames;       // Part: the names the element has in that tree
   int contextRank = 0;
+  ElementKeys keys{element};
+  const Bloom* aboveBloom = nullptr;
+  bool aboveKnown = false;
+  // What the elements above the element have (none if it has none above).
+  const Bloom* AncestorBloom() {
+    if (!aboveKnown) {
+      aboveKnown = true;
+      const dom::Element* upper = UpperElement(element);
+      aboveBloom = upper ? &BloomWithSelf(upper) : nullptr;
+    }
+    return aboveBloom;
+  }
 
   void RegisterLayer(const std::string& path) {
     if (path.empty() || layerRank.count(path)) return;
@@ -245,7 +464,25 @@ struct Gatherer {
 
   // `outer` is the specificity of the style rule these rules are in, when it matched the element: its nested declarations
   // apply as it does.
-  void Rules(const std::vector<CssRule*>& rules, int layer, const Specificity* outer = nullptr) {
+  void Rules(const std::vector<CssRule*>& all, int layer, const Specificity* outer = nullptr, bool picked = false) {
+    std::vector<CssRule*> candidates;
+    const bool indexed = !picked && !collecting && mode == Mode::Own && keys.usable && all.size() >= 48;
+    if (indexed) {
+      const RuleIndex& index = IndexOf(all);
+      std::vector<uint32_t> positions = index.always;
+      const uint64_t marker = PseudoMarker(matchContext.pseudoElement);
+      const auto take = [&](uint64_t key) {
+        const auto found = index.buckets.find(key);
+        if (found != index.buckets.end()) positions.insert(positions.end(), found->second.begin(), found->second.end());
+      };
+      for (uint64_t key : keys.keys) take(key ^ marker);
+      if (marker) take(marker);
+      std::sort(positions.begin(), positions.end());
+      positions.erase(std::unique(positions.begin(), positions.end()), positions.end());
+      candidates.reserve(positions.size());
+      for (uint32_t i : positions) candidates.push_back(all[i]);
+    }
+    const std::vector<CssRule*>& rules = indexed ? candidates : all;
     for (CssRule* rule : rules) {
       if (collecting && rule->kind == RuleKind::Scope) {
         Rules(rule->rules, layer, outer);
@@ -261,9 +498,33 @@ struct Gatherer {
           break;
         case RuleKind::Style: {
           if (!rule->selectors || !rule->style) break;
+          if (!collecting && mode == Mode::Own && keys.usable) {
+            if (rule->quickState == 0) WorkOutQuickKeys(*rule);
+            if (rule->quickState == 1) {
+              const uint64_t marker = PseudoMarker(matchContext.pseudoElement);
+              bool possible = false;
+              for (size_t j = 0; j < rule->quickKeys.size() && !possible; ++j) {
+                if (rule->quickMarkers[j] != marker) continue;
+                const uint64_t base = rule->quickKeys[j] ^ marker;
+                possible = base == 0 || keys.Has(base);
+              }
+              if (!possible) {
+                if (!rule->rules.empty()) Rules(rule->rules, layer, nullptr);
+                break;
+              }
+            }
+          }
           Specificity best;
           bool matched = false;
-          for (const ComplexSelector& selector : *rule->selectors) {
+          const bool screening = !collecting && mode == Mode::Own && keys.usable && rule->quickAncestors.size() == rule->selectors->size();
+          for (size_t selectorIndex = 0; selectorIndex < rule->selectors->size(); ++selectorIndex) {
+            const ComplexSelector& selector = (*rule->selectors)[selectorIndex];
+            if (screening && !rule->quickAncestors[selectorIndex].empty()) {
+              const Bloom* above = AncestorBloom();
+              bool possible = above != nullptr;
+              if (possible) for (uint64_t key : rule->quickAncestors[selectorIndex]) if (!above->Has(key)) { possible = false; break; }
+              if (!possible) continue;
+            }
             Specificity extra;
             if (Matches(selector, extra)) {
               Specificity s = SpecificityOf(selector);
@@ -551,7 +812,31 @@ ElementStyle& StyleOf(dom::Element* element, const std::string& pseudo = "") {
 void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo);
 
 // The room the scrollbars and the gutter of the viewport take: the overflow is that of the root element, or of the body when the root's is visible.
+double ViewportScrollbarsUncached(dom::Document* document, const std::function<std::string(dom::Element*, const char*)>& get, double& horizontal, ViewportAuto* autos);
+
+// (Every length with a digit in it asks, and it takes the overflow of two elements: what it comes to is kept until something changes.)
 double ViewportScrollbarsWith(dom::Document* document, const std::function<std::string(dom::Element*, const char*)>& get, double& horizontal, ViewportAuto* autos = nullptr) {
+  struct Kept {
+    dom::Document* document = nullptr;
+    uint64_t version = 0;
+    double vertical = 0, horizontal = 0;
+    ViewportAuto autos;
+  };
+  static Kept kept;
+  const uint64_t version = dom::TreeVersion() * 1000003 + g_styleVersion;
+  if (kept.document == document && kept.version == version && document) {
+    horizontal = kept.horizontal;
+    if (autos) *autos = kept.autos;
+    return kept.vertical;
+  }
+  ViewportAuto computedAutos;
+  const double vertical = ViewportScrollbarsUncached(document, get, horizontal, &computedAutos);
+  kept = {document, version, vertical, horizontal, computedAutos};
+  if (autos) *autos = computedAutos;
+  return vertical;
+}
+
+double ViewportScrollbarsUncached(dom::Document* document, const std::function<std::string(dom::Element*, const char*)>& get, double& horizontal, ViewportAuto* autos) {
   horizontal = 0;
   if (autos) *autos = ViewportAuto();
   dom::Element* root = document ? document->DocumentElement() : nullptr;
@@ -760,6 +1045,31 @@ void RollBack(std::map<std::string, Winner>& winners) {
   }
 }
 
+// The rules of the user agent's sheet, by key, as the rules of the author are.
+struct UserAgentIndex {
+  std::vector<uint32_t> always;
+  std::unordered_map<uint64_t, std::vector<uint32_t>> buckets;
+};
+
+const UserAgentIndex& UaIndex() {
+  static const UserAgentIndex index = [] {
+    UserAgentIndex built;
+    const std::vector<UserAgentRule>& rules = UserAgentRules();
+    for (uint32_t i = 0; i < rules.size(); ++i) {
+      std::vector<uint64_t> keys, markers;
+      if (!KeysOf(rules[i].selectors, keys, markers)) { built.always.push_back(i); continue; }
+      std::vector<uint64_t> done;
+      for (uint64_t key : keys) {
+        if (std::find(done.begin(), done.end(), key) != done.end()) continue;
+        done.push_back(key);
+        built.buckets[key].push_back(i);
+      }
+    }
+    return built;
+  }();
+  return index;
+}
+
 void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo) {
   if (style.built) return;
   style.built = true;
@@ -769,7 +1079,25 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
   Gatherer gatherer{element, matchContext, style.cascade};
   gatherer.startingMode = StartingStyleFor(element, pseudo);
   // The user agent's rules first, then the author's.
-  for (const UserAgentRule& rule : UserAgentRules()) {
+  const std::vector<UserAgentRule>& uaRules = UserAgentRules();
+  std::vector<uint32_t> uaPositions;
+  if (gatherer.keys.usable) {
+    const UserAgentIndex& index = UaIndex();
+    uaPositions = index.always;
+    const uint64_t marker = PseudoMarker(matchContext.pseudoElement);
+    const auto take = [&](uint64_t key) {
+      const auto found = index.buckets.find(key);
+      if (found != index.buckets.end()) uaPositions.insert(uaPositions.end(), found->second.begin(), found->second.end());
+    };
+    for (uint64_t key : gatherer.keys.keys) take(key ^ marker);
+    if (marker) take(marker);
+    std::sort(uaPositions.begin(), uaPositions.end());
+    uaPositions.erase(std::unique(uaPositions.begin(), uaPositions.end()), uaPositions.end());
+  } else {
+    for (uint32_t i = 0; i < uaRules.size(); ++i) uaPositions.push_back(i);
+  }
+  for (const uint32_t position : uaPositions) {
+    const UserAgentRule& rule = uaRules[position];
     Specificity best;
     bool matched = false;
     for (const ComplexSelector& selector : rule.selectors) {
@@ -832,12 +1160,38 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
       const std::string& preferred = element->nodeDocument->preferredSheetSet;
       sheets.erase(std::remove_if(sheets.begin(), sheets.end(), [&](const CssStyleSheet* sheet) { return sheet->hasTitle && sheet->ownerNode && sheet->title != preferred; }), sheets.end());
     }
-    gatherer.collecting = true;
-    for (CssStyleSheet* sheet : sheets) {
-      if (sheet->disabled || !MediaListMatches(sheet->media ? sheet->media->queries : std::vector<std::string>(), gatherer.media)) continue;
-      gatherer.Rules(sheet->rules, kUnlayered);
+    // The layers there are, and their order, are the same for every element of the tree (unless a container query decides on them): they are worked out once.
+    struct LayerSnapshot {
+      uint64_t version = 0;
+      std::map<std::string, std::vector<std::string>> children;
+      std::map<std::string, int> rank;
+    };
+    static std::unordered_map<const dom::Node*, LayerSnapshot> snapshots;
+    const bool shareable = !(element->nodeDocument && element->nodeDocument->containerQueriesSeen);
+    uint64_t snapshotVersion = AuthorStyleVersion() * 1000003 + sheets.size();
+    {
+      const MediaEnvironment& m = gatherer.media;
+      snapshotVersion = (snapshotVersion * 31 + static_cast<uint64_t>(m.width * 8)) * 31 + static_cast<uint64_t>(m.height * 8);
+      snapshotVersion = (snapshotVersion * 31 + static_cast<uint64_t>(m.resolution * 100)) * 31 + std::hash<std::string>()(m.colorScheme);
+      snapshotVersion = (snapshotVersion * 31 + static_cast<uint64_t>(m.deviceWidth)) * 31 + static_cast<uint64_t>(m.deviceHeight);
     }
-    gatherer.RankLayers();
+    auto snapshot = snapshots.find(treeRoot);
+    if (shareable && snapshot != snapshots.end() && snapshot->second.version == snapshotVersion) {
+      gatherer.layerChildren = snapshot->second.children;
+      gatherer.layerRank = snapshot->second.rank;
+      gatherer.anonymousLayers = 0;
+    } else {
+      gatherer.collecting = true;
+      for (CssStyleSheet* sheet : sheets) {
+        if (sheet->disabled || !MediaListMatches(sheet->media ? sheet->media->queries : std::vector<std::string>(), gatherer.media)) continue;
+        gatherer.Rules(sheet->rules, kUnlayered);
+      }
+      gatherer.RankLayers();
+      if (shareable) {
+        if (snapshots.size() > 64) snapshots.clear();
+        snapshots[treeRoot] = {snapshotVersion, gatherer.layerChildren, gatherer.layerRank};
+      }
+    }
     gatherer.collecting = false;
     for (CssStyleSheet* sheet : sheets) {
       if (sheet->disabled || !MediaListMatches(sheet->media ? sheet->media->queries : std::vector<std::string>(), gatherer.media)) continue;
@@ -1647,7 +2001,6 @@ std::string Resolver::Finish(dom::Element* element, const std::string& property,
 }  // namespace
 
 void SetLayoutHook(LayoutHook hook) { g_layoutHook = hook; }
-uint64_t g_authorVersion = 1;
 uint64_t g_animationMentions = 0;
 void SnapshotComputedValues(Quanta::Context& ctx, dom::Element* element) {
   if (!element || !element->nodeDocument || !dom::ShadowIncludingRoot(element)->IsDocument()) return;
