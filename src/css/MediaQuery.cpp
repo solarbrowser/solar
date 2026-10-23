@@ -1,3 +1,4 @@
+#include <unordered_map>
 #include "solar/css/MediaQuery.h"
 #include "solar/css/Fonts.h"
 
@@ -364,7 +365,28 @@ const MediaEnvironment& CurrentMediaEnvironment() {
   return environment;
 }
 
+static bool MediaQueryMatchesUncached(const std::string& query, const MediaEnvironment& e);
+
+// What a query comes to depends on the query and the environment alone: it is worked out once for each environment there is.
 bool MediaQueryMatches(const std::string& query, const MediaEnvironment& e) {
+  static MediaEnvironment last;
+  static bool haveLast = false;
+  static std::unordered_map<std::string, bool> answers;
+  if (!haveLast || last.width != e.width || last.height != e.height || last.deviceWidth != e.deviceWidth || last.deviceHeight != e.deviceHeight || last.resolution != e.resolution ||
+      last.colorScheme != e.colorScheme) {
+    last = e;
+    haveLast = true;
+    answers.clear();
+  }
+  const auto found = answers.find(query);
+  if (found != answers.end()) return found->second;
+  const bool result = MediaQueryMatchesUncached(query, e);
+  if (answers.size() > 20000) answers.clear();
+  answers.emplace(query, result);
+  return result;
+}
+
+static bool MediaQueryMatchesUncached(const std::string& query, const MediaEnvironment& e) {
   ComponentValues values = Trimmed(ParseComponentValues(query));
   if (values.empty()) return true;
   std::vector<ComponentValue> items;

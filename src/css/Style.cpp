@@ -154,6 +154,16 @@ bool Beats(const Winner& a, const Winner& b) {
   return a.order > b.order;
 }
 
+// Whether an @supports condition holds: what is supported does not change, so the answer for a text is kept.
+bool SupportsText(const std::string& text) {
+  static std::unordered_map<std::string, bool> answers;
+  const auto found = answers.find(text);
+  if (found != answers.end()) return found->second;
+  const bool result = SupportsCondition(ParseComponentValues(text));
+  answers.emplace(text, result);
+  return result;
+}
+
 struct Gatherer {
   dom::Element* element;
   MatchContext matchContext;
@@ -334,7 +344,7 @@ struct Gatherer {
           if (!rule->media || MediaListMatches(rule->media->queries, media)) Rules(rule->rules, layer, outer);
           break;
         case RuleKind::Supports:
-          if (SupportsCondition(ParseComponentValues(rule->supportsText))) Rules(rule->rules, layer, outer);
+          if (SupportsText(rule->supportsText)) Rules(rule->rules, layer, outer);
           break;
         case RuleKind::Container:
           if (element->nodeDocument) element->nodeDocument->containerQueriesSeen = true;
@@ -344,7 +354,7 @@ struct Gatherer {
           CssStyleSheet* imported = rule->importedSheet;
           if (imported && imported->disabled) break;
           if (rule->media && !MediaListMatches(rule->media->queries, media)) break;
-          if (!rule->supportsText.empty() && !SupportsCondition(ParseComponentValues(rule->supportsText))) break;
+          if (!rule->supportsText.empty() && !SupportsText(rule->supportsText)) break;
           const std::string savedPath = layerPath;
           int id = layer;
           if (!rule->layerName.empty()) {
