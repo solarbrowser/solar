@@ -226,7 +226,6 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
       extraWidth = std::max(extraWidth, wantWidth);
       extraHeight = std::max(extraHeight, wantHeight);
     }
-    LayoutContext lc{ctx, *tree, tree->viewportWidth, tree->viewportHeight};
     const bool containers = document->containerQueriesSeen && UpdateContainerSizes(*tree);
     // (What the scroll position was is kept for the new tree, as the relevance of boxes is worked out from it.)
     if (document->layoutTree) {

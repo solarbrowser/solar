@@ -48,7 +48,7 @@ const char* PlatformToken() {
 }  // namespace
 
 std::string DefaultUserAgent() {
-  return std::string("Solar/Developer (") + PlatformToken() + "; rv:development) Solar/Development Quanta/1.0";
+  return std::string("Solar/Developer (") + PlatformToken() + "; rv:development) Solar/Development Quanta/2.0.0-alpha";
 }
 
 }  // namespace solar::net

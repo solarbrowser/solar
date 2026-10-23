@@ -347,7 +347,7 @@ int main() {
   {
     const std::string fallback = solar::net::DefaultUserAgent();
     Check("the default says what Solar is and what it runs on", fallback.starts_with("Solar/Developer (") && fallback.find("; rv:development) ") != std::string::npos &&
-              fallback.ends_with(" Quanta/1.0") && fallback.find_first_of("\r\n") == std::string::npos, fallback);
+              fallback.ends_with(" Quanta/2.0.0-alpha") && fallback.find_first_of("\r\n") == std::string::npos, fallback);
     const bool knownSystem = fallback.find("Linux") != std::string::npos || fallback.find("Windows") != std::string::npos ||
                              fallback.find("Macintosh") != std::string::npos;
     Check("with the system in the parentheses", knownSystem, fallback);
