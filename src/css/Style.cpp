@@ -356,7 +356,6 @@ const RuleIndex& IndexOf(const std::vector<CssRule*>& rules) {
       index.buckets[key].push_back(i);
     }
   }
-  if (getenv("SOLAR_RULESTATS")) { size_t b = 0, m = 0; for (auto& kv : index.buckets) { b += kv.second.size(); m = std::max(m, kv.second.size()); } fprintf(stderr, "INDEX rules %zu always %zu buckets %zu entries %zu biggest %zu\n", rules.size(), index.always.size(), index.buckets.size(), b, m); }
   if (indexes.size() > 4096) { indexes.clear(); return IndexOf(rules); }
   return index;
 }
@@ -766,8 +765,13 @@ bool Gatherer::Matches(const ComplexSelector& selector, Specificity& extra) {
 // ---- The resolver ----
 
 // What was worked out for an element; elements that are styled the same way and inherit from the same share it.
+struct StringKeyHash {
+  using is_transparent = void;
+  size_t operator()(std::string_view text) const { return std::hash<std::string_view>()(text); }
+};
+
 struct Memo {
-  std::unordered_map<std::string, std::string> computed;
+  std::unordered_map<std::string, std::string, StringKeyHash, std::equal_to<>> computed;
   std::unordered_map<std::string, std::optional<std::string>> custom;
 };
 
@@ -921,7 +925,7 @@ bool SafeToShare(const DeclarationEntry* entry) {
 void Share(dom::Element* element, ElementStyle& style) {
   if (!style.memo->computed.empty() || !style.memo->custom.empty() || !style.storage.empty()) return;
   if (element->animVersion != 0 || dom::HasShadowTrees() || !element->parentNode || !element->parentNode->IsElement()) return;
-  if (element->nodeDocument && element->nodeDocument->adoptedStyleSheets) return;
+  if (element->nodeDocument && (element->nodeDocument->adoptedStyleSheets || element->nodeDocument->containerQueriesSeen)) return;  // (what a container query says is of the element's container)
   if (element->FindAttribute("", "style")) return;
   dom::Element* parent = static_cast<dom::Element*>(element->parentNode);
   if (parent->animVersion != 0) return;
@@ -930,10 +934,16 @@ void Share(dom::Element* element, ElementStyle& style) {
   hash = hash * 1000003 + std::hash<std::string>()(element->localName);
   hash = hash * 1000003 + std::hash<std::string>()(element->namespaceUri);
   for (const auto& [name, winner] : style.cascade) {
-    if (!winner.rest.empty() || !SafeToShare(winner.entry)) return;
+    if (!SafeToShare(winner.entry)) return;
     hash = hash * 1000003 + std::hash<std::string>()(name);
     hash = hash * 1000003 + std::hash<const void*>()(winner.entry);
     hash = hash * 1000003 + static_cast<uint64_t>(winner.origin * 31 + winner.layer);
+    // (The declarations that lost are part of the style too: the same ones lost.)
+    for (const Winner& lost : winner.rest) {
+      if (!SafeToShare(lost.entry)) return;
+      hash = hash * 1000003 + std::hash<const void*>()(lost.entry);
+      hash = hash * 1000003 + static_cast<uint64_t>(lost.origin * 31 + lost.layer);
+    }
   }
   std::vector<SharedKey>& bucket = SharedStyles()[hash];
   for (const SharedKey& other : bucket) {
@@ -943,10 +953,16 @@ void Share(dom::Element* element, ElementStyle& style) {
     if (a.size() != b.size()) continue;
     bool same = true;
     for (auto i = a.begin(), j = b.begin(); i != a.end(); ++i, ++j) {
-      if (i->first != j->first || i->second.entry != j->second.entry || i->second.origin != j->second.origin || i->second.layer != j->second.layer) {
+      if (i->first != j->first || i->second.entry != j->second.entry || i->second.origin != j->second.origin || i->second.layer != j->second.layer || i->second.rest.size() != j->second.rest.size()) {
         same = false;
         break;
       }
+      for (size_t k = 0; k < i->second.rest.size() && same; ++k) {
+        const Winner& x = i->second.rest[k];
+        const Winner& y = j->second.rest[k];
+        same = x.entry == y.entry && x.origin == y.origin && x.layer == y.layer;
+      }
+      if (!same) break;
     }
     if (!same) continue;
     style.memo = other.style->memo;
@@ -2097,6 +2113,15 @@ void ScanRules(const std::vector<CssRule*>& rules, SelectorFeatures& f, int dept
 
 uint64_t SheetsVersion() { return g_authorVersion; }
 
+std::shared_ptr<void> SharedStyleToken(Quanta::Context&, dom::Element* element) {
+  if (AnimatedValuesSuppressed() || StartingStyleFor(element, "") || (element->nodeDocument && element->nodeDocument->containerQueriesSeen)) return nullptr;
+  dom::Node* tree = dom::ShadowIncludingRoot(element);
+  if (!tree || !tree->IsDocument()) return nullptr;
+  ElementStyle& style = StyleOf(element);
+  if (!style.built || style.memo.use_count() <= 1) return nullptr;  // (the style is made by asking for a value, as ever)
+  return style.memo;
+}
+
 StyleReuse StyleReuseFor(dom::Document* document) {
   struct Entry {
     dom::Document* document = nullptr;
@@ -2196,6 +2221,29 @@ ResolvedValueHook g_resolvedHook = nullptr;
 }
 
 void SetResolvedValueHook(ResolvedValueHook hook) { g_resolvedHook = hook; }
+
+StyleReader::StyleReader(Quanta::Context& ctx, dom::Element* element, const std::string& pseudo) : ctx_(ctx), element_(element), pseudo_(pseudo) {}
+StyleReader::~StyleReader() = default;
+
+std::string StyleReader::Get(const char* property) {
+  const uint64_t now = dom::TreeVersion() * 1000003 + g_styleVersion;
+  if (memo_ && version_ == now && !element_->nodeDocument->containerQueriesSeen && !AnimatedValuesSuppressed() && !StartingStyleFor(element_, pseudo_) &&
+      (!element_->nodeDocument->animationStyleSeen || element_->nodeDocument->styleFlushedVersion == AuthorStyleVersion())) {
+    const Memo& memo = *static_cast<const Memo*>(memo_.get());
+    const auto found = memo.computed.find(std::string_view(property));
+    if (found != memo.computed.end()) return found->second;
+  }
+  std::string value = ComputedValue(ctx_, element_, property, pseudo_);
+  // After a first answer the style of the element is made, and what is asked next is found in it (unless the document asks for more: containers, animations).
+  if (!memo_ && element_->nodeDocument && !element_->nodeDocument->containerQueriesSeen && !AnimatedValuesSuppressed() && !StartingStyleFor(element_, pseudo_)) {
+    dom::Node* tree = dom::ShadowIncludingRoot(element_);
+    if (tree && tree->IsDocument() && !element_->nodeDocument->adoptedStyleSheets) {
+      memo_ = StyleOf(element_, pseudo_).memo;
+      version_ = dom::TreeVersion() * 1000003 + g_styleVersion;
+    }
+  }
+  return value;
+}
 
 std::string ResolvedValue(Quanta::Context& ctx, dom::Element* element, const std::string& property, const std::string& pseudo) {
   std::string used;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <memory>
+
 #include <string>
 #include <vector>
 
@@ -34,6 +36,21 @@ struct ViewportAuto {
 void ViewportScrollbars(Quanta::Context& ctx, dom::Document* document, double& vertical, double& horizontal, ViewportAuto* autos = nullptr);
 std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std::string& property, const std::string& pseudo = "");
 
+// Many computed values of one element (or one of its pseudo-elements) in a row: the same as ComputedValue, without what each call does around the lookup.
+class StyleReader {
+ public:
+  StyleReader(Quanta::Context& ctx, dom::Element* element, const std::string& pseudo = "");
+  ~StyleReader();
+  std::string Get(const char* property);
+
+ private:
+  Quanta::Context& ctx_;
+  dom::Element* element_;
+  const std::string& pseudo_;
+  std::shared_ptr<void> memo_;
+  uint64_t version_ = 0;
+};
+
 // What getComputedStyle answers: the used value where the property has one that layout works out (the width of a box, margins in px),
 // the computed value otherwise. Layout installs the hook that knows the used values.
 using ResolvedValueHook = bool (*)(Quanta::Context& ctx, dom::Element* element, const std::string& property, const std::string& pseudo, std::string& out);
@@ -66,5 +83,9 @@ void SetAnimationWake(Quanta::Context& ctx, dom::Document* document);
 uint64_t AnimationMentions();
 // A number that changes with the tree and with what is declared, not with what animations give.
 uint64_t AuthorStyleVersion();
+
+// A token that elements with the same computed style have in common (they share what was worked out of them), or none: what is read of the style
+// of one of them is the same for the others.
+std::shared_ptr<void> SharedStyleToken(Quanta::Context& ctx, dom::Element* element);
 
 }  // namespace solar::css

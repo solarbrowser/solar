@@ -269,7 +269,8 @@ T Pick(const std::string& text, std::initializer_list<std::pair<const char*, T>>
 std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* element, const std::string& pseudo) {
   auto style = std::make_shared<BoxStyle>();
   BoxStyle& s = *style;
-  const auto get = [&](const char* property) { return solar::css::ComputedValue(ctx, element, property, pseudo); };
+  solar::css::StyleReader reader(ctx, element, pseudo);
+  const auto get = [&](const char* property) { return reader.Get(property); };
 
   const std::string display = get("display");
   s.display = Pick<Display>(display, {

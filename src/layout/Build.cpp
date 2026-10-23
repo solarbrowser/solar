@@ -509,6 +509,46 @@ class Builder {
     }
   }
 
+  // The language of an element, from the nearest lang attribute above it (the only thing in the style layout reads that is of the element and not of what it shares).
+  static std::string LangOf(const dom::Element* element) {
+    for (const dom::Node* n = element; n; n = n->parentNode) {
+      if (!n->IsElement()) continue;
+      const dom::Element* e = static_cast<const dom::Element*>(n);
+      const dom::Attr* a = e->FindAttribute("", "lang");
+      if (!a) a = e->FindAttribute("http://www.w3.org/XML/1998/namespace", "lang");
+      if (a) {
+        std::string lang = a->value;
+        for (char& c : lang) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return lang;
+      }
+    }
+    return "";
+  }
+
+  // Elements that share their computed style share what is read of it, too: it is made once for them (and once for each language they are in).
+  std::shared_ptr<const BoxStyle> SharedBoxStyle(dom::Element* element) {
+    struct Kept {
+      std::shared_ptr<void> token;
+      std::shared_ptr<const BoxStyle> style;
+    };
+    static std::map<std::pair<const void*, std::string>, Kept> kept;
+    static uint64_t version = 0;
+    const uint64_t now = (dom::TreeVersion() * 1000003 + css::SheetsVersion()) * 1000003 + css::StyleVersion();
+    if (version != now || kept.size() > 20000) {
+      kept.clear();
+      version = now;
+    }
+    css::ComputedValue(lc_.ctx, element, "display");  // (the style is made, with all that goes with it, before its token is looked at)
+    std::shared_ptr<void> token = css::SharedStyleToken(lc_.ctx, element);
+    if (!token) return Logicalize(ReadStyle(lc_.ctx, element));
+    const auto key = std::make_pair(static_cast<const void*>(token.get()), LangOf(element));
+    const auto found = kept.find(key);
+    if (found != kept.end()) return found->second.style;
+    std::shared_ptr<const BoxStyle> style = Logicalize(ReadStyle(lc_.ctx, element));
+    kept[key] = {token, style};
+    return style;
+  }
+
   // The style layout reads of an element: what was made of it before, while nothing it depends on has changed, and else worked out again.
   std::shared_ptr<const BoxStyle> StyleFor(dom::Element* element, bool& recomputed) {
     const dom::Node* parent = element->parentNode;
@@ -528,7 +568,7 @@ class Builder {
       recomputed = false;
       return std::static_pointer_cast<const BoxStyle>(element->layoutStyle);
     }
-    std::shared_ptr<const BoxStyle> style = Logicalize(ReadStyle(lc_.ctx, element));
+    std::shared_ptr<const BoxStyle> style = SharedBoxStyle(element);
     element->layoutStyle = style;
     element->layoutStamp = want;
     recomputed = true;
