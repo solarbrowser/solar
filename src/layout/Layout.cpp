@@ -196,6 +196,8 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
   // (Asked for again while it is being made, from a style that needs the size of a container: what is there is answered.)
   if (inside.count(document)) return document->layoutTree && !document->layoutTree->damaged ? document->layoutTree.get() : nullptr;
   inside.insert(document);
+  // (A tree is as good as the version it was begun at: what changes while it is made — animations are brought up to date by asking for the style — makes it old.)
+  const uint64_t versionAtStart = versionNow();
   std::shared_ptr<Tree> tree;
   const std::shared_ptr<Tree> previous = document->layoutTree;
   // The styles that depend on the size of containers are made from the sizes of the last pass; layout is done again until they stop changing.
@@ -244,8 +246,7 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
       waking = false;
     }
   }
-  const uint64_t version = versionNow();
-  tree->builtFor = version;
+  tree->builtFor = versionAtStart;
   if (document->layoutTree) {
     for (const auto& entry : document->layoutTree->scroll) {
       if (entry.first == document || tree->boxesOf.count(entry.first)) tree->scroll[entry.first] = entry.second;

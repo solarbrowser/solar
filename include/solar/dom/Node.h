@@ -196,8 +196,15 @@ struct Attr : Node {
   void Visit(Quanta::Visitor& visitor);
 };
 
+// A number no other element has had: what is kept of an element is not taken for another that has the same address.
+inline uint64_t NextElementSerial() {
+  static uint64_t last = 0;
+  return ++last;
+}
+
 struct Element : Node {
   using Parent = Node;
+  uint64_t serial = NextElementSerial();
   std::string namespaceUri;  // empty: none
   std::string prefix;        // empty: none
   std::string localName;

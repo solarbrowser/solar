@@ -39,6 +39,8 @@ std::string Lower(std::string_view text) {
 
 uint64_t g_styleVersion = 1;
 uint64_t g_authorVersion = 1;  // changed when the rules do
+bool g_anyContainerQueries = false;  // a rule with a container query has been looked at
+uint64_t g_cacheVersion = 1;   // changed when what the kept styles were made from is (not for the values animations give: each element has its own number for those)
 LayoutHook g_layoutHook = nullptr;
 Quanta::Context* g_activeContext = nullptr;  // the realm a style is being worked out in, for what a rule's condition needs of other elements
 
@@ -609,6 +611,7 @@ struct Gatherer {
           break;
         case RuleKind::Container:
           if (element->nodeDocument) element->nodeDocument->containerQueriesSeen = true;
+          g_anyContainerQueries = true;
           if (g_activeContext && ContainerRuleMatches(*g_activeContext, const_cast<dom::Element*>(element), matchContext.pseudoElement != nullptr, rule->prelude)) Rules(rule->rules, layer, outer);
           break;
         case RuleKind::Import: {
@@ -790,6 +793,13 @@ struct ElementStyle {
 struct StyleEntry {
   ElementStyle plain;
   std::map<std::string, ElementStyle> others;
+  // What the styles were made from: they are kept while it is the same (see Validate).
+  uint64_t serial = 0;
+  uint64_t epoch = 0;    // a number for each time the styles are made anew: the elements below compare with it
+  uint64_t checked = 0;  // the version of the tree it was last seen to be good at
+  const dom::Node* parent = nullptr;
+  uint64_t parentEpoch = 0;
+  uint32_t attr = 0, anim = 0, children = 0, parentChildren = 0, parentChildAttr = 0;
 };
 
 std::unordered_map<dom::Element*, StyleEntry>& Cache() {
@@ -798,16 +808,95 @@ std::unordered_map<dom::Element*, StyleEntry>& Cache() {
 }
 
 void ClearShared();
+void DropSharedBuckets();
+
+// A number for the sheets of a document that count and the environment its media queries are of: the styles kept are good while it is the same.
+uint64_t DocumentSignature(dom::Document* document) {
+  uint64_t h = 1469598103934665603ull;
+  const auto mix = [&](uint64_t v) { h = (h ^ v) * 1099511628211ull; };
+  for (CssStyleSheet* sheet : SheetsOfTree(document, document->context)) {
+    mix(reinterpret_cast<uintptr_t>(sheet));
+    mix(sheet->disabled ? 1 : 2);
+  }
+  const MediaEnvironment e = EnvironmentFor(document);
+  mix(static_cast<uint64_t>(e.width * 8));
+  mix(static_cast<uint64_t>(e.height * 8));
+  mix(static_cast<uint64_t>(e.resolution * 100));
+  mix(std::hash<std::string>()(e.colorScheme));
+  mix(document->hasPreferredSheetSet ? std::hash<std::string>()(document->preferredSheetSet) : 7);
+  return h | 1;
+}
+
+uint64_t g_styleEpoch = 0;
+
+// The styles made of an element are good while what they were made from is the same: the sheets, the element and its attributes, the styles of the elements
+// above it, and (when a rule looks at them) its children and its siblings. A document with rules that look at more than that has nothing kept across changes.
+void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
+  if (entry.checked == treeVersion) return;
+  entry.checked = treeVersion;
+  const StyleReuse reuse = element->nodeDocument ? StyleReuseFor(element->nodeDocument) : StyleReuse();
+  const dom::Node* parentNode = element->parentNode;
+  dom::Element* parent = parentNode && parentNode->IsElement() ? const_cast<dom::Element*>(static_cast<const dom::Element*>(parentNode)) : nullptr;
+  uint64_t parentEpoch = 0;
+  if (parent) {
+    StyleEntry& up = Cache()[parent];
+    Validate(parent, up, treeVersion);
+    parentEpoch = up.epoch;
+  }
+  bool good = reuse.allowed && !(element->nodeDocument && element->nodeDocument->containerQueriesSeen) && entry.serial == element->serial && entry.parent == parentNode && entry.parentEpoch == parentEpoch && entry.attr == element->attrVersion && entry.anim == element->animVersion;
+  if (good && reuse.structural) good = entry.children == element->childrenVersion && (!parent || entry.parentChildren == parent->childrenVersion);
+  if (good && reuse.sibling) good = !parent || (entry.parentChildAttr == parent->childAttrVersion && entry.parentChildren == parent->childrenVersion);
+  if (good) return;
+  entry.plain = ElementStyle();
+  entry.others.clear();
+  entry.serial = element->serial;
+  entry.epoch = ++g_styleEpoch;
+  entry.parent = parentNode;
+  entry.parentEpoch = parentEpoch;
+  entry.attr = element->attrVersion;
+  entry.anim = element->animVersion;
+  entry.children = element->childrenVersion;
+  entry.parentChildren = parent ? parent->childrenVersion : 0;
+  entry.parentChildAttr = parent ? parent->childAttrVersion : 0;
+}
 
 ElementStyle& StyleOf(dom::Element* element, const std::string& pseudo = "") {
-  static uint64_t cachedVersion = 0;
+  static uint64_t cachedStyleVersion = 0;
   const uint64_t version = dom::TreeVersion() * 1000003 + g_styleVersion;
-  if (cachedVersion != version) {
+  const uint64_t treeVersion = version;  // (what animations give changes the version too, and is looked at element by element)
+  if (cachedStyleVersion != g_cacheVersion || Cache().size() > 60000) {
     ClearShared();
     Cache().clear();
-    cachedVersion = version;
+    cachedStyleVersion = g_cacheVersion;
+  }
+  // The elements that share what was worked out are found anew when anything changes (what is kept of an element is still good for it).
+  static uint64_t sharedVersion = 0;
+  if (sharedVersion != version) {
+    DropSharedBuckets();
+    sharedVersion = version;
+  }
+  // What the sheets of the document are (which of them count, and the size of the window the media queries are of) is what every style depends on.
+  if (element->nodeDocument) {
+    struct DocumentState {
+      uint64_t checkedAt = 0;
+      uint64_t signature = 0;
+    };
+    static std::unordered_map<const dom::Document*, DocumentState> states;
+    DocumentState& state = states[element->nodeDocument];
+    if (state.checkedAt != version) {
+      state.checkedAt = version;
+      const uint64_t signature = DocumentSignature(element->nodeDocument);
+      if (state.signature != signature) {
+        if (state.signature != 0) {
+          ClearShared();
+          Cache().clear();
+        }
+        state.signature = signature;
+      }
+    }
   }
   StyleEntry& entry = Cache()[element];
+  Validate(element, entry, treeVersion);
   const bool suppressed = AnimatedValuesSuppressed(), starting = StartingStyleFor(element, pseudo);
   ElementStyle& style = pseudo.empty() && !suppressed && !starting ? entry.plain : entry.others[(suppressed ? pseudo + "\x03" : pseudo) + (starting ? "\x04" : "")];
   style.version = version;
@@ -889,9 +978,9 @@ double ViewportScrollbarsUncached(dom::Document* document, const std::function<s
 // computed values: they are worked out once. (What looks at more than the declarations and the parent is left out: attr(), the
 // sizes of containers, the siblings, the animations.)
 struct SharedKey {
-  const Memo* parent = nullptr;
-  const std::string* localName = nullptr;
-  const std::string* namespaceUri = nullptr;
+  std::shared_ptr<const Memo> parent;  // (kept: its address is not taken for another memo's)
+  std::string localName;
+  std::string namespaceUri;
   const ElementStyle* style = nullptr;
   std::string pseudo;
 };
@@ -905,6 +994,8 @@ std::unordered_map<const DeclarationEntry*, bool>& EntrySafety() {
   static std::unordered_map<const DeclarationEntry*, bool> safety;
   return safety;
 }
+
+void DropSharedBuckets() { SharedStyles().clear(); }
 
 void ClearShared() {
   SharedStyles().clear();
@@ -934,7 +1025,7 @@ void Share(dom::Element* element, ElementStyle& style, const std::string& pseudo
     while (top->parentNode) top = top->parentNode;
     if (!top->IsDocument()) return;
   }
-  if (element->nodeDocument && (element->nodeDocument->adoptedStyleSheets || element->nodeDocument->containerQueriesSeen)) return;  // (what a container query says is of the element's container)
+  if (element->nodeDocument && element->nodeDocument->containerQueriesSeen) return;  // (what a container query says is of the element's container)
   if (element->FindAttribute("", "style")) return;
   dom::Element* parent = static_cast<dom::Element*>(element->parentNode);
   if (parent->animVersion != 0) return;
@@ -959,7 +1050,7 @@ void Share(dom::Element* element, ElementStyle& style, const std::string& pseudo
   }
   std::vector<SharedKey>& bucket = SharedStyles()[hash];
   for (const SharedKey& other : bucket) {
-    if (other.parent != parentStyle.memo.get() || *other.localName != element->localName || *other.namespaceUri != element->namespaceUri || other.pseudo != pseudo) continue;
+    if (other.parent.get() != parentStyle.memo.get() || other.localName != element->localName || other.namespaceUri != element->namespaceUri || other.pseudo != pseudo) continue;
     const auto& a = other.style->cascade;
     const auto& b = style.cascade;
     if (a.size() != b.size()) continue;
@@ -980,7 +1071,7 @@ void Share(dom::Element* element, ElementStyle& style, const std::string& pseudo
     style.memo = other.style->memo;
     return;
   }
-  bucket.push_back({parentStyle.memo.get(), &element->localName, &element->namespaceUri, &style, pseudo});
+  bucket.push_back({parentStyle.memo, element->localName, element->namespaceUri, &style, pseudo});
 }
 
 // The cascade of an element is made, and what is shared with others of the same style is found.
@@ -1322,9 +1413,19 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
   }
   // The style attribute (a pseudo-element has none).
   if (const dom::Attr* attribute = pseudo.empty() ? element->FindAttribute("", "style") : nullptr) {
-    SetValueBaseUrl(element->nodeDocument ? dom::DocumentBaseUri(element->nodeDocument) : "");
-    style.storage.push_back(ParseDeclarationList(attribute->value));
-    SetValueBaseUrl("");
+    // (The same text is parsed once: a page puts the same style attribute on many elements, and a style made again reads it again.)
+    const std::string base = element->nodeDocument ? dom::DocumentBaseUri(element->nodeDocument) : "";
+    static std::unordered_map<std::string, std::vector<DeclarationEntry>> parsed;
+    const std::string key = base + '\x01' + attribute->value;
+    auto found = parsed.find(key);
+    if (found == parsed.end()) {
+      SetValueBaseUrl(base);
+      std::vector<DeclarationEntry> entries = ParseDeclarationList(attribute->value);
+      SetValueBaseUrl("");
+      if (parsed.size() > 20000) parsed.clear();
+      found = parsed.emplace(key, std::move(entries)).first;
+    }
+    style.storage.push_back(found->second);
     ++gatherer.ruleSerial;
     for (const DeclarationEntry& entry : style.storage.back()) gatherer.Offer(entry, true, true, kUnlayered, Specificity{});
   }
@@ -2066,10 +2167,14 @@ void NoteAnimationMention() {
 uint64_t AnimationMentions() { return g_animationMentions; }
 void NoteStyleChange() {
   ++g_styleVersion;
+  ++g_cacheVersion;
   ++g_authorVersion;
 }
 void NoteStyleChangeForRegistry() { NoteStyleChange(); }
-void NoteAnimatedStyleChange() { ++g_styleVersion; }
+void NoteAnimatedStyleChange() {
+  ++g_styleVersion;
+  if (g_anyContainerQueries) ++g_cacheVersion;  // (the size of a container may be what an animation gives)
+}
 uint64_t AuthorStyleVersion() { return dom::TreeVersion() * 1000003 + g_authorVersion; }
 uint64_t StyleVersion() { return g_styleVersion; }
 
@@ -2096,14 +2201,14 @@ void ScanComplex(const ComplexSelector& selector, SelectorFeatures& f) {
       switch (simple.kind) {
         case SimpleSelector::Kind::Pseudo:
           switch (simple.pseudo) {
-            case PseudoClass::Root: case PseudoClass::Scope: case PseudoClass::Link: case PseudoClass::AnyLink: case PseudoClass::Defined: break;
+            case PseudoClass::Root: case PseudoClass::Scope: case PseudoClass::Link: case PseudoClass::AnyLink: break;
             case PseudoClass::Empty: case PseudoClass::FirstChild: case PseudoClass::LastChild: case PseudoClass::OnlyChild:
             case PseudoClass::FirstOfType: case PseudoClass::LastOfType: case PseudoClass::OnlyOfType: f.structural = true; break;
             default: f.dynamic = true; break;
           }
           break;
         case SimpleSelector::Kind::Has: f.has = true; if (simple.list) ScanList(*simple.list, f); break;
-        case SimpleSelector::Kind::Nth: f.structural = true; if (simple.list) ScanList(*simple.list, f); break;
+        case SimpleSelector::Kind::Nth: f.structural = true; if (simple.list) { f.sibling = true; ScanList(*simple.list, f); } break;  // ("of S": the siblings' own attributes count)
         case SimpleSelector::Kind::Not: case SimpleSelector::Kind::Is: case SimpleSelector::Kind::Where: case SimpleSelector::Kind::Nesting:
           if (simple.list) ScanList(*simple.list, f);
           break;
@@ -2147,7 +2252,8 @@ StyleReuse StyleReuseFor(dom::Document* document) {
   };
   static Entry entry;
   StyleReuse none;
-  if (!document || dom::HasShadowTrees() || document->adoptedStyleSheets) return none;
+  // (Adopted style sheets are in the sheets: the array tells of every change of it. A container query is of a size that layout finds, not of the elements.)
+  if (!document || dom::HasShadowTrees() || document->containerQueriesSeen) return none;
   const std::vector<CssStyleSheet*> sheets = SheetsOfTree(document, document->context);
   if (entry.document == document && entry.author == g_authorVersion && entry.sheets == sheets) return entry.reuse;
   SelectorFeatures f;
@@ -2187,7 +2293,7 @@ void NotePseudoNamesOfRules(const std::vector<CssRule*>& rules, std::unordered_s
 bool PseudoNameMayHaveRules(dom::Element* element, const std::string& pseudo) {
   if (dom::HasShadowTrees() || !element->nodeDocument) return true;
   dom::Node* tree = dom::ShadowIncludingRoot(element);
-  if (!tree || !tree->IsDocument() || element->nodeDocument->adoptedStyleSheets) return true;
+  if (!tree || !tree->IsDocument()) return true;
   static const std::unordered_set<std::string> ua = [] {
     std::unordered_set<std::string> names;
     for (const UserAgentRule& rule : UserAgentRules()) NotePseudoNames(rule.selectors, names);
@@ -2223,14 +2329,7 @@ void ViewportScrollbars(Quanta::Context& ctx, dom::Document* document, double& v
 }
 
 std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std::string& property, const std::string& pseudo) {
-  // An adopted sheets array can be changed in place, which nothing tells us of: styles are made again when there is one.
-  // (Not while another is under way: it holds styles that a new version would drop.)
   static int depth = 0;
-  if (depth == 0 && element && element->nodeDocument) {
-    dom::Node* root = element;
-    while (root->parentNode) root = root->parentNode;
-    if (element->nodeDocument->adoptedStyleSheets || (root->IsFragment() && static_cast<dom::DocumentFragment*>(root)->adoptedStyleSheets)) ++g_styleVersion;
-  }
   // What animations give is brought up to date first, when what it depends on has changed.
   static bool flushing = false;
   dom::Document* document = element ? element->nodeDocument : nullptr;
@@ -2306,7 +2405,7 @@ std::string StyleReader::Get(const char* property) {
   // After a first answer the style of the element is made, and what is asked next is found in it (unless the document asks for more: containers, animations).
   if (!memo_ && element_->nodeDocument && !element_->nodeDocument->containerQueriesSeen && !AnimatedValuesSuppressed() && !StartingStyleFor(element_, pseudo_)) {
     dom::Node* tree = dom::ShadowIncludingRoot(element_);
-    if (tree && tree->IsDocument() && !element_->nodeDocument->adoptedStyleSheets) {
+    if (tree && tree->IsDocument()) {
       memo_ = StyleOf(element_, pseudo_).memo;
       version_ = dom::TreeVersion() * 1000003 + g_styleVersion;
     }
