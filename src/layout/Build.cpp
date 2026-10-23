@@ -526,7 +526,7 @@ class Builder {
   }
 
   // Elements that share their computed style share what is read of it, too: it is made once for them (and once for each language they are in).
-  std::shared_ptr<const BoxStyle> SharedBoxStyle(dom::Element* element) {
+  std::shared_ptr<const BoxStyle> SharedBoxStyle(dom::Element* element, const std::string& pseudo = "") {
     struct Kept {
       std::shared_ptr<void> token;
       std::shared_ptr<const BoxStyle> style;
@@ -538,13 +538,13 @@ class Builder {
       kept.clear();
       version = now;
     }
-    css::ComputedValue(lc_.ctx, element, "display");  // (the style is made, with all that goes with it, before its token is looked at)
-    std::shared_ptr<void> token = css::SharedStyleToken(lc_.ctx, element);
-    if (!token) return Logicalize(ReadStyle(lc_.ctx, element));
+    if (pseudo.empty()) css::ComputedValue(lc_.ctx, element, "display");  // (the style is made, with all that goes with it, before its token is looked at)
+    std::shared_ptr<void> token = css::SharedStyleToken(lc_.ctx, element, pseudo);
+    if (!token) return Logicalize(ReadStyle(lc_.ctx, element, pseudo));
     const auto key = std::make_pair(static_cast<const void*>(token.get()), LangOf(element));
     const auto found = kept.find(key);
     if (found != kept.end()) return found->second.style;
-    std::shared_ptr<const BoxStyle> style = Logicalize(ReadStyle(lc_.ctx, element));
+    std::shared_ptr<const BoxStyle> style = Logicalize(ReadStyle(lc_.ctx, element, pseudo));
     kept[key] = {token, style};
     return style;
   }
@@ -578,7 +578,7 @@ class Builder {
   void BuildGenerated(Box& parent, dom::Element* element, const char* pseudo) {
     // Without a rule for it there is nothing generated: the style of it is not worth working out.
     if (!solar::css::HasPseudoStyle(element, pseudo)) return;
-    std::shared_ptr<const BoxStyle> style = Logicalize(ReadStyle(lc_.ctx, element, pseudo));
+    std::shared_ptr<const BoxStyle> style = SharedBoxStyle(element, pseudo);
     if (style->display == Display::None) return;
     // Floating and positioning blockify a generated box as they do any (https://www.w3.org/TR/CSS22/visuren.html#dis-pos-flo).
     if ((style->IsOutOfFlow() || style->IsFloating()) && (style->display == Display::Inline || style->display == Display::InlineBlock)) {

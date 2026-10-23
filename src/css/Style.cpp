@@ -1,3 +1,4 @@
+#include <unordered_set>
 #include <functional>
 #include "solar/css/Style.h"
 #include "solar/css/Animation.h"
@@ -892,6 +893,7 @@ struct SharedKey {
   const std::string* localName = nullptr;
   const std::string* namespaceUri = nullptr;
   const ElementStyle* style = nullptr;
+  std::string pseudo;
 };
 
 std::unordered_map<uint64_t, std::vector<SharedKey>>& SharedStyles() {
@@ -922,15 +924,25 @@ bool SafeToShare(const DeclarationEntry* entry) {
   return safe;
 }
 
-void Share(dom::Element* element, ElementStyle& style) {
+void Share(dom::Element* element, ElementStyle& style, const std::string& pseudo = "") {
   if (!style.memo->computed.empty() || !style.memo->custom.empty() || !style.storage.empty()) return;
-  if (element->animVersion != 0 || dom::HasShadowTrees() || !element->parentNode || !element->parentNode->IsElement()) return;
+  if (element->animVersion != 0 || !element->parentNode || !element->parentNode->IsElement()) return;
+  // (An element of a shadow tree, a shadow host, and one that is assigned to a slot are styled by more than the declarations around them.)
+  if (dom::HasShadowTrees()) {
+    if (element->shadowRoot || element->assignedSlot) return;
+    dom::Node* top = element;
+    while (top->parentNode) top = top->parentNode;
+    if (!top->IsDocument()) return;
+  }
   if (element->nodeDocument && (element->nodeDocument->adoptedStyleSheets || element->nodeDocument->containerQueriesSeen)) return;  // (what a container query says is of the element's container)
   if (element->FindAttribute("", "style")) return;
   dom::Element* parent = static_cast<dom::Element*>(element->parentNode);
   if (parent->animVersion != 0) return;
-  ElementStyle& parentStyle = StyleOf(parent);
+  // A pseudo-element inherits from the element it is of; it is shared among those of the same style and the same name.
+  ElementStyle& parentStyle = pseudo.empty() ? StyleOf(parent) : StyleOf(element);
+  if (!pseudo.empty() && !parentStyle.built) return;
   uint64_t hash = std::hash<const void*>()(parentStyle.memo.get());
+  hash = hash * 1000003 + std::hash<std::string>()(pseudo);
   hash = hash * 1000003 + std::hash<std::string>()(element->localName);
   hash = hash * 1000003 + std::hash<std::string>()(element->namespaceUri);
   for (const auto& [name, winner] : style.cascade) {
@@ -947,7 +959,7 @@ void Share(dom::Element* element, ElementStyle& style) {
   }
   std::vector<SharedKey>& bucket = SharedStyles()[hash];
   for (const SharedKey& other : bucket) {
-    if (other.parent != parentStyle.memo.get() || *other.localName != element->localName || *other.namespaceUri != element->namespaceUri) continue;
+    if (other.parent != parentStyle.memo.get() || *other.localName != element->localName || *other.namespaceUri != element->namespaceUri || other.pseudo != pseudo) continue;
     const auto& a = other.style->cascade;
     const auto& b = style.cascade;
     if (a.size() != b.size()) continue;
@@ -968,7 +980,7 @@ void Share(dom::Element* element, ElementStyle& style) {
     style.memo = other.style->memo;
     return;
   }
-  bucket.push_back({parentStyle.memo.get(), &element->localName, &element->namespaceUri, &style});
+  bucket.push_back({parentStyle.memo.get(), &element->localName, &element->namespaceUri, &style, pseudo});
 }
 
 // The cascade of an element is made, and what is shared with others of the same style is found.
@@ -1480,7 +1492,9 @@ std::optional<RegisteredProperty> RegistrationOf(dom::Element* element, const st
 // The value of a custom property on an element: its own, or its parent's; nothing for the guaranteed-invalid value.
 std::optional<std::string> Resolver::Custom(dom::Element* element, const std::string& name, const std::string& pseudo) {
   ElementStyle& style = StyleOf(element, pseudo);
+  const bool fresh = !style.built;
   Build(element, style, pseudo);
+  if (fresh && !pseudo.empty() && !style.cascade.empty()) Share(element, style, pseudo);
   const auto cached = style.memo->custom.find(name);
   if (cached != style.memo->custom.end()) return cached->second;
   if (style.resolving.count(name)) return std::nullopt;  // a cycle
@@ -1683,7 +1697,9 @@ std::string Resolver::Specified(dom::Element* element, const std::string& proper
   valid = true;
   plainInherit_ = false;
   ElementStyle& style = StyleOf(element, pseudo);
+  const bool fresh = !style.built;
   Build(element, style, pseudo);
+  if (fresh && !pseudo.empty() && !style.cascade.empty()) Share(element, style, pseudo);
   const Parent parent = ParentOf(element, pseudo);
   const auto fromParent = [&]() -> std::string {
     if (parent.element) return Compute(parent.element, property, parent.pseudo);
@@ -2113,11 +2129,11 @@ void ScanRules(const std::vector<CssRule*>& rules, SelectorFeatures& f, int dept
 
 uint64_t SheetsVersion() { return g_authorVersion; }
 
-std::shared_ptr<void> SharedStyleToken(Quanta::Context&, dom::Element* element) {
-  if (AnimatedValuesSuppressed() || StartingStyleFor(element, "") || (element->nodeDocument && element->nodeDocument->containerQueriesSeen)) return nullptr;
+std::shared_ptr<void> SharedStyleToken(Quanta::Context&, dom::Element* element, const std::string& pseudo) {
+  if (AnimatedValuesSuppressed() || StartingStyleFor(element, pseudo) || (element->nodeDocument && element->nodeDocument->containerQueriesSeen)) return nullptr;
   dom::Node* tree = dom::ShadowIncludingRoot(element);
   if (!tree || !tree->IsDocument()) return nullptr;
-  ElementStyle& style = StyleOf(element);
+  ElementStyle& style = StyleOf(element, pseudo);
   if (!style.built || style.memo.use_count() <= 1) return nullptr;  // (the style is made by asking for a value, as ever)
   return style.memo;
 }
@@ -2143,9 +2159,62 @@ StyleReuse StyleReuseFor(dom::Document* document) {
   return entry.reuse;
 }
 
+namespace {
+
+void NotePseudoNames(const SelectorList& list, std::unordered_set<std::string>& names) {
+  for (const ComplexSelector& selector : list) {
+    for (const CompoundSelector& compound : selector.compounds) {
+      for (const SimpleSelector& simple : compound.simples) {
+        if (simple.kind == SimpleSelector::Kind::PseudoElement) names.insert(simple.name);
+        if (simple.list) NotePseudoNames(*simple.list, names);
+      }
+    }
+  }
+}
+
+void NotePseudoNamesOfRules(const std::vector<CssRule*>& rules, std::unordered_set<std::string>& names, int depth) {
+  if (depth > 40) return;
+  for (const CssRule* rule : rules) {
+    if (rule->selectors) NotePseudoNames(*rule->selectors, names);
+    if (rule->scopeStart) NotePseudoNames(*rule->scopeStart, names);
+    if (rule->scopeEnd) NotePseudoNames(*rule->scopeEnd, names);
+    NotePseudoNamesOfRules(rule->rules, names, depth + 1);
+    if (rule->importedSheet) NotePseudoNamesOfRules(rule->importedSheet->rules, names, depth + 1);
+  }
+}
+
+// Whether a rule of the document's sheets or of the user agent's could be for a pseudo-element of that name (a document with no shadow trees only).
+bool PseudoNameMayHaveRules(dom::Element* element, const std::string& pseudo) {
+  if (dom::HasShadowTrees() || !element->nodeDocument) return true;
+  dom::Node* tree = dom::ShadowIncludingRoot(element);
+  if (!tree || !tree->IsDocument() || element->nodeDocument->adoptedStyleSheets) return true;
+  static const std::unordered_set<std::string> ua = [] {
+    std::unordered_set<std::string> names;
+    for (const UserAgentRule& rule : UserAgentRules()) NotePseudoNames(rule.selectors, names);
+    return names;
+  }();
+  if (ua.count(pseudo)) return true;
+  static std::unordered_map<const dom::Node*, std::pair<uint64_t, std::unordered_set<std::string>>> cache;
+  const uint64_t version = AuthorStyleVersion();
+  auto found = cache.find(tree);
+  if (found == cache.end() || found->second.first != version) {
+    std::unordered_set<std::string> names;
+    for (CssStyleSheet* sheet : SheetsOfTree(tree, element->nodeDocument->context)) NotePseudoNamesOfRules(sheet->rules, names, 0);
+    if (cache.size() > 64) cache.clear();
+    found = cache.insert_or_assign(tree, std::make_pair(version, std::move(names))).first;
+  }
+  return found->second.second.count(pseudo) != 0;
+}
+
+}  // namespace
+
 bool HasPseudoStyle(dom::Element* element, const std::string& pseudo) {
+  if (!PseudoNameMayHaveRules(element, pseudo)) return false;
   ElementStyle& style = StyleOf(element, pseudo);
-  Build(element, style, pseudo);
+  if (!style.built) {
+    Build(element, style, pseudo);
+    if (!style.cascade.empty()) Share(element, style, pseudo);
+  }
   return !style.cascade.empty();
 }
 

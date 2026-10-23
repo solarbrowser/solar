@@ -86,6 +86,6 @@ uint64_t AuthorStyleVersion();
 
 // A token that elements with the same computed style have in common (they share what was worked out of them), or none: what is read of the style
 // of one of them is the same for the others.
-std::shared_ptr<void> SharedStyleToken(Quanta::Context& ctx, dom::Element* element);
+std::shared_ptr<void> SharedStyleToken(Quanta::Context& ctx, dom::Element* element, const std::string& pseudo = "");
 
 }  // namespace solar::css
