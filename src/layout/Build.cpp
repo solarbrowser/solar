@@ -454,7 +454,7 @@ class Builder {
 
   // The box of an element from the tree before, taken out of it, when it is good as it was: its style and everything in it unchanged.
   std::unique_ptr<Box> TakeOld(const Box& parent, dom::Element* element) {
-    if (!canReuse_ || element->subtreeBuilt != element->subtreeVersion) return nullptr;
+    if (!canReuse_ || element->subtreeBuilt != element->VersionsInView().subtree) return nullptr;
     if (element->IsHtml("html") || element->IsHtml("body")) return nullptr;  // (the viewport takes its overflow from them)
     switch (parent.style->display) {
       case Display::Ruby: case Display::RubyBase: case Display::RubyText: case Display::RubyBaseContainer: case Display::RubyTextContainer: return nullptr;
@@ -569,11 +569,13 @@ class Builder {
     want.author = css::SheetsVersion();
     want.environment = environmentKey_;
     want.parent = parent;
-    want.attr = element->attrVersion;
-    want.anim = element->animVersion;
-    want.children = reuse_.structural ? element->childrenVersion : 0;
-    want.parentChildren = reuse_.structural && parentElement ? parentElement->childrenVersion : 0;
-    want.parentChildAttr = reuse_.sibling && parentElement ? parentElement->childAttrVersion : 0;
+    const dom::Element::Versions ev = element->VersionsInView();
+    const dom::Element::Versions pv = parentElement ? parentElement->VersionsInView() : dom::Element::Versions();
+    want.attr = ev.attr;
+    want.anim = ev.anim;
+    want.children = reuse_.structural ? ev.children : 0;
+    want.parentChildren = reuse_.structural && parentElement ? pv.children : 0;
+    want.parentChildAttr = reuse_.sibling && parentElement ? pv.childAttr : 0;
     want.epoch = reuse_.allowed ? css::StyleEpochOf(element) : 0;
     const dom::Element::LayoutStamp& have = element->layoutStamp;
     if (reuse_.allowed && !dirtyBelow_ && element->layoutStyle && have.author == want.author && have.environment == want.environment && have.parent == want.parent &&
@@ -649,7 +651,7 @@ class Builder {
       ~Seal() {
         if (!*box) return;
         (*box)->volatileSubtree = b->volatileEvents_ != before;
-        element->subtreeBuilt = element->subtreeVersion;
+        element->subtreeBuilt = element->VersionsInView().subtree;
       }
     };
     Box* sealed = nullptr;

@@ -256,6 +256,7 @@ void SetAnimatedValues(dom::Element* element, const std::string& pseudo, Animate
     const auto before = element->animatedValues.find(pseudo);
     const bool wasAlone = before == element->animatedValues.end() || OnlyItself(before->second);
     if (!wasAlone || !OnlyItself(values)) ++element->animInheritVersion;
+    dom::MarkPending(element, dom::kPendingVersions | dom::kPendingAnimated);
   }
   if (values.empty()) {
     const auto at = element->animatedValues.find(pseudo);
@@ -273,8 +274,12 @@ void SetAnimatedValues(dom::Element* element, const std::string& pseudo, Animate
     }
   }
   ++element->animVersion;
-  for (dom::Node* n = element; n; n = dom::ParentOf(n)) {
-    if (n->IsElement()) ++static_cast<dom::Element*>(n)->subtreeVersion;
+  // (This is script's doing, as the flush of animations is script: the pending tree is what it walks.)
+  for (dom::Node* n = element; n; n = n->parentNode) {
+    if (n->IsElement()) {
+      ++static_cast<dom::Element*>(n)->subtreeVersion;
+      dom::MarkPending(n, dom::kPendingVersions);
+    }
   }
   // What only changes how an element is drawn is nothing for a container query to see.
   static const std::set<std::string> drawOnly = {"opacity", "transform", "translate", "rotate", "scale", "color", "background-color", "border-color", "outline-color", "fill", "stroke",
@@ -302,9 +307,11 @@ void SetAnimatedValues(dom::Element* element, const std::string& pseudo, Animate
 }
 
 const std::string* AnimatedValue(dom::Element* element, const std::string& pseudo, const std::string& property) {
-  if (g_suppressed || !element || element->animatedValues.empty()) return nullptr;
-  const auto at = element->animatedValues.find(pseudo);
-  if (at == element->animatedValues.end()) return nullptr;
+  if (g_suppressed || !element) return nullptr;
+  const auto& animated = element->AnimatedValuesInView();
+  if (animated.empty()) return nullptr;
+  const auto at = animated.find(pseudo);
+  if (at == animated.end()) return nullptr;
   const auto value = at->second.find(property);
   return value == at->second.end() ? nullptr : &value->second;
 }

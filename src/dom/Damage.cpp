@@ -69,16 +69,23 @@ void NoteDamage(Node* node, uint8_t flags) {
     Element* element = static_cast<Element*>(node);
     if (flags & kDamageAttributes) {
       ++element->attrVersion;
-      if (element->parentNode && element->parentNode->IsElement()) ++static_cast<Element*>(element->parentNode)->childAttrVersion;
+      if (element->parentNode && element->parentNode->IsElement()) {
+        ++static_cast<Element*>(element->parentNode)->childAttrVersion;
+        MarkPending(element->parentNode, kPendingVersions);
+      }
     }
     if (flags & kDamageState) ++element->stateVersion;
     if (flags & kDamageChildren) ++element->childrenVersion;
   } else if (node && (flags & kDamageText) && node->parentNode && node->parentNode->IsElement()) {
     ++static_cast<Element*>(node->parentNode)->childrenVersion;
+    MarkPending(node->parentNode, kPendingVersions);
   }
   // The boxes of everything above are no good as they were either.
   for (Node* n = node; n; n = n->parentNode) {
-    if (n->IsElement()) ++static_cast<Element*>(n)->subtreeVersion;
+    if (n->IsElement()) {
+      ++static_cast<Element*>(n)->subtreeVersion;
+      MarkPending(n, kPendingVersions);
+    }
   }
   if (DamageTracker* tracker = DamageOf(node)) tracker->Note(node, flags);
 }

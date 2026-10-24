@@ -153,7 +153,7 @@ struct Node : web::JsEventTarget {
 // Pending and committed. Script reads and writes the fields of a node as they are (pending). Style and layout work from what was committed at the
 // start of the frame, so that what script does while they work does not reach them half way. They read through these, which give the committed
 // links inside a CommittedViewScope and the pending ones outside it (so that the same code can serve script, as the selector matcher does).
-enum PendingKind : uint8_t { kPendingLinks = 1, kPendingAttributes = 2, kPendingText = 4, kPendingShadow = 8, kPendingDocumentState = 16 };
+enum PendingKind : uint8_t { kPendingLinks = 1, kPendingAttributes = 2, kPendingText = 4, kPendingShadow = 8, kPendingDocumentState = 16, kPendingVersions = 32, kPendingAnimated = 64 };
 // Notes that the node changed in the way, to be committed.
 void MarkPending(Node* node, uint8_t kinds);
 extern thread_local int g_committedViewDepth;
@@ -164,6 +164,7 @@ inline Node* LastChildOf(const Node* n) { return g_committedViewDepth ? n->commi
 inline Node* PreviousSiblingOf(const Node* n) { return g_committedViewDepth ? n->committed.previous : n->previousSibling; }
 inline Node* NextSiblingOf(const Node* n) { return g_committedViewDepth ? n->committed.next : n->nextSibling; }
 inline Element* AssignedSlotOf(const Node* n) { return g_committedViewDepth ? n->committed.assignedSlot : n->assignedSlot; }
+// The versions of the documents (see DocumentVersion): in a committed view, as they were when it was committed.
 // Takes what script changed into the committed state. Nothing is lost by calling it again; it does nothing when nothing changed.
 void CommitPending();
 // Begins a frame's work on the committed state (and commits what is pending, if this is the outermost one). Where script runs in the middle of
@@ -307,7 +308,16 @@ struct Element : Node {
   uint32_t animVersion = 0;       // what animations give it changed
   uint32_t animInheritVersion = 0;  // ... in a way that is more than itself: a property that is inherited (or one that what is under it is made from) changed
   uint32_t subtreeVersion = 0;    // anything in it, or it, changed (counted on it and on every element above)
-  uint32_t subtreeBuilt = UINT32_MAX;  // the count when layout last built its box
+  uint32_t subtreeBuilt = UINT32_MAX;  // the count when layout last built its box (of the committed ones)
+  // The counts above as they were committed (see CommitPending): what style and layout compare their stamps with.
+  struct Versions {
+    uint32_t attr = 0, state = 0, children = 0, childAttr = 0, anim = 0, animInherit = 0, subtree = 0;
+  } committedVersions;
+  Versions VersionsInView() const {
+    return g_committedViewDepth ? committedVersions : Versions{attrVersion, stateVersion, childrenVersion, childAttrVersion, animVersion, animInheritVersion, subtreeVersion};
+  }
+  std::map<std::string, std::map<std::string, std::string>> committedAnimatedValues;
+  const std::map<std::string, std::map<std::string, std::string>>& AnimatedValuesInView() const { return g_committedViewDepth ? committedAnimatedValues : animatedValues; }
   // Layout's style of the element (a BoxStyle) and what it was made from.
   std::shared_ptr<const void> layoutStyle;
   struct LayoutStamp {

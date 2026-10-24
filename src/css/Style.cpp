@@ -906,11 +906,13 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
       shadowed = !top->IsDocument();
     }
   }
-  const bool basic = reuse.allowed && !shadowed && !entry.shadowed && entry.serial == element->serial && entry.parent == parentNode && entry.parentEpoch == parentEpoch && entry.attr == element->attrVersion && entry.animInherit == element->animInheritVersion;
+  const dom::Element::Versions ev = element->VersionsInView();
+  const dom::Element::Versions pv = parent ? parent->VersionsInView() : dom::Element::Versions();
+  const bool basic = reuse.allowed && !shadowed && !entry.shadowed && entry.serial == element->serial && entry.parent == parentNode && entry.parentEpoch == parentEpoch && entry.attr == ev.attr && entry.animInherit == ev.animInherit;
   bool good = basic;
-  const bool animSame = entry.anim == element->animVersion;
-  if (good && reuse.structural) good = entry.children == element->childrenVersion && (!parent || entry.parentChildren == parent->childrenVersion);
-  if (good && reuse.sibling) good = !parent || (entry.parentChildAttr == parent->childAttrVersion && entry.parentChildren == parent->childrenVersion);
+  const bool animSame = entry.anim == ev.anim;
+  if (good && reuse.structural) good = entry.children == ev.children && (!parent || entry.parentChildren == pv.children);
+  if (good && reuse.sibling) good = !parent || (entry.parentChildAttr == pv.childAttr && entry.parentChildren == pv.children);
   if (good && reuse.has) {
     HasUse use = entry.plain.has;
     for (const auto& other : entry.others) {
@@ -920,10 +922,10 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
     }
     // (The elements it looked at are under it, or after it; when it was for some other element in the selector, they can be anywhere: the styles are made anew at every change of the tree.)
     if (use.other) good = entry.treeVersion == dom::DocumentVersion() * 1000003 + dom::StateVersion();
-    else if (use.sibling) good = entry.subtree == element->subtreeVersion && (!parent || entry.parentSubtree == parent->subtreeVersion);
-    else if (use.any) good = entry.subtree == element->subtreeVersion;
+    else if (use.sibling) good = entry.subtree == ev.subtree && (!parent || entry.parentSubtree == pv.subtree);
+    else if (use.any) good = entry.subtree == ev.subtree;
   }
-  const bool stateSame = entry.state == element->stateVersion;
+  const bool stateSame = entry.state == ev.state;
   if (good && animSame && stateSame) return;
   // What an animation gives that is only of the element itself (its opacity, its transform) makes its own style anew, not the ones of the elements under it.
   const uint64_t keptEpoch = good && !animSame ? entry.epoch : 0;
@@ -941,19 +943,19 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   entry.others.clear();
   entry.serial = element->serial;
   entry.epoch = keptEpoch ? keptEpoch : ++g_styleEpoch;
-  entry.animInherit = element->animInheritVersion;
+  entry.animInherit = ev.animInherit;
   entry.parent = parentNode;
   entry.parentEpoch = parentEpoch;
-  entry.attr = element->attrVersion;
-  entry.anim = element->animVersion;
-  entry.children = element->childrenVersion;
-  entry.parentChildren = parent ? parent->childrenVersion : 0;
-  entry.parentChildAttr = parent ? parent->childAttrVersion : 0;
+  entry.attr = ev.attr;
+  entry.anim = ev.anim;
+  entry.children = ev.children;
+  entry.parentChildren = parent ? pv.children : 0;
+  entry.parentChildAttr = parent ? pv.childAttr : 0;
   entry.shadowed = shadowed;
   entry.treeVersion = dom::DocumentVersion() * 1000003 + dom::StateVersion();
-  entry.subtree = element->subtreeVersion;
-  entry.parentSubtree = parent ? parent->subtreeVersion : 0;
-  entry.state = element->stateVersion;
+  entry.subtree = ev.subtree;
+  entry.parentSubtree = parent ? pv.subtree : 0;
+  entry.state = ev.state;
   if (soft) {
     Build(element, entry.plain, "");
     bool same = SameCascade(old, entry.plain);
@@ -1125,7 +1127,7 @@ bool SafeToShare(const DeclarationEntry* entry) {
 
 void Share(dom::Element* element, ElementStyle& style, const std::string& pseudo = "") {
   if (!style.memo->computed.empty() || !style.memo->custom.empty() || !style.storage.empty()) return;
-  if (element->animVersion != 0 || !dom::ParentOf(element) || !dom::ParentOf(element)->IsElement()) return;
+  if (element->VersionsInView().anim != 0 || !dom::ParentOf(element) || !dom::ParentOf(element)->IsElement()) return;
   // (An element of a shadow tree, a shadow host, and one that is assigned to a slot are styled by more than the declarations around them.)
   if (dom::HasShadowTrees()) {
     if (element->ShadowRootInView() || dom::AssignedSlotOf(element)) return;
@@ -1135,7 +1137,7 @@ void Share(dom::Element* element, ElementStyle& style, const std::string& pseudo
   }
   if (element->FindAttribute("", "style")) return;
   dom::Element* parent = static_cast<dom::Element*>(dom::ParentOf(element));
-  if (parent->animVersion != 0) return;
+  if (parent->VersionsInView().anim != 0) return;
   // A pseudo-element inherits from the element it is of; it is shared among those of the same style and the same name.
   ElementStyle& parentStyle = pseudo.empty() ? StyleOf(parent) : StyleOf(element);
   if (!pseudo.empty() && !parentStyle.built) return;

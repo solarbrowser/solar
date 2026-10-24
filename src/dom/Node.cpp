@@ -120,7 +120,17 @@ void MarkLinks(Node* node) { MarkPending(node, kPendingLinks); }
 
 thread_local int g_committedViewDepth = 0;
 
+namespace {
+// The versions of the documents and their states, as script moves them and as they were when last committed.
+uint64_t g_documentVersion = 1;
+uint64_t g_stateVersion = 1;
+uint64_t g_committedDocumentVersion = 1;
+uint64_t g_committedStateVersion = 1;
+}  // namespace
+
 void CommitPending() {
+  g_committedDocumentVersion = g_documentVersion;
+  g_committedStateVersion = g_stateVersion;
   std::vector<Node*>& list = DirtyLinks();
   for (Node* node : list) {
     const uint8_t mask = node->pendingMask;
@@ -146,6 +156,14 @@ void CommitPending() {
         element->committedShadowRoot = element->shadowRoot;
         element->committedAssignedNodes = element->assignedNodes;
       }
+    }
+    if ((mask & kPendingVersions) && node->IsElement()) {
+      Element* element = static_cast<Element*>(node);
+      element->committedVersions = {element->attrVersion, element->stateVersion, element->childrenVersion, element->childAttrVersion, element->animVersion, element->animInheritVersion, element->subtreeVersion};
+    }
+    if ((mask & kPendingAnimated) && node->IsElement()) {
+      Element* element = static_cast<Element*>(node);
+      element->committedAnimatedValues = element->animatedValues;
     }
     if ((mask & kPendingDocumentState) && node->IsDocument()) {
       Document* document = static_cast<Document*>(node);
@@ -227,8 +245,6 @@ void DisposeDocument(Document* document) {
 
 namespace {
 uint64_t g_treeVersion = 1;
-uint64_t g_documentVersion = 1;
-uint64_t g_stateVersion = 1;
 }
 
 uint64_t TreeVersion() { return g_treeVersion; }
@@ -246,8 +262,8 @@ Node::~Node() {
 }
 size_t LiveNodes() { return g_liveNodes; }
 size_t LiveDocuments() { return 0; }
-uint64_t DocumentVersion() { return g_documentVersion; }
-uint64_t StateVersion() { return g_stateVersion; }
+uint64_t DocumentVersion() { return g_committedViewDepth ? g_committedDocumentVersion : g_documentVersion; }
+uint64_t StateVersion() { return g_committedViewDepth ? g_committedStateVersion : g_stateVersion; }
 
 namespace {
 std::string (*g_baseUriProvider)(const Document*) = nullptr;
