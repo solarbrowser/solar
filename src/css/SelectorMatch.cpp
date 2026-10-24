@@ -6,6 +6,10 @@
 namespace solar::css {
 
 namespace {
+bool g_hasEvaluated = false;
+}  // namespace
+
+namespace {
 
 using dom::Element;
 using dom::Node;
@@ -276,8 +280,21 @@ std::string DirectionOf(const Element* element) {
   return "ltr";
 }
 
+// The element is the one the pointer is over (or presses), or is above it (in the tree, through the hosts of shadow trees).
+bool OnPointerPath(const Element* element, const Element* pointed) {
+  for (const dom::Node* node = pointed; node;) {
+    if (node == element) return true;
+    const dom::Node* up = node->parentNode;
+    if (up && up->IsFragment() && static_cast<const dom::DocumentFragment*>(up)->isShadowRoot) up = static_cast<const dom::DocumentFragment*>(up)->host;
+    node = up;
+  }
+  return false;
+}
+
 bool MatchesPseudo(PseudoClass pseudo, const Element* element, const MatchContext& context) {
   switch (pseudo) {
+    case PseudoClass::Hover: return element->nodeDocument && element->nodeDocument->hoverElement && OnPointerPath(element, element->nodeDocument->hoverElement);
+    case PseudoClass::Active: return element->nodeDocument && element->nodeDocument->pressedElement && OnPointerPath(element, element->nodeDocument->pressedElement);
     case PseudoClass::Root: return IsRoot(element);
     case PseudoClass::Empty: return IsEmpty(element);
     case PseudoClass::Target: return IsTarget(element);
@@ -340,6 +357,7 @@ bool MatchesSimple(const SimpleSelector& selector, const Element* element, const
     case SimpleSelector::Kind::Is:
     case SimpleSelector::Kind::Where: return MatchesSelectorListAt(*selector.list, element, context);
     case SimpleSelector::Kind::Has: {
+      g_hasEvaluated = true;
       // The elements the relative selector can be about, which depend on how it starts.
       const auto matchesRelative = [&](const ComplexSelector& relative, const Element* anchor, auto&& self, size_t index, const Element* candidate) -> bool {
         if (!MatchesCompound(relative.compounds[index], candidate, context)) return false;
@@ -503,6 +521,14 @@ bool MatchesComplex(const ComplexSelector& selector, const Element* element, con
   }
   if (endsInPseudo != (context.pseudoElement != nullptr)) return false;
   return MatchesFrom(selector, selector.compounds.size() - 1, element, context);
+}
+
+void NoteHasEvaluated() { g_hasEvaluated = true; }
+
+bool TakeHasEvaluated() {
+  const bool was = g_hasEvaluated;
+  g_hasEvaluated = false;
+  return was;
 }
 
 bool MatchesAny(const SelectorList& list, const Element* element, const MatchContext& context) { return MatchesSelectorListAt(list, element, context); }

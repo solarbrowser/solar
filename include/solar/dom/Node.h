@@ -258,6 +258,7 @@ struct Element : Node {
     uint64_t author = 0, environment = 0;
     const Node* parent = nullptr;
     uint32_t attr = 0, anim = 0, children = 0, parentChildren = 0, parentChildAttr = 0;
+    uint64_t epoch = 0;  // of the style it was made from (see css::StyleEpochOf)
   } layoutStamp;
   // The computed values script last read (pseudo-element name → property → value): the style from before a change, for transitions.
   std::map<std::string, std::map<std::string, std::string>> lastRead;
@@ -294,6 +295,9 @@ struct Document : Node {
   Element* currentScript = nullptr;
   // The focused area of the document, if an element is: what document.activeElement is, once it is retargeted.
   Element* focusedElement = nullptr;
+  // The element the pointer is over (:hover is its, and its ancestors') and the one that is being pressed (:active): set by the input, never by script.
+  Element* hoverElement = nullptr;
+  Element* pressedElement = nullptr;
   // document.forms, images, links, anchors, embeds and scripts: each the same object every time.
   Quanta::Object* specialCollections[6] = {};
   // The context the document was made in, which the algorithms that must queue a microtask need.
@@ -401,6 +405,11 @@ Attr* NewAttr(Quanta::Context& ctx, Document* document, std::string_view namespa
 // A number that changes whenever any tree does, which the live collections check to know whether what
 // they have found is still so.
 uint64_t TreeVersion();
+// The elements whose :focus, :hover, :active or :focus-within may have changed with a change of state: the element and every element above it
+// (through the hosts of shadow trees). Each is noted as if an attribute of it had changed, and the tree has changed.
+void NoteStateChange(Element* element);
+void SetHoverElement(Document* document, Element* element);
+void SetPressedElement(Document* document, Element* element);
 // Called when the tree changes: layout asks for a frame, where the elements that came to be skipped are found.
 extern void (*g_treeChangeHook)();
 // Set by layout: whether the element is being rendered (has a box, or is display: contents, and is not in contents that content-visibility: hidden skips). Null: the markup decides.

@@ -786,6 +786,7 @@ struct ElementStyle {
   std::set<std::string> resolving;
   std::vector<std::vector<DeclarationEntry>> storage;  // the style attribute's declarations
   bool built = false;
+  bool usedHas = false;     // a :has() was looked at for it: what is under it, and beside it, is what its style was made from, too
   bool hasLogical = false;  // a logical property is declared for the element
 };
 
@@ -797,9 +798,11 @@ struct StyleEntry {
   uint64_t serial = 0;
   uint64_t epoch = 0;    // a number for each time the styles are made anew: the elements below compare with it
   uint64_t checked = 0;  // the version of the tree it was last seen to be good at
+  bool shadowed = false;  // it was made when the element was in a shadow tree, a host or assigned to a slot
   const dom::Node* parent = nullptr;
   uint64_t parentEpoch = 0;
   uint32_t attr = 0, anim = 0, children = 0, parentChildren = 0, parentChildAttr = 0;
+  uint64_t treeVersion = 0;  // of the tree when the styles were begun
 };
 
 std::unordered_map<dom::Element*, StyleEntry>& Cache() {
@@ -824,6 +827,8 @@ uint64_t DocumentSignature(dom::Document* document) {
   mix(static_cast<uint64_t>(e.resolution * 100));
   mix(std::hash<std::string>()(e.colorScheme));
   mix(document->hasPreferredSheetSet ? std::hash<std::string>()(document->preferredSheetSet) : 7);
+  const size_t hash = document->url.find('#');  // (:target)
+  mix(hash == std::string::npos ? 3 : std::hash<std::string>()(document->url.substr(hash)));
   return h | 1;
 }
 
@@ -843,9 +848,25 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
     Validate(parent, up, treeVersion);
     parentEpoch = up.epoch;
   }
-  bool good = reuse.allowed && !(element->nodeDocument && element->nodeDocument->containerQueriesSeen) && entry.serial == element->serial && entry.parent == parentNode && entry.parentEpoch == parentEpoch && entry.attr == element->attrVersion && entry.anim == element->animVersion;
+  // An element of a shadow tree, a shadow host and one assigned to a slot are styled by more than what is around them in the tree.
+  bool shadowed = false;
+  if (reuse.shadows) {
+    shadowed = element->shadowRoot || element->assignedSlot;
+    if (!shadowed) {
+      const dom::Node* top = element;
+      while (top->parentNode) top = top->parentNode;
+      shadowed = !top->IsDocument();
+    }
+  }
+  bool good = reuse.allowed && !shadowed && !entry.shadowed && !(element->nodeDocument && element->nodeDocument->containerQueriesSeen) && entry.serial == element->serial && entry.parent == parentNode && entry.parentEpoch == parentEpoch && entry.attr == element->attrVersion && entry.anim == element->animVersion;
   if (good && reuse.structural) good = entry.children == element->childrenVersion && (!parent || entry.parentChildren == parent->childrenVersion);
   if (good && reuse.sibling) good = !parent || (entry.parentChildAttr == parent->childAttrVersion && entry.parentChildren == parent->childrenVersion);
+  if (good && reuse.has) {
+    bool used = entry.plain.usedHas;
+    for (const auto& other : entry.others) used = used || other.second.usedHas;
+    // (What it depends on can be anywhere: under it, beside it, beside the elements above it. It is made anew at every change of the tree.)
+    if (used) good = entry.treeVersion == dom::TreeVersion();
+  }
   if (good) return;
   entry.plain = ElementStyle();
   entry.others.clear();
@@ -858,6 +879,8 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   entry.children = element->childrenVersion;
   entry.parentChildren = parent ? parent->childrenVersion : 0;
   entry.parentChildAttr = parent ? parent->childAttrVersion : 0;
+  entry.shadowed = shadowed;
+  entry.treeVersion = dom::TreeVersion();
 }
 
 ElementStyle& StyleOf(dom::Element* element, const std::string& pseudo = "") {
@@ -1192,6 +1215,7 @@ const UserAgentIndex& UaIndex() {
 void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo) {
   if (style.built) return;
   style.built = true;
+  const bool hasOfOuter = TakeHasEvaluated();  // (another style may be under way, which asked for this one)
   dom::Node* root = dom::ShadowIncludingRoot(element);
   MatchContext matchContext;
   matchContext.pseudoElement = pseudo.empty() ? nullptr : &pseudo;
@@ -1429,6 +1453,8 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
     ++gatherer.ruleSerial;
     for (const DeclarationEntry& entry : style.storage.back()) gatherer.Offer(entry, true, true, kUnlayered, Specificity{});
   }
+  style.usedHas = TakeHasEvaluated();
+  if (hasOfOuter) NoteHasEvaluated();
   RollBack(style.cascade);
   for (const auto& [name, winner] : style.cascade) {
     (void)winner;
@@ -2201,10 +2227,13 @@ void ScanComplex(const ComplexSelector& selector, SelectorFeatures& f) {
       switch (simple.kind) {
         case SimpleSelector::Kind::Pseudo:
           switch (simple.pseudo) {
-            case PseudoClass::Root: case PseudoClass::Scope: case PseudoClass::Link: case PseudoClass::AnyLink: break;
             case PseudoClass::Empty: case PseudoClass::FirstChild: case PseudoClass::LastChild: case PseudoClass::OnlyChild:
             case PseudoClass::FirstOfType: case PseudoClass::LastOfType: case PseudoClass::OnlyOfType: f.structural = true; break;
-            default: f.dynamic = true; break;
+            // An upgrade of a custom element tells of nothing.
+            case PseudoClass::Defined: f.dynamic = true; break;
+            // The rest depend on attributes (the element's and those above it), on a state that tells of its changes (hover, active and focus:
+            // NoteStateChange; target: the address of the document, which is in the signature of it), or are not matched by anything yet.
+            default: break;
           }
           break;
         case SimpleSelector::Kind::Has: f.has = true; if (simple.list) ScanList(*simple.list, f); break;
@@ -2234,6 +2263,11 @@ void ScanRules(const std::vector<CssRule*>& rules, SelectorFeatures& f, int dept
 
 uint64_t SheetsVersion() { return g_authorVersion; }
 
+uint64_t StyleEpochOf(dom::Element* element) {
+  StyleOf(element);
+  return Cache()[element].epoch;
+}
+
 std::shared_ptr<void> SharedStyleToken(Quanta::Context&, dom::Element* element, const std::string& pseudo) {
   if (AnimatedValuesSuppressed() || StartingStyleFor(element, pseudo) || (element->nodeDocument && element->nodeDocument->containerQueriesSeen)) return nullptr;
   dom::Node* tree = dom::ShadowIncludingRoot(element);
@@ -2253,15 +2287,15 @@ StyleReuse StyleReuseFor(dom::Document* document) {
   static Entry entry;
   StyleReuse none;
   // (Adopted style sheets are in the sheets: the array tells of every change of it. A container query is of a size that layout finds, not of the elements.)
-  if (!document || dom::HasShadowTrees() || document->containerQueriesSeen) return none;
+  if (!document || document->containerQueriesSeen) return none;
   const std::vector<CssStyleSheet*> sheets = SheetsOfTree(document, document->context);
-  if (entry.document == document && entry.author == g_authorVersion && entry.sheets == sheets) return entry.reuse;
+  if (entry.document == document && entry.author == g_authorVersion && entry.sheets == sheets && entry.reuse.shadows == dom::HasShadowTrees()) return entry.reuse;
   SelectorFeatures f;
   for (const CssStyleSheet* sheet : sheets) ScanRules(sheet->rules, f, 0);
   entry.document = document;
   entry.author = g_authorVersion;
   entry.sheets = sheets;
-  entry.reuse = {!f.dynamic && !f.has, f.structural, f.sibling};
+  entry.reuse = {!f.dynamic, f.structural, f.sibling, dom::HasShadowTrees(), f.has};
   return entry.reuse;
 }
 

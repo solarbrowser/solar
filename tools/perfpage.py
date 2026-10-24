@@ -28,9 +28,15 @@ test(() => {
   document.body.style.zoom = 1;
   document.body.offsetHeight;
   const t3 = performance.now();
+  const leaves = document.querySelectorAll("a, span");
+  const leaf = leaves[Math.floor(leaves.length / 2)];
+  const t4 = performance.now();
+  leaf.setAttribute("data-perf", "1");
+  document.body.offsetHeight;
+  const t5 = performance.now();
   const n = document.querySelectorAll("*").length;
   const h = document.documentElement.scrollHeight;
-  assert_equals(JSON.stringify({elements: n, scrollHeight: h, style_ms: Math.round(t1 - t0), layout_ms: Math.round(t2 - t1), relayout_ms: Math.round(t3 - t2)}), "x");
+  assert_equals(JSON.stringify({elements: n, scrollHeight: h, style_ms: Math.round(t1 - t0), layout_ms: Math.round(t2 - t1), relayout_ms: Math.round(t3 - t2), leaf_ms: Math.round(t5 - t4)}), "x");
 });
 </script>"""
 

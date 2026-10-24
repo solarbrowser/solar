@@ -134,6 +134,9 @@ struct MatchContext {
 };
 
 bool MatchesComplex(const ComplexSelector& selector, const dom::Element* element, const MatchContext& context);
+// Whether a :has() was evaluated since the last call (and clears it): what an element's style was made from includes what is under it, then.
+bool TakeHasEvaluated();
+void NoteHasEvaluated();
 bool MatchesAny(const SelectorList& list, const dom::Element* element, const MatchContext& context);
 
 }  // namespace solar::css

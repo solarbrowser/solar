@@ -152,7 +152,9 @@ void MoveFocus(Context& ctx, dom::Document* document, dom::Element* target) {
   }
   document->focusedElement = target;
   document->NoteWrite();
-  // (:focus and the like match differently now.)
+  // (:focus and the like match differently now, for the elements on the way up from the old focus and from the new.)
+  if (old) dom::NoteStateChange(old);
+  if (target) dom::NoteStateChange(target);
   dom::NoteTreeChange();
   // An iframe holds the focus of its parent while an element in it does.
   if (document->frameElement && document->frameElement->nodeDocument && target) {
@@ -267,8 +269,10 @@ void FocusAfterRemove(dom::Node* node) {
   dom::Document* document = node->nodeDocument;
   if (!document || !document->focusedElement) return;
   if (dom::IsShadowIncludingInclusiveAncestor(node, document->focusedElement)) {
+    dom::Element* gone = document->focusedElement;
     document->focusedElement = nullptr;
     document->NoteWrite();
+    dom::NoteStateChange(gone);
   }
 }
 

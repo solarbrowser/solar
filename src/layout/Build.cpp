@@ -196,6 +196,7 @@ class Builder {
     lc_.tree.root = std::move(root);
     dom::Element* html = document->DocumentElement();
     reuse_ = css::StyleReuseFor(document);
+    if (reuse_.shadows) reuse_.allowed = false;  // (the boxes are of the flat tree)
     {
       // (What is kept of the styles is checked against the animations, which are brought up to date by asking for a style.)
       const css::MediaEnvironment env = css::EnvironmentFor(document);
@@ -562,9 +563,10 @@ class Builder {
     want.children = reuse_.structural ? element->childrenVersion : 0;
     want.parentChildren = reuse_.structural && parentElement ? parentElement->childrenVersion : 0;
     want.parentChildAttr = reuse_.sibling && parentElement ? parentElement->childAttrVersion : 0;
+    want.epoch = reuse_.allowed ? css::StyleEpochOf(element) : 0;
     const dom::Element::LayoutStamp& have = element->layoutStamp;
     if (reuse_.allowed && !dirtyBelow_ && element->layoutStyle && have.author == want.author && have.environment == want.environment && have.parent == want.parent &&
-        have.attr == want.attr && have.anim == want.anim && have.children == want.children && have.parentChildren == want.parentChildren && have.parentChildAttr == want.parentChildAttr) {
+        have.attr == want.attr && have.anim == want.anim && have.children == want.children && have.parentChildren == want.parentChildren && have.parentChildAttr == want.parentChildAttr && have.epoch == want.epoch) {
       recomputed = false;
       return std::static_pointer_cast<const BoxStyle>(element->layoutStyle);
     }

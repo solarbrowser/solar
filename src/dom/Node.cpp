@@ -40,6 +40,8 @@ void Document::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(templateContentsOwner);
   visitor.Mark(currentScript);
   visitor.Mark(focusedElement);
+  visitor.Mark(hoverElement);
+  visitor.Mark(pressedElement);
   for (Quanta::Object* collection : specialCollections) visitor.Mark(collection);
   visitor.Mark(selection);
   visitor.Mark(window);
@@ -105,6 +107,34 @@ void (*g_nodeRemovedHook)(Node* node) = nullptr;
 void NoteTreeChange() {
   ++g_treeVersion;
   if (g_treeChangeHook) g_treeChangeHook();
+}
+
+void NoteStateChange(Element* element) {
+  for (Node* node = element; node;) {
+    NoteDamage(node, kDamageAttributes);
+    Node* up = node->parentNode;
+    if (up && up->IsFragment() && static_cast<DocumentFragment*>(up)->isShadowRoot) up = static_cast<DocumentFragment*>(up)->host;
+    node = up;
+  }
+  NoteTreeChange();
+}
+
+void SetHoverElement(Document* document, Element* element) {
+  if (document->hoverElement == element) return;
+  Element* old = document->hoverElement;
+  document->hoverElement = element;
+  document->NoteWrite();
+  if (old) NoteStateChange(old);
+  if (element) NoteStateChange(element);
+}
+
+void SetPressedElement(Document* document, Element* element) {
+  if (document->pressedElement == element) return;
+  Element* old = document->pressedElement;
+  document->pressedElement = element;
+  document->NoteWrite();
+  if (old) NoteStateChange(old);
+  if (element) NoteStateChange(element);
 }
 
 namespace {

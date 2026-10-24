@@ -21,8 +21,12 @@ struct StyleReuse {
   bool allowed = false;
   bool structural = false;
   bool sibling = false;
+  bool shadows = false;  // the document has shadow trees: the boxes are of the flat tree, which these stamps do not follow
+  bool has = false;  // :has(): an element depends on what is under it (and beside it), which the stamps of the styles kept say
 };
 StyleReuse StyleReuseFor(dom::Document* document);
+// A number that changes when the styles kept of the element are made anew (see Validate): what was read of them is good while it is the same.
+uint64_t StyleEpochOf(dom::Element* element);
 // Changes when a style sheet or what the cascade depends on besides the elements does.
 uint64_t SheetsVersion();
 // Whether any rule gives the pseudo-element of the element a style.
