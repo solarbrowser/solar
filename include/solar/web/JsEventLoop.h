@@ -37,6 +37,18 @@ class JsEventLoop {
     Arm();
   }
 
+  // One turn for a program that has other things to do: the network's loop for at most `slice` (it returns at once when nothing is in flight), then
+  // the promise jobs and the timers that are due.
+  void Step(std::chrono::milliseconds slice) {
+    Arm();
+    const net::Loop::TimerId stopper = loop_.PostDelayed(slice, [this] { loop_.Stop(); }, /*background=*/true);
+    loop_.Run();
+    loop_.CancelTimer(stopper);
+    hooks_.checkpoint();
+    hooks_.runDueTimers();
+    hooks_.checkpoint();
+  }
+
   // Runs until the network is quiet and no timer is pending, or `limit` has passed.
   void Run(std::chrono::milliseconds limit = std::chrono::hours(24)) {
     const auto deadline = std::chrono::steady_clock::now() + limit;

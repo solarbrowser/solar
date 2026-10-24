@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <map>
 #include <memory>
@@ -72,13 +73,14 @@ class Collector : public solar::net::FetchHandler {
     address = solar::url::Serialize(finalUrl);
   }
   void OnBody(std::span<const uint8_t> data) override { body.append(reinterpret_cast<const char*>(data.data()), data.size()); }
-  void OnEnd() override {}
+  void OnEnd() override { done = true; }
   void OnError(std::string_view message) override {
     failed = true;
+    done = true;
     error = std::string(message);
   }
   int status = 0;
-  bool failed = false;
+  bool failed = false, done = false;
   std::string body, contentType, address, error;
 };
 
@@ -159,6 +161,7 @@ class Browser : public solar::html::FrameEnvironment {
       done = true;
       if (owner->timing_) std::fprintf(stderr, "  fetch %5.0f ms  %7zu bytes  %s\n", std::chrono::duration<double, std::milli>(Clock::now() - started).count(), body.size(), url.substr(0, 100).c_str());
       if (owner->waiting_ == this) owner->loop_.Stop();
+      owner->arrived_ = true;
     }
   };
 
@@ -179,7 +182,10 @@ class Browser : public solar::html::FrameEnvironment {
 
   void WaitFor(Resource* resource) {
     waiting_ = resource;
-    while (!resource->done) loop_.Run();
+    while (!resource->done) {
+      events_.Step(std::chrono::milliseconds(8));
+      if (pump_) pump_();
+    }
     waiting_ = nullptr;
   }
 
@@ -205,15 +211,19 @@ class Browser : public solar::html::FrameEnvironment {
     const auto found = resources_.find(absolute);
     if (found != resources_.end() && found->second->done) return false;  // here (or failed): the loader has it
     if (!Start(absolute)) return false;
-    pendingImages_ = true;
     return true;
   }
-  bool HasPendingImages() const { return pendingImages_; }
-  void WaitForImages() {
-    pendingImages_ = false;
-    for (auto& entry : resources_) {
-      if (!entry.second->done) WaitFor(entry.second.get());
+  // Pictures that came since: the page is laid out again with their sizes (the pictures are not waited for).
+  bool TakeArrived() {
+    const bool was = arrived_;
+    arrived_ = false;
+    return was;
+  }
+  bool Loading() const {
+    for (const auto& entry : resources_) {
+      if (!entry.second->done) return true;
     }
+    return false;
   }
 
   // What the page will ask for as it is parsed, found in the markup before that: stylesheets, scripts and pictures are started at once, so that
@@ -319,10 +329,11 @@ class Browser : public solar::html::FrameEnvironment {
   std::vector<std::unique_ptr<RealmBundle>> bundles_;
   std::map<std::string, std::unique_ptr<Resource>> resources_;
   Resource* waiting_ = nullptr;
-  bool pendingImages_ = false;
+  bool arrived_ = false;
 
  public:
   bool timing_ = false;
+  std::function<void()> pump_;
 };
 
 // The address the user typed as one: a path of a file becomes a file: address.
@@ -336,6 +347,7 @@ std::string AddressOf(const std::string& given) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  const auto programStart = Clock::now();
   std::setbuf(stdout, nullptr);
   const std::string given = argc > 1 ? argv[1] : "https://example.com/";
   std::string address = AddressOf(given);
@@ -385,38 +397,12 @@ int main(int argc, char** argv) {
   };
   setViewport();
 
-  // Loads the page at `where` into a new realm, and runs its scripts.
+  // Puts the document that came for `where` in a new realm, and runs its scripts (what it fetches is waited for, with the window kept alive).
   qe::Realm* realm = nullptr;
   solar::dom::Document* document = nullptr;
-  const auto navigate = [&](const std::string& where) -> bool {
-    std::fprintf(stderr, "loading %s\n", where.c_str());
-    const auto started = Clock::now();
-    std::string markup, type = "text/html";
-    if (where.starts_with("file://")) {
-      if (!ReadFile(FileOfAddress(where), markup)) {
-        std::fprintf(stderr, "cannot read %s\n", where.c_str());
-        return false;
-      }
-    } else {
-      std::optional<solar::url::Url> parsed = solar::url::Parse(where);
-      if (!parsed) {
-        std::fprintf(stderr, "invalid address: %s\n", where.c_str());
-        return false;
-      }
-      Collector collector;
-      client.Fetch(*parsed, collector, solar::net::FetchOptions());
-      loop->Run();
-      if (collector.failed) {
-        std::fprintf(stderr, "fetch failed: %s\n", collector.error.c_str());
-        return false;
-      }
-      markup = std::move(collector.body);
-      if (std::getenv("SOLAR_GUI_TIMES")) std::fprintf(stderr, "  document fetched at %.0f ms (%zu bytes)\n", std::chrono::duration<double, std::milli>(Clock::now() - started).count(), markup.size());
-      if (!collector.address.empty()) address = collector.address;
-      else address = where;
-      if (collector.contentType.find("xml") != std::string::npos) type = "application/xhtml+xml";
-    }
-    if (where.starts_with("file://")) address = where;
+  bool dirty = true;
+  const auto commit = [&](const std::string& where, std::string markup, std::string type, const Clock::time_point& started) {
+    address = where;
     browser.SetPageUrl(address);
     browser.SetContentType(address, type);
     browser.Prefetch(markup, address);
@@ -426,22 +412,90 @@ int main(int argc, char** argv) {
       document->url = address;
       solar::html::InstallWindow(*realm, document);
     });
-    if (std::getenv("SOLAR_GUI_TIMES")) std::fprintf(stderr, "  parsing at %.0f ms\n", std::chrono::duration<double, std::milli>(Clock::now() - started).count());
     solar::html::LoadPage(*realm, document, markup, type);
     isolate->PerformMicrotaskCheckpoint();
-    events.Run(std::chrono::milliseconds(30));
-    const double ms = std::chrono::duration<double, std::milli>(Clock::now() - started).count();
-    std::fprintf(stderr, "loaded in %.0f ms\n", ms);
+    const auto settle = Clock::now() + std::chrono::milliseconds(30);
+    while (Clock::now() < settle) events.Step(std::chrono::milliseconds(8));
+    browser.TakeArrived();
+    std::fprintf(stderr, "loaded in %.0f ms\n", std::chrono::duration<double, std::milli>(Clock::now() - started).count());
     SDL_SetWindowTitle(window, ("Solar - " + address).c_str());
+    dirty = true;
+  };
+
+  // The document being fetched: the window goes on with the page it has until the new one is here.
+  struct Navigation {
+    std::string where;
+    Collector collector;
+    Clock::time_point started = Clock::now();
+  };
+  std::vector<std::unique_ptr<Navigation>> navigations;  // (a fetch cannot be taken back: the ones that were left are kept until they end)
+  Navigation* current = nullptr;
+  const auto navigate = [&](const std::string& where) -> bool {
+    std::fprintf(stderr, "loading %s\n", where.c_str());
+    if (where.starts_with("file://")) {
+      std::string markup;
+      if (!ReadFile(FileOfAddress(where), markup)) {
+        std::fprintf(stderr, "cannot read %s\n", where.c_str());
+        return false;
+      }
+      commit(where, std::move(markup), "text/html", Clock::now());
+      return true;
+    }
+    std::optional<solar::url::Url> parsed = solar::url::Parse(where);
+    if (!parsed) {
+      std::fprintf(stderr, "invalid address: %s\n", where.c_str());
+      return false;
+    }
+    auto navigation = std::make_unique<Navigation>();
+    navigation->where = where;
+    client.Fetch(*parsed, navigation->collector, solar::net::FetchOptions());
+    current = navigation.get();
+    navigations.push_back(std::move(navigation));
+    SDL_SetWindowTitle(window, ("Loading " + where).c_str());
     return true;
   };
+  // What the window does while a page is waited for: it keeps answering (to be closed, to be resized).
+  bool quit = false;
+  browser.pump_ = [&] {
+    SDL_Event event;
+    while (SDL_PollEvent(&event)) {
+      if (event.type == SDL_EVENT_QUIT) quit = true;
+      if (event.type == SDL_EVENT_WINDOW_RESIZED || event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) setViewport();
+    }
+    if (quit) {
+      SDL_Quit();
+      std::_Exit(0);
+    }
+  };
+  // The document that came: it is put in a realm, unless a newer address was asked for since.
+  const auto settleNavigation = [&] {
+    if (!current || !current->collector.done) return;
+    Navigation* arrived = current;
+    current = nullptr;
+    Collector& collector = arrived->collector;
+    if (collector.failed) {
+      std::fprintf(stderr, "fetch failed: %s\n", collector.error.c_str());
+      SDL_SetWindowTitle(window, ("Solar - " + address).c_str());
+      return;
+    }
+    if (std::getenv("SOLAR_GUI_TIMES")) std::fprintf(stderr, "  document fetched at %.0f ms (%zu bytes)\n", std::chrono::duration<double, std::milli>(Clock::now() - arrived->started).count(), collector.body.size());
+    const std::string type = collector.contentType.find("xml") != std::string::npos ? "application/xhtml+xml" : "text/html";
+    commit(collector.address.empty() ? arrived->where : collector.address, std::move(collector.body), type, arrived->started);
+  };
   if (!navigate(address)) return 1;
+  // (The first page is waited for, as a program that starts with one.)
+  while (current && !current->collector.done) {
+    events.Step(std::chrono::milliseconds(8));
+    browser.pump_();
+  }
+  settleNavigation();
+  if (!document) return 1;
 
   solar::paint::SkiaPainter painter;
   sk_sp<SkSurface> surface;
   SDL_Texture* texture = nullptr;
   int surfaceW = 0, surfaceH = 0;
-  bool dirty = true;
+  Clock::time_point lastRelayout = Clock::now();
   uint64_t lastVersion = 0;
   const bool timing = std::getenv("SOLAR_GUI_TIMES") != nullptr;
 
@@ -461,7 +515,7 @@ int main(int argc, char** argv) {
   bool running = true;
   while (running) {
     SDL_Event event;
-    bool any = SDL_WaitEventTimeout(&event, dirty ? 0 : 16);
+    bool any = SDL_WaitEventTimeout(&event, dirty ? 0 : 8);
     while (any) {
       switch (event.type) {
         case SDL_EVENT_QUIT: running = false; break;
@@ -511,10 +565,7 @@ int main(int argc, char** argv) {
                 std::optional<solar::url::Url> target = base ? solar::url::Parse(href->value, &*base) : solar::url::Parse(href->value);
                 if (target && (target->scheme == "http" || target->scheme == "https" || target->scheme == "file")) {
                   const std::string next = solar::url::Serialize(*target);
-                  if (navigate(next)) {
-                    address = next;
-                    dirty = true;
-                  }
+                  navigate(next);
                 }
               }
               break;
@@ -526,7 +577,13 @@ int main(int argc, char** argv) {
       }
       any = SDL_PollEvent(&event);
     }
-    events.Run(std::chrono::milliseconds(1));
+    events.Step(std::chrono::milliseconds(4));
+    settleNavigation();
+    // Pictures that came: the page is laid out again with them (a few at a time, not for each).
+    if (Clock::now() - lastRelayout > std::chrono::milliseconds(60) && browser.TakeArrived()) {
+      solar::dom::NoteTreeChange();
+      lastRelayout = Clock::now();
+    }
 
     const uint64_t version = solar::dom::TreeVersion() * 1000003 + solar::css::StyleVersion();
     if (version != lastVersion) {
@@ -538,20 +595,9 @@ int main(int argc, char** argv) {
 
     const auto t0 = Clock::now();
     solar::layout::Tree* tree = currentTree();
-    // The pictures layout asked for are fetched together, and it is done again with their sizes.
-    for (int round = 0; tree && browser.HasPendingImages() && round < 4; ++round) {
-      browser.WaitForImages();
-      solar::dom::NoteTreeChange();
-      tree = currentTree();
-    }
     if (!tree) continue;
     const auto t1 = Clock::now();
     solar::paint::DisplayList list = solar::paint::BuildDisplayList(realm->GetContext(), *tree);
-    // (What painting asked for, the pictures of styles, the same.)
-    for (int round = 0; browser.HasPendingImages() && round < 3; ++round) {
-      browser.WaitForImages();
-      list = solar::paint::BuildDisplayList(realm->GetContext(), *tree);
-    }
     const auto t2 = Clock::now();
 
     int pixelW = 0, pixelH = 0;
@@ -577,7 +623,9 @@ int main(int argc, char** argv) {
     SDL_RenderPresent(renderer);
     const auto t3 = Clock::now();
     // SOLAR_GUI_SHOT=file.png: the first frame is written to a file, and the program ends (for looking at what it paints without a screen).
-    if (const char* shot = std::getenv("SOLAR_GUI_SHOT")) {
+    // (SOLAR_GUI_SETTLE=ms: not before the pictures had that long to come.)
+    const char* settle = std::getenv("SOLAR_GUI_SETTLE");
+    if (const char* shot = settle && Clock::now() - programStart < std::chrono::milliseconds(std::atoi(settle)) ? nullptr : std::getenv("SOLAR_GUI_SHOT")) {
       SkDynamicMemoryWStream out;
       if (SkPngEncoder::Encode(&out, pixmap, SkPngEncoder::Options())) {
         sk_sp<SkData> png = out.detachAsData();
