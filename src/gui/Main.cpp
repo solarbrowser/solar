@@ -366,7 +366,7 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
     return 1;
   }
-  SDL_Window* window = SDL_CreateWindow("Solar", 1100, 760, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+  SDL_Window* window = SDL_CreateWindow("Solar", 1280, 800, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
   SDL_Renderer* renderer = window ? SDL_CreateRenderer(window, nullptr) : nullptr;
   if (!renderer) {
     std::fprintf(stderr, "window: %s\n", SDL_GetError());
@@ -411,6 +411,7 @@ int main(int argc, char** argv) {
         return false;
       }
       markup = std::move(collector.body);
+      if (std::getenv("SOLAR_GUI_TIMES")) std::fprintf(stderr, "  document fetched at %.0f ms (%zu bytes)\n", std::chrono::duration<double, std::milli>(Clock::now() - started).count(), markup.size());
       if (!collector.address.empty()) address = collector.address;
       else address = where;
       if (collector.contentType.find("xml") != std::string::npos) type = "application/xhtml+xml";
@@ -425,6 +426,7 @@ int main(int argc, char** argv) {
       document->url = address;
       solar::html::InstallWindow(*realm, document);
     });
+    if (std::getenv("SOLAR_GUI_TIMES")) std::fprintf(stderr, "  parsing at %.0f ms\n", std::chrono::duration<double, std::milli>(Clock::now() - started).count());
     solar::html::LoadPage(*realm, document, markup, type);
     isolate->PerformMicrotaskCheckpoint();
     events.Run(std::chrono::milliseconds(30));

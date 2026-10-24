@@ -848,6 +848,12 @@ bool ExpandShorthand(const PropertyDefinition& property, const ComponentValues& 
   }
 
   std::map<std::string, std::string> taken = AssignLonghands(property, match);
+  // `none` alone is both the image and the type (it stands for each of them, and for the one that is not given).
+  if (name == "list-style") {
+    const bool image = taken.count("list-style-image") != 0, type = taken.count("list-style-type") != 0;
+    if (image && !type && taken["list-style-image"] == "none") taken["list-style-type"] = "none";
+    else if (type && !image && taken["list-style-type"] == "none") taken["list-style-image"] = "none";
+  }
   // Omitted: the initial value, except where the specification says otherwise.
   static const std::set<std::string> copyFirst = {"gap", "grid-gap", "place-content", "place-items", "place-self"};
   const std::string firstLonghand = property.longhands.empty() ? "" : property.longhands[0];
