@@ -6,7 +6,8 @@
 namespace solar::css {
 
 namespace {
-bool g_hasEvaluated = false;
+HasUse g_hasUse;
+const dom::Element* g_hasSubject = nullptr;
 }  // namespace
 
 namespace {
@@ -357,7 +358,11 @@ bool MatchesSimple(const SimpleSelector& selector, const Element* element, const
     case SimpleSelector::Kind::Is:
     case SimpleSelector::Kind::Where: return MatchesSelectorListAt(*selector.list, element, context);
     case SimpleSelector::Kind::Has: {
-      g_hasEvaluated = true;
+      g_hasUse.any = true;
+      if (element != g_hasSubject) g_hasUse.other = true;
+      for (const ComplexSelector& relative : *selector.list) {
+        if (relative.leading == Combinator::NextSibling || relative.leading == Combinator::SubsequentSibling) g_hasUse.sibling = true;
+      }
       // The elements the relative selector can be about, which depend on how it starts.
       const auto matchesRelative = [&](const ComplexSelector& relative, const Element* anchor, auto&& self, size_t index, const Element* candidate) -> bool {
         if (!MatchesCompound(relative.compounds[index], candidate, context)) return false;
@@ -523,12 +528,22 @@ bool MatchesComplex(const ComplexSelector& selector, const Element* element, con
   return MatchesFrom(selector, selector.compounds.size() - 1, element, context);
 }
 
-void NoteHasEvaluated() { g_hasEvaluated = true; }
+const Element* SetHasSubject(const Element* subject) {
+  const Element* before = g_hasSubject;
+  g_hasSubject = subject;
+  return before;
+}
 
-bool TakeHasEvaluated() {
-  const bool was = g_hasEvaluated;
-  g_hasEvaluated = false;
-  return was;
+HasUse TakeHasUse() {
+  const HasUse use = g_hasUse;
+  g_hasUse = HasUse();
+  return use;
+}
+
+void MergeHasUse(const HasUse& use) {
+  g_hasUse.any = g_hasUse.any || use.any;
+  g_hasUse.other = g_hasUse.other || use.other;
+  g_hasUse.sibling = g_hasUse.sibling || use.sibling;
 }
 
 bool MatchesAny(const SelectorList& list, const Element* element, const MatchContext& context) { return MatchesSelectorListAt(list, element, context); }

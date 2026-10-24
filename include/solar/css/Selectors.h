@@ -134,9 +134,16 @@ struct MatchContext {
 };
 
 bool MatchesComplex(const ComplexSelector& selector, const dom::Element* element, const MatchContext& context);
-// Whether a :has() was evaluated since the last call (and clears it): what an element's style was made from includes what is under it, then.
-bool TakeHasEvaluated();
-void NoteHasEvaluated();
+// What the :has() evaluated since the last call looked at (see Take): the style of the element they were evaluated for is made from more than the element.
+struct HasUse {
+  bool any = false;      // a :has() was evaluated
+  bool other = false;    // for an element other than the subject (an element above it, or beside it, in the selector)
+  bool sibling = false;  // with a relative selector that starts with + or ~: the elements after the element
+};
+// The element the selectors that are being matched are for, until the next call: it returns the one before.
+const dom::Element* SetHasSubject(const dom::Element* subject);
+HasUse TakeHasUse();
+void MergeHasUse(const HasUse& use);
 bool MatchesAny(const SelectorList& list, const dom::Element* element, const MatchContext& context);
 
 }  // namespace solar::css

@@ -786,7 +786,7 @@ struct ElementStyle {
   std::set<std::string> resolving;
   std::vector<std::vector<DeclarationEntry>> storage;  // the style attribute's declarations
   bool built = false;
-  bool usedHas = false;     // a :has() was looked at for it: what is under it, and beside it, is what its style was made from, too
+  HasUse has;               // what the :has() looked at for it were: what is under it, and beside it, is what its style was made from, too
   bool hasLogical = false;  // a logical property is declared for the element
 };
 
@@ -803,6 +803,7 @@ struct StyleEntry {
   uint64_t parentEpoch = 0;
   uint32_t attr = 0, anim = 0, children = 0, parentChildren = 0, parentChildAttr = 0;
   uint64_t treeVersion = 0;  // of the tree when the styles were begun
+  uint32_t subtree = 0, parentSubtree = 0;
 };
 
 std::unordered_map<dom::Element*, StyleEntry>& Cache() {
@@ -862,10 +863,16 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   if (good && reuse.structural) good = entry.children == element->childrenVersion && (!parent || entry.parentChildren == parent->childrenVersion);
   if (good && reuse.sibling) good = !parent || (entry.parentChildAttr == parent->childAttrVersion && entry.parentChildren == parent->childrenVersion);
   if (good && reuse.has) {
-    bool used = entry.plain.usedHas;
-    for (const auto& other : entry.others) used = used || other.second.usedHas;
-    // (What it depends on can be anywhere: under it, beside it, beside the elements above it. It is made anew at every change of the tree.)
-    if (used) good = entry.treeVersion == dom::TreeVersion();
+    HasUse use = entry.plain.has;
+    for (const auto& other : entry.others) {
+      use.any = use.any || other.second.has.any;
+      use.other = use.other || other.second.has.other;
+      use.sibling = use.sibling || other.second.has.sibling;
+    }
+    // (The elements it looked at are under it, or after it; when it was for some other element in the selector, they can be anywhere: the styles are made anew at every change of the tree.)
+    if (use.other) good = entry.treeVersion == dom::TreeVersion();
+    else if (use.sibling) good = entry.subtree == element->subtreeVersion && (!parent || entry.parentSubtree == parent->subtreeVersion);
+    else if (use.any) good = entry.subtree == element->subtreeVersion;
   }
   if (good) return;
   entry.plain = ElementStyle();
@@ -881,6 +888,8 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   entry.parentChildAttr = parent ? parent->childAttrVersion : 0;
   entry.shadowed = shadowed;
   entry.treeVersion = dom::TreeVersion();
+  entry.subtree = element->subtreeVersion;
+  entry.parentSubtree = parent ? parent->subtreeVersion : 0;
 }
 
 ElementStyle& StyleOf(dom::Element* element, const std::string& pseudo = "") {
@@ -1215,7 +1224,8 @@ const UserAgentIndex& UaIndex() {
 void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo) {
   if (style.built) return;
   style.built = true;
-  const bool hasOfOuter = TakeHasEvaluated();  // (another style may be under way, which asked for this one)
+  const HasUse hasOfOuter = TakeHasUse();  // (another style may be under way, which asked for this one)
+  const dom::Element* subjectOfOuter = SetHasSubject(element);
   dom::Node* root = dom::ShadowIncludingRoot(element);
   MatchContext matchContext;
   matchContext.pseudoElement = pseudo.empty() ? nullptr : &pseudo;
@@ -1453,8 +1463,9 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
     ++gatherer.ruleSerial;
     for (const DeclarationEntry& entry : style.storage.back()) gatherer.Offer(entry, true, true, kUnlayered, Specificity{});
   }
-  style.usedHas = TakeHasEvaluated();
-  if (hasOfOuter) NoteHasEvaluated();
+  style.has = TakeHasUse();
+  SetHasSubject(subjectOfOuter);
+  MergeHasUse(hasOfOuter);
   RollBack(style.cascade);
   for (const auto& [name, winner] : style.cascade) {
     (void)winner;
