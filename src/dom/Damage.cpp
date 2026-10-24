@@ -66,6 +66,7 @@ void NoteDamage(Node* node, uint8_t flags) {
       ++element->attrVersion;
       if (element->parentNode && element->parentNode->IsElement()) ++static_cast<Element*>(element->parentNode)->childAttrVersion;
     }
+    if (flags & kDamageState) ++element->stateVersion;
     if (flags & kDamageChildren) ++element->childrenVersion;
   } else if (node && (flags & kDamageText) && node->parentNode && node->parentNode->IsElement()) {
     ++static_cast<Element*>(node->parentNode)->childrenVersion;

@@ -90,7 +90,7 @@ Value Compute(Context& ctx, Value, qe::Args args, Value) {
 }
 
 // __solarAuthorVersion(): changes when what is declared, or the tree, does.
-Value AuthorVersion(Context&, Value, qe::Args, Value) { return qe::FromNumber(static_cast<double>(AuthorStyleVersion() % 9007199254740991ULL)); }
+Value AuthorVersion(Context&, Value, qe::Args, Value) { return qe::FromNumber(static_cast<double>(FlushVersion() % 9007199254740991ULL)); }
 
 // __solarAnimOnFlush(function): the function to run before a computed style is read when what is declared has changed.
 Value OnFlush(Context& ctx, Value, qe::Args args, Value) {

@@ -144,6 +144,7 @@ void DisposeDocument(Document* document) {
 namespace {
 uint64_t g_treeVersion = 1;
 uint64_t g_documentVersion = 1;
+uint64_t g_stateVersion = 1;
 }
 
 uint64_t TreeVersion() { return g_treeVersion; }
@@ -156,6 +157,7 @@ Node::~Node() { --g_liveNodes; }
 size_t LiveNodes() { return g_liveNodes; }
 size_t LiveDocuments() { return 0; }
 uint64_t DocumentVersion() { return g_documentVersion; }
+uint64_t StateVersion() { return g_stateVersion; }
 
 namespace {
 std::string (*g_baseUriProvider)(const Document*) = nullptr;
@@ -163,6 +165,7 @@ std::string (*g_baseUriProvider)(const Document*) = nullptr;
 void SetDocumentBaseUriProvider(std::string (*provider)(const Document*)) { g_baseUriProvider = provider; }
 std::string DocumentBaseUri(const Document* document) { return g_baseUriProvider ? g_baseUriProvider(document) : document->url; }
 void (*g_treeChangeHook)() = nullptr;
+bool (*g_stateIsLocalHook)(Document* document, Element* element) = nullptr;
 bool (*g_beingRenderedHook)(Element* element) = nullptr;
 void (*g_nodeRemovedHook)(Node* node) = nullptr;
 void NoteTreeChange() {
@@ -189,13 +192,16 @@ void NoteTreeChangeAt(const Node* node) {
 }
 
 void NoteStateChange(Element* element) {
+  const bool local = g_stateIsLocalHook && element && element->nodeDocument && g_stateIsLocalHook(element->nodeDocument, element);
   for (Node* node = element; node;) {
-    NoteDamage(node, kDamageAttributes);
+    NoteDamage(node, local ? kDamageState : kDamageAttributes);
     Node* up = node->parentNode;
     if (up && up->IsFragment() && static_cast<DocumentFragment*>(up)->isShadowRoot) up = static_cast<DocumentFragment*>(up)->host;
     node = up;
   }
-  NoteTreeChange();
+  // (A state — hover, focus, :defined — is no change of the tree: what is kept of the others stays; the elements it is of, and the ones above, are made anew.)
+  ++g_stateVersion;
+  if (g_treeChangeHook) g_treeChangeHook();
 }
 
 void SetHoverElement(Document* document, Element* element) {

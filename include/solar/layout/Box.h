@@ -206,6 +206,10 @@ struct Tree {
   // How far elements (and the viewport, under the document) are scrolled; carried over when the tree is made again.
   std::unordered_map<const dom::Node*, std::pair<double, double>> scroll;
   std::vector<std::unique_ptr<Box>> detached;  // boxes the tree no longer holds, kept so that pointers stay good
+  // The scrollable overflow of the viewport, worked out once for the tree.
+  bool overflowCached = false;
+  dom::Element* overflowFor = nullptr;
+  Rect overflowRect;
 };
 
 }  // namespace solar::layout

@@ -433,7 +433,12 @@ int main(int argc, char** argv) {
   }
   SDL_Window* window = SDL_CreateWindow("Solar", 1280, 800, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
   SDL_Renderer* renderer = window ? SDL_CreateRenderer(window, nullptr) : nullptr;
-  if (renderer) SDL_SetRenderVSync(renderer, 1);
+  if (renderer) {
+    const bool ok = SDL_SetRenderVSync(renderer, 1);
+    int on = 0;
+    SDL_GetRenderVSync(renderer, &on);
+    if (std::getenv("SOLAR_GUI_TIMES")) std::fprintf(stderr, "vsync: asked %s, renderer says %d, driver %s\n", ok ? "ok" : "failed", on, SDL_GetRendererName(renderer));
+  }
   if (!renderer) {
     std::fprintf(stderr, "window: %s\n", SDL_GetError());
     return 1;
@@ -595,6 +600,18 @@ int main(int argc, char** argv) {
     bar.top = tree->scroll[document].second / maxY * (h - bar.height);
     return true;
   };
+  // What is under the pointer is what is hovered.
+  double pointerX = 0, pointerY = 0;
+  bool pointerKnown = false, hoverStale = false;
+  Clock::time_point lastScrollInput = Clock::now() - std::chrono::seconds(10);
+  const auto updateHover = [&] {
+    hoverStale = false;
+    if (!pointerKnown) return;
+    solar::layout::Tree* tree = currentTree();
+    if (!tree) return;
+    const std::vector<solar::dom::Element*> elements = solar::layout::ElementsAtPoint(*tree, pointerX, pointerY);
+    solar::dom::SetHoverElement(document, elements.empty() ? nullptr : elements.front());
+  };
   // Scrolling goes toward where it was asked to, a part of the way each frame (it eases out), so that a wheel step is a glide and not a jump.
   double targetX = 0, targetY = 0;
   bool gliding = false;
@@ -625,6 +642,8 @@ int main(int argc, char** argv) {
     if (!gliding) lastGlide = Clock::now();
     gliding = true;
     scrollActive = Clock::now();
+    lastScrollInput = scrollActive;
+    hoverStale = pointerKnown;
   };
   const auto glide = [&] {
     if (!gliding) return;
@@ -669,7 +688,10 @@ int main(int argc, char** argv) {
   Clock::time_point lastWheel = Clock::now(), wheelDone;
   const bool scrollTest = autoScroll > 0;
   bool running = true;
+  double barMs = 0, stepMs = 0, glideMs = 0;
   while (running) {
+    const auto iterStart = Clock::now();
+    barMs = stepMs = glideMs = 0;
     SDL_Event event;
     bool any = SDL_WaitEventTimeout(&event, dirty ? 0 : 8);
     while (any) {
@@ -719,11 +741,12 @@ int main(int argc, char** argv) {
             scrollActive = Clock::now();
             dirty = true;
           }
-          solar::layout::Tree* tree = currentTree();
-          if (tree) {
-            const std::vector<solar::dom::Element*> elements = solar::layout::ElementsAtPoint(*tree, event.motion.x, event.motion.y);
-            solar::dom::SetHoverElement(document, elements.empty() ? nullptr : elements.front());
-          }
+          pointerX = event.motion.x;
+          pointerY = event.motion.y;
+          pointerKnown = true;
+          // (While the page is scrolling, what is under the pointer is looked at when it stops: a change of hover is a change of style, and a frame is not the time for one.)
+          if (gliding || Clock::now() - lastScrollInput < std::chrono::milliseconds(150)) hoverStale = true;
+          else updateHover();
           break;
         }
         case SDL_EVENT_MOUSE_BUTTON_DOWN: {
@@ -740,6 +763,7 @@ int main(int argc, char** argv) {
             dirty = true;
             break;
           }
+          if (hoverStale) updateHover();
           if (event.button.button == SDL_BUTTON_LEFT && document->hoverElement) solar::dom::SetPressedElement(document, document->hoverElement);
           break;
         }
@@ -788,12 +812,24 @@ int main(int argc, char** argv) {
       wheel.type = SDL_EVENT_MOUSE_WHEEL;
       wheel.wheel.y = -1;
       SDL_PushEvent(&wheel);
+      if (std::getenv("SOLAR_GUI_MOTION")) {
+        SDL_Event motion{};
+        motion.type = SDL_EVENT_MOUSE_MOTION;
+        motion.motion.x = 300 + (wheelLeft % 7) * 20;
+        motion.motion.y = 150 + (wheelLeft % 13) * 40;
+        SDL_PushEvent(&motion);
+      }
       if (wheelLeft == 0) wheelDone = Clock::now();
     }
     if (wheelDone != Clock::time_point() && !gliding && Clock::now() - wheelDone > std::chrono::milliseconds(300)) running = false;
+    if (hoverStale && !gliding && Clock::now() - lastScrollInput > std::chrono::milliseconds(150)) updateHover();
+    const auto g0 = Clock::now();
     glide();
+    glideMs = std::chrono::duration<double, std::milli>(Clock::now() - g0).count();
     const uint64_t beforeStep = solar::dom::DocumentVersion();
+    const auto s0 = Clock::now();
     events.Step(std::chrono::milliseconds(4));
+    stepMs = std::chrono::duration<double, std::milli>(Clock::now() - s0).count();
     if (timing && solar::dom::DocumentVersion() != beforeStep) std::fprintf(stderr, "step changed the document by %llu\n", (unsigned long long)(solar::dom::DocumentVersion() - beforeStep));
     settleNavigation();
     // (SOLAR_GUI_SCROLL=n: the page is scrolled n times, a step each frame, for timing it.)
@@ -827,7 +863,7 @@ int main(int argc, char** argv) {
       if (browser.TakeArrived()) dirty = true;
     }
 
-    const uint64_t version = solar::dom::DocumentVersion() * 1000003 + solar::css::StyleVersion();
+    const uint64_t version = (solar::dom::DocumentVersion() * 1000003 + solar::css::StyleVersion()) * 1000003 + solar::dom::StateVersion();
     if (version != lastVersion) {
       if (timing) std::fprintf(stderr, "version: tree %llu style %llu\n", (unsigned long long)solar::dom::TreeVersion(), (unsigned long long)solar::css::StyleVersion());
       lastVersion = version;
@@ -861,6 +897,7 @@ int main(int argc, char** argv) {
     canvas->scale(density, density);
     painter.Draw(list, *canvas);
     {
+      const auto b0 = Clock::now();
       Bar bar;
       const double idle = std::chrono::duration<double>(Clock::now() - scrollActive).count();
       const double alpha = barHover || barDrag ? 1.0 : std::clamp(1.0 - (idle - 1.0) / 0.4, 0.0, 1.0);
@@ -878,6 +915,7 @@ int main(int argc, char** argv) {
         canvas->drawRRect(SkRRect::MakeRectXY(SkRect::MakeXYWH(ww - width - 2, bar.top + 2, width, bar.height - 4), width / 2, width / 2), paint);
         if (alpha < 1.0 || idle < 1.4) dirty = true;
       }
+      barMs = std::chrono::duration<double, std::milli>(Clock::now() - b0).count();
     }
     SkPixmap pixmap;
     surface->peekPixels(&pixmap);
@@ -901,7 +939,7 @@ int main(int argc, char** argv) {
     }
     if (timing) {
       const auto ms = [](Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
-      std::fprintf(stderr, "frame: layout %.1f ms, display list %.1f ms (%zu items), draw %.1f ms\n", ms(t0, t1), ms(t1, t2), list.items.size(), ms(t2, t3));
+      std::fprintf(stderr, "frame: layout %.1f ms, display list %.1f ms (%zu items), draw %.1f ms; step %.1f, glide %.1f, scrollbar %.1f, iteration %.1f\n", ms(t0, t1), ms(t1, t2), list.items.size(), ms(t2, t3), stepMs, glideMs, barMs, ms(iterStart, Clock::now()));
     }
     if (scrollTest && autoScroll == 0) running = false;
   }

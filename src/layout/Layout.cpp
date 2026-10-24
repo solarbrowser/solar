@@ -192,7 +192,7 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
     }
   }
   const auto versionNow = [&] {
-    uint64_t v = ((dom::DocumentVersion() * 1000003 + css::StyleVersion()) * 1000003 + css::AnimationVersion()) * 1000003 + static_cast<uint64_t>(environment.width * 7 + environment.height);
+    uint64_t v = (((dom::DocumentVersion() * 1000003 + css::StyleVersion()) * 1000003 + css::AnimationVersion()) * 1000003 + dom::StateVersion()) * 1000003 + static_cast<uint64_t>(environment.width * 7 + environment.height);
     // What is relevant to the user of content-visibility: auto depends on the focus and the selection.
     if (document->contentVisibilityAutoSeen) {
       v = v * 1000003 + reinterpret_cast<uintptr_t>(document->focusedElement);

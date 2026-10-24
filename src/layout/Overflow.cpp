@@ -183,7 +183,22 @@ struct Collector {
 
 }  // namespace
 
+static Rect ScrollableOverflowUncached(Tree& tree, const Box& scroller, dom::Element* rootElement);
+
 Rect ScrollableOverflow(Tree& tree, const Box& scroller, dom::Element* rootElement) {
+  // The overflow of the viewport is asked for at every frame (the extent of the page, the scrollbar): it is worked out once for a tree.
+  if (scroller.parent == nullptr) {
+    if (tree.overflowCached && tree.overflowFor == rootElement) return tree.overflowRect;
+    const Rect rect = ScrollableOverflowUncached(tree, scroller, rootElement);
+    tree.overflowCached = true;
+    tree.overflowFor = rootElement;
+    tree.overflowRect = rect;
+    return rect;
+  }
+  return ScrollableOverflowUncached(tree, scroller, rootElement);
+}
+
+static Rect ScrollableOverflowUncached(Tree& tree, const Box& scroller, dom::Element* rootElement) {
   const bool viewport = scroller.parent == nullptr;
   Rect padding;
   const Rect abs = AbsoluteBorderBox(scroller);

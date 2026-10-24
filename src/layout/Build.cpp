@@ -146,6 +146,8 @@ bool ReplacedSize(dom::Element* element, const std::string& base, Box& box) {
   return false;
 }
 
+long g_visited = 0, g_recomputed = 0, g_reused = 0;
+
 class Builder {
  public:
   Builder(LayoutContext& lc, Tree* previous) : lc_(lc), previous_(previous) {}
@@ -212,11 +214,14 @@ class Builder {
     // The boxes of the tree before are kept for what has not changed, when nothing in the document makes a box depend on more than its own subtree.
     canReuse_ = previous_ && previous_->root && reuse_.allowed && !getenv("SOLAR_NOREUSE") && !document->contentVisibilityAutoSeen &&
                 !css::g_firstLetterSeen && !css::g_firstLineSeen && !dom::HasShadowTrees();
+    if (getenv("SOLAR_LAYOUT_DEBUG")) std::fprintf(stderr, "  build: previous %d allowed %d shadows %d cvauto %d firstLetter %d firstLine %d -> reuse %d\n", previous_ != nullptr, reuse_.allowed, dom::HasShadowTrees(), document->contentVisibilityAutoSeen, css::g_firstLetterSeen, css::g_firstLineSeen, canReuse_);
     if (canReuse_) {
       lc_.tree.boxesOf = std::move(previous_->boxesOf);
       previous_->damaged = true;
     }
+    g_visited = g_recomputed = g_reused = 0;
     if (html) BuildElement(*initial, html);
+    if (getenv("SOLAR_LAYOUT_DEBUG")) std::fprintf(stderr, "  build: visited %ld, style made again for %ld, boxes reused %ld\n", g_visited, g_recomputed, g_reused);
     Normalize(*initial);
     ApplyFirstLetters(lc_, *initial);
     ApplyFirstLines(lc_, *initial);
@@ -618,6 +623,8 @@ class Builder {
   void BuildElement(Box& parent, dom::Element* element) {
     bool recomputed = false;
     std::shared_ptr<const BoxStyle> style = StyleFor(element, recomputed);
+    ++g_visited;
+    if (recomputed) ++g_recomputed;
     // What an element's style is made again from, its children's is too (they inherit).
     struct Below {
       Builder* builder;
@@ -628,6 +635,7 @@ class Builder {
     if (style->display == Display::None) return;
     if (!recomputed && style->display != Display::Contents) {
       if (std::unique_ptr<Box> old = TakeOld(parent, element)) {
+        ++g_reused;
         parent.AddChild(std::move(old));
         return;
       }

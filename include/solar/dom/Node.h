@@ -250,6 +250,7 @@ struct Element : Node {
   bool scrollbarSeen[2] = {false, false};  // the scrollbars the last layout gave it: kept while container queries are settled, so they do not flicker
   // What changed in and around the element, counted: what layout keeps of its style is good while the counts are what they were.
   uint32_t attrVersion = 0;       // an attribute of it changed
+  uint32_t stateVersion = 0;      // a state of it (hover, focus, pressed), or of an element under it, changed
   uint32_t childrenVersion = 0;   // its children changed, or the text in them
   uint32_t childAttrVersion = 0;  // an attribute of a child of it changed
   uint32_t animVersion = 0;       // what animations give it changed
@@ -416,6 +417,8 @@ size_t LiveNodes();
 size_t LiveDocuments();
 // The same, but for the changes of what is in a document: what happens to a node that is not in one does not change it.
 uint64_t DocumentVersion();
+// Changes with the states of elements (hover, focus, pressed, defined): style is made anew for them, and what is kept of the tree is not let go.
+uint64_t StateVersion();
 void NoteTreeChangeAt(const Node* node);
 // The elements whose :focus, :hover, :active or :focus-within may have changed with a change of state: the element and every element above it
 // (through the hosts of shadow trees). Each is noted as if an attribute of it had changed, and the tree has changed.
@@ -424,6 +427,8 @@ void SetHoverElement(Document* document, Element* element);
 void SetPressedElement(Document* document, Element* element);
 // Called when the tree changes: layout asks for a frame, where the elements that came to be skipped are found.
 extern void (*g_treeChangeHook)();
+// Whether a change of state (hover, focus) of an element is of that element and the ones above it alone: set by style, which knows the rules.
+extern bool (*g_stateIsLocalHook)(Document* document, Element* element);
 // Set by layout: whether the element is being rendered (has a box, or is display: contents, and is not in contents that content-visibility: hidden skips). Null: the markup decides.
 extern bool (*g_beingRenderedHook)(Element* element);
 // Called with a node that was taken out of its tree.

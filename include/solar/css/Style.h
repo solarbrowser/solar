@@ -23,6 +23,7 @@ struct StyleReuse {
   bool sibling = false;
   bool shadows = false;  // the document has shadow trees: the boxes are of the flat tree, which these stamps do not follow
   bool has = false;  // :has(): an element depends on what is under it (and beside it), which the stamps of the styles kept say
+  bool stateAncestor = false;  // a state (hover, focus) is asked of an element that is not the subject of a rule: the ones under it depend on it
 };
 StyleReuse StyleReuseFor(dom::Document* document);
 // A number that changes when the styles kept of the element are made anew (see Validate): what was read of them is good while it is the same.
@@ -31,6 +32,8 @@ uint64_t StyleEpochOf(dom::Element* element);
 uint64_t SheetsVersion();
 // Changes when what was kept of the styles is no longer good (animations count).
 uint64_t StyleCacheVersion();
+// The version that animations and transitions look at: changes with the tree, the sheets and the states of elements.
+uint64_t FlushVersion();
 // Changes when what an animation gives changes (for what is made again from it, as a layout).
 uint64_t AnimationVersion();
 // Whether any rule gives the pseudo-element of the element a style.

@@ -814,7 +814,7 @@ struct StyleEntry {
   const dom::Node* parent = nullptr;
   uint64_t parentEpoch = 0;
   uint32_t animInherit = 0;
-  uint32_t attr = 0, anim = 0, children = 0, parentChildren = 0, parentChildAttr = 0;
+  uint32_t attr = 0, anim = 0, children = 0, parentChildren = 0, parentChildAttr = 0, state = 0;
   uint64_t treeVersion = 0;  // of the tree when the styles were begun
   uint32_t subtree = 0, parentSubtree = 0;
 };
@@ -861,6 +861,29 @@ uint64_t g_styleEpoch = 0;
 // above it, and (when a rule looks at them) its children and its siblings. A document with rules that look at more than that has nothing kept across changes.
 void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo);
 
+bool SameWinners(const Winner& a, const Winner& b) {
+  if (a.entry != b.entry || a.origin != b.origin || a.layer != b.layer || a.context != b.context || a.rest.size() != b.rest.size()) return false;
+  for (size_t i = 0; i < a.rest.size(); ++i) {
+    if (!SameWinners(a.rest[i], b.rest[i])) return false;
+  }
+  return true;
+}
+
+// Whether two cascades have the same declaration winning for every property: what comes of them is the same.
+bool SameCascade(const ElementStyle& a, const ElementStyle& b) {
+  if (a.cascade.size() != b.cascade.size() || a.hasLogical != b.hasLogical || !a.storage.empty() || !b.storage.empty()) {
+    return false;
+  }
+  auto x = a.cascade.begin();
+  auto y = b.cascade.begin();
+  for (; x != a.cascade.end(); ++x, ++y) {
+    if (x->first != y->first || !SameWinners(x->second, y->second)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   if (entry.checked == treeVersion) return;
   entry.checked = treeVersion;
@@ -896,13 +919,24 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
       use.sibling = use.sibling || other.second.has.sibling;
     }
     // (The elements it looked at are under it, or after it; when it was for some other element in the selector, they can be anywhere: the styles are made anew at every change of the tree.)
-    if (use.other) good = entry.treeVersion == dom::DocumentVersion();
+    if (use.other) good = entry.treeVersion == dom::DocumentVersion() * 1000003 + dom::StateVersion();
     else if (use.sibling) good = entry.subtree == element->subtreeVersion && (!parent || entry.parentSubtree == parent->subtreeVersion);
     else if (use.any) good = entry.subtree == element->subtreeVersion;
   }
-  if (good && animSame) return;
+  const bool stateSame = entry.state == element->stateVersion;
+  if (good && animSame && stateSame) return;
   // What an animation gives that is only of the element itself (its opacity, its transform) makes its own style anew, not the ones of the elements under it.
   const uint64_t keptEpoch = good && !animSame ? entry.epoch : 0;
+  // A state of the element that no rule looks at from another element: it is made again at once, and if the same declarations win nothing is different for the
+  // elements under it.
+  const bool soft = good && animSame && !stateSame && entry.plain.built;
+  const uint64_t oldEpoch = entry.epoch;
+  ElementStyle old;
+  std::map<std::string, ElementStyle> oldOthers;
+  if (soft) {
+    old = std::move(entry.plain);
+    oldOthers = std::move(entry.others);
+  }
   entry.plain = ElementStyle();
   entry.others.clear();
   entry.serial = element->serial;
@@ -916,15 +950,32 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   entry.parentChildren = parent ? parent->childrenVersion : 0;
   entry.parentChildAttr = parent ? parent->childAttrVersion : 0;
   entry.shadowed = shadowed;
-  entry.treeVersion = dom::DocumentVersion();
+  entry.treeVersion = dom::DocumentVersion() * 1000003 + dom::StateVersion();
   entry.subtree = element->subtreeVersion;
   entry.parentSubtree = parent ? parent->subtreeVersion : 0;
+  entry.state = element->stateVersion;
+  if (soft) {
+    Build(element, entry.plain, "");
+    bool same = SameCascade(old, entry.plain);
+    for (auto it = oldOthers.begin(); same && it != oldOthers.end(); ++it) {
+      // (What was not made, and the variants of animations and starting styles, are made when they are asked for.)
+      if (it->first.find_first_of("\x03\x04") != std::string::npos || !it->second.built) continue;
+      ElementStyle& fresh = entry.others[it->first];
+      Build(element, fresh, it->first);
+      same = SameCascade(it->second, fresh);
+    }
+    if (same) {
+      entry.plain.memo = old.memo;
+      for (auto& [key, style] : entry.others) style.memo = oldOthers[key].memo;
+      entry.epoch = oldEpoch;
+    }
+  }
 }
 
 ElementStyle& StyleOf(dom::Element* element, const std::string& pseudo = "") {
   static uint64_t cachedStyleVersion = 0;
   const uint64_t version = dom::DocumentVersion() * 1000003 + g_styleVersion;
-  const uint64_t treeVersion = version * 1000003 + g_animationVersion;  // (what animations give is looked at element by element)
+  const uint64_t treeVersion = (version * 1000003 + g_animationVersion) * 1000003 + dom::StateVersion();  // (what animations give is looked at element by element)
   if (cachedStyleVersion != g_cacheVersion || Cache().size() > 60000) {
     ClearShared();
     Cache().clear();
@@ -2298,6 +2349,7 @@ void NoteAnimatedStyleChange(bool affectsSizes, bool) {
   if (g_anyContainerQueries && affectsSizes) ++g_cacheVersion;  // (the size of a container may be what an animation gives)
 }
 uint64_t AuthorStyleVersion() { return dom::DocumentVersion() * 1000003 + g_authorVersion; }
+uint64_t FlushVersion() { return AuthorStyleVersion() * 1000003 + dom::StateVersion(); }
 uint64_t StyleVersion() { return g_styleVersion; }
 
 namespace {
@@ -2307,21 +2359,44 @@ struct SelectorFeatures {
   bool has = false;         // :has(): an element depends on what is under it
   bool structural = false;  // depends on the place among the siblings
   bool sibling = false;     // + and ~
+  bool stateAncestor = false;  // a state (hover, active, focus) is asked of an element that is not the subject: the elements under it depend on it
+  std::vector<const CompoundSelector*> stateCompounds;  // the compounds of the elements whose state those rules ask for (the rest of such a rule is not looked at)
+  bool stateUnknown = false;  // where it is asked is not known (a nested rule)
 };
 
-void ScanComplex(const ComplexSelector& selector, SelectorFeatures& f);
+void ScanComplex(const ComplexSelector& selector, SelectorFeatures& f, bool inAncestor = false, const CompoundSelector* owner = nullptr);
 
-void ScanList(const SelectorList& list, SelectorFeatures& f) {
-  for (const ComplexSelector& s : list) ScanComplex(s, f);
+void ScanList(const SelectorList& list, SelectorFeatures& f, bool inAncestor = false, const CompoundSelector* owner = nullptr) {
+  for (const ComplexSelector& s : list) ScanComplex(s, f, inAncestor, owner);
 }
 
-void ScanComplex(const ComplexSelector& selector, SelectorFeatures& f) {
+bool IsStatePseudo(PseudoClass p) { return p == PseudoClass::Hover || p == PseudoClass::Active || p == PseudoClass::Focus || p == PseudoClass::FocusVisible || p == PseudoClass::FocusWithin || p == PseudoClass::Defined; }
+
+bool HasStateIn(const SelectorList& list) {
+  for (const ComplexSelector& s : list) {
+    for (const CompoundSelector& c : s.compounds) {
+      for (const SimpleSelector& simple : c.simples) {
+        if (simple.kind == SimpleSelector::Kind::Pseudo && IsStatePseudo(simple.pseudo)) return true;
+        if (simple.list && HasStateIn(*simple.list)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+void ScanComplex(const ComplexSelector& selector, SelectorFeatures& f, bool inAncestor, const CompoundSelector* owner) {
   for (const Combinator c : selector.combinators) if (c == Combinator::NextSibling || c == Combinator::SubsequentSibling) f.sibling = true;
   if (selector.leading == Combinator::NextSibling || selector.leading == Combinator::SubsequentSibling) f.sibling = true;
-  for (const CompoundSelector& compound : selector.compounds) {
+  for (size_t compoundIndex = 0; compoundIndex < selector.compounds.size(); ++compoundIndex) {
+    const CompoundSelector& compound = selector.compounds[compoundIndex];
+    const bool ancestor = inAncestor || compoundIndex + 1 < selector.compounds.size();
     for (const SimpleSelector& simple : compound.simples) {
       switch (simple.kind) {
         case SimpleSelector::Kind::Pseudo:
+          if (ancestor && IsStatePseudo(simple.pseudo)) {
+            f.stateAncestor = true;
+            f.stateCompounds.push_back(owner ? owner : &compound);
+          }
           switch (simple.pseudo) {
             case PseudoClass::Empty: case PseudoClass::FirstChild: case PseudoClass::LastChild: case PseudoClass::OnlyChild:
             case PseudoClass::FirstOfType: case PseudoClass::LastOfType: case PseudoClass::OnlyOfType: f.structural = true; break;
@@ -2332,10 +2407,10 @@ void ScanComplex(const ComplexSelector& selector, SelectorFeatures& f) {
             default: break;
           }
           break;
-        case SimpleSelector::Kind::Has: f.has = true; if (simple.list) ScanList(*simple.list, f); break;
+        case SimpleSelector::Kind::Has: f.has = true; if (simple.list) { ScanList(*simple.list, f, true, owner ? owner : &compound); if (HasStateIn(*simple.list)) { f.stateAncestor = true; f.stateCompounds.push_back(owner ? owner : &compound); } } break;
         case SimpleSelector::Kind::Nth: f.structural = true; if (simple.list) { f.sibling = true; ScanList(*simple.list, f); } break;  // ("of S": the siblings' own attributes count)
         case SimpleSelector::Kind::Not: case SimpleSelector::Kind::Is: case SimpleSelector::Kind::Where: case SimpleSelector::Kind::Nesting:
-          if (simple.list) ScanList(*simple.list, f);
+          if (simple.list) ScanList(*simple.list, f, ancestor, owner ? owner : &compound);
           break;
         case SimpleSelector::Kind::Host: f.dynamic = true; break;
         default: break;
@@ -2347,7 +2422,13 @@ void ScanComplex(const ComplexSelector& selector, SelectorFeatures& f) {
 void ScanRules(const std::vector<CssRule*>& rules, SelectorFeatures& f, int depth) {
   if (depth > 12) { f.dynamic = true; return; }
   for (const CssRule* rule : rules) {
-    if (rule->selectors) ScanList(*rule->selectors, f);
+    if (rule->selectors) {
+      ScanList(*rule->selectors, f);
+      if (!rule->rules.empty() && HasStateIn(*rule->selectors)) {
+        f.stateAncestor = true;  // (what is nested in it is of it)
+        f.stateUnknown = true;
+      }
+    }
     if (rule->scopeStart) ScanList(*rule->scopeStart, f);
     if (rule->scopeEnd) ScanList(*rule->scopeEnd, f);
     ScanRules(rule->rules, f, depth + 1);
@@ -2374,6 +2455,15 @@ std::shared_ptr<void> SharedStyleToken(Quanta::Context&, dom::Element* element, 
   return style.memo;
 }
 
+std::vector<ComplexSelector>& StateCompounds() {
+  static std::vector<ComplexSelector> compounds;
+  return compounds;
+}
+bool& StateUnknown() {
+  static bool unknown = false;
+  return unknown;
+}
+
 StyleReuse StyleReuseFor(dom::Document* document) {
   struct Entry {
     dom::Document* document = nullptr;
@@ -2393,7 +2483,21 @@ StyleReuse StyleReuseFor(dom::Document* document) {
   entry.document = document;
   entry.author = g_authorVersion;
   entry.sheets = sheets;
-  entry.reuse = {!f.dynamic, f.structural, f.sibling, dom::HasShadowTrees(), f.has};
+  entry.reuse = {!f.dynamic, f.structural, f.sibling, dom::HasShadowTrees(), f.has, f.stateAncestor};
+  StateCompounds().clear();
+  StateUnknown() = f.stateUnknown;
+  for (const CompoundSelector* compound : f.stateCompounds) {
+    // (What is looked for is the element that has the state, whether it has it now or not: the compound without what asks for the state.)
+    ComplexSelector single;
+    CompoundSelector stripped;
+    for (const SimpleSelector& simple : compound->simples) {
+      if (simple.kind == SimpleSelector::Kind::Pseudo && IsStatePseudo(simple.pseudo)) continue;
+      if (simple.list && HasStateIn(*simple.list)) continue;
+      stripped.simples.push_back(simple);
+    }
+    single.compounds.push_back(std::move(stripped));
+    StateCompounds().push_back(std::move(single));
+  }
   return entry.reuse;
 }
 
@@ -2614,12 +2718,12 @@ std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std
   dom::Document* document = element ? element->nodeDocument : nullptr;
   const auto flush = [&]() {
     if (!document || !document->styleFlush || !document->animationStyleSeen || flushing || StyleFlushSuppressed()) return;
-    const uint64_t version = AuthorStyleVersion();
+    const uint64_t version = FlushVersion();
     if (document->styleFlushedVersion == version) return;
     flushing = true;
     Quanta::Embed::Call(ctx, Quanta::Embed::FromObject(document->styleFlush), Quanta::Embed::Undefined());
     flushing = false;
-    document->styleFlushedVersion = AuthorStyleVersion();
+    document->styleFlushedVersion = FlushVersion();
   };
   if (depth == 0) flush();
   struct Depth {
@@ -2673,9 +2777,9 @@ StyleReader::StyleReader(Quanta::Context& ctx, dom::Element* element, const std:
 StyleReader::~StyleReader() = default;
 
 std::string StyleReader::Get(const char* property) {
-  const uint64_t now = ((dom::DocumentVersion() * 1000003 + g_styleVersion) * 1000003 + g_cacheVersion) * 1000003 + g_animationVersion;
+  const uint64_t now = (((dom::DocumentVersion() * 1000003 + g_styleVersion) * 1000003 + g_cacheVersion) * 1000003 + g_animationVersion) * 1000003 + dom::StateVersion();
   if (memo_ && version_ == now && !AnimatedValuesSuppressed() && !StartingStyleFor(element_, pseudo_) &&
-      (!element_->nodeDocument->animationStyleSeen || element_->nodeDocument->styleFlushedVersion == AuthorStyleVersion())) {
+      (!element_->nodeDocument->animationStyleSeen || element_->nodeDocument->styleFlushedVersion == FlushVersion())) {
     const Memo& memo = *static_cast<const Memo*>(memo_.get());
     const auto found = memo.computed.find(std::string_view(property));
     if (found != memo.computed.end()) return found->second;
@@ -2686,7 +2790,7 @@ std::string StyleReader::Get(const char* property) {
     dom::Node* tree = dom::ShadowIncludingRoot(element_);
     if (tree && tree->IsDocument()) {
       memo_ = StyleOf(element_, pseudo_).memo;
-      version_ = ((dom::DocumentVersion() * 1000003 + g_styleVersion) * 1000003 + g_cacheVersion) * 1000003 + g_animationVersion;
+      version_ = (((dom::DocumentVersion() * 1000003 + g_styleVersion) * 1000003 + g_cacheVersion) * 1000003 + g_animationVersion) * 1000003 + dom::StateVersion();
     }
   }
   return value;
@@ -2774,4 +2878,33 @@ void ForgetDocument(dom::Document* document) {
   ++g_cacheVersion;
 }
 
+}  // namespace solar::css
+
+namespace solar::css {
+namespace {
+
+// A change of state is of the element and the ones above it alone when no rule asks for a state of an element other than its own subject, the document has no
+// shadow trees, and style is kept from one change to the next.
+const bool g_stateHookInstalled = [] {
+  dom::g_stateIsLocalHook = [](dom::Document* document, dom::Element* element) {
+    const StyleReuse reuse = StyleReuseFor(document);
+    if (!reuse.allowed || reuse.shadows) return false;
+    if (!reuse.stateAncestor) return true;
+    if (StateUnknown()) return false;
+    // The elements whose state changes are this one and the ones above it: if none is what a rule asks the state of, the elements under them are as they were.
+    MatchContext context;
+    context.quirks = document->mode == dom::Document::Mode::Quirks;
+    for (const dom::Element* chain = element; chain; chain = chain->parentNode ? dom::AsElement(chain->parentNode) : nullptr) {
+      for (const ComplexSelector& compound : StateCompounds()) {
+        if (MatchesComplex(compound, chain, context)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  };
+  return true;
+}();
+
+}  // namespace
 }  // namespace solar::css

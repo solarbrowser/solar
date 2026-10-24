@@ -17,6 +17,7 @@ enum DamageFlag : uint8_t {
   kDamageAttributes = 1,  // an attribute changed: a style may have changed with it
   kDamageChildren = 2,    // children were added or removed
   kDamageText = 4,        // character data changed
+  kDamageState = 16,      // a state (hover, focus) of the element changed, and no rule looks at it from another element: its style is made again, what is around it is not
   kDamageStyleSheets = 8, // the rules of the document changed: any element's style may have
 };
 
