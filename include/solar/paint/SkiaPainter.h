@@ -17,6 +17,8 @@ class SkiaPainter {
   SkiaPainter& operator=(const SkiaPainter&) = delete;
 
   void Draw(const DisplayList& list, SkCanvas& canvas);
+  // What was kept of a page that is left (decoded pictures, typefaces) is let go.
+  void Forget();
 
  private:
   struct Impl;

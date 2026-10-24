@@ -160,8 +160,24 @@ ImageRequestHandler g_imageRequestHandler;
 
 void SetImageRequestHandler(ImageRequestHandler handler) { g_imageRequestHandler = std::move(handler); }
 
-std::shared_ptr<const std::string> ImageDataOf(const std::string& address, const std::string& base, std::string* absoluteOut, bool* pending) {
+namespace {
+std::unordered_map<std::string, std::shared_ptr<const std::string>>& ImageBytesCache() {
   static std::unordered_map<std::string, std::shared_ptr<const std::string>> cache;
+  return cache;
+}
+std::unordered_map<std::string, std::array<double, 3>>& ImageMetricsCache() {
+  static std::unordered_map<std::string, std::array<double, 3>> cache;
+  return cache;
+}
+}  // namespace
+
+void ForgetImages() {
+  ImageBytesCache().clear();
+  ImageMetricsCache().clear();
+}
+
+std::shared_ptr<const std::string> ImageDataOf(const std::string& address, const std::string& base, std::string* absoluteOut, bool* pending) {
+  auto& cache = ImageBytesCache();
   if (pending) *pending = false;
   const std::string absolute = AbsoluteAddress(address, base);
   if (absoluteOut) *absoluteOut = absolute;
@@ -212,7 +228,7 @@ std::shared_ptr<const std::string> ImageDataOf(const std::string& address, const
 }
 
 bool ImageMetricsOf(const std::string& address, const std::string& base, double& w, double& h, double& ratio) {
-  static std::unordered_map<std::string, std::array<double, 3>> cache;
+  auto& cache = ImageMetricsCache();
   std::string absolute;
   bool pending = false;
   const std::shared_ptr<const std::string> bytes = ImageDataOf(address, base, &absolute, &pending);

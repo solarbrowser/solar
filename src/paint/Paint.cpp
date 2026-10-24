@@ -412,6 +412,19 @@ struct Decoration {
   Color color;
 };
 
+// The same picture is the same ImageData from one display list to the next: the painter decodes it once.
+ImageRef KeptImage(const std::string& key, const std::shared_ptr<const std::string>& bytes) {
+  static std::unordered_map<std::string, ImageRef> kept;
+  const auto found = kept.find(key);
+  if (found != kept.end() && (found->second->bytes == bytes || *found->second->bytes == *bytes)) return found->second;
+  if (kept.size() > 600) kept.clear();
+  auto data = std::make_shared<ImageData>();
+  data->bytes = bytes;
+  data->url = key;
+  kept[key] = data;
+  return data;
+}
+
 class Painter {
  public:
   Painter(Quanta::Context& ctx, Tree& tree) : ctx_(ctx), tree_(tree) {}
@@ -654,12 +667,7 @@ class Painter {
     ImageRef ref;
     std::string absolute;
     const std::shared_ptr<const std::string> bytes = layout::ImageDataOf(url, "", &absolute);
-    if (bytes && !bytes->empty()) {
-      auto data = std::make_shared<ImageData>();
-      data->bytes = bytes;
-      data->url = absolute;
-      ref = data;
-    }
+    if (bytes && !bytes->empty()) ref = KeptImage(absolute, bytes);
     images_[url] = ref;
     return ref;
   }
@@ -763,10 +771,7 @@ class Painter {
       std::string pseudo;
       const std::string color = css::ComputedValue(ctx_, svg, "color", pseudo);
       source->insert(4, " color=\"" + color + "\"");
-      auto data = std::make_shared<ImageData>();
-      data->url = "inline-svg:" + std::to_string(std::hash<std::string>{}(*source));
-      data->bytes = std::make_shared<const std::string>(std::move(*source));
-      image = data;
+      image = KeptImage("inline-svg:" + std::to_string(std::hash<std::string>{}(*source)), std::make_shared<const std::string>(std::move(*source)));
     } else {
       image = ImageFor(box.imageUrl);
     }

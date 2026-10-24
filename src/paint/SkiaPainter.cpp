@@ -129,6 +129,7 @@ struct SkiaPainter::Impl {
   sk_sp<SkImage> At(Decoded& decoded, int width, int height) {
     if (decoded.raster) return decoded.raster;
     if (!decoded.svg || width <= 0 || height <= 0 || width > 8192 || height > 8192) return nullptr;
+    if (decoded.rendered.size() > 6 && !decoded.rendered.count({width, height})) decoded.rendered.clear();
     auto& slot = decoded.rendered[{width, height}];
     if (!slot) {
       sk_sp<SkSurface> surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(width, height));
@@ -394,6 +395,11 @@ struct SkiaPainter::Impl {
   }
 };
 
+void SkiaPainter::Forget() {
+  impl_->images.clear();
+  impl_->typefaces.clear();
+}
+
 SkiaPainter::SkiaPainter() : impl_(std::make_unique<Impl>()) {}
 SkiaPainter::~SkiaPainter() = default;
 
@@ -498,6 +504,7 @@ void DrawBorderSide(SkCanvas& canvas, const DrawBorder& b, int side, const SkRRe
 }  // namespace
 
 void SkiaPainter::Draw(const DisplayList& list, SkCanvas& canvas) {
+  if (impl_->images.size() > 700) impl_->images.clear();
   for (const Item& item : list.items) {
     if (const auto* fill = std::get_if<FillRoundedRect>(&item)) {
       SkPaint paint;

@@ -38,6 +38,8 @@ bool TransformOf(const Box& box, Matrix& out);
 std::shared_ptr<const std::string> ImageDataOf(const std::string& address, const std::string& base, std::string* absolute = nullptr, bool* pending = nullptr);
 // Asked of an address that is not here yet: true if the program is getting it (then the answer is a later one), false to have it loaded where it is asked for.
 using ImageRequestHandler = std::function<bool(const std::string& absolute)>;
+// The pictures kept for the pages (their bytes and sizes) are let go: a page that is left has no use for them.
+void ForgetImages();
 void SetImageRequestHandler(ImageRequestHandler handler);
 std::string AbsoluteAddress(const std::string& address, const std::string& base);
 
