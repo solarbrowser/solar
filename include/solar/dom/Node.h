@@ -490,6 +490,8 @@ Attr* NewAttr(Quanta::Context& ctx, Document* document, std::string_view namespa
 // A number that changes whenever any tree does, which the live collections check to know whether what
 // they have found is still so.
 uint64_t TreeVersion();
+// Moves when a name or an id can be found by something else (see WindowNamedElements).
+uint64_t NameVersion();
 // How many nodes are alive (made and not yet collected), for looking for what keeps a page after it was left.
 // A document that will not be used again (a page that was left): what hangs from it is let go of, so that what keeps the document itself keeps no more than that.
 void DisposeDocument(Document* document);
@@ -565,6 +567,10 @@ const web::EventTargetOps* NodeEventOps();
 void WindowNamesOf(const Node* subtree, std::vector<std::string>& names);
 // Whether `element` is named `name` for window[name]: its id does, or its name does if it is one of the few that may be.
 bool HasWindowName(const Element* element, const std::string& name);
+// The elements of the document that window[name] is made of (null if there are none), in tree order: from an index kept for the version of the tree.
+const std::vector<Element*>* WindowNamedElements(Document* document, const std::string& name);
+// What is kept of a document's names is let go.
+void ForgetNameIndex(Document* document);
 
 // ---- The tree ----
 // Each is the algorithm of that name in the standard. All but the last return the error the standard

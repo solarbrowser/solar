@@ -1,6 +1,8 @@
 #include <algorithm>
 #include <cstdio>
 #include <string>
+#include <chrono>
+#include <cstdio>
 #include <unordered_map>
 
 #include "solar/dom/CustomElements.h"
@@ -431,15 +433,82 @@ bool HasDocumentName(const Element* element, const std::string& name) {
   return std::find(names.begin(), names.end(), name) != names.end();
 }
 
+namespace {
+// The names of the elements of a document, found once for a version of the tree: a script that asks for names that nothing has (a feature test on window,
+// document.x) asks again and again, and the tree is not walked for each.
+struct NameIndex {
+  uint64_t tree = 0, document = 0;
+  bool built = false;
+  std::unordered_map<std::string, std::vector<Element*>> window, named;
+};
+std::unordered_map<const Document*, NameIndex>& NameIndexes() {
+  static std::unordered_map<const Document*, NameIndex> indexes;
+  return indexes;
+}
+const NameIndex& NameIndexOf(Document* document) {
+  NameIndex& index = NameIndexes()[document];
+  if (index.built && index.tree == NameVersion()) return index;
+  index.window.clear();
+  index.named.clear();
+  static uint64_t builds = 0;
+  static double buildMs = 0;
+  const auto began = std::chrono::steady_clock::now();
+  for (Node* node = document->NextInTree(document); node; node = node->NextInTree(document)) {
+    if (!node->IsElement()) continue;
+    Element* element = static_cast<Element*>(node);
+    if (element->attributes.empty()) continue;
+    // (One look at the attributes: most elements have neither an id nor a name.)
+    const Attr* id = nullptr;
+    const Attr* name = nullptr;
+    for (const Attr* attribute : element->attributes) {
+      if (!attribute->namespaceUri.empty()) continue;
+      if (attribute->localName == "id") id = attribute;
+      else if (attribute->localName == "name") name = attribute;
+    }
+    if (!id && !name) continue;
+    if (id && !id->value.empty()) index.window[id->value].push_back(element);
+    if (element->IsHtml()) {
+      const std::string& tag = element->localName;
+      const bool named = tag == "embed" || tag == "form" || tag == "img" || tag == "object";
+      // (An element that has the same name as its id is one, not two.)
+      if (named && name && !name->value.empty() && !(id && id->value == name->value)) index.window[name->value].push_back(element);
+      std::vector<std::string> names;
+      DocumentNamesOf(element, names);
+      for (const std::string& each : names) {
+        std::vector<Element*>& list = index.named[each];
+        if (list.empty() || list.back() != element) list.push_back(element);
+      }
+    }
+  }
+  ++builds;
+  buildMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
+  if (std::getenv("SOLAR_NAME_DEBUG") && builds % 50 == 0) std::fprintf(stderr, "name index: %llu builds, %.0f ms\n", (unsigned long long)builds, buildMs);
+  index.tree = NameVersion();
+  index.built = true;
+  return index;
+}
+}  // namespace
+
+void ForgetNameIndex(Document* document) { NameIndexes().erase(document); }
+
+const std::vector<Element*>* WindowNamedElements(Document* document, const std::string& name) {
+  const NameIndex& index = NameIndexOf(document);
+  const auto found = index.window.find(name);
+  return found == index.window.end() ? nullptr : &found->second;
+}
+
 bool Document::NamedGetter(Context& ctx, Document& self, const std::string& name, Value& out) {
   if (name.empty()) return false;
   Element* first = nullptr;
   size_t count = 0;
-  for (Node* node = self.NextInTree(&self); node; node = node->NextInTree(&self)) {
-    Element* element = AsElement(node);
-    if (element && HasDocumentName(element, name)) {
-      if (!first) first = element;
-      ++count;
+  {
+    const NameIndex& index = NameIndexOf(&self);
+    const auto found = index.named.find(name);
+    if (found != index.named.end()) {
+      for (Element* element : found->second) {
+        if (!first) first = element;
+        ++count;
+      }
     }
   }
   if (count == 0) return false;

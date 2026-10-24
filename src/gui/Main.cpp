@@ -904,21 +904,35 @@ int PageMain(Shared& shared, int argc, char** argv) {
     solar::html::LoadPage(*realm, document, markup, type);
     if (timing_log) std::fprintf(stderr, "[%.0f ms] LoadPage ends\n", std::chrono::duration<double, std::milli>(Clock::now().time_since_epoch()).count());
     if (timing_log) std::fprintf(stderr, "  LoadPage took %.0f ms (%.0f ms of it waiting; scripts %.0f ms, style sheets parsed %.0f ms, layout %.0f ms)\n", std::chrono::duration<double, std::milli>(Clock::now() - loadStart).count(), browser.waited_, solar::html::ScriptMillis(), solar::css::SheetParseMillis(), solar::layout::LayoutMillis());
+    const auto stepStart = Clock::now();
+    auto lap = [&, last = stepStart](const char* what) mutable {
+      const auto now = Clock::now();
+      if (timing_log) std::fprintf(stderr, "    after load: %-28s %7.0f ms\n", what, std::chrono::duration<double, std::milli>(now - last).count());
+      last = now;
+    };
     isolate->PerformMicrotaskCheckpoint();
+    lap("microtasks");
     const auto settle = Clock::now() + std::chrono::milliseconds(30);
     while (Clock::now() < settle) events.Step(std::chrono::milliseconds(8));
+    lap("settle");
     browser.TakeArrived();
     browser.TakeSizesArrived();
     if (left) {
       // The page that was left: its timers stop, what hangs from its document is let go of, its realm goes, and what is no more used is collected.
       timers.DropRealm(left);
+      lap("timers dropped");
       if (leftDocument) solar::dom::DisposeDocument(leftDocument);
+      lap("document disposed");
       if (leftDocument) solar::css::ForgetDocument(leftDocument);
+      lap("style forgotten");
       browser.ReleaseRealm(left);
+      lap("realm released");
       solar::layout::ForgetImages();
       shared.Post({UiCommand::Kind::Forget});
       browser.TrimResources(48u << 20);
+      lap("resources trimmed");
       isolate->CollectGarbage();
+      lap("garbage collected");
     }
     std::fprintf(stderr, "loaded in %.0f ms\n", std::chrono::duration<double, std::milli>(Clock::now() - started).count());
     {

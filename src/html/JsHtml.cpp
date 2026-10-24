@@ -1174,17 +1174,9 @@ Value IllegalWindowConstructor(Context& ctx, Value, qe::Args, Value) {
 bool NamedWindowProperty(qe::Realm* realm, const std::string& name, Value& out) {
   dom::Document* document = DocumentOfRealm(realm);
   if (!document) return false;
-  dom::Element* first = nullptr;
-  size_t count = 0;
-  for (dom::Node* node = document->NextInTree(document); node; node = node->NextInTree(document)) {
-    dom::Element* element = dom::AsElement(node);
-    if (element && dom::HasWindowName(element, name)) {
-      if (!first) first = element;
-      ++count;
-    }
-  }
-  if (count == 0) return false;
-  out = count == 1 ? qe::FromObject(first) : dom::NewWindowNamedCollection(realm->GetContext(), document, name);
+  const std::vector<dom::Element*>* elements = dom::WindowNamedElements(document, name);
+  if (!elements || elements->empty()) return false;
+  out = elements->size() == 1 ? qe::FromObject(elements->front()) : dom::NewWindowNamedCollection(realm->GetContext(), document, name);
   return true;
 }
 

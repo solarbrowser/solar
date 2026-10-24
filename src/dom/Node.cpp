@@ -120,6 +120,13 @@ void MarkLinks(Node* node) { MarkPending(node, kPendingLinks); }
 
 thread_local int g_committedViewDepth = 0;
 
+// Moves when what an id or a name can be found by moves: a node is linked or unlinked, an id or a name attribute is set or taken off.
+static uint64_t g_nameVersion = 1;
+uint64_t NameVersion() { return g_nameVersion; }
+static void NoteAttributeName(const Attr* attribute) {
+  if (attribute->namespaceUri.empty() && (attribute->localName == "id" || attribute->localName == "name")) ++g_nameVersion;
+}
+
 namespace {
 // The versions of the documents and their states, as script moves them and as they were when last committed.
 uint64_t g_documentVersion = 1;
@@ -215,6 +222,7 @@ CommittedViewScope::~CommittedViewScope() { --g_committedViewDepth; }
 
 void DisposeDocument(Document* document) {
   if (!document) return;
+  ForgetNameIndex(document);
   // Every node that hangs from it, through the children, the shadow trees and the contents of templates.
   std::vector<Node*> all;
   std::vector<Node*> pending = {document};
@@ -613,6 +621,7 @@ std::optional<DomError> Validate(Node* node, Node* parent, Node* child, bool rep
 }
 
 void Unlink(Node* node) {
+  ++g_nameVersion;
   NoteTreeChangeAt(node->parentNode);
   NoteDamage(node->parentNode, kDamageChildren);
   Node* parent = node->parentNode;
@@ -641,6 +650,7 @@ void Unlink(Node* node) {
 }
 
 void Link(Node* node, Node* parent, Node* child) {
+  ++g_nameVersion;
   NoteTreeChangeAt(parent);
   NoteDamage(parent, kDamageChildren);
   MarkLinks(node);
@@ -667,6 +677,7 @@ void Link(Node* node, Node* parent, Node* child) {
 }
 
 void SetDocumentOfTree(Node* node, Document* document) {
+  ++g_nameVersion;
   for (Node* n = node; n; n = n->NextInTree(node)) {
     if (n->nodeDocument != document) {
       n->nodeDocument = document;
@@ -968,6 +979,7 @@ void AppendCharacterData(CharacterData* node, std::string_view data) {
 }
 
 void SetAttrValue(Attr* attribute, std::string value) {
+  NoteAttributeName(attribute);
   Element* owner = attribute->ownerElement;
   if (owner && HasMutationObservers()) QueueAttributeRecord(owner, attribute->localName, attribute->namespaceUri, attribute->value);
   const std::string old = attribute->value;
@@ -983,6 +995,7 @@ void SetAttrValue(Attr* attribute, std::string value) {
 }
 
 void AppendAttr(Element* element, Attr* attribute) {
+  NoteAttributeName(attribute);
   attribute->ownerElement = element;
   attribute->nodeDocument = element->nodeDocument;
   element->attributes.push_back(attribute);
@@ -1289,6 +1302,7 @@ std::optional<DomError> SetAttribute(Context& ctx, Element* element, std::string
 std::optional<DomError> SetAttributeNode(Element* element, Attr* attribute, Attr*& replaced) {
   replaced = nullptr;
   if (attribute->ownerElement && attribute->ownerElement != element) return DomError{"InUseAttributeError", "The attribute is in use by another element"};
+  NoteAttributeName(attribute);
   Attr* old = element->FindAttribute(attribute->namespaceUri, attribute->localName);
   if (old == attribute) {
     replaced = attribute;
@@ -1317,6 +1331,7 @@ std::optional<DomError> SetAttributeNode(Element* element, Attr* attribute, Attr
 }
 
 void RemoveAttributeNode(Element* element, Attr* attribute) {
+  NoteAttributeName(attribute);
   if (HasMutationObservers()) QueueAttributeRecord(element, attribute->localName, attribute->namespaceUri, attribute->value);
   element->attributes.erase(std::find(element->attributes.begin(), element->attributes.end(), attribute));
   attribute->ownerElement = nullptr;
