@@ -617,6 +617,64 @@ const char* const kWindowScript = R"JS(
       return event.defaultPrevented;
     });
   setHelper("fireFocus", (target, type, related, bubbles) => target.dispatchEvent(new FocusEvent(type, { bubbles, composed: true, relatedTarget: related, view: globalThis })));
+  // The constructors of elements that HTML names as functions: new Image(width, height), new Audio(src), new Option(text, value, defaultSelected, selected).
+  const defineGlobal = (name, value) => Object.defineProperty(globalThis, name, { value, writable: true, enumerable: false, configurable: true });
+  const Image = function Image(width, height) {
+    const element = getDocument().createElement("img");
+    if (width !== undefined) element.setAttribute("width", String(width));
+    if (height !== undefined) element.setAttribute("height", String(height));
+    return element;
+  };
+  Image.prototype = globalThis.HTMLImageElement.prototype;
+  defineGlobal("Image", Image);
+  const Audio = function Audio(src) {
+    const element = getDocument().createElement("audio");
+    element.setAttribute("preload", "auto");
+    if (src !== undefined) element.setAttribute("src", String(src));
+    return element;
+  };
+  Audio.prototype = globalThis.HTMLAudioElement.prototype;
+  defineGlobal("Audio", Audio);
+  const Option = function Option(text, value, defaultSelected, selected) {
+    const element = getDocument().createElement("option");
+    if (text !== undefined) element.appendChild(getDocument().createTextNode(String(text)));
+    if (value !== undefined) element.setAttribute("value", String(value));
+    if (defaultSelected) element.setAttribute("selected", "");
+    if (selected !== undefined) element.selected = !!selected;
+    return element;
+  };
+  Option.prototype = globalThis.HTMLOptionElement.prototype;
+  defineGlobal("Option", Option);
+  // btoa and atob (https://infra.spec.whatwg.org/#forgiving-base64): a string of bytes and its base64.
+  const base64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  defineGlobal("btoa", function btoa(data) {
+    if (arguments.length === 0) throw new TypeError("btoa requires 1 argument");
+    const input = String(data);
+    let out = "";
+    for (let i = 0; i < input.length; i += 3) {
+      const a = input.charCodeAt(i), b = input.charCodeAt(i + 1), c = input.charCodeAt(i + 2);
+      if (a > 255 || b > 255 || c > 255) throw new DOMException("The string to be encoded contains characters outside of the Latin1 range.", "InvalidCharacterError");
+      const n = (a << 16) | ((b || 0) << 8) | (c || 0);
+      out += base64[(n >> 18) & 63] + base64[(n >> 12) & 63] + (i + 1 < input.length ? base64[(n >> 6) & 63] : "=") + (i + 2 < input.length ? base64[n & 63] : "=");
+    }
+    return out;
+  });
+  defineGlobal("atob", function atob(data) {
+    if (arguments.length === 0) throw new TypeError("atob requires 1 argument");
+    let input = String(data).replace(/[\t\n\f\r ]/g, "");
+    if (input.length % 4 === 0) input = input.replace(/==?$/, "");
+    if (input.length % 4 === 1 || /[^A-Za-z0-9+/]/.test(input)) throw new DOMException("The string to be decoded is not correctly encoded.", "InvalidCharacterError");
+    let out = "", bits = 0, value = 0;
+    for (const ch of input) {
+      value = (value << 6) | base64.indexOf(ch);
+      bits += 6;
+      if (bits >= 8) {
+        bits -= 8;
+        out += String.fromCharCode((value >> bits) & 255);
+      }
+    }
+    return out;
+  });
   // window.focus() and blur(): the window has the focus already, and has no other window to give it to.
   for (const name of ["focus", "blur"]) Object.defineProperty(globalThis, name, { value: function () {}, writable: true, enumerable: true, configurable: true });
   for (const name of ["__solarParent", "__solarFrameElement", "__solarChildCount", "__solarChildWindow"]) delete globalThis[name];
