@@ -7,6 +7,7 @@
 #include "solar/dom/Traversal.h"
 
 #include <algorithm>
+#include <cstdlib>
 
 namespace solar::dom {
 
@@ -120,11 +121,38 @@ void MarkLinks(Node* node) { MarkPending(node, kPendingLinks); }
 
 thread_local int g_committedViewDepth = 0;
 
-// Moves when what an id or a name can be found by moves: a node is linked or unlinked, an id or a name attribute is set or taken off.
+// Moves when what an id or a name can be found by moves: a node that has one (or has what has one) is linked or unlinked, an id or a name attribute is set or
+// taken off. And the same for the base of the document: a base element comes or goes, or its href changes.
 static uint64_t g_nameVersion = 1;
+static uint64_t g_baseVersion = 1;
 uint64_t NameVersion() { return g_nameVersion; }
+uint64_t BaseVersion() { return g_baseVersion; }
 static void NoteAttributeName(const Attr* attribute) {
-  if (attribute->namespaceUri.empty() && (attribute->localName == "id" || attribute->localName == "name")) ++g_nameVersion;
+  if (!attribute->namespaceUri.empty()) return;
+  if (attribute->localName == "id" || attribute->localName == "name") ++g_nameVersion;
+  else if (attribute->localName == "href" && (!attribute->ownerElement || attribute->ownerElement->IsHtml("base"))) ++g_baseVersion;
+}
+// Whether linking or unlinking the node can change what an id or a name finds, or the base.
+static void NoteSubtreeLinked(const Node* node) {
+  if (!node->IsElement()) return;
+  const Element* element = static_cast<const Element*>(node);
+  if (node->firstChild) {
+    ++g_nameVersion;
+    for (Node* n = const_cast<Node*>(node); n; n = n->NextInTree(node)) {
+      if (n->IsElement() && static_cast<const Element*>(n)->IsHtml("base")) {
+        ++g_baseVersion;
+        break;
+      }
+    }
+    return;
+  }
+  if (element->IsHtml("base")) ++g_baseVersion;
+  for (const Attr* attribute : element->attributes) {
+    if (attribute->namespaceUri.empty() && (attribute->localName == "id" || attribute->localName == "name")) {
+      ++g_nameVersion;
+      return;
+    }
+  }
 }
 
 namespace {
@@ -621,7 +649,7 @@ std::optional<DomError> Validate(Node* node, Node* parent, Node* child, bool rep
 }
 
 void Unlink(Node* node) {
-  ++g_nameVersion;
+  NoteSubtreeLinked(node);
   NoteTreeChangeAt(node->parentNode);
   NoteDamage(node->parentNode, kDamageChildren);
   Node* parent = node->parentNode;
@@ -650,7 +678,7 @@ void Unlink(Node* node) {
 }
 
 void Link(Node* node, Node* parent, Node* child) {
-  ++g_nameVersion;
+  NoteSubtreeLinked(node);
   NoteTreeChangeAt(parent);
   NoteDamage(parent, kDamageChildren);
   MarkLinks(node);
@@ -678,6 +706,7 @@ void Link(Node* node, Node* parent, Node* child) {
 
 void SetDocumentOfTree(Node* node, Document* document) {
   ++g_nameVersion;
+  ++g_baseVersion;
   for (Node* n = node; n; n = n->NextInTree(node)) {
     if (n->nodeDocument != document) {
       n->nodeDocument = document;

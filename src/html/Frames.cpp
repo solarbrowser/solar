@@ -55,7 +55,7 @@ std::string Resolve(const std::string& relative, const std::string& base);
 std::string BaseOf(const dom::Document* document) {
   static std::map<const dom::Document*, std::tuple<uint64_t, std::string, std::string>> cache;  // tree version, address, base
   const auto found = cache.find(document);
-  if (found != cache.end() && std::get<0>(found->second) == dom::TreeVersion() && std::get<1>(found->second) == document->url) return std::get<2>(found->second);
+  if (found != cache.end() && std::get<0>(found->second) == dom::BaseVersion() && std::get<1>(found->second) == document->url) return std::get<2>(found->second);
   std::string base = FallbackBaseOf(document);
   for (dom::Node* node = document->firstChild; node; node = node->NextInTree(const_cast<dom::Document*>(document))) {
     dom::Element* element = dom::AsElement(node);
@@ -65,7 +65,7 @@ std::string BaseOf(const dom::Document* document) {
       break;
     }
   }
-  cache[document] = {dom::TreeVersion(), document->url, base};
+  cache[document] = {dom::BaseVersion(), document->url, base};
   return base;
 }
 

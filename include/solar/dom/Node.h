@@ -492,6 +492,8 @@ Attr* NewAttr(Quanta::Context& ctx, Document* document, std::string_view namespa
 uint64_t TreeVersion();
 // Moves when a name or an id can be found by something else (see WindowNamedElements).
 uint64_t NameVersion();
+// Moves when the base of a document (its first base element, or that one's href) can have changed.
+uint64_t BaseVersion();
 // How many nodes are alive (made and not yet collected), for looking for what keeps a page after it was left.
 // A document that will not be used again (a page that was left): what hangs from it is let go of, so that what keeps the document itself keeps no more than that.
 void DisposeDocument(Document* document);

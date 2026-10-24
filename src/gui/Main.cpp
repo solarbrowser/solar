@@ -1031,7 +1031,8 @@ int PageMain(Shared& shared, int argc, char** argv) {
   // The page is shown while it is still being loaded (what the parser has made, once a script or a picture is waited for): a page that takes seconds to be
   // loaded has its first part drawn in the first one. How often is held to what a frame costs, so that showing it does not slow the loading.
   const auto paintEarly = [&] {
-    if (!loadingPage || !document || !realm || Clock::now() < nextEarly) return;
+    static const bool never = std::getenv("SOLAR_NO_EARLY") != nullptr;
+    if (never || !loadingPage || !document || !realm || Clock::now() < nextEarly) return;
     // Nothing is drawn before the body has something in it.
     solar::dom::Element* root = document->DocumentElement();
     solar::dom::Element* body = nullptr;
