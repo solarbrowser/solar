@@ -101,9 +101,9 @@ bool Triplets(Reader& flags, Reader& data, size_t count, std::vector<Point>& poi
     int dx, dy;
     if (flag < 10) {
       dx = 0;
-      dy = Signed(flag, ((flag & 14) << 8) + data.U8());
+      dy = Signed(flag, ((flag & 14) << 7) + data.U8());
     } else if (flag < 20) {
-      dx = Signed(flag, (((flag - 10) & 14) << 8) + data.U8());
+      dx = Signed(flag, (((flag - 10) & 14) << 7) + data.U8());
       dy = 0;
     } else if (flag < 84) {
       const int b0 = flag - 20, b1 = data.U8();
