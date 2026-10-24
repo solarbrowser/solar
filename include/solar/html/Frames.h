@@ -76,13 +76,16 @@ void FireChange(dom::Document* document, dom::Element* target);
 void SetCaret(dom::Document* document, dom::Element* target, size_t start, size_t end);
 
 // What a form control shows (its value, whether it is checked, what it says when it is a button or a list), and where the caret and the
-// selection of a text control are, as the script of the window has them. False for an element that is not a control.
+// selection of a text control are. False for an element that is not a control.
 struct ControlView {
   std::string kind, type, value, placeholder, label;
   bool checked = false, indeterminate = false, disabled = false, readOnly = false;
   size_t start = 0, end = 0;  // in UTF-16 units of the value
 };
 bool ReadControl(dom::Element* element, ControlView& out);
+// Asks the script of the window for the state of the controls that changed since, and keeps it for ReadControl (which gives it as it was committed).
+// Called before a frame is made.
+void RefreshControls(dom::Document* document);
 
 // Parses `markup` into `document`, a document made in `realm` that has had InstallWindow, runs its scripts, and
 // fires DOMContentLoaded and, once the frames in it have loaded, load. Returns whether every script ran.

@@ -58,7 +58,30 @@ DamageTracker* DamageOf(Node* node) {
   return document->damage.get();
 }
 
+namespace {
+// The form control whose looks a change to the node may change: the control itself, the select an option or a group is in, the textarea or option a text is in.
+Element* ControlOfChange(Node* node) {
+  if (!node) return nullptr;
+  if (node->IsText() && node->parentNode) node = node->parentNode;
+  if (!node->IsElement()) return nullptr;
+  Element* element = static_cast<Element*>(node);
+  if (!element->IsHtml()) return nullptr;
+  const std::string& name = element->localName;
+  if (name == "input" || name == "select" || name == "textarea" || name == "button") return element;
+  if (name == "option" || name == "optgroup") {
+    for (Node* up = element->parentNode; up; up = up->parentNode) {
+      if (up->IsElement() && static_cast<Element*>(up)->IsHtml("select")) return static_cast<Element*>(up);
+      if (!up->IsElement() || !static_cast<Element*>(up)->IsHtml("optgroup")) return nullptr;
+    }
+  }
+  return nullptr;
+}
+}  // namespace
+
 void NoteDamage(Node* node, uint8_t flags) {
+  if (flags & (kDamageAttributes | kDamageChildren | kDamageText)) {
+    if (Element* control = ControlOfChange(node)) MarkControlDirty(control);
+  }
   // What style and layout read of the node is taken over at the next commit.
   if (node) {
     if (flags & kDamageAttributes) MarkPending(node, kPendingAttributes);

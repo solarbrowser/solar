@@ -114,6 +114,7 @@ struct Node : web::JsEventTarget {
     Node* next = nullptr;
     Element* assignedSlot = nullptr;  // the slot a slottable is assigned to
   } committed;
+  bool controlDirty = false;  // a form control: what it shows may have changed, and the script of the window is asked for it again before the next frame
   uint8_t pendingMask = 0;  // what of it changed since it was committed (kPending...: it is in the list of CommitPending)
   // The document the node belongs to; null only for a Document itself.
   Document* nodeDocument = nullptr;
@@ -153,7 +154,13 @@ struct Node : web::JsEventTarget {
 // Pending and committed. Script reads and writes the fields of a node as they are (pending). Style and layout work from what was committed at the
 // start of the frame, so that what script does while they work does not reach them half way. They read through these, which give the committed
 // links inside a CommittedViewScope and the pending ones outside it (so that the same code can serve script, as the selector matcher does).
-enum PendingKind : uint8_t { kPendingLinks = 1, kPendingAttributes = 2, kPendingText = 4, kPendingShadow = 8, kPendingDocumentState = 16, kPendingVersions = 32, kPendingAnimated = 64 };
+enum PendingKind : uint8_t { kPendingLinks = 1, kPendingAttributes = 2, kPendingText = 4, kPendingShadow = 8, kPendingDocumentState = 16, kPendingVersions = 32, kPendingAnimated = 64, kPendingControl = 128 };
+// What a form control shows, as the script of the window works it out (JsForms.cpp) and hands over; painting reads it, in the committed form.
+struct ControlState {
+  std::string kind, type, value, placeholder, label;
+  bool checked = false, indeterminate = false, disabled = false, readOnly = false;
+  size_t start = 0, end = 0;  // the caret and the selection, in UTF-16 units of the value
+};
 // Notes that the node changed in the way, to be committed.
 void MarkPending(Node* node, uint8_t kinds);
 extern thread_local int g_committedViewDepth;
@@ -167,6 +174,9 @@ inline Element* AssignedSlotOf(const Node* n) { return g_committedViewDepth ? n-
 // The versions of the documents (see DocumentVersion): in a committed view, as they were when it was committed.
 // Takes what script changed into the committed state. Nothing is lost by calling it again; it does nothing when nothing changed.
 void CommitPending();
+// The form controls that may show something else than they did: taken (and forgotten) by whoever asks the script of the window for their state.
+void MarkControlDirty(Element* control);
+std::vector<Element*> TakeDirtyControls();
 // Begins a frame's work on the committed state (and commits what is pending, if this is the outermost one). Where script runs in the middle of
 // it, CommittedViewSuspend puts the pending state back for as long as it lives.
 struct CommittedViewScope {
@@ -317,6 +327,9 @@ struct Element : Node {
     return g_committedViewDepth ? committedVersions : Versions{attrVersion, stateVersion, childrenVersion, childAttrVersion, animVersion, animInheritVersion, subtreeVersion};
   }
   std::map<std::string, std::map<std::string, std::string>> committedAnimatedValues;
+  // A form control's state: what script's side made of it last (pending), and as committed.
+  std::shared_ptr<const ControlState> control, committedControl;
+  const ControlState* ControlInView() const { return (g_committedViewDepth ? committedControl : control).get(); }
   const std::map<std::string, std::map<std::string, std::string>>& AnimatedValuesInView() const { return g_committedViewDepth ? committedAnimatedValues : animatedValues; }
   // Layout's style of the element (a BoxStyle) and what it was made from.
   std::shared_ptr<const void> layoutStyle;

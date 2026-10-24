@@ -57,27 +57,56 @@ bool TypeInto(dom::Document* document, dom::Element* target, const std::string& 
 }
 
 bool ReadControl(dom::Element* element, ControlView& out) {
-  dom::Document* document = element ? element->nodeDocument : nullptr;
-  if (!document || !document->context) return false;
-  Context& ctx = *document->context;
-  Value arguments[] = {qe::FromObject(element)};
-  const Value meta = CallHelper(document, "formMeta", arguments, 1);
-  if (!qe::IsObject(meta)) return false;
-  const auto text = [&](const char* name) { Value v = qe::Get(ctx, meta, name); return qe::IsString(v) ? qe::ToWtf8(ctx, v) : std::string(); };
-  const auto flag = [&](const char* name) { return qe::ToBoolean(qe::Get(ctx, meta, name)); };
-  const auto number = [&](const char* name) { Value v = qe::Get(ctx, meta, name); return qe::IsNumber(v) ? static_cast<size_t>(qe::ToNumber(ctx, v)) : size_t(0); };
-  out.kind = text("kind");
-  out.type = text("type");
-  out.value = text("value");
-  out.placeholder = text("placeholder");
-  out.label = text("label");
-  out.checked = flag("checked");
-  out.indeterminate = flag("indeterminate");
-  out.disabled = flag("disabled");
-  out.readOnly = flag("readonly");
-  out.start = number("start");
-  out.end = number("end");
+  // What the control shows as it was committed: no script is asked, so this can be done away from the thread script runs on.
+  const dom::ControlState* state = element ? element->ControlInView() : nullptr;
+  if (!state) return false;
+  out.kind = state->kind;
+  out.type = state->type;
+  out.value = state->value;
+  out.placeholder = state->placeholder;
+  out.label = state->label;
+  out.checked = state->checked;
+  out.indeterminate = state->indeterminate;
+  out.disabled = state->disabled;
+  out.readOnly = state->readOnly;
+  out.start = state->start;
+  out.end = state->end;
   return true;
+}
+
+void RefreshControls(dom::Document* document) {
+  if (!document || !document->context) return;
+  Context& ctx = *document->context;
+  for (dom::Element* element : dom::TakeDirtyControls()) {
+    if (element->nodeDocument != document) {
+      if (element->nodeDocument) dom::MarkControlDirty(element);
+      continue;
+    }
+    Value arguments[] = {qe::FromObject(element)};
+    const Value meta = CallHelper(document, "formMeta", arguments, 1);
+    if (!qe::IsObject(meta)) {
+      element->control.reset();
+      dom::MarkPending(element, dom::kPendingControl);
+      continue;
+    }
+    const auto text = [&](const char* name) { Value v = qe::Get(ctx, meta, name); return qe::IsString(v) ? qe::ToWtf8(ctx, v) : std::string(); };
+    const auto flag = [&](const char* name) { return qe::ToBoolean(qe::Get(ctx, meta, name)); };
+    const auto number = [&](const char* name) { Value v = qe::Get(ctx, meta, name); return qe::IsNumber(v) ? static_cast<size_t>(qe::ToNumber(ctx, v)) : size_t(0); };
+    auto state = std::make_shared<dom::ControlState>();
+    state->kind = text("kind");
+    state->type = text("type");
+    state->value = text("value");
+    state->placeholder = text("placeholder");
+    state->label = text("label");
+    state->checked = flag("checked");
+    state->indeterminate = flag("indeterminate");
+    state->disabled = flag("disabled");
+    state->readOnly = flag("readonly");
+    state->start = number("start");
+    state->end = number("end");
+    element->control = std::move(state);
+    dom::MarkPending(element, dom::kPendingControl);
+  }
 }
 
 void SetCaret(dom::Document* document, dom::Element* target, size_t start, size_t end) {

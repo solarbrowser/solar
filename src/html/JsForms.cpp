@@ -10,7 +10,8 @@ namespace {
 const char* const kFormScript = R"JS(
 (function () {
   const setHelper = globalThis.__solarSetHelper;
-  const formChanged = (e) => { if (typeof __solarFormChanged === "function") __solarFormChanged(e); };
+  const nativeChanged = globalThis.__solarFormChanged;
+  const formChanged = (e) => { if (e && nativeChanged) nativeChanged(e); };
   const define = (proto, name, get, set) => Object.defineProperty(proto, name, { get, set, enumerable: true, configurable: true });
   const method = (proto, name, fn) => Object.defineProperty(proto, name, { value: fn, writable: true, enumerable: true, configurable: true });
   const str = (proto, prop, attr = prop.toLowerCase(), fallback = "") => define(proto, prop, function () { const v = this.getAttribute(attr); return v === null ? fallback : v; }, function (v) { this.setAttribute(attr, String(v)); });
@@ -119,7 +120,7 @@ const char* const kFormScript = R"JS(
     formChanged(this);
   });
   define(I, "checked", function () { const s = stateOf(this); return s.checkedDirty ? s.checked : this.hasAttribute("checked"); }, function (v) { setChecked(this, !!v); });
-  define(I, "indeterminate", function () { return stateOf(this).indeterminate; }, function (v) { stateOf(this).indeterminate = !!v; });
+  define(I, "indeterminate", function () { return stateOf(this).indeterminate; }, function (v) { stateOf(this).indeterminate = !!v; formChanged(this); });
   define(I, "valueAsNumber", function () { const n = parseFloat(this.value); return Number.isFinite(n) ? n : NaN; }, function (v) { this.value = String(v); });
   define(I, "valueAsDate", function () { return null; });
   method(I, "stepUp", function (n = 1) { const step = parseFloat(this.step) || 1; this.value = String((parseFloat(this.value) || 0) + step * n); });
@@ -134,18 +135,18 @@ const char* const kFormScript = R"JS(
   const setChecked = (e, v) => {
     const s = stateOf(e);
     s.checked = v; s.checkedDirty = true;
-    if (v && typeOf(e) === "radio") for (const o of groupOf(e)) if (o !== e) { const os = stateOf(o); os.checked = false; os.checkedDirty = true; }
+    if (v && typeOf(e) === "radio") for (const o of groupOf(e)) if (o !== e) { const os = stateOf(o); os.checked = false; os.checkedDirty = true; formChanged(o); }
     formChanged(e);
   };
   // Selection in text controls.
   const selectionApplies = (e) => e instanceof HTMLTextAreaElement || ["text", "search", "tel", "url", "password"].includes(typeOf(e));
   const clampSel = (e) => { const s = stateOf(e), n = e.value.length; s.start = Math.min(s.start, n); s.end = Math.min(Math.max(s.end, s.start), n); return s; };
   for (const proto of [I, T]) {
-    define(proto, "selectionStart", function () { if (!selectionApplies(this)) return null; return clampSel(this).start; }, function (v) { const s = clampSel(this); s.start = Math.min(Math.max(0, v | 0), this.value.length); if (s.end < s.start) s.end = s.start; });
-    define(proto, "selectionEnd", function () { if (!selectionApplies(this)) return null; return clampSel(this).end; }, function (v) { const s = clampSel(this); s.end = Math.min(Math.max(s.start, v | 0), this.value.length); });
+    define(proto, "selectionStart", function () { if (!selectionApplies(this)) return null; return clampSel(this).start; }, function (v) { const s = clampSel(this); s.start = Math.min(Math.max(0, v | 0), this.value.length); if (s.end < s.start) s.end = s.start; formChanged(this); });
+    define(proto, "selectionEnd", function () { if (!selectionApplies(this)) return null; return clampSel(this).end; }, function (v) { const s = clampSel(this); s.end = Math.min(Math.max(s.start, v | 0), this.value.length); formChanged(this); });
     define(proto, "selectionDirection", function () { return selectionApplies(this) ? stateOf(this).direction : null; }, function (v) { stateOf(this).direction = String(v); });
-    method(proto, "select", function () { const s = stateOf(this); s.start = 0; s.end = this.value.length; });
-    method(proto, "setSelectionRange", function (a, b, d = "none") { const n = this.value.length, s = stateOf(this); s.start = Math.min(a | 0, n); s.end = Math.min(Math.max(b | 0, s.start), n); s.direction = d; });
+    method(proto, "select", function () { const s = stateOf(this); s.start = 0; s.end = this.value.length; formChanged(this); });
+    method(proto, "setSelectionRange", function (a, b, d = "none") { const n = this.value.length, s = stateOf(this); s.start = Math.min(a | 0, n); s.end = Math.min(Math.max(b | 0, s.start), n); s.direction = d; formChanged(this); });
     method(proto, "setRangeText", function (text, a, b) {
       const s = clampSel(this), v = this.value;
       if (a === undefined) { a = s.start; b = s.end; }
@@ -178,7 +179,7 @@ const char* const kFormScript = R"JS(
   define(O, "form", function () { const s = selectOf(this); return s ? s.form : null; });
   define(O, "index", function () { const s = selectOf(this); return s ? optionsOf(s).indexOf(this) : 0; });
   define(O, "selected", function () { const s = stateOf(this); if (s.checkedDirty) return s.checked; const sel = selectOf(this); if (sel) resetSelection(sel); const t = stateOf(this); return t.checkedDirty ? t.checked : this.hasAttribute("selected"); },
-    function (v) { const s = stateOf(this); s.checked = !!v; s.checkedDirty = true; const sel = selectOf(this); if (sel && v && !sel.multiple) for (const o of optionsOf(sel)) if (o !== this) { const os = stateOf(o); os.checked = false; os.checkedDirty = true; } });
+    function (v) { const s = stateOf(this); s.checked = !!v; s.checkedDirty = true; const sel = selectOf(this); if (sel && v && !sel.multiple) for (const o of optionsOf(sel)) if (o !== this) { const os = stateOf(o); os.checked = false; os.checkedDirty = true; } formChanged(sel); });
   // A select with no selected option (and not multiple, with display size 1) selects its first non-disabled option.
   const resetSelection = (sel) => {
     const options = optionsOf(sel);
@@ -193,8 +194,8 @@ const char* const kFormScript = R"JS(
   define(S, "selectedOptions", function () { resetSelection(this); return optionsOf(this).filter((o) => o.selected); });
   define(S, "length", function () { return optionsOf(this).length; });
   define(S, "type", function () { return this.multiple ? "select-multiple" : "select-one"; });
-  define(S, "selectedIndex", function () { resetSelection(this); return optionsOf(this).findIndex((o) => o.selected); }, function (v) { const options = optionsOf(this); options.forEach((o, i) => { const s = stateOf(o); s.checked = i === v; s.checkedDirty = true; }); });
-  define(S, "value", function () { resetSelection(this); const o = optionsOf(this).find((x) => x.selected); return o ? o.value : ""; }, function (v) { let found = false; for (const o of optionsOf(this)) { const s = stateOf(o); s.checked = !found && o.value === String(v); s.checkedDirty = true; if (s.checked) found = true; } });
+  define(S, "selectedIndex", function () { resetSelection(this); return optionsOf(this).findIndex((o) => o.selected); }, function (v) { const options = optionsOf(this); options.forEach((o, i) => { const s = stateOf(o); s.checked = i === v; s.checkedDirty = true; }); formChanged(this); });
+  define(S, "value", function () { resetSelection(this); const o = optionsOf(this).find((x) => x.selected); return o ? o.value : ""; }, function (v) { let found = false; for (const o of optionsOf(this)) { const s = stateOf(o); s.checked = !found && o.value === String(v); s.checkedDirty = true; if (s.checked) found = true; } formChanged(this); });
   bool(S, "multiple"); bool(S, "required"); int(S, "size", "size", 0);
   method(S, "item", function (i) { return optionsOf(this)[i] || null; });
   method(S, "namedItem", function (n) { return optionsOf(this).find((o) => o.id === n || o.getAttribute("name") === n) || null; });
@@ -273,6 +274,7 @@ const char* const kFormScript = R"JS(
     for (const e of controlsOf(this)) {
       if (e instanceof HTMLInputElement || e instanceof HTMLTextAreaElement) { const s = stateOf(e); s.dirty = false; s.checkedDirty = false; s.value = ""; }
       else if (e instanceof HTMLSelectElement) for (const o of optionsOf(e)) stateOf(o).checkedDirty = false;
+      formChanged(e);
     }
   });
   if (typeof SubmitEvent === "undefined") {
@@ -377,7 +379,7 @@ const char* const kFormScript = R"JS(
     else if (kind === "delete") { if (start === end) end = Math.min(v.length, end + 1); data = ""; }
     else if (kind === "left" || kind === "right" || kind === "home" || kind === "end") {
       const p = kind === "left" ? (start === end ? Math.max(0, start - 1) : start) : kind === "right" ? (start === end ? Math.min(v.length, end + 1) : end) : kind === "home" ? 0 : v.length;
-      s.start = s.end = p; return true;
+      s.start = s.end = p; formChanged(target); return true;
     } else if (target instanceof HTMLInputElement && target.maxLength >= 0) data = data.slice(0, Math.max(0, target.maxLength - (v.length - (end - start))));
     if (data === "" && start === end) return true;
     const ok = target.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, cancelable: true, composed: true, data: data || null, inputType: kind === "backspace" ? "deleteContentBackward" : kind === "delete" ? "deleteContentForward" : "insertText" }));
@@ -389,7 +391,7 @@ const char* const kFormScript = R"JS(
     return true;
   });
   const sanitizeTyping = (e, v) => (typeOf(e) === "number" || typeOf(e) === "range" || typeOf(e) === "color") ? v : sanitize(e, v);
-  setHelper("caret", (target, a, b) => { if (target.setSelectionRange) target.setSelectionRange(a, b); });
+  setHelper("caret", (target, a, b) => { if (target.setSelectionRange) target.setSelectionRange(a, b); formChanged(target); });
   setHelper("change", (target) => { target.dispatchEvent(new Event("change", { bubbles: true })); });
   setHelper("formMeta", (target) => {
     const base = { disabled: false, readonly: false, checked: false, indeterminate: false, placeholder: "", label: "", value: "", start: 0, end: 0 };

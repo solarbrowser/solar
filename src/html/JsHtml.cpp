@@ -510,6 +510,7 @@ Value FormChanged(Context& ctx, Value, qe::Args args, Value) {
   if (!args.empty()) {
     if (dom::Element* element = dom::ThisElement(ctx, args[0]); element && element->nodeDocument) {
       element->nodeDocument->NoteWrite();
+      dom::MarkControlDirty(element);
       dom::NoteTreeChange();
     }
   }

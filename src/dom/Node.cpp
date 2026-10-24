@@ -165,6 +165,10 @@ void CommitPending() {
       Element* element = static_cast<Element*>(node);
       element->committedAnimatedValues = element->animatedValues;
     }
+    if ((mask & kPendingControl) && node->IsElement()) {
+      Element* element = static_cast<Element*>(node);
+      element->committedControl = element->control;
+    }
     if ((mask & kPendingDocumentState) && node->IsDocument()) {
       Document* document = static_cast<Document*>(node);
       document->committedFocused = document->focusedElement;
@@ -179,6 +183,26 @@ void CommitPending() {
     }
   }
   list.clear();
+}
+
+namespace {
+std::vector<Element*>& DirtyControls() {
+  static std::vector<Element*> list;
+  return list;
+}
+}  // namespace
+
+void MarkControlDirty(Element* control) {
+  if (!control || control->controlDirty) return;
+  control->controlDirty = true;
+  DirtyControls().push_back(control);
+}
+
+std::vector<Element*> TakeDirtyControls() {
+  std::vector<Element*> taken;
+  taken.swap(DirtyControls());
+  for (Element* e : taken) e->controlDirty = false;
+  return taken;
 }
 
 CommittedViewScope::CommittedViewScope() {
@@ -255,6 +279,10 @@ size_t g_liveNodes = 0;
 Node::Node() { ++g_liveNodes; }
 Node::~Node() {
   --g_liveNodes;
+  if (controlDirty) {
+    std::vector<Element*>& controls = DirtyControls();
+    controls.erase(std::remove_if(controls.begin(), controls.end(), [this](Element* e) { return static_cast<Node*>(e) == this; }), controls.end());
+  }
   if (pendingMask) {
     std::vector<Node*>& list = DirtyLinks();
     list.erase(std::remove(list.begin(), list.end(), this), list.end());
@@ -378,6 +406,8 @@ Element* NewElement(Context& ctx, Document* document, std::string_view localName
   element->localName = localName;
   element->namespaceUri = namespaceUri;
   element->prefix = prefix;
+  // A form control shows something from the start.
+  if (namespaceUri == kHtmlNamespace && (localName == "input" || localName == "select" || localName == "textarea" || localName == "button")) MarkControlDirty(element);
   if (namespaceUri == kSvgNamespace) {
     if (Object* prototype = SvgElementPrototype(ctx, localName)) element->initialize_prototype(prototype);
   }

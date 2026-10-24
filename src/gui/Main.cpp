@@ -598,7 +598,11 @@ int main(int argc, char** argv) {
   uint64_t lastVersion = 0;
   const bool timing = std::getenv("SOLAR_GUI_TIMES") != nullptr;
 
-  const auto currentTree = [&]() -> solar::layout::Tree* { return solar::layout::UpdateLayout(realm->GetContext(), document); };
+  // (What the form controls show is asked of the page's script before the frame, on the thread the script is on; the frame reads it as it was committed.)
+  const auto currentTree = [&]() -> solar::layout::Tree* {
+    solar::html::RunInRealm(*realm, [&] { solar::html::RefreshControls(document); });
+    return solar::layout::UpdateLayout(realm->GetContext(), document);
+  };
   // The scrollbar of the window floats over the page: it shows while the page is scrolled (and under the pointer), then fades; it can be dragged.
   Clock::time_point scrollActive = Clock::now() - std::chrono::seconds(10);
   bool barDrag = false, barHover = false;
