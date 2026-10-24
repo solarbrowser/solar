@@ -125,6 +125,7 @@ struct Box {
   bool formControl = false;   // a form control: a box with a size of its own when its width and height are auto
   double controlAscent = -1;  // a form control with text: where its baseline is, from the top of its content box
   double naturalRatio = 0;   // width / height, 0 when it has none
+  std::string imageUrl;      // an image (img, input type=image): its address, absolute, for painting
   double attrWidth = -1, attrHeight = -1;  // the width and height attributes, which size it when the style does not
 
   // The border box in its own frame, before the sizes are turned into the parent's: the frame the contents are placed in.

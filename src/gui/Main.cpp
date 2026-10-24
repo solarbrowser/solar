@@ -1,4 +1,4 @@
-// solar-gui: a page in a window. The page is loaded as the tests load one (a realm with every API of a window, a document, its scripts and style
+// solar: a page in a window. The page is loaded as the tests load one (a realm with every API of a window, a document, its scripts and style
 // sheets fetched as it asks), laid out for the size of the window, painted as a display list and drawn by Skia into a texture SDL shows.
 #include <SDL3/SDL.h>
 

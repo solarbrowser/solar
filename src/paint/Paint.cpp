@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <functional>
 #include <map>
@@ -57,6 +58,136 @@ bool ParseRadius(const std::string& text, double width, double height, double& x
   x = resolve(parts[0], width);
   y = parts.size() > 1 ? resolve(parts[1], height) : (parts[0].second ? resolve(parts[0], height) : x);
   return true;
+}
+
+
+// ---- The values of the properties of images ----
+
+// The items of a comma separated list, at the top level (not inside parentheses or quotes).
+std::vector<std::string> SplitList(const std::string& text, char separator) {
+  std::vector<std::string> out;
+  std::string current;
+  int depth = 0;
+  char quote = 0;
+  for (char c : text) {
+    if (quote) {
+      current += c;
+      if (c == quote) quote = 0;
+      continue;
+    }
+    if (c == '"' || c == '\'') {
+      quote = c;
+      current += c;
+    } else if (c == '(') {
+      ++depth;
+      current += c;
+    } else if (c == ')') {
+      --depth;
+      current += c;
+    } else if (c == separator && depth == 0) {
+      out.push_back(current);
+      current.clear();
+    } else {
+      current += c;
+    }
+  }
+  out.push_back(current);
+  return out;
+}
+
+std::string Trim(const std::string& text) {
+  size_t a = 0, b = text.size();
+  while (a < b && std::isspace(static_cast<unsigned char>(text[a]))) ++a;
+  while (b > a && std::isspace(static_cast<unsigned char>(text[b - 1]))) --b;
+  return text.substr(a, b - a);
+}
+
+// The words of a value: split at white space at the top level.
+std::vector<std::string> SplitWords(const std::string& text) {
+  std::vector<std::string> out;
+  std::string current;
+  int depth = 0;
+  char quote = 0;
+  for (char c : text) {
+    if (quote) {
+      current += c;
+      if (c == quote) quote = 0;
+      continue;
+    }
+    if (c == '"' || c == '\'') {
+      quote = c;
+      current += c;
+    } else if (c == '(') {
+      ++depth;
+      current += c;
+    } else if (c == ')') {
+      --depth;
+      current += c;
+    } else if (std::isspace(static_cast<unsigned char>(c)) && depth == 0) {
+      if (!current.empty()) out.push_back(current);
+      current.clear();
+    } else {
+      current += c;
+    }
+  }
+  if (!current.empty()) out.push_back(current);
+  return out;
+}
+
+// A length or a percentage, or the sum of them in calc() (what a computed position or size comes to): `auto` is the automatic one.
+bool ParseLength(const std::string& given, Length& out) {
+  const std::string text = Trim(given);
+  out = Length{};
+  if (text == "auto") {
+    out.automatic = true;
+    return true;
+  }
+  const auto add = [&](const std::string& t, double sign) {
+    char* end = nullptr;
+    const double v = std::strtod(t.c_str(), &end);
+    if (end == t.c_str()) return false;
+    const std::string unit = end;
+    if (unit == "%") out.percent += static_cast<float>(sign * v);
+    else if (unit.empty() || unit == "px") out.px += static_cast<float>(sign * v);
+    else return false;
+    return true;
+  };
+  if (text.rfind("calc(", 0) == 0 && text.back() == ')') {
+    double sign = 1;
+    bool any = false;
+    for (const std::string& w : SplitWords(Trim(text.substr(5, text.size() - 6)))) {
+      if (w == "+") { sign = 1; continue; }
+      if (w == "-") { sign = -1; continue; }
+      if (!add(w, sign)) return false;
+      any = true;
+      sign = 1;
+    }
+    return any;
+  }
+  return add(text, 1);
+}
+
+// The address in a url("...") (or url(...)); empty if it is not one.
+std::string UrlOf(const std::string& item) {
+  const std::string t = Trim(item);
+  if (t.rfind("url(", 0) != 0 || t.back() != ')') return "";
+  std::string inner = Trim(t.substr(4, t.size() - 5));
+  if (inner.size() >= 2 && (inner.front() == '"' || inner.front() == '\'') && inner.back() == inner.front()) {
+    std::string out;
+    for (size_t i = 1; i + 1 < inner.size(); ++i) {
+      if (inner[i] == '\\' && i + 2 < inner.size()) ++i;
+      out += inner[i];
+    }
+    return out;
+  }
+  return inner;
+}
+
+Repeat RepeatOf(const std::string& word) {
+  if (word == "no-repeat") return Repeat::NoRepeat;
+  if (word == "space") return Repeat::Space;
+  if (word == "round") return Repeat::Round;
+  return Repeat::Repeat;
 }
 
 LineStyle LineStyleOf(layout::BorderStyle s) {
@@ -246,10 +377,19 @@ class Painter {
         list_->items.push_back(item);
       }
     }
+    for (ImageLayer& layer : LayersOf(box, borderBox, props, false)) {
+      DrawImageLayer item;
+      item.layer = std::move(layer);
+      list_->items.push_back(std::move(item));
+    }
     layout::Edges widths = box.border;
     if (!leftEdge) widths.left = 0;
     if (!rightEdge) widths.right = 0;
-    if (widths.top <= 0 && widths.right <= 0 && widths.bottom <= 0 && widths.left <= 0) return;
+    if (widths.top > 0 || widths.right > 0 || widths.bottom > 0 || widths.left > 0) PaintBorder(box, props, physical, borderBox, widths);
+    if (leftEdge && rightEdge) PaintImageOf(box, borderBox, props);
+  }
+
+  void PaintBorder(const Box& box, const PaintProps& props, const layout::BoxStyle& physical, const RectF& borderBox, const layout::Edges& widths) {
     DrawBorder border;
     border.outer = Rounded(box, borderBox, props, 0, nullptr);
     RectF inner{borderBox.x + F(widths.left), borderBox.y + F(widths.top), std::max(0.0f, borderBox.width - F(widths.left + widths.right)),
@@ -264,6 +404,137 @@ class Painter {
       if (border.styles[i] != LineStyle::None && border.styles[i] != LineStyle::Hidden && !border.colors[i].Transparent()) any = true;
     }
     if (any) list_->items.push_back(border);
+  }
+
+  // ---- Images ----
+
+  ImageRef ImageFor(const std::string& url) {
+    const auto found = images_.find(url);
+    if (found != images_.end()) return found->second;
+    ImageRef ref;
+    std::string absolute;
+    const std::shared_ptr<const std::string> bytes = layout::ImageDataOf(url, "", &absolute);
+    if (bytes && !bytes->empty()) {
+      auto data = std::make_shared<ImageData>();
+      data->bytes = bytes;
+      data->url = absolute;
+      ref = data;
+    }
+    images_[url] = ref;
+    return ref;
+  }
+
+  // The rectangle a box keyword (border-box, padding-box, content-box) names, and its corners.
+  RectF BoxArea(const std::string& keyword, const RectF& borderBox, const layout::Edges& border, const layout::Edges& padding, layout::Edges& insets) const {
+    insets = layout::Edges();
+    if (keyword == "padding-box" || keyword == "content-box") {
+      insets = border;
+      if (keyword == "content-box") {
+        insets.top += padding.top;
+        insets.right += padding.right;
+        insets.bottom += padding.bottom;
+        insets.left += padding.left;
+      }
+    }
+    return RectF{borderBox.x + F(insets.left), borderBox.y + F(insets.top), std::max(0.0f, borderBox.width - F(insets.Horizontal())), std::max(0.0f, borderBox.height - F(insets.Vertical()))};
+  }
+
+  // The images of the background (or the mask) of a box, the lowest first.
+  std::vector<ImageLayer> LayersOf(const Box& box, const RectF& borderBox, const PaintProps& props, bool mask) {
+    std::vector<ImageLayer> out;
+    std::string pseudo;
+    dom::Element* element = ElementOf(box, pseudo);
+    if (!element) return out;
+    css::StyleReader reader(ctx_, element, pseudo);
+    const std::string prefix = mask ? "mask-" : "background-";
+    const std::string images = Trim(reader.Get(prefix + "image"));
+    if (images.empty() || images == "none") return out;
+    const std::vector<std::string> items = SplitList(images, ',');
+    const std::vector<std::string> sizes = SplitList(reader.Get(prefix + "size"), ','), positions = SplitList(reader.Get(prefix + "position"), ',');
+    const std::vector<std::string> repeats = SplitList(reader.Get(prefix + "repeat"), ','), origins = SplitList(reader.Get(prefix + "origin"), ','), clips = SplitList(reader.Get(prefix + "clip"), ',');
+    const auto at = [&](const std::vector<std::string>& values, size_t i) { return values.empty() ? std::string() : Trim(values[i % values.size()]); };
+    const std::string rendering = reader.Get("image-rendering");
+    for (size_t k = items.size(); k-- > 0;) {
+      const std::string url = UrlOf(items[k]);
+      if (url.empty()) continue;  // (gradients and the like are not yet)
+      ImageLayer layer;
+      layer.image = ImageFor(url);
+      if (!layer.image) continue;
+      layer.pixelated = rendering == "pixelated" || rendering == "crisp-edges";
+      layout::Edges insets;
+      std::string origin = at(origins, k);
+      if (origin.empty()) origin = mask ? "border-box" : "padding-box";
+      layer.origin = BoxArea(origin, borderBox, box.border, box.padding, insets);
+      std::string clipWord = at(clips, k);
+      if (clipWord.empty() || clipWord == "text" || clipWord == "no-clip") clipWord = "border-box";
+      const RectF clipRect = BoxArea(clipWord, borderBox, box.border, box.padding, insets);
+      layer.clip = Rounded(box, clipRect, props, clipWord == "border-box" ? 0 : 1, &insets);
+      const std::vector<std::string> size = SplitWords(at(sizes, k));
+      if (!size.empty() && size[0] == "cover") layer.size = ImageLayer::Size::Cover;
+      else if (!size.empty() && size[0] == "contain") layer.size = ImageLayer::Size::Contain;
+      else if (!size.empty()) {
+        layer.size = ImageLayer::Size::Lengths;
+        ParseLength(size[0], layer.width);
+        if (size.size() > 1) ParseLength(size[1], layer.height);
+      }
+      std::vector<std::string> position = SplitWords(at(positions, k));
+      const auto keyword = [](const std::string& w, bool horizontal) -> std::string {
+        if (w == "left" || w == "top") return "0%";
+        if (w == "center") return "50%";
+        if (w == "right" || w == "bottom") return "100%";
+        (void)horizontal;
+        return w;
+      };
+      if (position.size() == 1) position.push_back("50%");
+      if (position.size() == 2) {
+        ParseLength(keyword(position[0], true), layer.x);
+        ParseLength(keyword(position[1], false), layer.y);
+      }
+      std::vector<std::string> repeat = SplitWords(at(repeats, k));
+      if (repeat.size() == 1) {
+        if (repeat[0] == "repeat-x") repeat = {"repeat", "no-repeat"};
+        else if (repeat[0] == "repeat-y") repeat = {"no-repeat", "repeat"};
+        else repeat.push_back(repeat[0]);
+      }
+      if (repeat.size() >= 2) {
+        layer.repeatX = RepeatOf(repeat[0]);
+        layer.repeatY = RepeatOf(repeat[1]);
+      }
+      out.push_back(std::move(layer));
+    }
+    return out;
+  }
+
+  // The picture of an img (and the like): in its content box.
+  void PaintImageOf(const Box& box, const RectF& borderBox, const PaintProps& props) {
+    if (std::getenv("SOLAR_PAINT_DEBUG") && box.element() && box.element()->IsHtml("img")) std::fprintf(stderr, "paint img box replaced=%d kind=%d url=[%s] size %gx%g\n", box.replaced, (int)box.kind, box.imageUrl.c_str(), box.width, box.height);
+    if (!box.replaced || box.kind != Box::Kind::Block || box.imageUrl.empty()) return;
+    const ImageRef image = ImageFor(box.imageUrl);
+    if (std::getenv("SOLAR_PAINT_DEBUG")) std::fprintf(stderr, "img %s -> %s\n", box.imageUrl.c_str(), image ? "bytes" : "none");
+    if (!image) return;
+    layout::Edges insets;
+    insets.top = box.border.top + box.padding.top;
+    insets.right = box.border.right + box.padding.right;
+    insets.bottom = box.border.bottom + box.padding.bottom;
+    insets.left = box.border.left + box.padding.left;
+    const RectF content{borderBox.x + F(insets.left), borderBox.y + F(insets.top), std::max(0.0f, borderBox.width - F(insets.Horizontal())), std::max(0.0f, borderBox.height - F(insets.Vertical()))};
+    DrawImage item;
+    item.image = image;
+    item.clip = Rounded(box, content, props, 1, &insets);
+    std::string pseudo;
+    if (dom::Element* element = ElementOf(box, pseudo)) {
+      css::StyleReader reader(ctx_, element, pseudo);
+      const std::string fit = reader.Get("object-fit");
+      item.fit = fit == "contain" ? ObjectFit::Contain : fit == "cover" ? ObjectFit::Cover : fit == "none" ? ObjectFit::None : fit == "scale-down" ? ObjectFit::ScaleDown : ObjectFit::Fill;
+      const std::vector<std::string> position = SplitWords(reader.Get("object-position"));
+      if (position.size() == 2) {
+        ParseLength(position[0], item.x);
+        ParseLength(position[1], item.y);
+      }
+      const std::string rendering = reader.Get("image-rendering");
+      item.pixelated = rendering == "pixelated" || rendering == "crisp-edges";
+    }
+    list_->items.push_back(std::move(item));
   }
 
   // ---- Text ----
@@ -531,10 +802,21 @@ class Painter {
       PushTransformOf(scrollX_, scrollY_);  // (a fixed box stays where it is in the viewport)
       fixedUndo = true;
     }
+    std::vector<ImageLayer> masks;
+    {
+      const RectF area = ToRectF(absolute);
+      masks = LayersOf(box, area, PropsOf(box, area), true);
+    }
+    if (!masks.empty()) list_->items.push_back(PushMask{});
     frames_.push_back(Frame{clipStack_.size()});
     PaintContext(box);
     EnsureClips({});
     frames_.pop_back();
+    if (!masks.empty()) {
+      PopMask popped;
+      popped.layers = std::move(masks);
+      list_->items.push_back(std::move(popped));
+    }
     if (fixedUndo) list_->items.push_back(PopTransform{});
     if (transformed) list_->items.push_back(PopTransform{});
     if (layer) list_->items.push_back(PopLayer{});
@@ -572,6 +854,7 @@ class Painter {
   const Box* canvasFrom_ = nullptr;
   std::vector<Frame> frames_;
   std::vector<const Box*> clipStack_;
+  std::unordered_map<std::string, ImageRef> images_;
   std::unordered_map<const Box*, PaintProps> props_;
   std::unordered_map<const Box*, Decoration> decorations_;
   std::unordered_map<const Box*, std::vector<const Box*>> clipChains_;

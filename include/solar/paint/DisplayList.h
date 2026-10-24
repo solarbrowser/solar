@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -81,7 +82,57 @@ struct PushTransform {
 };
 struct PopTransform {};
 
-using Item = std::variant<FillRoundedRect, DrawBorder, DrawGlyphs, PushClip, PopClip, PushLayer, PopLayer, PushTransform, PopTransform>;
+// An image the page has, as the file says it (the painter decodes it, once): a picture, or an SVG.
+struct ImageData {
+  std::shared_ptr<const std::string> bytes;
+  std::string url;
+};
+using ImageRef = std::shared_ptr<const ImageData>;
+
+// A length: so many px and so many percent of some room (what a calc() of the two comes to), or automatic (the size of an image that is not given).
+struct Length {
+  float px = 0;
+  float percent = 0;
+  bool automatic = false;
+  float Of(float room) const { return px + percent * room / 100; }
+};
+
+enum class Repeat : uint8_t { NoRepeat, Repeat, Space, Round };
+
+// An image put in an area the way a background or a mask does (https://www.w3.org/TR/css-backgrounds-3/#backgrounds): it is as large as `size` says
+// in the positioning area `origin`, put in it by `x` and `y`, repeated as asked, and shown where `clip` is.
+struct ImageLayer {
+  ImageRef image;
+  RoundedRect clip;
+  RectF origin;
+  enum class Size : uint8_t { Auto, Cover, Contain, Lengths } size = Size::Auto;
+  Length width{0, 0, true}, height{0, 0, true};
+  Length x{0, 0, false}, y{0, 0, false};
+  Repeat repeatX = Repeat::Repeat, repeatY = Repeat::Repeat;
+  bool pixelated = false;  // image-rendering: pixelated or crisp-edges
+};
+
+struct DrawImageLayer {
+  ImageLayer layer;
+};
+
+// An image of an element (img): in its content box as object-fit and object-position say.
+enum class ObjectFit : uint8_t { Fill, Contain, Cover, None, ScaleDown };
+struct DrawImage {
+  ImageRef image;
+  RoundedRect clip;  // the content box, whose corners are the element's rounded
+  ObjectFit fit = ObjectFit::Fill;
+  Length x{0, 50, false}, y{0, 50, false};
+  bool pixelated = false;
+};
+
+// What is drawn between PushMask and PopMask is drawn on its own, then cut to the image of the mask (its alpha), and put in the page.
+struct PushMask {};
+struct PopMask {
+  std::vector<ImageLayer> layers;  // added together: what any of them shows is shown
+};
+
+using Item = std::variant<FillRoundedRect, DrawBorder, DrawGlyphs, PushClip, PopClip, PushLayer, PopLayer, PushTransform, PopTransform, DrawImageLayer, DrawImage, PushMask, PopMask>;
 
 struct DisplayList {
   std::vector<Item> items;

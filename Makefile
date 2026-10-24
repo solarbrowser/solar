@@ -36,7 +36,7 @@ SKIA_DIR = third_party/skia
 SKIA_OUT = $(SKIA_DIR)/out/Static
 SKIA_CFLAGS = -I$(SKIA_DIR) -DSK_RELEASE
 # (Skia's own static libraries, in one group: they refer to each other)
-SKIA_LIBS = -Wl,--start-group $(SKIA_OUT)/libskia.a $(SKIA_OUT)/libraw_ptr.a $(SKIA_OUT)/liballocator_core.a $(SKIA_OUT)/liballocator_base.a \
+SKIA_LIBS = -Wl,--start-group $(SKIA_OUT)/libskia.a $(SKIA_OUT)/libsvg.a $(SKIA_OUT)/libskresources.a $(SKIA_OUT)/libskshaper.a $(SKIA_OUT)/libraw_ptr.a $(SKIA_OUT)/liballocator_core.a $(SKIA_OUT)/liballocator_base.a \
             $(SKIA_OUT)/libfreetype2.a $(SKIA_OUT)/libpng.a $(SKIA_OUT)/libjpeg.a $(SKIA_OUT)/libwebp.a $(SKIA_OUT)/libwebp_sse41.a \
             $(SKIA_OUT)/libzlib.a $(SKIA_OUT)/libexpat.a $(SKIA_OUT)/libskcms.a $(SKIA_OUT)/libwuffs.a -Wl,--end-group
 SDL_CFLAGS = $(shell pkg-config --cflags sdl3 2>/dev/null)
@@ -139,25 +139,25 @@ PSL_URL = https://publicsuffix.org/list/public_suffix_list.dat
 PSL_FILE = $(BUILD_DIR)/psl/public_suffix_list.dat
 
 .DEFAULT_GOAL := all
-.PHONY: all solar-gui test test-gc asan-test idna-tables public-suffix-tables html-tables clean quanta
+.PHONY: all test test-gc asan-test idna-tables public-suffix-tables html-tables clean quanta
 
-all: solar
+all: solar solar-cli
 
 quanta:
 	@$(MAKE) --no-print-directory -C $(QUANTA_DIR) lib
 
 $(QUANTA_LIBS): | quanta
 
-solar: $(OBJ_DIR)/src/main.o $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
-	@echo "[LINK] $@"
-	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS)
-
-# A page in a window.
+# The browser: a page in a window (src/gui), and solar-cli, the command line for what is under it (addresses, fetches), which the tests and tools use.
 $(OBJ_DIR)/src/paint/SkiaPainter.o $(OBJ_DIR)/src/gui/Main.o: CXXFLAGS += $(SKIA_CFLAGS) $(SDL_CFLAGS)
 
-solar-gui: $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/paint/SkiaPainter.o $(PAINT_OBJECTS) $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
+solar: $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/paint/SkiaPainter.o $(PAINT_OBJECTS) $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS) $(SKIA_LIBS) $(SDL_LIBS)
+
+solar-cli: $(OBJ_DIR)/src/main.o $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
+	@echo "[LINK] $@"
+	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS)
 
 $(BUILD_DIR)/UrlTest: $(OBJ_DIR)/tests/UrlTest.o $(URL_OBJECTS)
 	@echo "[LINK] $@"

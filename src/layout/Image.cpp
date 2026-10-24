@@ -1,6 +1,9 @@
 // The size of an image, read from its header: layout needs how big a picture is, not what is in it.
+#include <array>
 #include <cmath>
 #include <cstdlib>
+#include <memory>
+#include <unordered_map>
 
 #include "Internal.h"
 #include "solar/css/Cssom.h"
@@ -144,24 +147,25 @@ bool ReadImageMetrics(const std::string& d, double& w, double& h, double& ratio)
 }
 
 // The picture at an address of the document, if it can be had: the loader the style sheets use brings it.
-bool ImageMetricsOf(const std::string& address, const std::string& base, double& w, double& h, double& ratio) {
-  static std::unordered_map<std::string, std::array<double, 3>> cache;
-  std::string absolute = address;
+std::string AbsoluteAddress(const std::string& address, const std::string& base) {
   const std::optional<url::Url> baseUrl = url::Parse(base);
   const std::optional<url::Url> parsed = url::Parse(address, baseUrl ? &*baseUrl : nullptr);
-  if (!parsed) return false;
-  absolute = url::Serialize(*parsed);
+  return parsed ? url::Serialize(*parsed) : std::string();
+}
+
+// The bytes of an image: those of a data: address, decoded, or what the loader gives for another; kept, so that a page loads a picture once.
+std::shared_ptr<const std::string> ImageDataOf(const std::string& address, const std::string& base, std::string* absoluteOut) {
+  static std::unordered_map<std::string, std::shared_ptr<const std::string>> cache;
+  const std::string absolute = AbsoluteAddress(address, base);
+  if (absoluteOut) *absoluteOut = absolute;
+  if (absolute.empty()) return nullptr;
   const auto found = cache.find(absolute);
-  if (found != cache.end()) {
-    w = found->second[0];
-    h = found->second[1];
-    ratio = found->second[2];
-    return w >= 0 || ratio > 0;
-  }
+  if (found != cache.end()) return found->second;
   std::string data;
+  bool have = true;
   if (absolute.rfind("data:", 0) == 0) {
     const size_t comma = absolute.find(',');
-    if (comma == std::string::npos) return false;
+    if (comma == std::string::npos) return nullptr;
     const std::string meta = absolute.substr(5, comma - 5);
     const std::string body = absolute.substr(comma + 1);
     if (meta.size() >= 7 && meta.compare(meta.size() - 7, 7, ";base64") == 0) {
@@ -186,12 +190,29 @@ bool ImageMetricsOf(const std::string& address, const std::string& base, double&
     }
   } else {
     const css::SheetLoader& load = css::GetSheetLoader();
-    if (!load) return false;
-    std::optional<std::string> loaded = load(absolute);
-    if (!loaded) { cache[absolute] = {-1, -1, 0}; return false; }
-    data = std::move(*loaded);
+    std::optional<std::string> loaded = load ? load(absolute) : std::nullopt;
+    if (loaded) data = std::move(*loaded);
+    else have = false;
   }
-  const bool ok = ReadImageMetrics(data, w, h, ratio);
+  std::shared_ptr<const std::string> result = have ? std::make_shared<const std::string>(std::move(data)) : nullptr;
+  cache[absolute] = result;
+  return result;
+}
+
+bool ImageMetricsOf(const std::string& address, const std::string& base, double& w, double& h, double& ratio) {
+  static std::unordered_map<std::string, std::array<double, 3>> cache;
+  std::string absolute;
+  const std::shared_ptr<const std::string> bytes = ImageDataOf(address, base, &absolute);
+  if (absolute.empty()) return false;
+  const auto found = cache.find(absolute);
+  if (found != cache.end()) {
+    w = found->second[0];
+    h = found->second[1];
+    ratio = found->second[2];
+    return w >= 0 || ratio > 0;
+  }
+  if (!bytes) { cache[absolute] = {-1, -1, 0}; return false; }
+  const bool ok = ReadImageMetrics(*bytes, w, h, ratio);
   cache[absolute] = {w, h, ratio};
   return ok;
 }

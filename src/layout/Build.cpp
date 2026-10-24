@@ -111,6 +111,7 @@ bool ReplacedSize(dom::Element* element, const std::string& base, Box& box) {
       }
     }
     double w = -1, h = -1, ratio = 0;
+    if (!src.empty()) box.imageUrl = AbsoluteAddress(src, base);
     if (!src.empty() && ImageMetricsOf(src, base, w, h, ratio)) {
       box.naturalWidth = w;
       box.naturalHeight = h;

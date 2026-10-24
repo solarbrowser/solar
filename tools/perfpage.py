@@ -12,7 +12,7 @@ import subprocess
 import sys
 import urllib.parse
 
-SOLAR = "./solar"
+SOLAR = "./solar-cli"
 DIR = "build/perf"
 # The page has to be inside tests/wpt for the test runner to find /resources.
 PAGE_DIR = "tests/wpt/css"

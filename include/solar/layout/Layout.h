@@ -1,5 +1,7 @@
 #pragma once
 
+#include <memory>
+#include <string>
 #include <vector>
 
 #include "solar/layout/Box.h"
@@ -28,6 +30,11 @@ struct Matrix {
 bool ParseTransformList(const std::string& text, double width, double height, Matrix& out);
 // The matrix a box's transform properties come to, about its transform origin, in the box's own coordinates; false if it has none.
 bool TransformOf(const Box& box, Matrix& out);
+
+// The bytes of an image at `address` (against `base`): a data: address decoded, any other from the loader of the page; each is loaded once. Null where there are none.
+// `absolute` gets the address the image is known by.
+std::shared_ptr<const std::string> ImageDataOf(const std::string& address, const std::string& base, std::string* absolute = nullptr);
+std::string AbsoluteAddress(const std::string& address, const std::string& base);
 
 // A box's border box in the coordinates of the document (the initial containing block's origin).
 Rect AbsoluteBorderBox(const Box& box);

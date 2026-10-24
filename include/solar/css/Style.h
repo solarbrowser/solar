@@ -46,6 +46,7 @@ class StyleReader {
   StyleReader(Quanta::Context& ctx, dom::Element* element, const std::string& pseudo = "");
   ~StyleReader();
   std::string Get(const char* property);
+  std::string Get(const std::string& property) { return Get(property.c_str()); }
 
  private:
   Quanta::Context& ctx_;

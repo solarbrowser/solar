@@ -54,4 +54,4 @@ Thumbs.db
 *.log
 # CLI binary
 /solar
-/solar-gui
+/solar-cli
