@@ -1,3 +1,4 @@
+#include <chrono>
 #include "solar/css/Cssom.h"
 #include "solar/css/Descriptors.h"
 
@@ -1267,7 +1268,15 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
 
 }  // namespace
 
+double g_sheetParseMs = 0;
+double SheetParseMillis() { return g_sheetParseMs; }
+
 void ParseSheetInto(Context& ctx, CssStyleSheet* sheet, std::string_view text) {
+  const auto parseStart = std::chrono::steady_clock::now();
+  struct Timing {
+    std::chrono::steady_clock::time_point start;
+    ~Timing() { g_sheetParseMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(); }
+  } timing{parseStart};
   struct Parsing {
     Parsing() { BeginSheetParse(); }
     ~Parsing() { EndSheetParse(); }

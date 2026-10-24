@@ -202,10 +202,14 @@ class Browser : public solar::html::FrameEnvironment {
 
   void WaitFor(Resource* resource) {
     waiting_ = resource;
+    const auto waitStart = Clock::now();
     while (!resource->done) {
-      events_.Step(std::chrono::milliseconds(8));
+      events_.Step(std::chrono::milliseconds(std::getenv("SOLAR_SLICE") ? std::atoi(std::getenv("SOLAR_SLICE")) : 8));
       if (pump_) pump_();
     }
+    const double thisWait = std::chrono::duration<double, std::milli>(Clock::now() - waitStart).count();
+    waited_ += thisWait;
+    if (timing_ && thisWait > 300) std::fprintf(stderr, "  waited %.0f ms for %s\n", thisWait, resource->url.substr(0, 110).c_str());
     waiting_ = nullptr;
   }
 
@@ -304,7 +308,7 @@ class Browser : public solar::html::FrameEnvironment {
       std::optional<solar::url::Url> url = solar::url::Parse(value, &*base);
       return url ? solar::url::Serialize(*url) : std::string();
     };
-    for (const char* name : {"<link", "<script", "<img"}) {
+    for (const char* name : {"<link", "<script"}) {  // (pictures wait: what the page needs to be made goes first)
       size_t at = 0;
       const std::string needle = name;
       while ((at = lower.find(needle, at)) != std::string::npos && started < 80) {
@@ -379,6 +383,7 @@ class Browser : public solar::html::FrameEnvironment {
  private:
 
  public:
+  double waited_ = 0;  // ms spent waiting for what the page asked for
   bool painting_ = false;
   bool timing_ = false;
   std::function<void()> pump_;
@@ -452,6 +457,7 @@ int main(int argc, char** argv) {
   qe::Realm* realm = nullptr;
   solar::dom::Document* document = nullptr;
   bool dirty = true;
+  const bool timing_log = std::getenv("SOLAR_GUI_TIMES") != nullptr;
   const auto commit = [&](const std::string& where, std::string markup, std::string type, const Clock::time_point& started) {
     qe::Realm* left = realm;
     solar::dom::Document* leftDocument = document;
@@ -465,7 +471,11 @@ int main(int argc, char** argv) {
       document->url = address;
       solar::html::InstallWindow(*realm, document);
     });
+    const auto loadStart = Clock::now();
+    if (timing_log) std::fprintf(stderr, "[%.0f ms] LoadPage begins\n", std::chrono::duration<double, std::milli>(loadStart.time_since_epoch()).count());
     solar::html::LoadPage(*realm, document, markup, type);
+    if (timing_log) std::fprintf(stderr, "[%.0f ms] LoadPage ends\n", std::chrono::duration<double, std::milli>(Clock::now().time_since_epoch()).count());
+    if (timing_log) std::fprintf(stderr, "  LoadPage took %.0f ms (%.0f ms of it waiting; scripts %.0f ms, style sheets parsed %.0f ms, layout %.0f ms)\n", std::chrono::duration<double, std::milli>(Clock::now() - loadStart).count(), browser.waited_, solar::html::ScriptMillis(), solar::css::SheetParseMillis(), solar::layout::LayoutMillis());
     isolate->PerformMicrotaskCheckpoint();
     const auto settle = Clock::now() + std::chrono::milliseconds(30);
     while (Clock::now() < settle) events.Step(std::chrono::milliseconds(8));

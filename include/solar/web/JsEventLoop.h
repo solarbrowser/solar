@@ -41,13 +41,19 @@ class JsEventLoop {
   // the promise jobs and the timers that are due.
   void Step(std::chrono::milliseconds slice) {
     Arm();
+    const auto t0 = std::chrono::steady_clock::now();
     const net::Loop::TimerId stopper = loop_.PostDelayed(slice, [this] { loop_.Stop(); }, /*background=*/true);
     loop_.Run();
     loop_.CancelTimer(stopper);
+    const auto t1 = std::chrono::steady_clock::now();
     hooks_.checkpoint();
     hooks_.runDueTimers();
     hooks_.checkpoint();
+    networkMs += std::chrono::duration<double, std::milli>(t1 - t0).count();
+    scriptMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count();
   }
+  // Where the time of Step went (for looking at it): in the network's loop, and in script (promise jobs and timers).
+  double networkMs = 0, scriptMs = 0;
 
   // Runs until the network is quiet and no timer is pending, or `limit` has passed.
   void Run(std::chrono::milliseconds limit = std::chrono::hours(24)) {

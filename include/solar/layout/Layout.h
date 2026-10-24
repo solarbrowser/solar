@@ -40,6 +40,8 @@ std::shared_ptr<const std::string> ImageDataOf(const std::string& address, const
 using ImageRequestHandler = std::function<bool(const std::string& absolute)>;
 // The pictures kept for the pages (their bytes and sizes) are let go: a page that is left has no use for them.
 void ForgetImages();
+// How long layout has taken (for looking at where the time of a page goes).
+double LayoutMillis();
 void SetImageRequestHandler(ImageRequestHandler handler);
 std::string AbsoluteAddress(const std::string& address, const std::string& base);
 

@@ -1,3 +1,4 @@
+#include <chrono>
 // The natives under Web Animations (Animation, KeyframeEffect, CSS animations and transitions), which is written in script over them.
 #include "solar/css/Animation.h"
 #include "solar/css/Cssom.h"
@@ -154,6 +155,7 @@ int AnimationMask(Context& ctx, dom::Element* element, bool pseudos) {
   const char* names[] = {"", "before", "after", "marker"};
   for (int i = 0; i < (pseudos ? 4 : 1); ++i) {
     const std::string pseudo = names[i];
+    if (!MayDeclareAnimation(element, pseudo)) continue;
     if (i > 0 && !HasPseudoStyle(element, pseudo)) continue;
     if (!DeclaresAnimation(element, pseudo)) continue;
     const std::string name = ComputedValue(ctx, element, "animation-name", pseudo);
@@ -188,6 +190,9 @@ Value Candidates(Context& ctx, Value, qe::Args args, Value) {
   CollectCandidates(ctx, document, args.size() > 0 && qe::ToBoolean(args[0]), out);
   return out;
 }
+
+// __solarAnimPseudoPossible(): whether the style sheets have a rule for ::before, ::after or ::marker.
+Value PseudoPossible(Context& ctx, Value, qe::Args, Value) { return qe::FromBool(AuthorSheetsHavePseudoElements(dom::AssociatedDocument(ctx))); }
 
 // __solarAnimOnWake(function): the function to call when something is declared that asks for animations or transitions.
 Value OnWake(Context& ctx, Value, qe::Args args, Value) {
@@ -244,6 +249,7 @@ void InstallAnimationNatives(Context& ctx) {
   qe::DefineGlobalFunction(ctx, "__solarAnimMentions", Mentions, 0);
   qe::DefineGlobalFunction(ctx, "__solarAnimOnWake", OnWake, 1);
   qe::DefineGlobalFunction(ctx, "__solarAnimCandidates", Candidates, 1);
+  qe::DefineGlobalFunction(ctx, "__solarAnimPseudoPossible", PseudoPossible, 0);
   qe::DefineGlobalFunction(ctx, "__solarAnimLastRead", LastRead, 3);
   qe::DefineGlobalFunction(ctx, "__solarAnimStarting", Starting, 3);
   qe::DefineGlobalFunction(ctx, "__solarAnimForget", Forget, 1);

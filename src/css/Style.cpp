@@ -1,3 +1,4 @@
+#include <chrono>
 #include <unordered_set>
 #include <functional>
 #include "solar/css/Style.h"
@@ -858,6 +859,8 @@ uint64_t g_styleEpoch = 0;
 
 // The styles made of an element are good while what they were made from is the same: the sheets, the element and its attributes, the styles of the elements
 // above it, and (when a rule looks at them) its children and its siblings. A document with rules that look at more than that has nothing kept across changes.
+void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo);
+
 void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   if (entry.checked == treeVersion) return;
   entry.checked = treeVersion;
@@ -880,7 +883,8 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
       shadowed = !top->IsDocument();
     }
   }
-  bool good = reuse.allowed && !shadowed && !entry.shadowed && entry.serial == element->serial && entry.parent == parentNode && entry.parentEpoch == parentEpoch && entry.attr == element->attrVersion && entry.animInherit == element->animInheritVersion;
+  const bool basic = reuse.allowed && !shadowed && !entry.shadowed && entry.serial == element->serial && entry.parent == parentNode && entry.parentEpoch == parentEpoch && entry.attr == element->attrVersion && entry.animInherit == element->animInheritVersion;
+  bool good = basic;
   const bool animSame = entry.anim == element->animVersion;
   if (good && reuse.structural) good = entry.children == element->childrenVersion && (!parent || entry.parentChildren == parent->childrenVersion);
   if (good && reuse.sibling) good = !parent || (entry.parentChildAttr == parent->childAttrVersion && entry.parentChildren == parent->childrenVersion);
@@ -2468,9 +2472,133 @@ void ViewportScrollbars(Quanta::Context& ctx, dom::Document* document, double& v
   vertical = ViewportScrollbarsWith(document, [&](dom::Element* e, const char* p) { return ComputedValue(ctx, e, p); }, horizontal, autos);
 }
 
+namespace {
+
+bool DeclaresAnimationProperty(const CssDeclarations& declarations) {
+  for (const DeclarationEntry& entry : declarations.items) {
+    // (Only what can start something counts: a name of an animation, a time that is not nothing. A rule that says `none` or 0s starts nothing, and what it
+    // overrides is another rule that is looked at.)
+    if (entry.name == "animation-name") {
+      if (entry.value != "none" && !entry.value.empty()) return true;
+    } else if (entry.name == "transition-duration" || entry.name == "transition-delay") {
+      if (entry.value.find("var(") != std::string::npos || entry.value.find_first_of("123456789") != std::string::npos) return true;
+    } else if ((entry.name.rfind("animation", 0) == 0 || entry.name.rfind("transition", 0) == 0) && (entry.name.size() <= 10 || !entry.pendingShorthand.empty())) {
+      if (entry.name == "animation" || entry.name == "transition" || !entry.pendingShorthand.empty()) return true;  // (a shorthand that is not worked out yet)
+    }
+  }
+  return false;
+}
+
+// The rules of the sheets that declare anything about animations or transitions: a rule that does not is none of the matter of what starts them. (Conditions are
+// not looked at: a rule that may apply is one that is looked at.) Not usable where a rule nested in another, or one of a scope, does.
+void CollectAnimationRules(const std::vector<CssRule*>& rules, std::vector<const CssRule*>& out, bool& usable, bool nested, int depth) {
+  if (depth > 12) {
+    usable = false;
+    return;
+  }
+  for (const CssRule* rule : rules) {
+    switch (rule->kind) {
+      case RuleKind::Style:
+        if (rule->style && DeclaresAnimationProperty(*rule->style)) {
+          if (nested) usable = false;
+          else out.push_back(rule);
+        }
+        CollectAnimationRules(rule->rules, out, usable, true, depth + 1);
+        break;
+      case RuleKind::NestedDeclarations:
+        if (rule->style && DeclaresAnimationProperty(*rule->style)) usable = false;
+        break;
+      case RuleKind::Media: case RuleKind::Supports: case RuleKind::Container: case RuleKind::LayerBlock: case RuleKind::StartingStyle:
+        CollectAnimationRules(rule->rules, out, usable, nested, depth + 1);
+        break;
+      case RuleKind::Scope: {
+        std::vector<const CssRule*> inside;
+        bool ok = true;
+        CollectAnimationRules(rule->rules, inside, ok, true, depth + 1);
+        if (!inside.empty() || !ok) usable = false;
+        break;
+      }
+      case RuleKind::Import:
+        if (rule->importedSheet && !rule->importedSheet->disabled) CollectAnimationRules(rule->importedSheet->rules, out, usable, nested, depth + 1);
+        break;
+      default: break;
+    }
+  }
+}
+
+}  // namespace
+
+bool AuthorSheetsHavePseudoElements(dom::Document* document) {
+  if (!document) return false;
+  if (dom::HasShadowTrees()) return true;
+  static dom::Document* keptDocument = nullptr;
+  static uint64_t keptAuthor = 0;
+  static size_t keptSheets = 0;
+  static bool answer = false;
+  const std::vector<CssStyleSheet*> sheets = SheetsOfTree(document, document->context);
+  if (keptDocument == document && keptAuthor == g_authorVersion && keptSheets == sheets.size()) return answer;
+  std::unordered_set<std::string> names;
+  for (CssStyleSheet* sheet : sheets) NotePseudoNamesOfRules(sheet->rules, names, 0);
+  keptDocument = document;
+  keptAuthor = g_authorVersion;
+  keptSheets = sheets.size();
+  answer = names.count("before") || names.count("after") || names.count("marker");
+  return answer;
+}
+
+bool MayDeclareAnimation(dom::Element* element, const std::string& pseudo) {
+  dom::Document* document = element->nodeDocument;
+  if (!document || dom::HasShadowTrees()) return true;
+  struct Kept {
+    dom::Document* document = nullptr;
+    uint64_t author = 0;
+    std::vector<CssStyleSheet*> sheets;
+    std::vector<const CssRule*> rules;
+    bool usable = false;
+  };
+  static Kept kept;
+  const std::vector<CssStyleSheet*> sheets = SheetsOfTree(document, document->context);
+  if (kept.document != document || kept.author != g_authorVersion || kept.sheets != sheets) {
+    kept = Kept();
+    kept.document = document;
+    kept.author = g_authorVersion;
+    kept.sheets = sheets;
+    kept.usable = true;
+    for (const CssStyleSheet* sheet : sheets) {
+      if (!sheet->disabled) CollectAnimationRules(sheet->rules, kept.rules, kept.usable, false, 0);
+    }
+  }
+  if (!kept.usable) return true;
+  if (const dom::Attr* inlineStyle = element->FindAttribute("", "style")) {
+    if (inlineStyle->value.find("transition") != std::string::npos || inlineStyle->value.find("animation") != std::string::npos) return true;
+  }
+  MatchContext context;
+  context.quirks = document->mode == dom::Document::Mode::Quirks;
+  context.pseudoElement = pseudo.empty() ? nullptr : &pseudo;
+  // (A rule is looked at only when the element has what its selector asks of the subject: its tag, a class, an id.)
+  const ElementKeys keys{element};
+  const uint64_t marker = PseudoMarker(context.pseudoElement);
+  for (const CssRule* rule : kept.rules) {
+    if (!rule->selectors) continue;
+    if (rule->quickState == 0) WorkOutQuickKeys(*const_cast<CssRule*>(rule));
+    if (keys.usable && rule->quickState == 1) {
+      bool possible = false;
+      for (size_t j = 0; j < rule->quickKeys.size() && !possible; ++j) {
+        if (rule->quickMarkers[j] != marker) continue;
+        const uint64_t base = rule->quickKeys[j] ^ marker;
+        possible = base == 0 || keys.Has(base);
+      }
+      if (!possible) continue;
+    }
+    if (MatchesAny(*rule->selectors, element, context)) return true;
+  }
+  return false;
+}
+
 bool DeclaresAnimation(dom::Element* element, const std::string& pseudo) {
   // (What a container's size makes of the rules is not in the styles yet: all are looked at.)
   if (element->nodeDocument && element->nodeDocument->containerQueriesSeen) return true;
+  if (!MayDeclareAnimation(element, pseudo)) return false;
   ElementStyle& style = StyleOf(element, pseudo);
   if (!style.built) {
     Build(element, style, pseudo);

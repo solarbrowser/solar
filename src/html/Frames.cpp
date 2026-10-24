@@ -1,3 +1,4 @@
+#include <chrono>
 #include "solar/html/Frames.h"
 
 #include <map>
@@ -183,6 +184,8 @@ bool StartModuleScript(Quanta::Embed::Realm& realm, dom::Document* document, dom
   return true;
 }
 
+double g_scriptMs = 0;
+
 bool RunScript(Quanta::Embed::Realm& realm, dom::Document* document, dom::Element* script) {
   const std::string kind = LowerType(script);
   // An import map is read, not run.
@@ -225,7 +228,9 @@ bool RunScript(Quanta::Embed::Realm& realm, dom::Document* document, dom::Elemen
   document->currentScript = inDocument ? script : nullptr;
   // A script that is loaded from an address can be compiled once and run in every realm that has it.
   std::shared_ptr<qe::Script> compiled = script->FindAttribute("", "src") && g_environment ? g_environment->CompileScript(filename, code) : nullptr;
+  const auto scriptStart = std::chrono::steady_clock::now();
   const qe::EvaluateResult result = compiled ? realm.EvaluateScript(*compiled) : realm.Evaluate(code, filename);
+  g_scriptMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - scriptStart).count();
   document->currentScript = previous;
   if (g_environment) g_environment->RunJobs();
   bool failed = !result.ok;
@@ -1207,5 +1212,11 @@ Quanta::Object* ChildWindowNamed(dom::Document* document, const std::string& nam
   }
   return nullptr;
 }
+
+}  // namespace solar::html
+
+namespace solar::html {
+
+double ScriptMillis() { return g_scriptMs; }
 
 }  // namespace solar::html

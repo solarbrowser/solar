@@ -51,6 +51,8 @@ class FrameEnvironment {
 };
 
 void SetFrameEnvironment(FrameEnvironment* environment);
+// How long scripts have run (for looking at where the time of a page goes).
+double ScriptMillis();
 
 // Host code that makes or touches the things of a realm has to run as that realm, or the prototypes and holders it
 // finds are those of the realm that happens to be running. RunInRealm runs `work` that way.

@@ -163,7 +163,18 @@ void VerifyAgainstFresh(Quanta::Context& ctx, dom::Document* document, const css
 
 }  // namespace
 
+double g_layoutMs = 0;
+double LayoutMillis() { return g_layoutMs; }
+
 Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
+  struct Timing {
+    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+    int& depth;
+    ~Timing() { if (--depth == 0) g_layoutMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(); }
+  };
+  static int layoutDepth = 0;
+  ++layoutDepth;
+  Timing timing{std::chrono::steady_clock::now(), layoutDepth};
   css::MediaEnvironment environment = css::EnvironmentFor(document);
   // The viewport of a frame is the room its element has, which is whatever style says of it.
   if (dom::Element* frame = document->frameElement; frame && frame->nodeDocument && frame->nodeDocument != document) {
@@ -208,7 +219,9 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
     tree->keepScrollbars = pass > 0;
     double barWidth = 0, barHeight = 0;
     css::ViewportAuto autos;
+    const auto v0 = std::chrono::steady_clock::now();
     css::ViewportScrollbars(ctx, document, barWidth, barHeight, &autos);
+    if (std::getenv("SOLAR_LAYOUT_DEBUG")) std::fprintf(stderr, "  viewport scrollbars %.1f ms\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - v0).count());
     // An overflow of auto has a scrollbar when the contents overflow: the layout is done again with the room it takes.
     double extraWidth = 0, extraHeight = 0;
     for (int attempt = 0;; ++attempt) {
@@ -220,7 +233,7 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
       BuildTree(lc, document, attempt == 0 && pass == 0 && previous && previous->root ? previous.get() : nullptr);
       const auto t1 = std::chrono::steady_clock::now();
       LayoutRoot(lc);
-      if (std::getenv("SOLAR_LAYOUT_DEBUG")) std::fprintf(stderr, "layout pass %d attempt %d [doc %llu style %llu cache %llu author %llu]: build %.1f ms, layout %.1f ms\n", pass, attempt, (unsigned long long)dom::DocumentVersion(), (unsigned long long)css::StyleVersion(), (unsigned long long)css::StyleCacheVersion(), (unsigned long long)css::SheetsVersion(), std::chrono::duration<double, std::milli>(t1 - t0).count(), std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count());
+      if (std::getenv("SOLAR_LAYOUT_DEBUG")) std::fprintf(stderr, "[%.0f ms] layout pass %d attempt %d [doc %llu style %llu cache %llu author %llu]: build %.1f ms, layout %.1f ms\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count() - 0, pass, attempt, (unsigned long long)dom::DocumentVersion(), (unsigned long long)css::StyleVersion(), (unsigned long long)css::StyleCacheVersion(), (unsigned long long)css::SheetsVersion(), std::chrono::duration<double, std::milli>(t1 - t0).count(), std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count());
       if (attempt >= 2 || autos.thickness <= 0 || (!autos.x && !autos.y) || !tree->root) break;
       const Rect overflow = ScrollableOverflow(*tree, *tree->root, document->DocumentElement());
       const bool needY = autos.y && barWidth == 0 && overflow.Bottom() > tree->viewportHeight + 0.01;

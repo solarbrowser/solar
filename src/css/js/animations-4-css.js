@@ -393,21 +393,8 @@
   };
 
   let pseudoPossible = false;
-  const pseudoTexts = () => {
-    const found = [];
-    const visit = (rules) => {
-      for (const rule of rules) {
-        if (rule.selectorText !== undefined) {
-          if (/::?(before|after|marker)/i.test(rule.selectorText)) pseudoPossible = true;
-        }
-        if (rule.cssRules) visit(rule.cssRules);
-      }
-    };
-    pseudoPossible = false;
-    for (const sheet of document.styleSheets) {
-      try { visit(sheet.cssRules); } catch (e) { /* cross-origin */ }
-    }
-  };
+  // (Asked of the native side, which has the rules as they are: a script that goes over them all makes an object of each.)
+  const pseudoTexts = () => { pseudoPossible = N.pseudoPossible(); };
 
   let scannedVersion = -1;
   // Something declared that asks for animations or transitions calls for a frame, and while something has been, the style is looked at now

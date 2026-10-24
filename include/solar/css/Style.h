@@ -76,10 +76,15 @@ std::vector<CssStyleSheet*> SheetsOfTreeRoot(dom::Node* root);
 // Something a style depends on changed (a sheet, a declaration): computed values are made again.
 void NoteStyleChange();
 // A style sheet is being parsed: script must not run until it is done (what is half made is not safe to collect).
+double SheetParseMillis();
 void BeginSheetParse();
 void EndSheetParse();
 // Whether any declaration for the element (or its pseudo-element) is about animations or transitions: what has none has nothing to start.
 bool DeclaresAnimation(dom::Element* element, const std::string& pseudo);
+// Whether a rule that could apply to the element (or its pseudo-element) is about animations or transitions, worked out without making the style: false is sure.
+// Whether a rule of the sheets of the document is for ::before, ::after or ::marker.
+bool AuthorSheetsHavePseudoElements(dom::Document* document);
+bool MayDeclareAnimation(dom::Element* element, const std::string& pseudo);
 // Scrollbars of the viewport that float over the page and take no room (a window; the tests have the ones that do).
 void SetOverlayScrollbars(bool overlay);
 // A document that is gone (a page that was left): what style kept for it is let go.
