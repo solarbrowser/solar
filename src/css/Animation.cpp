@@ -1,3 +1,4 @@
+#include <set>
 // The values animations give to properties, and how two values of a property are combined (interpolated, added).
 #include "solar/css/Animation.h"
 
@@ -255,7 +256,24 @@ void SetAnimatedValues(dom::Element* element, const std::string& pseudo, Animate
   for (dom::Node* n = element; n; n = n->parentNode) {
     if (n->IsElement()) ++static_cast<dom::Element*>(n)->subtreeVersion;
   }
-  NoteAnimatedStyleChange();
+  // What only changes how an element is drawn is nothing for a container query to see.
+  static const std::set<std::string> drawOnly = {"opacity", "transform", "translate", "rotate", "scale", "color", "background-color", "border-color", "outline-color", "fill", "stroke",
+                                                 "stroke-dashoffset", "stroke-dasharray", "filter", "backdrop-filter", "box-shadow", "text-shadow", "clip-path", "mask-position",
+                                                 "background-position", "stop-color", "fill-opacity", "stroke-opacity"};
+  static const std::set<std::string> notInherited = {"opacity", "transform", "translate", "rotate", "scale", "filter", "backdrop-filter", "box-shadow", "clip-path", "background-color",
+                                                     "border-color", "outline-color", "background-position", "mask-position"};
+  bool sizing = false, itself = true;
+  const auto now = element->animatedValues.find(pseudo);
+  if (now != element->animatedValues.end()) {
+    for (const auto& entry : now->second) {
+      sizing = sizing || !drawOnly.count(entry.first);
+      itself = itself && notInherited.count(entry.first);
+    }
+  } else {
+    sizing = true;  // (what was there before was of unknown kind)
+    itself = false;
+  }
+  NoteAnimatedStyleChange(sizing, itself);
 }
 
 const std::string* AnimatedValue(dom::Element* element, const std::string& pseudo, const std::string& property) {

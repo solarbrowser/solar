@@ -41,6 +41,9 @@ uint64_t g_styleVersion = 1;
 uint64_t g_authorVersion = 1;  // changed when the rules do
 bool g_anyContainerQueries = false;  // a rule with a container query has been looked at
 bool g_overlayScrollbars = false;
+int g_sheetParsing = 0;
+bool g_styleChangedInParse = false;
+bool g_wakeAfterParse = false;
 uint64_t g_cacheVersion = 1;   // changed when what the kept styles were made from is (not for the values animations give: each element has its own number for those)
 LayoutHook g_layoutHook = nullptr;
 Quanta::Context* g_activeContext = nullptr;  // the realm a style is being worked out in, for what a rule's condition needs of other elements
@@ -385,6 +388,7 @@ struct Gatherer {
   // are first named, a layer's sublayers below it: the rank of a path is its place in that order.
   std::map<std::string, std::vector<std::string>> layerChildren;
   std::map<std::string, int> layerRank;
+  std::shared_ptr<const std::map<std::string, int>> sharedRank;  // the ranks that were worked out for the tree (not copied for each element)
   std::string layerPath;
   bool collecting = false;  // only finding the layers
   bool startingMode = false;  // the starting style of the element is being made: @starting-style rules count
@@ -430,8 +434,9 @@ struct Gatherer {
   }
   std::string Child(const std::string& name) const { return layerPath.empty() ? name : layerPath + "." + name; }
   int RankOf(const std::string& path) {
-    const auto found = layerRank.find(path);
-    return layerBase + (found == layerRank.end() ? 0 : found->second);
+    const std::map<std::string, int>& ranks = sharedRank ? *sharedRank : layerRank;
+    const auto found = ranks.find(path);
+    return layerBase + (found == ranks.end() ? 0 : found->second);
   }
 
   // Whether the selector, as the rules of the current mode read it, is for the element.
@@ -611,6 +616,10 @@ struct Gatherer {
           if (SupportsText(rule->supportsText)) Rules(rule->rules, layer, outer);
           break;
         case RuleKind::Container:
+          if (collecting) {
+            Rules(rule->rules, layer, outer);
+            break;
+          }
           if (element->nodeDocument) element->nodeDocument->containerQueriesSeen = true;
           g_anyContainerQueries = true;
           if (g_activeContext && ContainerRuleMatches(*g_activeContext, const_cast<dom::Element*>(element), matchContext.pseudoElement != nullptr, rule->prelude)) Rules(rule->rules, layer, outer);
@@ -869,7 +878,7 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
       shadowed = !top->IsDocument();
     }
   }
-  bool good = reuse.allowed && !shadowed && !entry.shadowed && !(element->nodeDocument && element->nodeDocument->containerQueriesSeen) && entry.serial == element->serial && entry.parent == parentNode && entry.parentEpoch == parentEpoch && entry.attr == element->attrVersion && entry.anim == element->animVersion;
+  bool good = reuse.allowed && !shadowed && !entry.shadowed && entry.serial == element->serial && entry.parent == parentNode && entry.parentEpoch == parentEpoch && entry.attr == element->attrVersion && entry.anim == element->animVersion;
   if (good && reuse.structural) good = entry.children == element->childrenVersion && (!parent || entry.parentChildren == parent->childrenVersion);
   if (good && reuse.sibling) good = !parent || (entry.parentChildAttr == parent->childAttrVersion && entry.parentChildren == parent->childrenVersion);
   if (good && reuse.has) {
@@ -1063,7 +1072,6 @@ void Share(dom::Element* element, ElementStyle& style, const std::string& pseudo
     while (top->parentNode) top = top->parentNode;
     if (!top->IsDocument()) return;
   }
-  if (element->nodeDocument && element->nodeDocument->containerQueriesSeen) return;  // (what a container query says is of the element's container)
   if (element->FindAttribute("", "style")) return;
   dom::Element* parent = static_cast<dom::Element*>(element->parentNode);
   if (parent->animVersion != 0) return;
@@ -1322,11 +1330,10 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
     // The layers there are, and their order, are the same for every element of the tree (unless a container query decides on them): they are worked out once.
     struct LayerSnapshot {
       uint64_t version = 0;
-      std::map<std::string, std::vector<std::string>> children;
-      std::map<std::string, int> rank;
+      std::shared_ptr<const std::map<std::string, int>> rank;
     };
     static std::unordered_map<const dom::Node*, LayerSnapshot> snapshots;
-    const bool shareable = !(element->nodeDocument && element->nodeDocument->containerQueriesSeen);
+    const bool shareable = true;  // (the layers a container query holds are all taken into account when they are collected)
     uint64_t snapshotVersion = AuthorStyleVersion() * 1000003 + sheets.size();
     {
       const MediaEnvironment& m = gatherer.media;
@@ -1336,8 +1343,7 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
     }
     auto snapshot = snapshots.find(treeRoot);
     if (shareable && snapshot != snapshots.end() && snapshot->second.version == snapshotVersion) {
-      gatherer.layerChildren = snapshot->second.children;
-      gatherer.layerRank = snapshot->second.rank;
+      gatherer.sharedRank = snapshot->second.rank;
       gatherer.anonymousLayers = 0;
     } else {
       gatherer.collecting = true;
@@ -1348,7 +1354,7 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
       gatherer.RankLayers();
       if (shareable) {
         if (snapshots.size() > 64) snapshots.clear();
-        snapshots[treeRoot] = {snapshotVersion, gatherer.layerChildren, gatherer.layerRank};
+        snapshots[treeRoot] = {snapshotVersion, std::make_shared<const std::map<std::string, int>>(gatherer.layerRank)};
       }
     }
     gatherer.collecting = false;
@@ -2229,14 +2235,33 @@ void SetAnimationWake(Quanta::Context& ctx, dom::Document* document) {
   g_wakeContext = &ctx;
   g_wakeDocument = document;
 }
-void NoteAnimationMention() {
-  ++g_animationMentions;
-  // The frame that starts what is declared has to be asked for, as nothing else tells that there is something to start.
+
+// The frame that starts what is declared has to be asked for, as nothing else tells that there is something to start.
+void WakeAnimations() {
   if (g_wakeDocument && g_wakeDocument->animationWake && g_wakeContext && !g_inWake) {
     g_inWake = true;
     Quanta::Embed::Call(*g_wakeContext, Quanta::Embed::FromObject(g_wakeDocument->animationWake), Quanta::Embed::Undefined());
     g_inWake = false;
   }
+}
+
+void BeginSheetParse() { ++g_sheetParsing; }
+// Script does not run in the middle of parsing a sheet (what is half made is not safe to collect): the call waits for the end of it.
+void EndSheetParse() {
+  if (--g_sheetParsing == 0 && g_styleChangedInParse) {
+    g_styleChangedInParse = false;
+    NoteStyleChange();
+  }
+  if (g_sheetParsing == 0 && g_wakeAfterParse) {
+    g_wakeAfterParse = false;
+    WakeAnimations();
+  }
+}
+
+void NoteAnimationMention() {
+  ++g_animationMentions;
+  if (g_sheetParsing > 0) g_wakeAfterParse = true;
+  else WakeAnimations();
 }
 uint64_t AnimationMentions() { return g_animationMentions; }
 void SetOverlayScrollbars(bool overlay) {
@@ -2245,14 +2270,22 @@ void SetOverlayScrollbars(bool overlay) {
   NoteStyleChange();
 }
 void NoteStyleChange() {
+  // (While a sheet is being made, what it changes is told once, when it is done.)
+  if (g_sheetParsing > 0) {
+    g_styleChangedInParse = true;
+    return;
+  }
   ++g_styleVersion;
   ++g_cacheVersion;
   ++g_authorVersion;
 }
 void NoteStyleChangeForRegistry() { NoteStyleChange(); }
-void NoteAnimatedStyleChange() {
+uint64_t g_animationVersion = 1;
+uint64_t AnimationVersion() { return g_animationVersion; }
+void NoteAnimatedStyleChange(bool affectsSizes, bool) {
+  ++g_animationVersion;
   ++g_styleVersion;
-  if (g_anyContainerQueries) ++g_cacheVersion;  // (the size of a container may be what an animation gives)
+  if (g_anyContainerQueries && affectsSizes) ++g_cacheVersion;  // (the size of a container may be what an animation gives)
 }
 uint64_t AuthorStyleVersion() { return dom::DocumentVersion() * 1000003 + g_authorVersion; }
 uint64_t StyleVersion() { return g_styleVersion; }
@@ -2315,6 +2348,7 @@ void ScanRules(const std::vector<CssRule*>& rules, SelectorFeatures& f, int dept
 }  // namespace
 
 uint64_t SheetsVersion() { return g_authorVersion; }
+uint64_t StyleCacheVersion() { return g_cacheVersion; }
 
 uint64_t StyleEpochOf(dom::Element* element) {
   StyleOf(element);
@@ -2322,7 +2356,7 @@ uint64_t StyleEpochOf(dom::Element* element) {
 }
 
 std::shared_ptr<void> SharedStyleToken(Quanta::Context&, dom::Element* element, const std::string& pseudo) {
-  if (AnimatedValuesSuppressed() || StartingStyleFor(element, pseudo) || (element->nodeDocument && element->nodeDocument->containerQueriesSeen)) return nullptr;
+  if (AnimatedValuesSuppressed() || StartingStyleFor(element, pseudo)) return nullptr;
   dom::Node* tree = dom::ShadowIncludingRoot(element);
   if (!tree || !tree->IsDocument()) return nullptr;
   ElementStyle& style = StyleOf(element, pseudo);
@@ -2504,8 +2538,8 @@ StyleReader::StyleReader(Quanta::Context& ctx, dom::Element* element, const std:
 StyleReader::~StyleReader() = default;
 
 std::string StyleReader::Get(const char* property) {
-  const uint64_t now = dom::DocumentVersion() * 1000003 + g_styleVersion;
-  if (memo_ && version_ == now && !element_->nodeDocument->containerQueriesSeen && !AnimatedValuesSuppressed() && !StartingStyleFor(element_, pseudo_) &&
+  const uint64_t now = (dom::DocumentVersion() * 1000003 + g_styleVersion) * 1000003 + g_cacheVersion;
+  if (memo_ && version_ == now && !AnimatedValuesSuppressed() && !StartingStyleFor(element_, pseudo_) &&
       (!element_->nodeDocument->animationStyleSeen || element_->nodeDocument->styleFlushedVersion == AuthorStyleVersion())) {
     const Memo& memo = *static_cast<const Memo*>(memo_.get());
     const auto found = memo.computed.find(std::string_view(property));
@@ -2513,11 +2547,11 @@ std::string StyleReader::Get(const char* property) {
   }
   std::string value = ComputedValue(ctx_, element_, property, pseudo_);
   // After a first answer the style of the element is made, and what is asked next is found in it (unless the document asks for more: containers, animations).
-  if (!memo_ && element_->nodeDocument && !element_->nodeDocument->containerQueriesSeen && !AnimatedValuesSuppressed() && !StartingStyleFor(element_, pseudo_)) {
+  if (!memo_ && element_->nodeDocument && !AnimatedValuesSuppressed() && !StartingStyleFor(element_, pseudo_)) {
     dom::Node* tree = dom::ShadowIncludingRoot(element_);
     if (tree && tree->IsDocument()) {
       memo_ = StyleOf(element_, pseudo_).memo;
-      version_ = dom::DocumentVersion() * 1000003 + g_styleVersion;
+      version_ = (dom::DocumentVersion() * 1000003 + g_styleVersion) * 1000003 + g_cacheVersion;
     }
   }
   return value;

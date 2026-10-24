@@ -210,7 +210,7 @@ class Builder {
     }
     if (html) css::ComputedValue(lc_.ctx, html, "display");
     // The boxes of the tree before are kept for what has not changed, when nothing in the document makes a box depend on more than its own subtree.
-    canReuse_ = previous_ && previous_->root && reuse_.allowed && !getenv("SOLAR_NOREUSE") && !document->containerQueriesSeen && !document->contentVisibilityAutoSeen &&
+    canReuse_ = previous_ && previous_->root && reuse_.allowed && !getenv("SOLAR_NOREUSE") && !document->contentVisibilityAutoSeen &&
                 !css::g_firstLetterSeen && !css::g_firstLineSeen && !dom::HasShadowTrees();
     if (canReuse_) {
       lc_.tree.boxesOf = std::move(previous_->boxesOf);

@@ -1,3 +1,4 @@
+#include <unordered_map>
 // Container queries (https://www.w3.org/TR/css-conditional-5/#container-queries): whether an @container rule applies to an element, from the size layout
 // found for the nearest ancestor that is a container, or from its style.
 #include <algorithm>
@@ -404,7 +405,25 @@ struct ContainerFacts {
   std::vector<std::string> names;
 };
 
+ContainerFacts FactsOfUncached(Quanta::Context& ctx, dom::Element* element);
+
+// What an element is as a container, kept until something changes (every rule with a container condition asks it of each ancestor of each element).
 ContainerFacts FactsOf(Quanta::Context& ctx, dom::Element* element) {
+  static std::unordered_map<dom::Element*, ContainerFacts> kept;
+  static uint64_t version = 0;
+  const uint64_t now = (dom::DocumentVersion() * 1000003 + StyleVersion()) * 1000003 + StyleCacheVersion();
+  if (version != now || kept.size() > 50000) {
+    kept.clear();
+    version = now;
+  }
+  const auto found = kept.find(element);
+  if (found != kept.end()) return found->second;
+  ContainerFacts facts = FactsOfUncached(ctx, element);
+  kept[element] = facts;
+  return facts;
+}
+
+ContainerFacts FactsOfUncached(Quanta::Context& ctx, dom::Element* element) {
   ContainerFacts facts;
   // Size containment does not apply to everything: tables, ruby and what has no box of its own are not containers.
   const std::string display = ComputedValue(ctx, element, "display");

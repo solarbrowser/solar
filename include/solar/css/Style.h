@@ -29,6 +29,10 @@ StyleReuse StyleReuseFor(dom::Document* document);
 uint64_t StyleEpochOf(dom::Element* element);
 // Changes when a style sheet or what the cascade depends on besides the elements does.
 uint64_t SheetsVersion();
+// Changes when what was kept of the styles is no longer good (animations count).
+uint64_t StyleCacheVersion();
+// Changes when what an animation gives changes (for what is made again from it, as a layout).
+uint64_t AnimationVersion();
 // Whether any rule gives the pseudo-element of the element a style.
 bool HasPseudoStyle(dom::Element* element, const std::string& pseudo);
 // The width the vertical scrollbar or gutter of the viewport takes, and the height of the horizontal one.
@@ -71,6 +75,9 @@ std::vector<CssStyleSheet*> SheetsOfTreeRoot(dom::Node* root);
 
 // Something a style depends on changed (a sheet, a declaration): computed values are made again.
 void NoteStyleChange();
+// A style sheet is being parsed: script must not run until it is done (what is half made is not safe to collect).
+void BeginSheetParse();
+void EndSheetParse();
 // Whether any declaration for the element (or its pseudo-element) is about animations or transitions: what has none has nothing to start.
 bool DeclaresAnimation(dom::Element* element, const std::string& pseudo);
 // Scrollbars of the viewport that float over the page and take no room (a window; the tests have the ones that do).
@@ -79,7 +86,7 @@ void SetOverlayScrollbars(bool overlay);
 void ForgetDocument(dom::Document* document);
 uint64_t StyleVersion();
 // An animation changed the values it gives: computed values are made again, but nothing that was declared is different.
-void NoteAnimatedStyleChange();
+void NoteAnimatedStyleChange(bool affectsSizes = true, bool onlyItself = false);
 // Keeps the computed values the element has now (of the properties that can be animated), as the style that a change of style that
 // follows is compared with, which a transition starts from.
 void SnapshotComputedValues(Quanta::Context& ctx, dom::Element* element);

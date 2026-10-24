@@ -1267,6 +1267,10 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
 }  // namespace
 
 void ParseSheetInto(Context& ctx, CssStyleSheet* sheet, std::string_view text) {
+  struct Parsing {
+    Parsing() { BeginSheetParse(); }
+    ~Parsing() { EndSheetParse(); }
+  } parsing;
   NoteStyleChange();
   struct ParsingBase {
     explicit ParsingBase(const std::string& base) { SetParsingBase(base); }

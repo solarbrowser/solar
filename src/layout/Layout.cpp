@@ -181,7 +181,7 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
     }
   }
   const auto versionNow = [&] {
-    uint64_t v = (dom::DocumentVersion() * 1000003 + css::StyleVersion()) * 1000003 + static_cast<uint64_t>(environment.width * 7 + environment.height);
+    uint64_t v = ((dom::DocumentVersion() * 1000003 + css::StyleVersion()) * 1000003 + css::AnimationVersion()) * 1000003 + static_cast<uint64_t>(environment.width * 7 + environment.height);
     // What is relevant to the user of content-visibility: auto depends on the focus and the selection.
     if (document->contentVisibilityAutoSeen) {
       v = v * 1000003 + reinterpret_cast<uintptr_t>(document->focusedElement);
@@ -220,7 +220,7 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
       BuildTree(lc, document, attempt == 0 && pass == 0 && previous && previous->root ? previous.get() : nullptr);
       const auto t1 = std::chrono::steady_clock::now();
       LayoutRoot(lc);
-      if (std::getenv("SOLAR_LAYOUT_DEBUG")) std::fprintf(stderr, "layout pass %d attempt %d: build %.1f ms, layout %.1f ms\n", pass, attempt, std::chrono::duration<double, std::milli>(t1 - t0).count(), std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count());
+      if (std::getenv("SOLAR_LAYOUT_DEBUG")) std::fprintf(stderr, "layout pass %d attempt %d [doc %llu style %llu cache %llu author %llu]: build %.1f ms, layout %.1f ms\n", pass, attempt, (unsigned long long)dom::DocumentVersion(), (unsigned long long)css::StyleVersion(), (unsigned long long)css::StyleCacheVersion(), (unsigned long long)css::SheetsVersion(), std::chrono::duration<double, std::milli>(t1 - t0).count(), std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count());
       if (attempt >= 2 || autos.thickness <= 0 || (!autos.x && !autos.y) || !tree->root) break;
       const Rect overflow = ScrollableOverflow(*tree, *tree->root, document->DocumentElement());
       const bool needY = autos.y && barWidth == 0 && overflow.Bottom() > tree->viewportHeight + 0.01;
