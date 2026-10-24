@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "solar/layout/Box.h"
+#include "solar/paint/Sticky.h"
 
 // Layout (https://www.w3.org/TR/CSS22/visudet.html): the sizes and places of the boxes of a document. Computation only: nothing here draws.
 namespace solar::layout {
@@ -13,6 +14,8 @@ namespace solar::layout {
 // The layout of the document, made again if the tree or its style changed since it was last made.
 // Moves the sticky positioned boxes to where the scroll positions of their scroll containers put them.
 void ApplySticky(Tree& tree);
+// What a sticky box that the viewport holds needs to be placed for any scroll (see paint::ComputeSticky); false for another box.
+bool StickyInfoOf(const Tree& tree, const Box& box, paint::StickyInfo& info);
 
 Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document);
 

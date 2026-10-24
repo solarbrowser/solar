@@ -631,6 +631,11 @@ void SkiaPainter::Draw(const DisplayList& list, SkCanvas& canvas, double scrollX
         continue;
       }
       const float* m = transform->matrix.m;
+      if (transform->sticky.valid) {
+        double dx = 0, dy = 0;
+        ComputeSticky(transform->sticky, scrollX, scrollY, dx, dy);
+        canvas.translate(static_cast<float>(dx), static_cast<float>(dy));
+      }
       canvas.concat(SkM44(m[0], m[4], m[8], m[12], m[1], m[5], m[9], m[13], m[2], m[6], m[10], m[14], m[3], m[7], m[11], m[15]));
     }
   }

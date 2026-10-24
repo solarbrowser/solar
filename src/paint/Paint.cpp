@@ -1249,7 +1249,7 @@ class Painter {
     if (!box.style || box.kind != Box::Kind::Block) return;
     EnsureClipsFor(box);
     const Rect absolute = layout::AbsoluteBorderBox(box);
-    bool layer = false, transformed = false, fixedUndo = false;
+    bool layer = false, transformed = false, fixedUndo = false, stickyUndo = false;
     if (box.style->opacity < 1) {
       PushLayer item;
       item.opacity = F(std::max(0.0, box.style->opacity));
@@ -1276,6 +1276,14 @@ class Painter {
       std::get<PushTransform>(list_->items.back()).followsScroll = true;
       fixedUndo = true;
     }
+    if (box.style->position == layout::Position::Sticky && !transformed && !fixedUndo) {
+      paint::StickyInfo sticky;
+      if (layout::StickyInfoOf(tree_, box, sticky)) {
+        PushTransformOf(-box.stickyX, -box.stickyY);  // (the box is where it is held now: it is put where it is without that, and moved as the scroll asks)
+        std::get<PushTransform>(list_->items.back()).sticky = sticky;
+        stickyUndo = true;
+      }
+    }
     std::vector<ImageLayer> masks;
     {
       const RectF area = ToRectF(absolute);
@@ -1290,6 +1298,10 @@ class Painter {
       PopMask popped;
       popped.layers = std::move(masks);
       list_->items.push_back(std::move(popped));
+    }
+    if (stickyUndo) {
+      list_->items.push_back(PopTransform{});
+      --transformDepth_;
     }
     if (fixedUndo) {
       list_->items.push_back(PopTransform{});

@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "solar/layout/Layout.h"
+#include "solar/paint/Sticky.h"
 
 namespace solar::layout {
 
@@ -21,101 +22,135 @@ const Box* BlockParent(const Box& box) {
   return p;
 }
 
+// Where a sticky box is held by the viewport (not by a scroll container of its own), and how far the viewport is scrolled. False for one that is not
+// held by the viewport.
+bool InfoOf(const Tree& tree, const Box& box, paint::StickyInfo& info, double& scrollX, double& scrollY) {
+  const BoxStyle& style = *box.style;
+  if (box.kind != Box::Kind::Block || style.position != Position::Sticky || !box.parent || box.inlineLevel) return false;
+  const BoxStyle& physical = style.Physical();
+  for (const Box* p = BlockParent(box); p && p->parent; p = BlockParent(*p)) {
+    if (p->style && ScrollsOverflow(*p->style)) return false;
+  }
+  scrollX = scrollY = 0;
+  const auto found = tree.root->node ? tree.scroll.find(tree.root->node) : tree.scroll.end();
+  if (found != tree.scroll.end()) {
+    scrollX = found->second.first;
+    scrollY = found->second.second;
+  }
+  info = paint::StickyInfo();
+  info.valid = true;
+  info.portWidth = tree.viewportWidth;
+  info.portHeight = tree.viewportHeight;
+  // Where the box is without the shift it had.
+  const Rect abs = AbsoluteBorderBox(box);
+  info.x = abs.x - box.stickyX;
+  info.y = abs.y - box.stickyY;
+  info.width = abs.width;
+  info.height = abs.height;
+  info.marginTop = box.margin.top;
+  info.marginRight = box.margin.right;
+  info.marginBottom = box.margin.bottom;
+  info.marginLeft = box.margin.left;
+  // The containing block's content box.
+  const Box* container = BlockParent(box);
+  Rect content = container ? AbsoluteBorderBox(*container) : Rect{0, 0, tree.viewportWidth, tree.viewportHeight};
+  if (container) {
+    content.x += container->border.left + container->padding.left;
+    content.y += container->border.top + container->padding.top;
+    // A scrollbar takes no room from the block a sticky box is held in.
+    content.width = container->ContentWidth() + container->scrollbar.Horizontal();
+    content.height = container->ContentHeight() + container->scrollbar.Vertical();
+  }
+  info.containerX = content.x;
+  info.containerY = content.y;
+  info.containerWidth = content.width;
+  info.containerHeight = content.height;
+  const auto inset = [&](int side, double basis, double& out) {
+    const Length& l = physical.inset[side];
+    if (l.IsAuto()) return false;
+    out = l.Resolve(basis);
+    return true;
+  };
+  info.hasTop = inset(0, info.portHeight, info.top);
+  info.hasRight = inset(1, info.portWidth, info.right);
+  info.hasBottom = inset(2, info.portHeight, info.bottom);
+  info.hasLeft = inset(3, info.portWidth, info.left);
+  info.rtl = physical.direction == Direction::Rtl;
+  return true;
+}
+
 void Apply(Tree& tree, Box& box) {
   const BoxStyle& style = *box.style;
   if (box.kind == Box::Kind::Block && style.position == Position::Sticky && box.parent && !box.inlineLevel) {
     const BoxStyle& physical = style.Physical();
-    // The scroll container: the nearest box that scrolls its overflow, else the viewport.
-    const Box* scroller = nullptr;
-    for (const Box* p = BlockParent(box); p && p->parent; p = BlockParent(*p)) {
-      if (p->style && ScrollsOverflow(*p->style)) {
-        scroller = p;
-        break;
-      }
-    }
-    double portX, portY, portWidth, portHeight, scrollX = 0, scrollY = 0;
-    if (scroller) {
-      const Rect abs = AbsoluteBorderBox(*scroller);
-      portX = abs.x + scroller->border.left + scroller->scrollbar.left;
-      portY = abs.y + scroller->border.top + scroller->scrollbar.top;
-      portWidth = scroller->width - scroller->border.Horizontal() - scroller->scrollbar.Horizontal();
-      portHeight = scroller->height - scroller->border.Vertical() - scroller->scrollbar.Vertical();
-      const auto found = scroller->node ? tree.scroll.find(scroller->node) : tree.scroll.end();
-      if (found != tree.scroll.end()) {
-        scrollX = found->second.first;
-        scrollY = found->second.second;
-      }
-    } else {
-      portX = portY = 0;
-      portWidth = tree.viewportWidth;
-      portHeight = tree.viewportHeight;
-      const auto found = tree.root->node ? tree.scroll.find(tree.root->node) : tree.scroll.end();
-      if (found != tree.scroll.end()) {
-        scrollX = found->second.first;
-        scrollY = found->second.second;
-      }
-    }
-    // Where the box is without the shift it had.
-    Rect abs = AbsoluteBorderBox(box);
-    abs.x -= box.stickyX;
-    abs.y -= box.stickyY;
-    const double marginLeft = abs.x - box.margin.left, marginTop = abs.y - box.margin.top;
-    const double marginRight = abs.x + abs.width + box.margin.right, marginBottom = abs.y + abs.height + box.margin.bottom;
-    // The containing block's content box.
-    const Box* container = BlockParent(box);
-    Rect content = container ? AbsoluteBorderBox(*container) : Rect{0, 0, tree.viewportWidth, tree.viewportHeight};
-    if (container) {
-      content.x += container->border.left + container->padding.left;
-      content.y += container->border.top + container->padding.top;
-      // A scrollbar takes no room from the block a sticky box is held in.
-      content.width = container->ContentWidth() + container->scrollbar.Horizontal();
-      content.height = container->ContentHeight() + container->scrollbar.Vertical();
-    }
-    // The part of the scroll container that is seen, and the sticky view rectangle inside it.
-    const double viewLeft = portX + scrollX, viewTop = portY + scrollY, viewRight = viewLeft + portWidth, viewBottom = viewTop + portHeight;
-    const auto inset = [&](int side, double basis, double& out) {
-      const Length& l = physical.inset[side];
-      if (l.IsAuto()) return false;
-      out = l.Resolve(basis);
-      return true;
-    };
-    double top, right, bottom, left;
-    const bool hasTop = inset(0, portHeight, top), hasRight = inset(1, portWidth, right), hasBottom = inset(2, portHeight, bottom), hasLeft = inset(3, portWidth, left);
+    paint::StickyInfo info;
+    double viewportScrollX = 0, viewportScrollY = 0;
     double dx = 0, dy = 0;
-    // The sticky view rectangle holds the border box; the containing block holds the margin box.
-    double bt = abs.y, bb = abs.y + abs.height, bl = abs.x, br = abs.x + abs.width;
-    if (hasTop && bt < viewTop + top) {
-      const double room = std::max(0.0, content.y + content.height - (marginBottom + dy));
-      const double shift = std::min(viewTop + top - bt, room);
-      dy += shift;
-      bt += shift;
-      bb += shift;
-    }
-    if (hasBottom && bb > viewBottom - bottom) {
-      const double room = std::max(0.0, (marginTop + dy) - content.y);
-      dy -= std::min(bb - (viewBottom - bottom), room);
-    }
-    const bool rtl = physical.direction == Direction::Rtl;
-    const auto horizontal = [&](bool useLeft) {
-      if (useLeft) {
-        if (hasLeft && bl < viewLeft + left) {
-          const double room = std::max(0.0, content.x + content.width - (marginRight + dx));
-          const double shift = std::min(viewLeft + left - bl, room);
-          dx += shift;
-          bl += shift;
-          br += shift;
-        }
-      } else if (hasRight && br > viewRight - right) {
-        const double room = std::max(0.0, (marginLeft + dx) - content.x);
-        dx -= std::min(br - (viewRight - right), room);
-      }
-    };
-    if (hasLeft && hasRight) {
-      // Both: the one at the end of the line of text goes first and the other has what is left.
-      horizontal(!rtl);
-      horizontal(rtl);
+    if (InfoOf(tree, box, info, viewportScrollX, viewportScrollY)) {
+      paint::ComputeSticky(info, viewportScrollX, viewportScrollY, dx, dy);
     } else {
-      horizontal(hasLeft);
+      // Held by a scroll container of its own.
+      const Box* scroller = nullptr;
+      for (const Box* p = BlockParent(box); p && p->parent; p = BlockParent(*p)) {
+        if (p->style && ScrollsOverflow(*p->style)) {
+          scroller = p;
+          break;
+        }
+      }
+      if (scroller) {
+        const Rect scrollerBox = AbsoluteBorderBox(*scroller);
+        double scrollX = 0, scrollY = 0;
+        const auto found = scroller->node ? tree.scroll.find(scroller->node) : tree.scroll.end();
+        if (found != tree.scroll.end()) {
+          scrollX = found->second.first;
+          scrollY = found->second.second;
+        }
+        paint::StickyInfo own;
+        own.valid = true;
+        const double portX = scrollerBox.x + scroller->border.left + scroller->scrollbar.left;
+        const double portY = scrollerBox.y + scroller->border.top + scroller->scrollbar.top;
+        own.portWidth = scroller->width - scroller->border.Horizontal() - scroller->scrollbar.Horizontal();
+        own.portHeight = scroller->height - scroller->border.Vertical() - scroller->scrollbar.Vertical();
+        Rect abs = AbsoluteBorderBox(box);
+        own.x = abs.x - box.stickyX;
+        own.y = abs.y - box.stickyY;
+        own.width = abs.width;
+        own.height = abs.height;
+        own.marginTop = box.margin.top;
+        own.marginRight = box.margin.right;
+        own.marginBottom = box.margin.bottom;
+        own.marginLeft = box.margin.left;
+        const Box* container = BlockParent(box);
+        Rect content = container ? AbsoluteBorderBox(*container) : Rect{0, 0, tree.viewportWidth, tree.viewportHeight};
+        if (container) {
+          content.x += container->border.left + container->padding.left;
+          content.y += container->border.top + container->padding.top;
+          content.width = container->ContentWidth() + container->scrollbar.Horizontal();
+          content.height = container->ContentHeight() + container->scrollbar.Vertical();
+        }
+        own.containerX = content.x;
+        own.containerY = content.y;
+        own.containerWidth = content.width;
+        own.containerHeight = content.height;
+        const auto inset = [&](int side, double basis, double& out) {
+          const Length& l = physical.inset[side];
+          if (l.IsAuto()) return false;
+          out = l.Resolve(basis);
+          return true;
+        };
+        own.hasTop = inset(0, own.portHeight, own.top);
+        own.hasRight = inset(1, own.portWidth, own.right);
+        own.hasBottom = inset(2, own.portHeight, own.bottom);
+        own.hasLeft = inset(3, own.portWidth, own.left);
+        own.rtl = physical.direction == Direction::Rtl;
+        // (The port of a scroll container is at its own place in the document, and what is scrolled is in its own coordinates: the numbers are moved to the port.)
+        paint::StickyInfo moved = own;
+        moved.x -= portX;
+        moved.y -= portY;
+        moved.containerX -= portX;
+        moved.containerY -= portY;
+        paint::ComputeSticky(moved, scrollX, scrollY, dx, dy);
+      }
     }
     box.x += dx - box.stickyX;
     box.y += dy - box.stickyY;
@@ -129,6 +164,11 @@ void Apply(Tree& tree, Box& box) {
 
 void ApplySticky(Tree& tree) {
   if (tree.root) Apply(tree, *tree.root);
+}
+
+bool StickyInfoOf(const Tree& tree, const Box& box, paint::StickyInfo& info) {
+  double scrollX = 0, scrollY = 0;
+  return tree.root && InfoOf(tree, box, info, scrollX, scrollY);
 }
 
 }  // namespace solar::layout

@@ -687,7 +687,12 @@ void RunWindow(Shared& shared, SDL_Window* window, SDL_Renderer* renderer) {
         case UiCommand::Kind::ScrollBy: scrollBy(command.x, command.y, command.instant); break;
         case UiCommand::Kind::ScrollTo: scrollTo(command.x, command.y); break;
         case UiCommand::Kind::Forget: painter.Forget(); break;
-        case UiCommand::Kind::Shot: shotPath = command.text; dirty = true; break;
+        case UiCommand::Kind::Shot:
+          shotPath = command.text;
+          // (SOLAR_GUI_SHOTAT=y: the list the page made is drawn at that scroll, as the window does while the page is busy.)
+          if (const char* at = std::getenv("SOLAR_GUI_SHOTAT")) y = targetY = std::atof(at);
+          dirty = true;
+          break;
         case UiCommand::Kind::Quit: running = false; break;
       }
     }
@@ -1092,7 +1097,8 @@ int PageMain(Shared& shared, int argc, char** argv) {
     lastScrollInput = Clock::now();
     hoverStale = pointerKnown;
     // The list that was made has items for some way above and below where it was made; past a part of that it is made again.
-    if (std::abs(sy - builtY) > 0.25 * shared.height.load() || std::abs(sx - builtX) > 1) dirty = true;
+    // (SOLAR_GUI_NOREBUILD: it is not made again for the scroll, to see what the window does by itself.)
+    if (!std::getenv("SOLAR_GUI_NOREBUILD") && (std::abs(sy - builtY) > 0.25 * shared.height.load() || std::abs(sx - builtX) > 1)) dirty = true;
   };
 
   int autoScroll = std::getenv("SOLAR_GUI_SCROLL") ? std::atoi(std::getenv("SOLAR_GUI_SCROLL")) : 0;

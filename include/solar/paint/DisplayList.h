@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "solar/font/Face.h"
+#include "solar/paint/Sticky.h"
 
 // What a page comes to when it is painted, as a list of drawing commands in the coordinates of the document: made from the boxes of layout
 // (Paint.cpp), run by a canvas (Skia, or anything that can draw rectangles and glyphs). Nothing in it refers to the DOM or the boxes, so a canvas
@@ -90,6 +91,8 @@ struct PushTransform {
   // The box stays where it is in the viewport (position: fixed): whoever draws moves it by how far the viewport is scrolled when it is drawn
   // (the matrix is the same move for the scroll the list was made at).
   bool followsScroll = false;
+  // A sticky box (held by the viewport): the matrix takes back the shift the box has in the list, and whoever draws moves it by the one it has at the scroll it draws at.
+  StickyInfo sticky;
 };
 struct PopTransform {};
 
