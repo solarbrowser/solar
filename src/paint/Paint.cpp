@@ -898,7 +898,7 @@ class Painter {
         }
       }
     };
-    EnsureClipsFor(owner);
+    EnsureClipsForContentsOf(owner);
     boxes(owner);
     for (const Line& line : owner.lines) {
       for (const LineItem& item : line.items) {
@@ -906,7 +906,7 @@ class Painter {
           PaintText(owner, item, origin);
         } else if (item.kind == LineItem::Kind::Atomic && item.box) {
           PaintStackingChild(*item.box);
-          EnsureClipsFor(owner);
+          EnsureClipsForContentsOf(owner);
         }
       }
     }
@@ -956,6 +956,15 @@ class Painter {
   }
 
   void EnsureClipsFor(const Box& box) { EnsureClips(ClipChain(box)); }
+
+  // What cuts the contents of a box: what cuts the box, and the box itself when it clips its overflow.
+  void EnsureClipsForContentsOf(const Box& box) {
+    std::vector<const Box*> chain = ClipChain(box);
+    const dom::Element* element = box.element();
+    const bool viewport = element && (element->IsHtml("html") || (element->IsHtml("body") && box.parent && box.parent->element() && box.parent->element()->IsHtml("html") && &box == canvasFrom_));
+    if (box.parent && ClipsOverflow(box) && !viewport) chain.push_back(&box);
+    EnsureClips(chain);
+  }
 
   void EnsureClips(const std::vector<const Box*>& chain) {
     const size_t base = frames_.empty() ? 0 : frames_.back().base;
@@ -1117,7 +1126,6 @@ class Painter {
     }
     for (const Box* f : lists.floats) PaintStackingChild(*f);
     for (const Box* o : lists.inlineOwners) {
-      inside(*o);
       PaintLines(*o);
     }
     for (const auto& z : lists.zero) PaintStackingChild(*z.second);

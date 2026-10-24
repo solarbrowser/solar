@@ -1260,6 +1260,11 @@ Side StaticSide(const Box& a, const Box* parent, bool inlineAxis, WritingMode cb
       }
     }
     Align::Kind k = s.alignSelf.kind == Align::Kind::Auto ? ps.alignItems.kind : s.alignSelf.kind;
+    // An inset that is given to a box whose alignment is not its own (align-self) is what places it, as in a block: only the static position is aligned.
+    if (s.alignSelf.kind == Align::Kind::Auto || s.alignSelf.kind == Align::Kind::Normal) {
+      const bool crossVertical = row == !IsVertical(parent->Mode());
+      if (!s.inset[crossVertical ? 0 : 3].IsAuto() || !s.inset[crossVertical ? 2 : 1].IsAuto()) return Side::None;
+    }
     // (The cross axis of a column is the inline axis, whose start is on the right in rtl.)
     const bool wrapReverse = (ps.flexWrap == FlexWrap::WrapReverse) != (!row && ps.direction == Direction::Rtl);
     if (k == Align::Kind::Normal || k == Align::Kind::Stretch || k == Align::Kind::Auto) k = Align::Kind::FlexStart;
