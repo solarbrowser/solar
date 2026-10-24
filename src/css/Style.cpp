@@ -40,6 +40,7 @@ std::string Lower(std::string_view text) {
 uint64_t g_styleVersion = 1;
 uint64_t g_authorVersion = 1;  // changed when the rules do
 bool g_anyContainerQueries = false;  // a rule with a container query has been looked at
+bool g_overlayScrollbars = false;
 uint64_t g_cacheVersion = 1;   // changed when what the kept styles were made from is (not for the values animations give: each element has its own number for those)
 LayoutHook g_layoutHook = nullptr;
 Quanta::Context* g_activeContext = nullptr;  // the realm a style is being worked out in, for what a rule's condition needs of other elements
@@ -989,7 +990,8 @@ double ViewportScrollbarsUncached(dom::Document* document, const std::function<s
   if (ox == "visible") ox = "auto";
   if (oy == "visible") oy = "auto";
   const std::string width = get(root, "scrollbar-width"), gutter = get(root, "scrollbar-gutter");
-  const double thickness = width == "none" ? 0.0 : width == "thin" ? 8.0 : 15.0;
+  // (Scrollbars that float over the page take no room: the page is not laid out again for the room of one.)
+  const double thickness = g_overlayScrollbars || width == "none" ? 0.0 : width == "thin" ? 8.0 : 15.0;
   const bool stable = gutter.find("stable") != std::string::npos, both = gutter.find("both-edges") != std::string::npos;
   const std::string mode = get(source, "writing-mode");
   const bool vertical = mode.starts_with("vertical") || mode.starts_with("sideways");
@@ -2145,6 +2147,37 @@ std::string Resolver::Finish(dom::Element* element, const std::string& property,
     }
   }
 
+  // What a value comes to is a matter of the property, the value and the context it is worked out in, and nothing of the element (the cases of the element
+  // are above): the same declaration is worked out once for every context.
+  std::string memoKey;
+  static std::unordered_map<std::string, std::string> memo;
+  static uint64_t memoVersion = 0;
+  const bool memoable = text.find("url(") == std::string::npos;
+  if (memoable) {
+    if (memoVersion != g_cacheVersion || memo.size() > 200000) {
+      memo.clear();
+      memoVersion = g_cacheVersion;
+    }
+    memoKey.reserve(property.size() + text.size() + 160);
+    memoKey += property;
+    memoKey += '|';
+    memoKey += text;
+    memoKey += '|';
+    const double numbers[] = {context.fontSize, context.rootFontSize, context.lineHeight, context.rootLineHeight, context.exHeight, context.chWidth, context.capHeight, context.icWidth,
+                              context.rootExHeight, context.rootChWidth, context.rootCapHeight, context.rootIcWidth, context.viewportWidth, context.viewportHeight, context.containerWidth, context.containerHeight};
+    memoKey.append(reinterpret_cast<const char*>(numbers), sizeof(numbers));
+    memoKey += context.containerVertical ? 'v' : 'h';
+    memoKey += context.currentColor;
+    memoKey += '|';
+    memoKey += context.colorScheme;
+    const auto hit = memo.find(memoKey);
+    if (hit != memo.end()) return hit->second;
+  }
+  const auto remember = [&](std::string result) {
+    if (memoable) memo[memoKey] = result;
+    return result;
+  };
+
   ValueMatch match;
   {
     // A relative url() is taken against where the declaration came from.
@@ -2167,9 +2200,9 @@ std::string Resolver::Finish(dom::Element* element, const std::string& property,
   if (opacities.count(property) && match.normalized.size() == 1 && match.normalized[0].kind == Cv::Kind::Token && match.normalized[0].token.type == T::Number) {
     match.normalized[0].token.number = std::max(0.0, std::min(1.0, match.normalized[0].token.number));
   }
-  if (property == "box-shadow" || property == "-webkit-box-shadow") return NormalizeShadows(TextOfComputed(match), 4, context.currentColor);
-  if (property == "text-shadow") return NormalizeShadows(TextOfComputed(match), 3, context.currentColor);
-  return TextOfComputed(match);
+  if (property == "box-shadow" || property == "-webkit-box-shadow") return remember(NormalizeShadows(TextOfComputed(match), 4, context.currentColor));
+  if (property == "text-shadow") return remember(NormalizeShadows(TextOfComputed(match), 3, context.currentColor));
+  return remember(TextOfComputed(match));
 }
 
 }  // namespace
@@ -2206,6 +2239,11 @@ void NoteAnimationMention() {
   }
 }
 uint64_t AnimationMentions() { return g_animationMentions; }
+void SetOverlayScrollbars(bool overlay) {
+  if (g_overlayScrollbars == overlay) return;
+  g_overlayScrollbars = overlay;
+  NoteStyleChange();
+}
 void NoteStyleChange() {
   ++g_styleVersion;
   ++g_cacheVersion;
@@ -2341,7 +2379,19 @@ void NotePseudoNamesOfRules(const std::vector<CssRule*>& rules, std::unordered_s
 // Whether a rule of the document's sheets or of the user agent's could be for a pseudo-element of that name (a document with no shadow trees only).
 bool PseudoNameMayHaveRules(dom::Element* element, const std::string& pseudo) {
   if (dom::HasShadowTrees() || !element->nodeDocument) return true;
-  dom::Node* tree = dom::ShadowIncludingRoot(element);
+  // (The root is the same for the children of one parent, which come one after the other.)
+  static const dom::Node* lastParent = nullptr;
+  static dom::Node* lastTree = nullptr;
+  static uint64_t lastVersion = 0;
+  dom::Node* tree = nullptr;
+  if (element->parentNode && element->parentNode == lastParent && lastVersion == dom::DocumentVersion()) {
+    tree = lastTree;
+  } else {
+    tree = dom::ShadowIncludingRoot(element);
+    lastParent = element->parentNode;
+    lastTree = tree;
+    lastVersion = dom::DocumentVersion();
+  }
   if (!tree || !tree->IsDocument()) return true;
   static const std::unordered_set<std::string> ua = [] {
     std::unordered_set<std::string> names;
@@ -2375,6 +2425,17 @@ bool HasPseudoStyle(dom::Element* element, const std::string& pseudo) {
 
 void ViewportScrollbars(Quanta::Context& ctx, dom::Document* document, double& vertical, double& horizontal, ViewportAuto* autos) {
   vertical = ViewportScrollbarsWith(document, [&](dom::Element* e, const char* p) { return ComputedValue(ctx, e, p); }, horizontal, autos);
+}
+
+bool DeclaresAnimation(dom::Element* element, const std::string& pseudo) {
+  // (What a container's size makes of the rules is not in the styles yet: all are looked at.)
+  if (element->nodeDocument && element->nodeDocument->containerQueriesSeen) return true;
+  ElementStyle& style = StyleOf(element, pseudo);
+  if (!style.built) {
+    Build(element, style, pseudo);
+    if (!style.cascade.empty()) Share(element, style, pseudo);
+  }
+  return style.cascade.count("animation-name") || style.cascade.count("transition-duration") || style.cascade.count("transition-delay");
 }
 
 std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std::string& property, const std::string& pseudo) {

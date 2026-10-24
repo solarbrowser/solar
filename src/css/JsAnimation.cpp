@@ -154,6 +154,8 @@ int AnimationMask(Context& ctx, dom::Element* element, bool pseudos) {
   const char* names[] = {"", "before", "after", "marker"};
   for (int i = 0; i < (pseudos ? 4 : 1); ++i) {
     const std::string pseudo = names[i];
+    if (i > 0 && !HasPseudoStyle(element, pseudo)) continue;
+    if (!DeclaresAnimation(element, pseudo)) continue;
     const std::string name = ComputedValue(ctx, element, "animation-name", pseudo);
     if ((!name.empty() && name != "none") || NonZeroTime(ComputedValue(ctx, element, "transition-duration", pseudo)) ||
         NonZeroTime(ComputedValue(ctx, element, "transition-delay", pseudo))) {

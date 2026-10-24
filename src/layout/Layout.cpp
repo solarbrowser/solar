@@ -1,3 +1,4 @@
+#include <chrono>
 #include "solar/layout/Layout.h"
 
 #include <cmath>
@@ -215,8 +216,11 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
       tree->viewportWidth = environment.width - barWidth - extraWidth;
       tree->viewportHeight = environment.height - barHeight - extraHeight;
       LayoutContext lc{ctx, *tree, tree->viewportWidth, tree->viewportHeight};
+      const auto t0 = std::chrono::steady_clock::now();
       BuildTree(lc, document, attempt == 0 && pass == 0 && previous && previous->root ? previous.get() : nullptr);
+      const auto t1 = std::chrono::steady_clock::now();
       LayoutRoot(lc);
+      if (std::getenv("SOLAR_LAYOUT_DEBUG")) std::fprintf(stderr, "layout pass %d attempt %d: build %.1f ms, layout %.1f ms\n", pass, attempt, std::chrono::duration<double, std::milli>(t1 - t0).count(), std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count());
       if (attempt >= 2 || autos.thickness <= 0 || (!autos.x && !autos.y) || !tree->root) break;
       const Rect overflow = ScrollableOverflow(*tree, *tree->root, document->DocumentElement());
       const bool needY = autos.y && barWidth == 0 && overflow.Bottom() > tree->viewportHeight + 0.01;

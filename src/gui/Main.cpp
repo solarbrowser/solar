@@ -26,6 +26,7 @@
 #include "solar/css/CssBindings.h"
 #include "solar/css/MediaQuery.h"
 #include "solar/css/Style.h"
+#include "solar/dom/Damage.h"
 #include "solar/dom/NodeBindings.h"
 #include "solar/dom/NodeBindingsInternal.h"
 #include "solar/font/Database.h"
@@ -174,7 +175,10 @@ class Browser : public solar::html::FrameEnvironment {
       done = true;
       if (owner->timing_) std::fprintf(stderr, "  fetch %5.0f ms  %7zu bytes  %s\n", std::chrono::duration<double, std::milli>(Clock::now() - started).count(), body.size(), url.substr(0, 100).c_str());
       if (owner->waiting_ == this) owner->loop_.Stop();
-      if (owner->layoutImages_.erase(url)) owner->sizesArrived_ = true;
+      if (owner->layoutImages_.erase(url)) {
+        owner->sizesArrived_ = true;
+        owner->arrivedUrls_.insert(url);
+      }
       else owner->arrived_ = true;
     }
   };
@@ -359,6 +363,11 @@ class Browser : public solar::html::FrameEnvironment {
   std::set<std::string> layoutImages_;
 
  public:
+  std::set<std::string> arrivedUrls_;
+
+ private:
+
+ public:
   bool painting_ = false;
   bool timing_ = false;
   std::function<void()> pump_;
@@ -425,6 +434,7 @@ int main(int argc, char** argv) {
     solar::css::SetCurrentMediaEnvironment(environment);
   };
   setViewport();
+  solar::css::SetOverlayScrollbars(true);
 
   // Puts the document that came for `where` in a new realm, and runs its scripts (what it fetches is waited for, with the window kept alive).
   qe::Realm* realm = nullptr;
@@ -707,7 +717,23 @@ int main(int argc, char** argv) {
     if (Clock::now() - lastRelayout > std::chrono::milliseconds(60)) {
       if (browser.TakeSizesArrived()) {
         if (timing) std::fprintf(stderr, "pictures came: laid out again\n");
+        // Only the elements of those pictures are made again (the rest of the page is as it was), when they can be found.
+        bool found = false;
+        if (solar::layout::Tree* tree = solar::dom::DocumentVersion() ? document->layoutTree.get() : nullptr; tree && tree->root) {
+          std::vector<const solar::layout::Box*> stack = {tree->root.get()};
+          while (!stack.empty()) {
+            const solar::layout::Box* box = stack.back();
+            stack.pop_back();
+            if (!box->imageUrl.empty() && browser.arrivedUrls_.count(box->imageUrl) && box->element()) {
+              solar::dom::NoteDamage(box->element(), solar::dom::kDamageAttributes);
+              found = true;
+            }
+            for (const auto& child : box->children) stack.push_back(child.get());
+          }
+        }
+        browser.arrivedUrls_.clear();
         solar::dom::NoteTreeChange();
+        (void)found;
         lastRelayout = Clock::now();
       }
       if (browser.TakeArrived()) dirty = true;

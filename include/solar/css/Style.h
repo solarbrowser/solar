@@ -71,6 +71,10 @@ std::vector<CssStyleSheet*> SheetsOfTreeRoot(dom::Node* root);
 
 // Something a style depends on changed (a sheet, a declaration): computed values are made again.
 void NoteStyleChange();
+// Whether any declaration for the element (or its pseudo-element) is about animations or transitions: what has none has nothing to start.
+bool DeclaresAnimation(dom::Element* element, const std::string& pseudo);
+// Scrollbars of the viewport that float over the page and take no room (a window; the tests have the ones that do).
+void SetOverlayScrollbars(bool overlay);
 // A document that is gone (a page that was left): what style kept for it is let go.
 void ForgetDocument(dom::Document* document);
 uint64_t StyleVersion();

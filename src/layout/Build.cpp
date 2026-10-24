@@ -112,7 +112,12 @@ bool ReplacedSize(dom::Element* element, const std::string& base, Box& box) {
     }
     double w = -1, h = -1, ratio = 0;
     if (!src.empty()) box.imageUrl = AbsoluteAddress(src, base);
-    if (!src.empty() && ImageMetricsOf(src, base, w, h, ratio)) {
+    if (!src.empty() && box.attrWidth > 0 && box.attrHeight > 0) {
+      // A picture with both its sizes given is laid out by them: what it is is not waited for (and the page is not laid out again when it comes).
+      box.naturalWidth = box.attrWidth;
+      box.naturalHeight = box.attrHeight;
+      box.naturalRatio = box.attrWidth / box.attrHeight;
+    } else if (!src.empty() && ImageMetricsOf(src, base, w, h, ratio)) {
       box.naturalWidth = w;
       box.naturalHeight = h;
       box.naturalRatio = ratio;
