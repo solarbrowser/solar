@@ -140,23 +140,152 @@ class Browser : public solar::html::FrameEnvironment {
     return &realm;
   }
 
+  // A resource in flight or here: what the network brought for an address, kept for as long as the program runs (pages share their scripts, styles and pictures).
+  struct Resource : solar::net::FetchHandler {
+    Browser* owner = nullptr;
+    std::string url;
+    int status = 0;
+    bool done = false, failed = false;
+    std::string body;
+    Clock::time_point started = Clock::now();
+    void OnResponseHead(const solar::net::HttpResponseHead& head, const solar::url::Url&) override { status = head.status; }
+    void OnBody(std::span<const uint8_t> data) override { body.append(reinterpret_cast<const char*>(data.data()), data.size()); }
+    void OnEnd() override { Finish(); }
+    void OnError(std::string_view) override {
+      failed = true;
+      Finish();
+    }
+    void Finish() {
+      done = true;
+      if (owner->timing_) std::fprintf(stderr, "  fetch %5.0f ms  %7zu bytes  %s\n", std::chrono::duration<double, std::milli>(Clock::now() - started).count(), body.size(), url.substr(0, 100).c_str());
+      if (owner->waiting_ == this) owner->loop_.Stop();
+    }
+  };
+
+  // Starts getting the resource at the address, if it is not being got already. Null for what is not for the network.
+  Resource* Start(const std::string& url) {
+    const auto found = resources_.find(url);
+    if (found != resources_.end()) return found->second.get();
+    std::optional<solar::url::Url> parsed = solar::url::Parse(url);
+    if (!parsed || (parsed->scheme != "http" && parsed->scheme != "https")) return nullptr;
+    auto resource = std::make_unique<Resource>();
+    resource->owner = this;
+    resource->url = url;
+    Resource* raw = resource.get();
+    resources_[url] = std::move(resource);
+    client_.Fetch(*parsed, *raw, solar::net::FetchOptions());
+    return raw;
+  }
+
+  void WaitFor(Resource* resource) {
+    waiting_ = resource;
+    while (!resource->done) loop_.Run();
+    waiting_ = nullptr;
+  }
+
   std::optional<std::string> Load(const std::string& url) override {
     if (url.starts_with("file://")) {
       std::string contents;
       if (!ReadFile(FileOfAddress(url), contents)) return std::nullopt;
       return contents;
     }
-    std::optional<solar::url::Url> parsed = solar::url::Parse(url);
-    if (!parsed || (parsed->scheme != "http" && parsed->scheme != "https")) return std::nullopt;
-    Collector collector;
-    solar::net::FetchOptions options;
-    client_.Fetch(*parsed, collector, options);
-    loop_.Run();
-    if (collector.failed || collector.status < 200 || collector.status >= 300) {
-      std::fprintf(stderr, "  [%d%s] %s\n", collector.status, collector.failed ? " failed" : "", url.c_str());
+    Resource* resource = Start(url);
+    if (!resource) return std::nullopt;
+    WaitFor(resource);
+    if (resource->failed || resource->status < 200 || resource->status >= 300) {
+      std::fprintf(stderr, "  [%d%s] %s\n", resource->status, resource->failed ? " failed" : "", url.c_str());
       return std::nullopt;
     }
-    return collector.body;
+    return resource->body;
+  }
+
+  // The pictures that layout and painting asked for and that are on their way: they are fetched together, and the page is laid out again when they are here.
+  bool RequestImage(const std::string& absolute) {
+    if (absolute.starts_with("file://")) return false;
+    const auto found = resources_.find(absolute);
+    if (found != resources_.end() && found->second->done) return false;  // here (or failed): the loader has it
+    if (!Start(absolute)) return false;
+    pendingImages_ = true;
+    return true;
+  }
+  bool HasPendingImages() const { return pendingImages_; }
+  void WaitForImages() {
+    pendingImages_ = false;
+    for (auto& entry : resources_) {
+      if (!entry.second->done) WaitFor(entry.second.get());
+    }
+  }
+
+  // What the page will ask for as it is parsed, found in the markup before that: stylesheets, scripts and pictures are started at once, so that
+  // the network does them together (https://html.spec.whatwg.org/multipage/parsing.html#preload-scanner).
+  void Prefetch(const std::string& markup, const std::string& baseAddress) {
+    std::optional<solar::url::Url> base = solar::url::Parse(baseAddress);
+    if (!base) return;
+    std::string lower = markup;
+    for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    int started = 0;
+    const auto attribute = [&](const std::string& tag, const std::string& tagLower, const char* name) -> std::string {
+      size_t at = 0;
+      const std::string key = std::string(name);
+      while ((at = tagLower.find(key, at)) != std::string::npos) {
+        const bool startOk = at > 0 && std::isspace(static_cast<unsigned char>(tagLower[at - 1]));
+        size_t e = at + key.size();
+        while (e < tagLower.size() && std::isspace(static_cast<unsigned char>(tagLower[e]))) ++e;
+        if (startOk && e < tagLower.size() && tagLower[e] == '=') {
+          ++e;
+          while (e < tagLower.size() && std::isspace(static_cast<unsigned char>(tagLower[e]))) ++e;
+          if (e >= tag.size()) return "";
+          if (tag[e] == '"' || tag[e] == '\'') {
+            const char q = tag[e++];
+            const size_t end = tag.find(q, e);
+            return tag.substr(e, end == std::string::npos ? std::string::npos : end - e);
+          }
+          const size_t end = tag.find_first_of(" \t\r\n>", e);
+          return tag.substr(e, end == std::string::npos ? std::string::npos : end - e);
+        }
+        at += key.size();
+      }
+      return "";
+    };
+    const auto resolve = [&](std::string value) -> std::string {
+      // (&amp; in an address of markup)
+      for (size_t i; (i = value.find("&amp;")) != std::string::npos;) value.replace(i, 5, "&");
+      std::optional<solar::url::Url> url = solar::url::Parse(value, &*base);
+      return url ? solar::url::Serialize(*url) : std::string();
+    };
+    for (const char* name : {"<link", "<script", "<img"}) {
+      size_t at = 0;
+      const std::string needle = name;
+      while ((at = lower.find(needle, at)) != std::string::npos && started < 80) {
+        const size_t end = lower.find('>', at);
+        if (end == std::string::npos) break;
+        const std::string tag = markup.substr(at, end - at + 1), tagLower = lower.substr(at, end - at + 1);
+        at = end;
+        std::string target;
+        if (needle == "<link") {
+          const std::string rel = attribute(tag, tagLower, "rel");
+          if (rel.find("stylesheet") == std::string::npos && rel.find("preload") == std::string::npos) continue;
+          if (rel.find("preload") != std::string::npos) {
+            const std::string as = attribute(tag, tagLower, "as");
+            if (as != "style" && as != "script" && as != "image") continue;
+          }
+          target = attribute(tag, tagLower, "href");
+        } else if (needle == "<script") {
+          target = attribute(tag, tagLower, "src");
+        } else {
+          target = attribute(tag, tagLower, "src");
+          if (target.empty()) {
+            std::string set = attribute(tag, tagLower, "srcset");
+            const size_t cut = set.find_first_of(" ,");
+            target = set.substr(0, cut);
+          }
+        }
+        if (target.empty() || target.starts_with("data:")) continue;
+        const std::string absolute = resolve(target);
+        if (absolute.empty()) continue;
+        if (Start(absolute)) ++started;
+      }
+    }
   }
 
   std::string ContentType(const std::string& url) override {
@@ -188,6 +317,12 @@ class Browser : public solar::html::FrameEnvironment {
   std::map<std::string, std::string> types_;
   std::map<std::string, std::pair<std::string, std::shared_ptr<qe::Script>>> scripts_;
   std::vector<std::unique_ptr<RealmBundle>> bundles_;
+  std::map<std::string, std::unique_ptr<Resource>> resources_;
+  Resource* waiting_ = nullptr;
+  bool pendingImages_ = false;
+
+ public:
+  bool timing_ = false;
 };
 
 // The address the user typed as one: a path of a file becomes a file: address.
@@ -222,6 +357,8 @@ int main(int argc, char** argv) {
   isolate->SetTimerProvider(timers.Provider());
   solar::web::JsEventLoop events(*loop, {[&] { isolate->PerformMicrotaskCheckpoint(); }, [&] { timers.RunDue(); }, [&] { return timers.NextDelayMs(); }});
   Browser browser(*isolate, *loop, client, events);
+  browser.timing_ = std::getenv("SOLAR_GUI_TIMES") != nullptr;
+  solar::layout::SetImageRequestHandler([&](const std::string& absolute) { return browser.RequestImage(absolute); });
   solar::html::SetFrameEnvironment(&browser);
 
   // The window.
@@ -281,6 +418,7 @@ int main(int argc, char** argv) {
     if (where.starts_with("file://")) address = where;
     browser.SetPageUrl(address);
     browser.SetContentType(address, type);
+    browser.Prefetch(markup, address);
     realm = browser.CreateRealm();
     solar::html::RunInRealm(*realm, [&] {
       document = solar::dom::NewDocument(realm->GetContext(), true);
@@ -289,7 +427,7 @@ int main(int argc, char** argv) {
     });
     solar::html::LoadPage(*realm, document, markup, type);
     isolate->PerformMicrotaskCheckpoint();
-    events.Run(std::chrono::milliseconds(1500));
+    events.Run(std::chrono::milliseconds(30));
     const double ms = std::chrono::duration<double, std::milli>(Clock::now() - started).count();
     std::fprintf(stderr, "loaded in %.0f ms\n", ms);
     SDL_SetWindowTitle(window, ("Solar - " + address).c_str());
@@ -398,9 +536,20 @@ int main(int argc, char** argv) {
 
     const auto t0 = Clock::now();
     solar::layout::Tree* tree = currentTree();
+    // The pictures layout asked for are fetched together, and it is done again with their sizes.
+    for (int round = 0; tree && browser.HasPendingImages() && round < 4; ++round) {
+      browser.WaitForImages();
+      solar::dom::NoteTreeChange();
+      tree = currentTree();
+    }
     if (!tree) continue;
     const auto t1 = Clock::now();
-    const solar::paint::DisplayList list = solar::paint::BuildDisplayList(realm->GetContext(), *tree);
+    solar::paint::DisplayList list = solar::paint::BuildDisplayList(realm->GetContext(), *tree);
+    // (What painting asked for, the pictures of styles, the same.)
+    for (int round = 0; browser.HasPendingImages() && round < 3; ++round) {
+      browser.WaitForImages();
+      list = solar::paint::BuildDisplayList(realm->GetContext(), *tree);
+    }
     const auto t2 = Clock::now();
 
     int pixelW = 0, pixelH = 0;

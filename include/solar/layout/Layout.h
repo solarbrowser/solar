@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -33,7 +34,11 @@ bool TransformOf(const Box& box, Matrix& out);
 
 // The bytes of an image at `address` (against `base`): a data: address decoded, any other from the loader of the page; each is loaded once. Null where there are none.
 // `absolute` gets the address the image is known by.
-std::shared_ptr<const std::string> ImageDataOf(const std::string& address, const std::string& base, std::string* absolute = nullptr);
+// `pending` says the picture is on its way (see SetImageRequestHandler): there is nothing now, and it is not a failure.
+std::shared_ptr<const std::string> ImageDataOf(const std::string& address, const std::string& base, std::string* absolute = nullptr, bool* pending = nullptr);
+// Asked of an address that is not here yet: true if the program is getting it (then the answer is a later one), false to have it loaded where it is asked for.
+using ImageRequestHandler = std::function<bool(const std::string& absolute)>;
+void SetImageRequestHandler(ImageRequestHandler handler);
 std::string AbsoluteAddress(const std::string& address, const std::string& base);
 
 // A box's border box in the coordinates of the document (the initial containing block's origin).

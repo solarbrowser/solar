@@ -154,8 +154,15 @@ std::string AbsoluteAddress(const std::string& address, const std::string& base)
 }
 
 // The bytes of an image: those of a data: address, decoded, or what the loader gives for another; kept, so that a page loads a picture once.
-std::shared_ptr<const std::string> ImageDataOf(const std::string& address, const std::string& base, std::string* absoluteOut) {
+namespace {
+ImageRequestHandler g_imageRequestHandler;
+}
+
+void SetImageRequestHandler(ImageRequestHandler handler) { g_imageRequestHandler = std::move(handler); }
+
+std::shared_ptr<const std::string> ImageDataOf(const std::string& address, const std::string& base, std::string* absoluteOut, bool* pending) {
   static std::unordered_map<std::string, std::shared_ptr<const std::string>> cache;
+  if (pending) *pending = false;
   const std::string absolute = AbsoluteAddress(address, base);
   if (absoluteOut) *absoluteOut = absolute;
   if (absolute.empty()) return nullptr;
@@ -189,6 +196,11 @@ std::shared_ptr<const std::string> ImageDataOf(const std::string& address, const
       }
     }
   } else {
+    // A picture the program has asked for and not yet got is not a missing one: the answer is not kept, and the page asks again when it is here.
+    if (g_imageRequestHandler && g_imageRequestHandler(absolute)) {
+      if (pending) *pending = true;
+      return nullptr;
+    }
     const css::SheetLoader& load = css::GetSheetLoader();
     std::optional<std::string> loaded = load ? load(absolute) : std::nullopt;
     if (loaded) data = std::move(*loaded);
@@ -202,8 +214,9 @@ std::shared_ptr<const std::string> ImageDataOf(const std::string& address, const
 bool ImageMetricsOf(const std::string& address, const std::string& base, double& w, double& h, double& ratio) {
   static std::unordered_map<std::string, std::array<double, 3>> cache;
   std::string absolute;
-  const std::shared_ptr<const std::string> bytes = ImageDataOf(address, base, &absolute);
-  if (absolute.empty()) return false;
+  bool pending = false;
+  const std::shared_ptr<const std::string> bytes = ImageDataOf(address, base, &absolute, &pending);
+  if (absolute.empty() || pending) return false;
   const auto found = cache.find(absolute);
   if (found != cache.end()) {
     w = found->second[0];
