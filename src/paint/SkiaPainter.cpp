@@ -18,6 +18,7 @@
 #include "include/core/SkImage.h"
 #include "include/core/SkStream.h"
 #include "include/core/SkSurface.h"
+#include "include/effects/SkDashPathEffect.h"
 #include "include/effects/SkGradient.h"
 #include "include/core/SkM44.h"
 #include "include/core/SkPaint.h"
@@ -398,10 +399,31 @@ SkiaPainter::~SkiaPainter() = default;
 
 namespace {
 
+// The rounded rectangle moved in on each side by its own amount (negative: out); a corner radius shrinks with the sides it touches.
+SkRRect InsetEach(const SkRRect& r, float top, float right, float bottom, float left) {
+  const SkRect rect = r.rect();
+  SkRect moved = SkRect::MakeLTRB(rect.left() + left, rect.top() + top, rect.right() - right, rect.bottom() - bottom);
+  if (moved.right() < moved.left()) moved.fLeft = moved.fRight = (moved.left() + moved.right()) / 2;
+  if (moved.bottom() < moved.top()) moved.fTop = moved.fBottom = (moved.top() + moved.bottom()) / 2;
+  const auto shrink = [](SkVector v, float dx, float dy) { return SkVector{std::max(0.f, v.fX - dx), std::max(0.f, v.fY - dy)}; };
+  SkVector radii[4] = {shrink(r.radii(SkRRect::kUpperLeft_Corner), left, top), shrink(r.radii(SkRRect::kUpperRight_Corner), right, top),
+                       shrink(r.radii(SkRRect::kLowerRight_Corner), right, bottom), shrink(r.radii(SkRRect::kLowerLeft_Corner), left, bottom)};
+  SkRRect out;
+  out.setRectRadii(moved, radii);
+  return out;
+}
+
+SkColor Shade(const Color& c, bool dark) {
+  if (!dark) return ToSk(c);
+  return SkColorSetARGB(c.a, c.r / 3, c.g / 3, c.b / 3);
+}
+
 // A side of a border: the part of the ring between the outer and the inner edge that is toward that side, cut along the diagonals of the corners.
 void DrawBorderSide(SkCanvas& canvas, const DrawBorder& b, int side, const SkRRect& outer, const SkRRect& inner) {
   const Color color = b.colors[side];
-  if (b.widths[side] <= 0 || b.styles[side] == LineStyle::None || b.styles[side] == LineStyle::Hidden || color.Transparent()) return;
+  const LineStyle style = b.styles[side];
+  const float w = b.widths[side];
+  if (w <= 0 || style == LineStyle::None || style == LineStyle::Hidden || color.Transparent()) return;
   const SkRect o = outer.rect(), i = inner.rect();
   SkPathBuilder region;
   switch (side) {
@@ -410,12 +432,66 @@ void DrawBorderSide(SkCanvas& canvas, const DrawBorder& b, int side, const SkRRe
     case 2: region.moveTo(o.right(), o.bottom()).lineTo(o.left(), o.bottom()).lineTo(i.left(), i.bottom()).lineTo(i.right(), i.bottom()).close(); break;
     default: region.moveTo(o.left(), o.bottom()).lineTo(o.left(), o.top()).lineTo(i.left(), i.top()).lineTo(i.left(), i.bottom()).close(); break;
   }
+  const float tw = b.widths[0], rw = b.widths[1], bw = b.widths[2], lw = b.widths[3];
   SkPaint paint;
   paint.setAntiAlias(true);
   paint.setColor(ToSk(color));
   canvas.save();
   canvas.clipPath(region.detach(), true);
-  canvas.drawDRRect(outer, inner, paint);
+  const auto ring = [&](const SkRRect& a, const SkRRect& c, SkColor fill) {
+    paint.setColor(fill);
+    canvas.drawDRRect(a, c, paint);
+  };
+  const bool topLeft = side == 0 || side == 3;
+  switch (style) {
+    case LineStyle::Dotted:
+    case LineStyle::Dashed: {
+      const SkRRect mid = InsetEach(outer, tw / 2, rw / 2, bw / 2, lw / 2);
+      SkPathBuilder pathBuilder;
+      pathBuilder.addRRect(mid);
+      const SkPath path = pathBuilder.detach();
+      const bool dots = style == LineStyle::Dotted;
+      const float on = dots ? 0.001f : std::max(2 * w, 3.f), off = dots ? w : std::max(w, 2.f);
+      const float dash[2] = {on, dots ? w : off};
+      paint.setStyle(SkPaint::kStroke_Style);
+      paint.setStrokeWidth(w);
+      if (dots) paint.setStrokeCap(SkPaint::kRound_Cap);
+      // Whole dashes along the side: the interval is stretched to fit when the side is straight.
+      const float length = side % 2 == 0 ? o.width() : o.height();
+      const float period = dash[0] + dash[1];
+      const float count = std::max(1.f, std::round(length / period));
+      const float scale = length / (count * period);
+      const float scaled[2] = {dash[0] * scale, dash[1] * scale};
+      paint.setPathEffect(SkDashPathEffect::Make(scaled, 0));
+      canvas.drawPath(path, paint);
+      break;
+    }
+    case LineStyle::Double: {
+      if (w < 3) {
+        ring(outer, inner, ToSk(color));
+        break;
+      }
+      const float t = w / 3;
+      ring(outer, InsetEach(outer, tw > 0 ? t : 0, rw > 0 ? t : 0, bw > 0 ? t : 0, lw > 0 ? t : 0), ToSk(color));
+      ring(InsetEach(inner, tw > 0 ? -t : 0, rw > 0 ? -t : 0, bw > 0 ? -t : 0, lw > 0 ? -t : 0), inner, ToSk(color));
+      break;
+    }
+    case LineStyle::Groove:
+    case LineStyle::Ridge:
+    case LineStyle::Inset:
+    case LineStyle::Outset: {
+      const bool inward = style == LineStyle::Groove || style == LineStyle::Inset;
+      if (style == LineStyle::Inset || style == LineStyle::Outset) {
+        ring(outer, inner, Shade(color, topLeft == inward));
+      } else {
+        const SkRRect mid = InsetEach(outer, tw / 2, rw / 2, bw / 2, lw / 2);
+        ring(outer, mid, Shade(color, topLeft == inward));
+        ring(mid, inner, Shade(color, topLeft != inward));
+      }
+      break;
+    }
+    default: ring(outer, inner, ToSk(color)); break;
+  }
   canvas.restore();
 }
 
@@ -438,11 +514,13 @@ void SkiaPainter::Draw(const DisplayList& list, SkCanvas& canvas) {
                border->colors[i].g == border->colors[0].g && border->colors[i].b == border->colors[0].b && border->colors[i].a == border->colors[0].a;
       }
       if (same) {
-        if (border->widths[0] > 0 && border->styles[0] != LineStyle::None && border->styles[0] != LineStyle::Hidden && !border->colors[0].Transparent()) {
+        if (border->widths[0] > 0 && border->styles[0] == LineStyle::Solid && !border->colors[0].Transparent()) {
           SkPaint paint;
           paint.setAntiAlias(true);
           paint.setColor(ToSk(border->colors[0]));
           canvas.drawDRRect(outer, inner, paint);
+        } else {
+          for (int side = 0; side < 4; ++side) DrawBorderSide(canvas, *border, side, outer, inner);
         }
       } else {
         for (int side = 0; side < 4; ++side) DrawBorderSide(canvas, *border, side, outer, inner);
