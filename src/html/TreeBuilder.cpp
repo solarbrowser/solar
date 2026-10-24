@@ -365,6 +365,7 @@ Element* TreeBuilder::CreateElementForToken(const Token& token, std::string_view
                                                   : dom::NewAttr(ctx_, document, attribute.namespaceUri, attribute.prefix, attribute.localName, attribute.value);
     node->ownerElement = element;
     element->attributes.push_back(node);
+    dom::MarkPending(element, dom::kPendingAttributes);
     if (element->customState == dom::CustomState::Custom) dom::CustomAttributeChanged(element, node->localName, node->namespaceUri, std::nullopt, node->value);
   }
   element->NoteWrite();

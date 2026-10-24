@@ -184,9 +184,9 @@ struct ElementKeys {
     if (!element->nodeDocument || element->nodeDocument->mode == dom::Document::Mode::Quirks) return;
     usable = true;
     keys.push_back(KeyHash(3, element->localName, true));
-    if (const dom::Attr* id = element->FindAttribute("id")) keys.push_back(KeyHash(1, id->value, false));
+    if (const dom::Attr* id = element->FindAttribute("id")) keys.push_back(KeyHash(1, id->Value(), false));
     if (const dom::Attr* cls = element->FindAttribute("class")) {
-      const std::string& v = cls->value;
+      const std::string& v = cls->Value();
       size_t i = 0;
       while (i < v.size()) {
         while (i < v.size() && (v[i] == ' ' || v[i] == '\t' || v[i] == '\n' || v[i] == '\r' || v[i] == '\f')) ++i;
@@ -1350,12 +1350,12 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
         if (!attribute) continue;
         if (input) {
           const dom::Attr* type = element->FindAttribute("", "type");
-          std::string t = type ? type->value : "";
+          std::string t = type ? type->Value() : "";
           for (char& c : t) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
           if (t != "image") continue;
         }
         // "Rules for parsing dimension values": digits with a fraction, then a percent sign or nothing.
-        const std::string& text = attribute->value;
+        const std::string& text = attribute->Value();
         size_t i = 0;
         while (i < text.size() && (text[i] == ' ' || text[i] == '\t' || text[i] == '\n' || text[i] == '\f' || text[i] == '\r')) ++i;
         const size_t start = i;
@@ -1480,7 +1480,7 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
     // ::part() rules of the trees around the shadow host whose tree the element is in.
     if (treeRoot && treeRoot->IsFragment() && static_cast<dom::DocumentFragment*>(treeRoot)->isShadowRoot) {
       std::vector<std::string> names;
-      if (const dom::Attr* part = element->FindAttribute("part")) names = SplitWords(part->value);
+      if (const dom::Attr* part = element->FindAttribute("part")) names = SplitWords(part->Value());
       const dom::Element* host = static_cast<dom::DocumentFragment*>(treeRoot)->host;
       int rank = 1;
       while (host && !names.empty()) {
@@ -1501,7 +1501,7 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
         if (const dom::Attr* attr = host->FindAttribute("exportparts")) {
           std::string current;
           std::vector<std::string> pieces;
-          for (char c : attr->value) {
+          for (char c : attr->Value()) {
             if (c == ',') { pieces.push_back(current); current.clear(); } else current += c;
           }
           pieces.push_back(current);
@@ -1523,11 +1523,11 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
     // (The same text is parsed once: a page puts the same style attribute on many elements, and a style made again reads it again.)
     const std::string base = element->nodeDocument ? dom::DocumentBaseUri(element->nodeDocument) : "";
     static std::unordered_map<std::string, std::vector<DeclarationEntry>> parsed;
-    const std::string key = base + '\x01' + attribute->value;
+    const std::string key = base + '\x01' + attribute->Value();
     auto found = parsed.find(key);
     if (found == parsed.end()) {
       SetValueBaseUrl(base);
-      std::vector<DeclarationEntry> entries = ParseDeclarationList(attribute->value);
+      std::vector<DeclarationEntry> entries = ParseDeclarationList(attribute->Value());
       SetValueBaseUrl("");
       if (parsed.size() > 20000) parsed.clear();
       found = parsed.emplace(key, std::move(entries)).first;
@@ -1614,7 +1614,7 @@ bool Resolver::SubstituteValues(dom::Element* element, const std::string& pseudo
       ComponentValues produced;
       bool ok = false;
       if (attribute) {
-        const std::string& text = attribute->value;
+        const std::string& text = attribute->Value();
         switch (call.type) {
           case AttrCall::Type::Raw: {
             Cv string;
@@ -2674,7 +2674,7 @@ bool MayDeclareAnimation(dom::Element* element, const std::string& pseudo) {
   }
   if (!kept.usable) return true;
   if (const dom::Attr* inlineStyle = element->FindAttribute("", "style")) {
-    if (inlineStyle->value.find("transition") != std::string::npos || inlineStyle->value.find("animation") != std::string::npos) return true;
+    if (inlineStyle->Value().find("transition") != std::string::npos || inlineStyle->Value().find("animation") != std::string::npos) return true;
   }
   MatchContext context;
   context.quirks = document->mode == dom::Document::Mode::Quirks;
@@ -2853,13 +2853,13 @@ MediaEnvironment EnvironmentFor(const dom::Document* document) {
   // The size of the frame: its width and height as its style attribute gives them in px, or its attributes, or 300 by 150.
   // (Not through the cascade: this is asked while a style is being worked out.)
   std::vector<DeclarationEntry> inlineStyle;
-  if (const dom::Attr* attribute = frame->FindAttribute("", "style")) inlineStyle = ParseDeclarationList(attribute->value);
+  if (const dom::Attr* attribute = frame->FindAttribute("", "style")) inlineStyle = ParseDeclarationList(attribute->Value());
   const auto size = [&](const char* property, double fallback) {
     for (const DeclarationEntry& entry : inlineStyle) {
       if (entry.name == property && entry.value.size() > 2 && entry.value.compare(entry.value.size() - 2, 2, "px") == 0) return std::atof(entry.value.c_str());
     }
     if (const dom::Attr* attribute = frame->FindAttribute("", property)) {
-      const int parsed = std::atoi(attribute->value.c_str());
+      const int parsed = std::atoi(attribute->Value().c_str());
       if (parsed > 0) return static_cast<double>(parsed);
     }
     return fallback;

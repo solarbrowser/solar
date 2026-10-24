@@ -481,7 +481,7 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
       const dom::Attr* a = e->FindAttribute("", "lang");
       if (!a) a = e->FindAttribute("http://www.w3.org/XML/1998/namespace", "lang");
       if (a) {
-        s.lang = a->value;
+        s.lang = a->Value();
         for (char& c : s.lang) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         break;
       }

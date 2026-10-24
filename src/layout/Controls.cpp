@@ -13,7 +13,7 @@ namespace {
 
 std::string Attr(const dom::Element* element, const char* name) {
   const dom::Attr* a = element->FindAttribute(name);
-  return a ? a->value : std::string();
+  return a ? a->Value() : std::string();
 }
 
 std::string Lower(std::string s) {
@@ -23,7 +23,7 @@ std::string Lower(std::string s) {
 
 void CollectText(const dom::Node* node, std::string& out) {
   for (const dom::Node* child = dom::FirstChildOf(node); child; child = dom::NextSiblingOf(child)) {
-    if (child->IsText()) out += static_cast<const dom::CharacterData*>(child)->data;
+    if (child->IsText()) out += static_cast<const dom::CharacterData*>(child)->Data();
     else if (child->IsElement()) CollectText(child, out);
   }
 }

@@ -61,7 +61,7 @@ bool IsSpace(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\f' ||
 bool HasClass(const Element* element, const std::string& name, bool quirks) {
   const dom::Attr* attribute = element->FindAttribute("", "class");
   if (!attribute) return false;
-  const std::string& value = attribute->value;
+  const std::string& value = attribute->Value();
   for (size_t i = 0; i < value.size();) {
     while (i < value.size() && IsSpace(value[i])) ++i;
     const size_t start = i;
@@ -87,7 +87,7 @@ bool MatchesAttribute(const SimpleSelector& selector, const Element* element) {
   const bool html = InHtmlDocument(element);
   const std::string name = html ? LowerAscii(selector.name) : selector.name;
   bool matched = false;
-  for (const dom::Attr* attribute : element->attributes) {
+  for (const dom::Attr* attribute : element->AttributesInView()) {
     if (attribute->localName != name) continue;
     if (selector.namespaceUri) {
       if (attribute->namespaceUri != *selector.namespaceUri) continue;
@@ -99,7 +99,7 @@ bool MatchesAttribute(const SimpleSelector& selector, const Element* element) {
     if (selector.op == AttributeOperator::Exists) return true;
 
     bool insensitive = selector.caseMode == CaseMode::Insensitive || (selector.caseMode == CaseMode::Default && html && attribute->namespaceUri.empty() && IsCaseInsensitiveAttribute(name));
-    const std::string& have = attribute->value;
+    const std::string& have = attribute->Value();
     const std::string& want = selector.value;
     const auto equal = [&](std::string_view a, std::string_view b) { return insensitive ? EqualsIgnoreCase(a, b) : a == b; };
     switch (selector.op) {
@@ -166,7 +166,7 @@ bool IsTarget(const Element* element) {
   }
   if (decoded.empty()) return false;
   const dom::Attr* id = element->FindAttribute("", "id");
-  return id && id->value == decoded;
+  return id && id->Value() == decoded;
 }
 
 // :focus is the focused element and the hosts of the shadow trees it is in; :focus-within is also all that contain them.
@@ -192,7 +192,7 @@ bool IsRoot(const Element* element) { return dom::ParentOf(element) && dom::Pare
 bool IsEmpty(const Element* element) {
   for (const Node* child = dom::FirstChildOf(element); child; child = dom::NextSiblingOf(child)) {
     if (child->IsElement()) return false;
-    if (child->IsText() && !static_cast<const dom::CharacterData*>(child)->data.empty()) return false;
+    if (child->IsText() && !static_cast<const dom::CharacterData*>(child)->Data().empty()) return false;
   }
   return true;
 }
@@ -257,8 +257,8 @@ bool FirstOfKind(const Element* element, bool ofType, bool last) {
 // The language of an element: the lang of it or its nearest ancestor that has one.
 std::optional<std::string> LanguageOf(const Element* element) {
   for (const Element* node = element; node; node = ParentElement(node)) {
-    if (const dom::Attr* lang = node->FindAttribute("", "lang")) return lang->value;
-    if (const dom::Attr* lang = node->FindAttribute(std::string(dom::kXmlNamespace), "lang")) return lang->value;
+    if (const dom::Attr* lang = node->FindAttribute("", "lang")) return lang->Value();
+    if (const dom::Attr* lang = node->FindAttribute(std::string(dom::kXmlNamespace), "lang")) return lang->Value();
   }
   return std::nullopt;
 }
@@ -274,7 +274,7 @@ bool MatchesLanguage(const std::string& range, const std::string& language) {
 std::string DirectionOf(const Element* element) {
   for (const Element* node = element; node; node = ParentElement(node)) {
     if (const dom::Attr* dir = node->FindAttribute("", "dir")) {
-      const std::string value = LowerAscii(dir->value);
+      const std::string value = LowerAscii(dir->Value());
       if (value == "ltr" || value == "rtl") return value;
     }
   }
@@ -314,7 +314,7 @@ bool MatchesPseudo(PseudoClass pseudo, const Element* element, const MatchContex
     case PseudoClass::Checked:
       if (IsHtmlNamed(element, {"input"})) {
         const dom::Attr* type = element->FindAttribute("", "type");
-        const std::string value = type ? LowerAscii(type->value) : "";
+        const std::string value = type ? LowerAscii(type->Value()) : "";
         return (value == "checkbox" || value == "radio") && element->FindAttribute("", "checked");
       }
       return IsHtmlNamed(element, {"option"}) && element->FindAttribute("", "selected");
@@ -350,7 +350,7 @@ bool MatchesSimple(const SimpleSelector& selector, const Element* element, const
     case SimpleSelector::Kind::Class: return HasClass(element, selector.name, context.quirks);
     case SimpleSelector::Kind::Id: {
       const dom::Attr* id = element->FindAttribute("", "id");
-      return id && (context.quirks ? EqualsIgnoreCase(id->value, selector.name) : id->value == selector.name);
+      return id && (context.quirks ? EqualsIgnoreCase(id->Value(), selector.name) : id->Value() == selector.name);
     }
     case SimpleSelector::Kind::Attribute: return MatchesAttribute(selector, element);
     case SimpleSelector::Kind::Pseudo: return MatchesPseudo(selector.pseudo, element, context);

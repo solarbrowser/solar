@@ -77,6 +77,7 @@ void Element::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(contentDocument);
   visitor.Mark(contentWindow);
   for (Attr* attribute : attributes) visitor.Mark(attribute);
+  for (Attr* attribute : committedAttributes) visitor.Mark(attribute);
   visitor.Mark(attributeMap);
   visitor.Mark(tokenList);
   visitor.Mark(styleSheet);
@@ -99,11 +100,16 @@ std::vector<Node*>& DirtyLinks() {
   static std::vector<Node*> list;
   return list;
 }
-void MarkLinks(Node* node) {
-  if (!node || node->linksDirty) return;
-  node->linksDirty = true;
-  DirtyLinks().push_back(node);
+}  // namespace
+
+void MarkPending(Node* node, uint8_t kinds) {
+  if (!node) return;
+  if (!node->pendingMask) DirtyLinks().push_back(node);
+  node->pendingMask |= kinds;
 }
+
+namespace {
+void MarkLinks(Node* node) { MarkPending(node, kPendingLinks); }
 }  // namespace
 
 thread_local int g_committedViewDepth = 0;
@@ -111,8 +117,22 @@ thread_local int g_committedViewDepth = 0;
 void CommitPending() {
   std::vector<Node*>& list = DirtyLinks();
   for (Node* node : list) {
-    node->committed = {node->parentNode, node->firstChild, node->lastChild, node->previousSibling, node->nextSibling};
-    node->linksDirty = false;
+    const uint8_t mask = node->pendingMask;
+    node->pendingMask = 0;
+    if (mask & kPendingLinks) node->committed = {node->parentNode, node->firstChild, node->lastChild, node->previousSibling, node->nextSibling};
+    if ((mask & kPendingAttributes) && node->IsElement()) {
+      Element* element = static_cast<Element*>(node);
+      element->committedAttributes = element->attributes;
+      for (Attr* attribute : element->attributes) {
+        if (attribute->committedValue != attribute->value) attribute->committedValue = attribute->value;
+      }
+    }
+    if ((mask & kPendingText) && node->IsCharacterData()) {
+      CharacterData* text = static_cast<CharacterData*>(node);
+      // (The text of a script is not read by style or layout: it is not copied each time a bit is added to it.)
+      const Element* parent = node->parentNode && node->parentNode->IsElement() ? static_cast<Element*>(node->parentNode) : nullptr;
+      if (!(parent && parent->localName == "script")) text->committedData = text->data;
+    }
   }
   list.clear();
 }
@@ -191,7 +211,7 @@ size_t g_liveNodes = 0;
 Node::Node() { ++g_liveNodes; }
 Node::~Node() {
   --g_liveNodes;
-  if (linksDirty) {
+  if (pendingMask) {
     std::vector<Node*>& list = DirtyLinks();
     list.erase(std::remove(list.begin(), list.end(), this), list.end());
   }
@@ -329,18 +349,21 @@ Element* NewElement(Context& ctx, Document* document, std::string_view localName
 CharacterData* NewText(Context& ctx, Document* document, std::string data) {
   CharacterData* text = Make<CharacterData>(ctx, Interface::Text, NodeType::Text, document);
   text->data = std::move(data);
+  MarkPending(text, kPendingText);
   return text;
 }
 
 CharacterData* NewComment(Context& ctx, Document* document, std::string data) {
   CharacterData* comment = Make<CharacterData>(ctx, Interface::Comment, NodeType::Comment, document);
   comment->data = std::move(data);
+  MarkPending(comment, kPendingText);
   return comment;
 }
 
 CharacterData* NewCdataSection(Context& ctx, Document* document, std::string data) {
   CharacterData* section = Make<CharacterData>(ctx, Interface::CdataSection, NodeType::CdataSection, document);
   section->data = std::move(data);
+  MarkPending(section, kPendingText);
   return section;
 }
 
@@ -922,6 +945,7 @@ Node* CloneNode(Context& ctx, Node* node, bool deep) {
         Attr* attributeCopy = NewAttr(ctx, document, attribute->namespaceUri, attribute->prefix, attribute->localName, attribute->value);
         attributeCopy->ownerElement = clone;
         clone->attributes.push_back(attributeCopy);
+        MarkPending(clone, kPendingAttributes);
       }
       clone->scriptStarted = original->scriptStarted;
       clone->NoteWrite();
@@ -1075,7 +1099,7 @@ uint16_t CompareDocumentPosition(Node* thisNode, Node* other) {
 // ---- Attributes ----
 
 Attr* Element::FindAttribute(std::string_view name) const {
-  for (Attr* attribute : attributes) {
+  for (Attr* attribute : AttributesInView()) {
     if (attribute->prefix.empty() ? attribute->localName == name : (attribute->prefix.size() + 1 + attribute->localName.size() == name.size() && name.starts_with(attribute->prefix) &&
                                                                      name[attribute->prefix.size()] == ':' && name.substr(attribute->prefix.size() + 1) == attribute->localName)) {
       return attribute;
@@ -1085,7 +1109,7 @@ Attr* Element::FindAttribute(std::string_view name) const {
 }
 
 Attr* Element::FindAttribute(std::string_view ns, std::string_view local) const {
-  for (Attr* attribute : attributes) {
+  for (Attr* attribute : AttributesInView()) {
     if (attribute->namespaceUri == ns && attribute->localName == local) return attribute;
   }
   return nullptr;

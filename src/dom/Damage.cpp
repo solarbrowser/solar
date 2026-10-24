@@ -59,6 +59,11 @@ DamageTracker* DamageOf(Node* node) {
 }
 
 void NoteDamage(Node* node, uint8_t flags) {
+  // What style and layout read of the node is taken over at the next commit.
+  if (node) {
+    if (flags & kDamageAttributes) MarkPending(node, kPendingAttributes);
+    if (flags & kDamageText) MarkPending(node, kPendingText);
+  }
   // What is kept of the style of an element is kept while these are the same (see Element::layoutStamp).
   if (node && node->IsElement()) {
     Element* element = static_cast<Element*>(node);

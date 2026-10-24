@@ -113,7 +113,7 @@ struct Node : web::JsEventTarget {
     Node* previous = nullptr;
     Node* next = nullptr;
   } committed;
-  bool linksDirty = false;  // changed since it was committed (it is in the list of CommitPending)
+  uint8_t pendingMask = 0;  // what of it changed since it was committed (kPending...: it is in the list of CommitPending)
   // The document the node belongs to; null only for a Document itself.
   Document* nodeDocument = nullptr;
   // What script gets from childNodes and children, which is the same object each time.
@@ -152,6 +152,9 @@ struct Node : web::JsEventTarget {
 // Pending and committed. Script reads and writes the fields of a node as they are (pending). Style and layout work from what was committed at the
 // start of the frame, so that what script does while they work does not reach them half way. They read through these, which give the committed
 // links inside a CommittedViewScope and the pending ones outside it (so that the same code can serve script, as the selector matcher does).
+enum PendingKind : uint8_t { kPendingLinks = 1, kPendingAttributes = 2, kPendingText = 4 };
+// Notes that the node changed in the way, to be committed.
+void MarkPending(Node* node, uint8_t kinds);
 extern thread_local int g_committedViewDepth;
 inline bool InCommittedView() { return g_committedViewDepth > 0; }
 inline Node* ParentOf(const Node* n) { return g_committedViewDepth ? n->committed.parent : n->parentNode; }
@@ -179,6 +182,9 @@ struct CommittedViewSuspend {
 struct CharacterData : Node {
   using Parent = Node;
   std::string data;
+  std::string committedData;  // what style and layout read (see CommitPending)
+  // The data as style and layout see it: the committed one in a committed view.
+  const std::string& Data() const { return g_committedViewDepth ? committedData : data; }
   std::string target;  // a ProcessingInstruction's
 
   void Visit(Quanta::Visitor& visitor) { Node::Visit(visitor); }
@@ -226,7 +232,10 @@ struct Attr : Node {
   std::string prefix;        // empty: none
   std::string localName;
   std::string value;
+  std::string committedValue;  // what style and layout read (see CommitPending)
   Element* ownerElement = nullptr;
+  // The value as style and layout see it: the committed one in a committed view.
+  const std::string& Value() const { return g_committedViewDepth ? committedValue : value; }
 
   // The qualified name: prefix:localName, or the local name alone.
   std::string QualifiedName() const { return prefix.empty() ? localName : prefix + ":" + localName; }
@@ -246,6 +255,8 @@ struct Element : Node {
   std::string prefix;        // empty: none
   std::string localName;
   std::vector<Attr*> attributes;
+  std::vector<Attr*> committedAttributes;  // the attributes as style and layout see them (see CommitPending)
+  const std::vector<Attr*>& AttributesInView() const { return g_committedViewDepth ? committedAttributes : attributes; }
   // attributes and classList, which are the same object each time.
   Quanta::Object* attributeMap = nullptr;
   Quanta::Object* tokenList = nullptr;

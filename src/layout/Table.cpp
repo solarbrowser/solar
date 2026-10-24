@@ -36,8 +36,8 @@ int AttributeInt(const Box& box, const char* name, int fallback, int lo, int hi)
   const dom::Attr* a = element->FindAttribute(name);
   if (!a) return fallback;
   char* end = nullptr;
-  const long v = std::strtol(a->value.c_str(), &end, 10);
-  if (end == a->value.c_str()) return fallback;
+  const long v = std::strtol(a->Value().c_str(), &end, 10);
+  if (end == a->Value().c_str()) return fallback;
   return static_cast<int>(std::max<long>(lo, std::min<long>(hi, v)));
 }
 

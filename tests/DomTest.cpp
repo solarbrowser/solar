@@ -207,6 +207,27 @@ void TestCommitted(Quanta::Context& ctx) {
     }
   }
   Check(FirstChildOf(body) == b, "outside a scope the pending tree is read");
+  // Attributes and text.
+  Element* d = NewElement(ctx, document, "div");
+  AppendChild(body, d);
+  SetAttribute(ctx, d, "class", "one");
+  CharacterData* text = NewText(ctx, document, "hello");
+  AppendChild(d, text);
+  {
+    CommittedViewScope view;
+    Check(d->FindAttribute("", "class") && d->FindAttribute("", "class")->Value() == "one" && text->Data() == "hello", "attributes and text are committed with the scope");
+    SetAttribute(ctx, d, "class", "two");
+    SetAttribute(ctx, d, "id", "x");
+    ReplaceData(text, 0, 5, "bye");
+    Check(d->FindAttribute("", "class")->value == "two", "script sees the new value");
+    Check(d->FindAttribute("", "class")->Value() == "one" && text->Data() == "hello", "layout sees the committed value of an attribute and of text");
+    Check(d->FindAttribute("", "id") == nullptr, "an attribute added meanwhile is not there for layout");
+    Check(d->AttributesInView().size() == 1, "nor in the list");
+  }
+  {
+    CommittedViewScope view;
+    Check(d->FindAttribute("", "class")->Value() == "two" && d->FindAttribute("", "id") && text->Data() == "bye", "the next scope commits them");
+  }
   {
     CommittedViewScope view;
     Check(FirstChildOf(body) == b && ParentOf(a) == nullptr, "the next scope commits the change");

@@ -280,6 +280,7 @@ std::optional<DomError> CloneOrExtract(Quanta::Context& ctx, Range* range, bool 
       CharacterData* original = static_cast<CharacterData*>(startNode);
       CharacterData* clone = static_cast<CharacterData*>(CloneNode(ctx, original, false));
       clone->data = Substring(original, startOffset, NodeLength(original) - startOffset);
+      MarkPending(clone, kPendingText);
       InsertUnchecked(clone, fragment, nullptr);
       if (extract) ReplaceData(original, startOffset, NodeLength(original) - startOffset, "");
     } else if (first) {

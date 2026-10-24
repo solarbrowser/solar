@@ -66,8 +66,8 @@ bool ReplacedSize(dom::Element* element, const std::string& base, Box& box) {
     const dom::Attr* a = element->FindAttribute(attr);
     if (!a) return -1;
     char* end = nullptr;
-    const double v = std::strtod(a->value.c_str(), &end);
-    if (end == a->value.c_str() || v < 0) return -1;
+    const double v = std::strtod(a->Value().c_str(), &end);
+    if (end == a->Value().c_str() || v < 0) return -1;
     const std::string unit = end;
     return (unit.empty() || unit == "px") ? v : -1;
   };
@@ -78,7 +78,7 @@ bool ReplacedSize(dom::Element* element, const std::string& base, Box& box) {
     box.naturalHeight = box.attrHeight;
     if (const dom::Attr* vb = element->FindAttribute("viewBox")) {
       double v[4] = {0, 0, 0, 0};
-      const char* p = vb->value.c_str();
+      const char* p = vb->Value().c_str();
       int n = 0;
       while (n < 4) {
         char* e = nullptr;
@@ -95,19 +95,19 @@ bool ReplacedSize(dom::Element* element, const std::string& base, Box& box) {
     if (box.naturalWidth < 0 && box.naturalHeight < 0 && box.naturalRatio == 0) { box.naturalWidth = 300; box.naturalHeight = 150; }
     return true;
   }
-  if (name == "img" || (name == "input" && element->FindAttribute("type") && element->FindAttribute("type")->value == "image")) {
+  if (name == "img" || (name == "input" && element->FindAttribute("type") && element->FindAttribute("type")->Value() == "image")) {
     box.attrWidth = attribute("width");
     box.attrHeight = attribute("height");
     std::string src;
-    if (const dom::Attr* a = element->FindAttribute("src")) src = a->value;
+    if (const dom::Attr* a = element->FindAttribute("src")) src = a->Value();
     // The first candidate of srcset stands in when there is no src.
     if (src.empty()) {
       if (const dom::Attr* set = element->FindAttribute("srcset")) {
         size_t i = 0;
-        while (i < set->value.size() && std::isspace(static_cast<unsigned char>(set->value[i]))) ++i;
+        while (i < set->Value().size() && std::isspace(static_cast<unsigned char>(set->Value()[i]))) ++i;
         size_t e = i;
-        while (e < set->value.size() && !std::isspace(static_cast<unsigned char>(set->value[e])) && set->value[e] != ',') ++e;
-        src = set->value.substr(i, e - i);
+        while (e < set->Value().size() && !std::isspace(static_cast<unsigned char>(set->Value()[e])) && set->Value()[e] != ',') ++e;
+        src = set->Value().substr(i, e - i);
       }
     }
     double w = -1, h = -1, ratio = 0;
@@ -291,12 +291,12 @@ class Builder {
       if (n == "ol" || n == "ul" || n == "menu" || n == "dir") {
         int start = 0;
         if (n == "ol") {
-          if (const dom::Attr* a = element->FindAttribute("start")) start = std::atoi(a->value.c_str()) - 1;
+          if (const dom::Attr* a = element->FindAttribute("start")) start = std::atoi(a->Value().c_str()) - 1;
           if (element->FindAttribute("reversed")) {
             int count = 0;
             for (dom::Node* c = dom::FirstChildOf(element); c; c = dom::NextSiblingOf(c)) if (c->IsElement() && static_cast<dom::Element*>(c)->IsHtml("li")) ++count;
             const dom::Attr* a = element->FindAttribute("start");
-            start = (a ? std::atoi(a->value.c_str()) : count) + 1;
+            start = (a ? std::atoi(a->Value().c_str()) : count) + 1;
           }
         }
         Instantiate("list-item", start);
@@ -316,7 +316,7 @@ class Builder {
       }();
       counters_["list-item"].back() += reversed ? -1 : 1;
       if (element && element->IsHtml("li")) {
-        if (const dom::Attr* a = element->FindAttribute("value")) counters_["list-item"].back() = std::atoi(a->value.c_str());
+        if (const dom::Attr* a = element->FindAttribute("value")) counters_["list-item"].back() = std::atoi(a->Value().c_str());
       }
     }
     for (const auto& [name, value] : ParseCounterList(style.counterSet, 0)) {
@@ -430,7 +430,7 @@ class Builder {
             for (size_t i = 0; i < stack.size(); ++i) out += (i ? separator : "") + FormatCounter(stack[i], style2.empty() ? "decimal" : style2);
           }
         } else if (name == "attr") {
-          if (element) if (const dom::Attr* a = element->FindAttribute(word(0))) out += a->value;
+          if (element) if (const dom::Attr* a = element->FindAttribute(word(0))) out += a->Value();
         }
       }
     }
@@ -508,7 +508,7 @@ class Builder {
       if (child->IsElement()) {
         BuildElement(parent, static_cast<dom::Element*>(child));
       } else if (child->nodeType == dom::NodeType::Text || child->nodeType == dom::NodeType::CdataSection) {
-        const std::string& data = static_cast<dom::CharacterData*>(child)->data;
+        const std::string& data = static_cast<dom::CharacterData*>(child)->Data();
         if (data.empty()) continue;
         auto text = std::make_unique<Box>();
         text->kind = Box::Kind::Text;
@@ -529,7 +529,7 @@ class Builder {
       const dom::Attr* a = e->FindAttribute("", "lang");
       if (!a) a = e->FindAttribute("http://www.w3.org/XML/1998/namespace", "lang");
       if (a) {
-        std::string lang = a->value;
+        std::string lang = a->Value();
         for (char& c : lang) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         return lang;
       }
