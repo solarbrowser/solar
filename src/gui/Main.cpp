@@ -408,6 +408,7 @@ int main(int argc, char** argv) {
   }
   SDL_Window* window = SDL_CreateWindow("Solar", 1280, 800, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
   SDL_Renderer* renderer = window ? SDL_CreateRenderer(window, nullptr) : nullptr;
+  if (renderer) SDL_SetRenderVSync(renderer, 1);
   if (!renderer) {
     std::fprintf(stderr, "window: %s\n", SDL_GetError());
     return 1;
@@ -539,14 +540,54 @@ int main(int argc, char** argv) {
   const bool timing = std::getenv("SOLAR_GUI_TIMES") != nullptr;
 
   const auto currentTree = [&]() -> solar::layout::Tree* { return solar::layout::UpdateLayout(realm->GetContext(), document); };
+  // Scrolling goes toward where it was asked to, a part of the way each frame (it eases out), so that a wheel step is a glide and not a jump.
+  double targetX = 0, targetY = 0;
+  bool gliding = false;
+  const solar::dom::Document* glidingIn = nullptr;
+  Clock::time_point lastGlide = Clock::now();
+  const bool scrollTestMode = std::getenv("SOLAR_GUI_SCROLL") != nullptr;
   const auto scrollBy = [&](double dx, double dy) {
     solar::layout::Tree* tree = currentTree();
     if (!tree) return;
     double maxX = 0, maxY = 0;
     solar::layout::ScrollRange(*tree, nullptr, maxX, maxY);
     auto& at = tree->scroll[document];
-    at.first = std::clamp(at.first + dx, 0.0, maxX);
-    at.second = std::clamp(at.second + dy, 0.0, maxY);
+    if (scrollTestMode) {
+      at.first = std::clamp(at.first + dx, 0.0, maxX);
+      at.second = std::clamp(at.second + dy, 0.0, maxY);
+      solar::layout::ApplySticky(*tree);
+      dirty = true;
+      return;
+    }
+    if (!gliding || glidingIn != document) {
+      targetX = at.first;
+      targetY = at.second;
+      glidingIn = document;
+    }
+    targetX = std::clamp(targetX + dx, 0.0, maxX);
+    targetY = std::clamp(targetY + dy, 0.0, maxY);
+    if (!gliding) lastGlide = Clock::now();
+    gliding = true;
+  };
+  const auto glide = [&] {
+    if (!gliding) return;
+    solar::layout::Tree* tree = currentTree();
+    if (!tree || glidingIn != document) {
+      gliding = false;
+      return;
+    }
+    const auto now = Clock::now();
+    const double dt = std::chrono::duration<double>(now - lastGlide).count();
+    lastGlide = now;
+    const double k = 1 - std::exp(-dt / 0.07);
+    auto& at = tree->scroll[document];
+    at.first += (targetX - at.first) * k;
+    at.second += (targetY - at.second) * k;
+    if (std::abs(targetX - at.first) < 0.5 && std::abs(targetY - at.second) < 0.5) {
+      at.first = targetX;
+      at.second = targetY;
+      gliding = false;
+    }
     solar::layout::ApplySticky(*tree);
     dirty = true;
   };
@@ -567,6 +608,8 @@ int main(int argc, char** argv) {
     }
     return 0L;
   };
+  int wheelLeft = std::getenv("SOLAR_GUI_WHEEL") ? std::atoi(std::getenv("SOLAR_GUI_WHEEL")) : 0;
+  Clock::time_point lastWheel = Clock::now(), wheelDone;
   const bool scrollTest = autoScroll > 0;
   bool running = true;
   while (running) {
@@ -639,6 +682,18 @@ int main(int argc, char** argv) {
       if (tourAt < tour.size()) navigate(AddressOf(tour[tourAt++]));
       else running = false;
     }
+    // (SOLAR_GUI_WHEEL=n: n wheel steps, one every 16 ms, for looking at how scrolling goes.)
+    if (wheelLeft > 0 && Clock::now() - programStart > std::chrono::milliseconds(7000) && Clock::now() - lastWheel > std::chrono::milliseconds(16)) {
+      --wheelLeft;
+      lastWheel = Clock::now();
+      SDL_Event wheel{};
+      wheel.type = SDL_EVENT_MOUSE_WHEEL;
+      wheel.wheel.y = -1;
+      SDL_PushEvent(&wheel);
+      if (wheelLeft == 0) wheelDone = Clock::now();
+    }
+    if (wheelDone != Clock::time_point() && !gliding && Clock::now() - wheelDone > std::chrono::milliseconds(300)) running = false;
+    glide();
     const uint64_t beforeStep = solar::dom::DocumentVersion();
     events.Step(std::chrono::milliseconds(4));
     if (timing && solar::dom::DocumentVersion() != beforeStep) std::fprintf(stderr, "step changed the document by %llu\n", (unsigned long long)(solar::dom::DocumentVersion() - beforeStep));
