@@ -210,6 +210,7 @@ void Upgrade(Context& ctx, Element* element, CustomDefinition* definition) {
   if (element->customState != CustomState::Undefined && element->customState != CustomState::Uncustomized) return;
   element->customDefinition = definition;
   element->customState = CustomState::Failed;
+  NoteStateChange(element);  // (:defined is a state: the style of the element is made anew)
   element->NoteWrite();
   for (Attr* attribute : std::vector<Attr*>(element->attributes)) {
     EnqueueCallback(ctx, element, Callback::AttributeChanged,
@@ -237,12 +238,14 @@ void Upgrade(Context& ctx, Element* element, CustomDefinition* definition) {
   if (!succeeded) {
     element->customDefinition = nullptr;
     element->customState = CustomState::Failed;
+  NoteStateChange(element);  // (:defined is a state: the style of the element is made anew)
     element->reactions.clear();
     element->NoteWrite();
     ReportException(ctx);
     return;
   }
   element->customState = CustomState::Custom;
+  NoteStateChange(element);  // (:defined is a state: the style of the element is made anew)
   element->NoteWrite();
 }
 

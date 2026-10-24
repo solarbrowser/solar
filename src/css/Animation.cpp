@@ -235,8 +235,28 @@ bool StyleFlushSuppressed() { return g_noFlush > 0; }
 
 int g_animatedSlots = 0;  // how many (element, pseudo-element) pairs have values: without any, there is nothing to suppress
 
+size_t g_sizingAnimations = 0;
+bool AnyAnimationAffectsSizes() { return g_sizingAnimations > 0; }
+
+namespace {
+// What an animation can give that nothing else is made from: not inherited, and not a length the others take their own from.
+bool OnlyItself(const AnimatedValues& values) {
+  static const std::set<std::string> alone = {"opacity", "transform", "translate", "rotate", "scale", "filter", "backdrop-filter", "box-shadow", "clip-path", "background-color",
+                                              "border-color", "outline-color", "background-position", "mask-position", "text-shadow-none"};
+  for (const auto& entry : values) {
+    if (!alone.count(entry.first)) return false;
+  }
+  return true;
+}
+}  // namespace
+
 void SetAnimatedValues(dom::Element* element, const std::string& pseudo, AnimatedValues values) {
   if (!element) return;
+  {
+    const auto before = element->animatedValues.find(pseudo);
+    const bool wasAlone = before == element->animatedValues.end() || OnlyItself(before->second);
+    if (!wasAlone || !OnlyItself(values)) ++element->animInheritVersion;
+  }
   if (values.empty()) {
     const auto at = element->animatedValues.find(pseudo);
     if (at == element->animatedValues.end()) return;
@@ -262,6 +282,7 @@ void SetAnimatedValues(dom::Element* element, const std::string& pseudo, Animate
                                                  "background-position", "stop-color", "fill-opacity", "stroke-opacity"};
   static const std::set<std::string> notInherited = {"opacity", "transform", "translate", "rotate", "scale", "filter", "backdrop-filter", "box-shadow", "clip-path", "background-color",
                                                      "border-color", "outline-color", "background-position", "mask-position"};
+  static std::set<const dom::Element*> sizingElements;
   bool sizing = false, itself = true;
   const auto now = element->animatedValues.find(pseudo);
   if (now != element->animatedValues.end()) {
@@ -270,9 +291,13 @@ void SetAnimatedValues(dom::Element* element, const std::string& pseudo, Animate
       itself = itself && notInherited.count(entry.first);
     }
   } else {
-    sizing = true;  // (what was there before was of unknown kind)
-    itself = false;
+    itself = false;  // (it ended: what was there before is what changes)
   }
+  const bool wasSizing = sizingElements.count(element) != 0;
+  if (sizing) sizingElements.insert(element);
+  else sizingElements.erase(element);
+  g_sizingAnimations = sizingElements.size();
+  sizing = sizing || wasSizing;
   NoteAnimatedStyleChange(sizing, itself);
 }
 

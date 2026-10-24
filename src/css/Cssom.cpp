@@ -659,7 +659,8 @@ std::string MediaList::Text() const {
 }
 
 void MediaList::SetText(std::string_view text) {
-  NoteStyleChange();
+  // (The list of a matchMedia() or of a rule that is being made is of no sheet that style has: nothing changes for it.)
+  if (ownerSheet || ownerRule) NoteStyleChange();
   queries.clear();
   if (Trim(std::string(text)).empty()) return;
   for (const ComponentValues& part : SplitOnCommas(ParseComponentValues(text))) {

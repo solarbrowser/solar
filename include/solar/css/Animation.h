@@ -19,6 +19,8 @@ void SetAnimatedValues(dom::Element* element, const std::string& pseudo, Animate
 const std::string* AnimatedValue(dom::Element* element, const std::string& pseudo, const std::string& property);
 // While suppressed computed styles are the ones without animations (the value an effect adds to or interpolates from).
 void SuppressAnimatedValues(bool suppressed);
+// Whether any element is being animated in a way that can change sizes (what a container query looks at).
+bool AnyAnimationAffectsSizes();
 bool AnimatedValuesSuppressed();
 // While set, the style of that element (or its pseudo-element) is its starting style: the rules in @starting-style are in the cascade.
 void SetStartingStyleElement(const dom::Element* element, const std::string& pseudo);

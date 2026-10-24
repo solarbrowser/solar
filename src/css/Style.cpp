@@ -38,6 +38,7 @@ std::string Lower(std::string_view text) {
 }
 
 uint64_t g_styleVersion = 1;
+uint64_t g_animationVersion = 1;
 uint64_t g_authorVersion = 1;  // changed when the rules do
 bool g_anyContainerQueries = false;  // a rule with a container query has been looked at
 bool g_overlayScrollbars = false;
@@ -811,6 +812,7 @@ struct StyleEntry {
   bool shadowed = false;  // it was made when the element was in a shadow tree, a host or assigned to a slot
   const dom::Node* parent = nullptr;
   uint64_t parentEpoch = 0;
+  uint32_t animInherit = 0;
   uint32_t attr = 0, anim = 0, children = 0, parentChildren = 0, parentChildAttr = 0;
   uint64_t treeVersion = 0;  // of the tree when the styles were begun
   uint32_t subtree = 0, parentSubtree = 0;
@@ -878,7 +880,8 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
       shadowed = !top->IsDocument();
     }
   }
-  bool good = reuse.allowed && !shadowed && !entry.shadowed && entry.serial == element->serial && entry.parent == parentNode && entry.parentEpoch == parentEpoch && entry.attr == element->attrVersion && entry.anim == element->animVersion;
+  bool good = reuse.allowed && !shadowed && !entry.shadowed && entry.serial == element->serial && entry.parent == parentNode && entry.parentEpoch == parentEpoch && entry.attr == element->attrVersion && entry.animInherit == element->animInheritVersion;
+  const bool animSame = entry.anim == element->animVersion;
   if (good && reuse.structural) good = entry.children == element->childrenVersion && (!parent || entry.parentChildren == parent->childrenVersion);
   if (good && reuse.sibling) good = !parent || (entry.parentChildAttr == parent->childAttrVersion && entry.parentChildren == parent->childrenVersion);
   if (good && reuse.has) {
@@ -893,11 +896,14 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
     else if (use.sibling) good = entry.subtree == element->subtreeVersion && (!parent || entry.parentSubtree == parent->subtreeVersion);
     else if (use.any) good = entry.subtree == element->subtreeVersion;
   }
-  if (good) return;
+  if (good && animSame) return;
+  // What an animation gives that is only of the element itself (its opacity, its transform) makes its own style anew, not the ones of the elements under it.
+  const uint64_t keptEpoch = good && !animSame ? entry.epoch : 0;
   entry.plain = ElementStyle();
   entry.others.clear();
   entry.serial = element->serial;
-  entry.epoch = ++g_styleEpoch;
+  entry.epoch = keptEpoch ? keptEpoch : ++g_styleEpoch;
+  entry.animInherit = element->animInheritVersion;
   entry.parent = parentNode;
   entry.parentEpoch = parentEpoch;
   entry.attr = element->attrVersion;
@@ -914,7 +920,7 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
 ElementStyle& StyleOf(dom::Element* element, const std::string& pseudo = "") {
   static uint64_t cachedStyleVersion = 0;
   const uint64_t version = dom::DocumentVersion() * 1000003 + g_styleVersion;
-  const uint64_t treeVersion = version;  // (what animations give changes the version too, and is looked at element by element)
+  const uint64_t treeVersion = version * 1000003 + g_animationVersion;  // (what animations give is looked at element by element)
   if (cachedStyleVersion != g_cacheVersion || Cache().size() > 60000) {
     ClearShared();
     Cache().clear();
@@ -963,7 +969,7 @@ double ViewportScrollbarsWith(dom::Document* document, const std::function<std::
     ViewportAuto autos;
   };
   static Kept kept;
-  const uint64_t version = dom::DocumentVersion() * 1000003 + g_styleVersion;
+  const uint64_t version = (dom::DocumentVersion() * 1000003 + g_styleVersion) * 1000003 + g_animationVersion;
   if (kept.document == document && kept.version == version && document) {
     horizontal = kept.horizontal;
     if (autos) *autos = kept.autos;
@@ -2280,11 +2286,11 @@ void NoteStyleChange() {
   ++g_authorVersion;
 }
 void NoteStyleChangeForRegistry() { NoteStyleChange(); }
-uint64_t g_animationVersion = 1;
 uint64_t AnimationVersion() { return g_animationVersion; }
 void NoteAnimatedStyleChange(bool affectsSizes, bool) {
+  // What animations give is looked at element by element (the style of an element is made again when its animation changes, and so are those under it
+  // when it is what they inherit): nothing that is kept for all of them is let go.
   ++g_animationVersion;
-  ++g_styleVersion;
   if (g_anyContainerQueries && affectsSizes) ++g_cacheVersion;  // (the size of a container may be what an animation gives)
 }
 uint64_t AuthorStyleVersion() { return dom::DocumentVersion() * 1000003 + g_authorVersion; }
@@ -2316,7 +2322,7 @@ void ScanComplex(const ComplexSelector& selector, SelectorFeatures& f) {
             case PseudoClass::Empty: case PseudoClass::FirstChild: case PseudoClass::LastChild: case PseudoClass::OnlyChild:
             case PseudoClass::FirstOfType: case PseudoClass::LastOfType: case PseudoClass::OnlyOfType: f.structural = true; break;
             // An upgrade of a custom element tells of nothing.
-            case PseudoClass::Defined: f.dynamic = true; break;
+            case PseudoClass::Defined: break;
             // The rest depend on attributes (the element's and those above it), on a state that tells of its changes (hover, active and focus:
             // NoteStateChange; target: the address of the document, which is in the signature of it), or are not matched by anything yet.
             default: break;
@@ -2374,7 +2380,8 @@ StyleReuse StyleReuseFor(dom::Document* document) {
   static Entry entry;
   StyleReuse none;
   // (Adopted style sheets are in the sheets: the array tells of every change of it. A container query is of a size that layout finds, not of the elements.)
-  if (!document || document->containerQueriesSeen) return none;
+  // (A container query is of a size that layout finds: when sizes are being animated, the styles are made anew.)
+  if (!document || (document->containerQueriesSeen && AnyAnimationAffectsSizes())) return none;
   const std::vector<CssStyleSheet*> sheets = SheetsOfTree(document, document->context);
   if (entry.document == document && entry.author == g_authorVersion && entry.sheets == sheets && entry.reuse.shadows == dom::HasShadowTrees()) return entry.reuse;
   SelectorFeatures f;
@@ -2538,7 +2545,7 @@ StyleReader::StyleReader(Quanta::Context& ctx, dom::Element* element, const std:
 StyleReader::~StyleReader() = default;
 
 std::string StyleReader::Get(const char* property) {
-  const uint64_t now = (dom::DocumentVersion() * 1000003 + g_styleVersion) * 1000003 + g_cacheVersion;
+  const uint64_t now = ((dom::DocumentVersion() * 1000003 + g_styleVersion) * 1000003 + g_cacheVersion) * 1000003 + g_animationVersion;
   if (memo_ && version_ == now && !AnimatedValuesSuppressed() && !StartingStyleFor(element_, pseudo_) &&
       (!element_->nodeDocument->animationStyleSeen || element_->nodeDocument->styleFlushedVersion == AuthorStyleVersion())) {
     const Memo& memo = *static_cast<const Memo*>(memo_.get());
@@ -2551,7 +2558,7 @@ std::string StyleReader::Get(const char* property) {
     dom::Node* tree = dom::ShadowIncludingRoot(element_);
     if (tree && tree->IsDocument()) {
       memo_ = StyleOf(element_, pseudo_).memo;
-      version_ = (dom::DocumentVersion() * 1000003 + g_styleVersion) * 1000003 + g_cacheVersion;
+      version_ = ((dom::DocumentVersion() * 1000003 + g_styleVersion) * 1000003 + g_cacheVersion) * 1000003 + g_animationVersion;
     }
   }
   return value;
