@@ -955,23 +955,33 @@ int main(int argc, char** argv) {
       script.pop_back();
       scriptQuiet = 0;
       SDL_Event e{};
-      if (step.rfind("c:", 0) == 0 || step.rfind("m:", 0) == 0) {
+      if (step.rfind("c:", 0) == 0 || step.rfind("m:", 0) == 0 || step.rfind("p:", 0) == 0 || step.rfind("u:", 0) == 0) {
         float x = 0, y = 0;
         std::sscanf(step.c_str() + 2, "%f,%f", &x, &y);
         e.type = SDL_EVENT_MOUSE_MOTION;
         e.motion.x = x;
         e.motion.y = y;
         SDL_PushEvent(&e);
-        if (step[0] == 'c') {
+        if (step[0] == 'u') {
+          SDL_Event up{};
+          up.type = SDL_EVENT_MOUSE_BUTTON_UP;
+          up.button.button = SDL_BUTTON_LEFT;
+          up.button.x = x;
+          up.button.y = y;
+          SDL_PushEvent(&up);
+        }
+        if (step[0] == 'c' || step[0] == 'p') {
           SDL_Event down{};
           down.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
           down.button.button = SDL_BUTTON_LEFT;
           down.button.x = x;
           down.button.y = y;
           SDL_PushEvent(&down);
-          SDL_Event up = down;
-          up.type = SDL_EVENT_MOUSE_BUTTON_UP;
-          SDL_PushEvent(&up);
+          if (step[0] == 'c') {
+            SDL_Event up = down;
+            up.type = SDL_EVENT_MOUSE_BUTTON_UP;
+            SDL_PushEvent(&up);
+          }
         }
       } else if (step.rfind("t:", 0) == 0) {
         e.type = SDL_EVENT_TEXT_INPUT;
@@ -987,7 +997,16 @@ int main(int argc, char** argv) {
       }
       dirty = true;
     } else if (script.empty()) {
-      if (++scriptQuiet == 6) dirty = true;
+      if (++scriptQuiet == 6) {
+        dirty = true;
+        // (SOLAR_GUI_EVAL="expression": what it comes to in the page is written out, once the script has been done.)
+        if (const char* expression = std::getenv("SOLAR_GUI_EVAL")) {
+          solar::html::RunInRealm(*realm, [&] {
+            const auto result = realm->Evaluate(std::string("console.log('eval: ' + String(") + expression + "))", "eval");
+            if (!result.ok) std::fprintf(stderr, "eval: %s\n", result.error.c_str());
+          });
+        }
+      }
     }
     // (SOLAR_GUI_WHEEL=n: n wheel steps, one every 16 ms, for looking at how scrolling goes.)
     if (wheelLeft > 0 && Clock::now() - programStart > std::chrono::milliseconds(7000) && Clock::now() - lastWheel > std::chrono::milliseconds(16)) {
