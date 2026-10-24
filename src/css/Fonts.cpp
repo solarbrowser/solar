@@ -251,6 +251,11 @@ std::map<dom::Document*, DocumentEntry>& Cache() {
 
 }  // namespace
 
+void ForgetDocumentFonts(dom::Document* document) {
+  Cache().erase(document);
+  ScriptFaces().erase(document);
+}
+
 font::Database& DocumentFonts(dom::Document* document) {
   DocumentEntry& entry = Cache()[document];
   const uint64_t version = (StyleVersion() * 1000003 + dom::DocumentVersion()) * 1000003 + g_scriptVersion;

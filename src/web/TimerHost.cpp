@@ -21,6 +21,17 @@ qe::TimerProvider TimerHost::Provider() {
   return provider;
 }
 
+void TimerHost::DropRealm(qe::Realm* realm) {
+  for (auto it = queue_.begin(); it != queue_.end();) {
+    if (it->second.GetRealm() == realm) {
+      it->second.Cancel();
+      it = queue_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
 void TimerHost::Schedule(qe::Task task) {
   double delay = std::max(0.0, task.DelayMs());
   // A timer nested five deep, or a repeating one that has run as often, waits at least four milliseconds.

@@ -507,7 +507,7 @@ Document* AssociatedDocument(Context& ctx) {
 }
 
 void SetAssociatedDocument(Context& ctx, Document* document) {
-  if (Object* holder = Holder(ctx)) qe::Set(ctx, qe::FromObject(holder), "document", qe::FromObject(document));
+  if (Object* holder = Holder(ctx)) qe::Set(ctx, qe::FromObject(holder), "document", document ? qe::FromObject(document) : qe::Undefined());
 }
 
 void DefineDocumentClasses(Context& ctx) {

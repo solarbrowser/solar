@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "solar/html/Errors.h"
 
 #include <cstdio>
@@ -109,6 +110,11 @@ void FlushRejections() {
 }
 
 }  // namespace
+
+void ForgetRejectionsOf(qe::Realm* realm) {
+  auto& pending = Pending();
+  pending.erase(std::remove_if(pending.begin(), pending.end(), [&](const PendingRejection& entry) { return entry.realm == realm; }), pending.end());
+}
 
 qe::PromiseRejectionHandler MakeRejectionHandler() {
   return [](qe::Realm* realm, const Value& promise, const Value& reason, qe::RejectionEvent event) {

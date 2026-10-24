@@ -95,6 +95,9 @@ inline constexpr std::string_view kXmlnsNamespace = "http://www.w3.org/2000/xmln
 struct Node : web::JsEventTarget {
   using Parent = web::JsEventTarget;
 
+  Node();
+  ~Node();
+
   NodeType nodeType = NodeType::Element;
   Node* parentNode = nullptr;
   Node* firstChild = nullptr;
@@ -405,6 +408,11 @@ Attr* NewAttr(Quanta::Context& ctx, Document* document, std::string_view namespa
 // A number that changes whenever any tree does, which the live collections check to know whether what
 // they have found is still so.
 uint64_t TreeVersion();
+// How many nodes are alive (made and not yet collected), for looking for what keeps a page after it was left.
+// A document that will not be used again (a page that was left): what hangs from it is let go of, so that what keeps the document itself keeps no more than that.
+void DisposeDocument(Document* document);
+size_t LiveNodes();
+size_t LiveDocuments();
 // The same, but for the changes of what is in a document: what happens to a node that is not in one does not change it.
 uint64_t DocumentVersion();
 void NoteTreeChangeAt(const Node* node);

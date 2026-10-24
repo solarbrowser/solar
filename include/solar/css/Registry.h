@@ -38,4 +38,7 @@ std::optional<RegisteredProperty> LookupRegistered(dom::Document* document, cons
 // The names of the registered properties of a document.
 std::vector<std::string> RegisteredNames(dom::Document* document);
 
+// A document that is gone: its registered custom properties are let go.
+void ForgetDocumentRegistrations(dom::Document* document);
+
 }  // namespace solar::css

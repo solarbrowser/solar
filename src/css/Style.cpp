@@ -811,6 +811,15 @@ std::unordered_map<dom::Element*, StyleEntry>& Cache() {
   return cache;
 }
 
+struct DocumentState {
+  uint64_t checkedAt = 0;
+  uint64_t signature = 0;
+};
+std::unordered_map<const dom::Document*, DocumentState>& DocumentStates() {
+  static std::unordered_map<const dom::Document*, DocumentState> states;
+  return states;
+}
+
 void ClearShared();
 void DropSharedBuckets();
 
@@ -909,12 +918,7 @@ ElementStyle& StyleOf(dom::Element* element, const std::string& pseudo = "") {
   }
   // What the sheets of the document are (which of them count, and the size of the window the media queries are of) is what every style depends on.
   if (element->nodeDocument) {
-    struct DocumentState {
-      uint64_t checkedAt = 0;
-      uint64_t signature = 0;
-    };
-    static std::unordered_map<const dom::Document*, DocumentState> states;
-    DocumentState& state = states[element->nodeDocument];
+    DocumentState& state = DocumentStates()[element->nodeDocument];
     if (state.checkedAt != version) {
       state.checkedAt = version;
       const uint64_t signature = DocumentSignature(element->nodeDocument);
@@ -2524,6 +2528,20 @@ MediaEnvironment EnvironmentFor(const dom::Document* document) {
   environment.width = size("width", 300);
   environment.height = size("height", 150);
   return environment;
+}
+
+}  // namespace solar::css
+
+namespace solar::css {
+
+void ForgetDocument(dom::Document* document) {
+  DocumentStates().erase(document);
+  ForgetDocumentFonts(document);
+  ForgetDocumentRegistrations(document);
+  // What was kept of its elements: their styles are of nothing now.
+  ClearShared();
+  Cache().clear();
+  ++g_cacheVersion;
 }
 
 }  // namespace solar::css

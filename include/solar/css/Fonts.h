@@ -37,6 +37,9 @@ std::shared_ptr<font::Face> FallbackFont(dom::Element* element, char32_t codePoi
 struct FaceRuleInfo {
   std::string family, src, weight, style, stretch, unicodeRange, variant, featureSettings, variationSettings, display, ascentOverride, descentOverride, lineGapOverride;
 };
+// A document that is gone: the fonts it loaded are let go.
+void ForgetDocumentFonts(dom::Document* document);
+
 // The @font-face rules of the document that have a family and sources, in the order DocumentFonts has them.
 std::vector<FaceRuleInfo> DocumentFaceRules(dom::Document* document);
 // Loads the font of the nth of them; whether it came. (State: 0 not tried, 1 loaded, 2 failed.)

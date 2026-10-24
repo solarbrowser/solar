@@ -71,6 +71,8 @@ std::vector<CssStyleSheet*> SheetsOfTreeRoot(dom::Node* root);
 
 // Something a style depends on changed (a sheet, a declaration): computed values are made again.
 void NoteStyleChange();
+// A document that is gone (a page that was left): what style kept for it is let go.
+void ForgetDocument(dom::Document* document);
 uint64_t StyleVersion();
 // An animation changed the values it gives: computed values are made again, but nothing that was declared is different.
 void NoteAnimatedStyleChange();

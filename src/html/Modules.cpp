@@ -1,3 +1,4 @@
+#include "solar/html/Errors.h"
 #include "solar/html/Modules.h"
 
 #include <algorithm>
@@ -252,7 +253,10 @@ std::string VisibleModuleUrl(const std::string& url) {
 }
 
 void RegisterRealmDocument(qe::Realm* realm, dom::Document* document) { Registry()[realm] = document; }
-void ForgetRealm(qe::Realm* realm) { Registry().erase(realm); }
+void ForgetRealm(qe::Realm* realm) {
+  Registry().erase(realm);
+  ForgetRejectionsOf(realm);
+}
 dom::Document* DocumentOfRealm(qe::Realm* realm) { return DocumentOf(realm); }
 
 bool RegisterImportMap(qe::Realm& realm, dom::Document* document, const std::string& json, std::string& error) {

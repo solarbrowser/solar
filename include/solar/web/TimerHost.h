@@ -27,6 +27,8 @@ class TimerHost {
   bool RunDue();
   // Milliseconds until the next task is due (0 if one already is); nothing when there is none.
   std::optional<int64_t> NextDelayMs() const;
+  // Drops the tasks of a realm that is going (a page that was left keeps no timers running).
+  void DropRealm(Quanta::Embed::Realm* realm);
   // How many tasks wait.
   size_t Size() const { return queue_.size(); }
 

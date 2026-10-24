@@ -88,6 +88,57 @@ void Element::Visit(Quanta::Visitor& visitor) {
   }
 }
 
+// ---- Letting a document go ----
+
+void DisposeDocument(Document* document) {
+  if (!document) return;
+  // Every node that hangs from it, through the children, the shadow trees and the contents of templates.
+  std::vector<Node*> all;
+  std::vector<Node*> pending = {document};
+  while (!pending.empty()) {
+    Node* root = pending.back();
+    pending.pop_back();
+    for (Node* n = root; n; n = n->NextInTree(root)) {
+      all.push_back(n);
+      if (n->IsElement()) {
+        Element* e = static_cast<Element*>(n);
+        if (e->shadowRoot) pending.push_back(e->shadowRoot);
+        if (e->templateContents) pending.push_back(e->templateContents);
+      }
+    }
+  }
+  for (Node* n : all) {
+    n->parentNode = n->firstChild = n->lastChild = n->previousSibling = n->nextSibling = nullptr;
+    n->childNodesList = n->childrenList = nullptr;
+    n->assignedSlot = n->manualSlot = nullptr;
+    n->registrations.reset();
+    n->listeners.clear();
+    n->eventHandlers.clear();
+    if (n != document) n->nodeDocument = nullptr;
+    if (n->IsElement()) {
+      Element* e = static_cast<Element*>(n);
+      e->attributes.clear();
+      e->attributeMap = e->tokenList = e->styleSheet = e->inlineStyle = e->dataset = nullptr;
+      e->templateContents = nullptr;
+      e->shadowRoot = nullptr;
+      e->assignedNodes.clear();
+      e->manuallyAssignedNodes.clear();
+      e->customDefinition = nullptr;
+      e->reactions.clear();
+      e->contentDocument = nullptr;
+      e->contentWindow = nullptr;
+      e->layoutStyle.reset();
+    } else if (n->IsCharacterData()) {
+      static_cast<CharacterData*>(n)->data.clear();
+    }
+  }
+  document->layoutTree.reset();
+  document->damage.reset();
+  document->focusedElement = document->hoverElement = document->pressedElement = document->currentScript = nullptr;
+  document->templateContentsOwner = nullptr;
+  document->frameElement = nullptr;
+}
+
 // ---- Making nodes ----
 
 namespace {
@@ -96,6 +147,14 @@ uint64_t g_documentVersion = 1;
 }
 
 uint64_t TreeVersion() { return g_treeVersion; }
+
+namespace {
+size_t g_liveNodes = 0;
+}
+Node::Node() { ++g_liveNodes; }
+Node::~Node() { --g_liveNodes; }
+size_t LiveNodes() { return g_liveNodes; }
+size_t LiveDocuments() { return 0; }
 uint64_t DocumentVersion() { return g_documentVersion; }
 
 namespace {

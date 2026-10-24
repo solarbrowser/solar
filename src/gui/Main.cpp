@@ -118,6 +118,18 @@ class Browser : public solar::html::FrameEnvironment {
   Browser(qe::Isolate& isolate, solar::net::Loop& loop, solar::net::HttpClient& client, solar::web::JsEventLoop& events)
       : isolate_(isolate), loop_(loop), client_(client), events_(events) {}
 
+  // A page that is left: its realm goes, and with it what only it kept.
+  void ReleaseRealm(qe::Realm* realm) {
+    // (What the realm's own data holds is not let go with the realm: the document it points at is let go first.)
+    solar::html::RunInRealm(*realm, [&] { solar::dom::SetAssociatedDocument(realm->GetContext(), nullptr); });
+    for (auto it = bundles_.begin(); it != bundles_.end(); ++it) {
+      if ((*it)->realm.get() == realm) {
+        bundles_.erase(it);
+        break;
+      }
+    }
+  }
+
   qe::Realm* CreateRealm() override {
     auto bundle = std::make_unique<RealmBundle>();
     qe::Isolate::RealmOptions options;
@@ -227,6 +239,12 @@ class Browser : public solar::html::FrameEnvironment {
     sizesArrived_ = false;
     return was;
   }
+  size_t CachedBytes() const {
+    size_t total = 0;
+    for (const auto& entry : resources_) total += entry.second->body.size();
+    return total;
+  }
+  size_t ScriptCount() const { return scripts_.size(); }
   bool Loading() const {
     for (const auto& entry : resources_) {
       if (!entry.second->done) return true;
@@ -412,6 +430,8 @@ int main(int argc, char** argv) {
   solar::dom::Document* document = nullptr;
   bool dirty = true;
   const auto commit = [&](const std::string& where, std::string markup, std::string type, const Clock::time_point& started) {
+    qe::Realm* left = realm;
+    solar::dom::Document* leftDocument = document;
     address = where;
     browser.SetPageUrl(address);
     browser.SetContentType(address, type);
@@ -428,6 +448,14 @@ int main(int argc, char** argv) {
     while (Clock::now() < settle) events.Step(std::chrono::milliseconds(8));
     browser.TakeArrived();
     browser.TakeSizesArrived();
+    if (left) {
+      // The page that was left: its timers stop, what hangs from its document is let go of, its realm goes, and what is no more used is collected.
+      timers.DropRealm(left);
+      if (leftDocument) solar::dom::DisposeDocument(leftDocument);
+      if (leftDocument) solar::css::ForgetDocument(leftDocument);
+      browser.ReleaseRealm(left);
+      isolate->CollectGarbage();
+    }
     std::fprintf(stderr, "loaded in %.0f ms\n", std::chrono::duration<double, std::milli>(Clock::now() - started).count());
     SDL_SetWindowTitle(window, ("Solar - " + address).c_str());
     dirty = true;
@@ -524,6 +552,21 @@ int main(int argc, char** argv) {
   };
 
   int autoScroll = std::getenv("SOLAR_GUI_SCROLL") ? std::atoi(std::getenv("SOLAR_GUI_SCROLL")) : 0;
+  // (SOLAR_GUI_TOUR="address address ...": each is gone to in turn, a few seconds apart, and the memory in use is printed, for looking for what is kept.)
+  std::vector<std::string> tour;
+  if (const char* list = std::getenv("SOLAR_GUI_TOUR")) {
+    std::istringstream words(list);
+    for (std::string w; words >> w;) tour.push_back(w);
+  }
+  size_t tourAt = 0;
+  Clock::time_point tourLast = Clock::now();
+  const auto anonymousKb = [] {
+    std::ifstream status("/proc/self/status");
+    for (std::string line; std::getline(status, line);) {
+      if (line.rfind("RssAnon:", 0) == 0) return std::atol(line.c_str() + 8);
+    }
+    return 0L;
+  };
   const bool scrollTest = autoScroll > 0;
   bool running = true;
   while (running) {
@@ -589,6 +632,12 @@ int main(int argc, char** argv) {
         default: break;
       }
       any = SDL_PollEvent(&event);
+    }
+    if (!tour.empty() && !current && Clock::now() - tourLast > std::chrono::milliseconds(3500)) {
+            std::fprintf(stderr, "memory: %ld kB in use (%zu pages seen; %zu nodes alive, resources %zu kB)\n", anonymousKb(), tourAt, solar::dom::LiveNodes(), browser.CachedBytes() / 1024);
+      tourLast = Clock::now();
+      if (tourAt < tour.size()) navigate(AddressOf(tour[tourAt++]));
+      else running = false;
     }
     const uint64_t beforeStep = solar::dom::DocumentVersion();
     events.Step(std::chrono::milliseconds(4));

@@ -19,4 +19,7 @@ Quanta::Embed::PromiseRejectionHandler MakeRejectionHandler();
 // The window script's natives: __solarRegisterReporters(reportError, reportRejection).
 void DefineErrorNatives(Quanta::Context& ctx);
 
+// A realm that is going: the rejections held for it are let go.
+void ForgetRejectionsOf(Quanta::Embed::Realm* realm);
+
 }  // namespace solar::html

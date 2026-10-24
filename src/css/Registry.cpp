@@ -190,3 +190,9 @@ std::vector<std::string> RegisteredNames(dom::Document* document) {
 }
 
 }  // namespace solar::css
+
+namespace solar::css {
+
+void ForgetDocumentRegistrations(dom::Document* document) { Registered().erase(document); }
+
+}  // namespace solar::css
