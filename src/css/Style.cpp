@@ -2713,7 +2713,48 @@ bool DeclaresAnimation(dom::Element* element, const std::string& pseudo) {
   return style.cascade.count("animation-name") || style.cascade.count("transition-duration") || style.cascade.count("transition-delay");
 }
 
+namespace {
+// Counted for looking at where the time of a page goes (SOLAR_TASK_DEBUG): what script asks of style, and how long that takes.
+struct AskedStats {
+  uint64_t calls = 0, slow = 0, fromLayout = 0, nested = 0;
+  double ms = 0, layoutMs = 0;
+  std::map<std::string, std::pair<uint64_t, double>> byProperty;
+  ~AskedStats() {
+    if (!std::getenv("SOLAR_TASK_DEBUG")) return;
+    std::fprintf(stderr, "style asked for %llu times (%llu over 1 ms), %.0f ms in all; %llu of them from layout and painting (%.0f ms), %llu inside another ask\n", (unsigned long long)calls, (unsigned long long)slow, ms, (unsigned long long)fromLayout, layoutMs, (unsigned long long)nested);
+    std::vector<std::pair<double, std::string>> top;
+    for (const auto& [name, v] : byProperty) top.push_back({v.second, name + " x" + std::to_string(v.first)});
+    std::sort(top.rbegin(), top.rend());
+    for (size_t i = 0; i < top.size() && i < 8; ++i) std::fprintf(stderr, "    %-40s %.0f ms\n", top[i].second.c_str(), top[i].first);
+  }
+};
+AskedStats g_asked;
+}  // namespace
+
 std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std::string& property, const std::string& pseudo) {
+  static const bool debug = std::getenv("SOLAR_TASK_DEBUG") != nullptr;
+  const auto askedAt = debug ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point();
+  struct Counted {
+    bool on;
+    std::chrono::steady_clock::time_point at;
+    const std::string& property;
+    bool inLayout = dom::InCommittedView();
+    ~Counted() {
+      if (!on) return;
+      static int depthNow = 0;
+      const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - at).count();
+      ++g_asked.calls;
+      if (inLayout) {
+        ++g_asked.fromLayout;
+        g_asked.layoutMs += ms;
+      }
+      if (ms > 1) ++g_asked.slow;
+      g_asked.ms += ms;
+      auto& entry = g_asked.byProperty[property];
+      ++entry.first;
+      entry.second += ms;
+    }
+  } counted{debug, askedAt, property};
   static int depth = 0;
   // What animations give is brought up to date first, when what it depends on has changed.
   static bool flushing = false;
