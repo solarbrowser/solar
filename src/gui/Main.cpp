@@ -1218,6 +1218,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
           pointerKnown = true;
           updateHover();
           pressTarget = document->hoverElement;
+          if (timing) std::fprintf(stderr, "press at %.0f,%.0f on %s%s%s\n", event.button.x, event.button.y, pressTarget ? pressTarget->localName.c_str() : "nothing", pressTarget && pressTarget->FindAttribute("", "class") ? "." : "", pressTarget && pressTarget->FindAttribute("", "class") ? pressTarget->FindAttribute("", "class")->value.c_str() : "");
           pressButton = event.button.button == SDL_BUTTON_LEFT ? 0 : event.button.button == SDL_BUTTON_MIDDLE ? 1 : 2;
           if (pressTarget) {
             bool proceed = true;
@@ -1452,6 +1453,8 @@ int PageMain(Shared& shared, int argc, char** argv) {
     // (SOLAR_GUI_SETTLE=ms: not before the pictures had that long to come.)
     const char* settle = std::getenv("SOLAR_GUI_SETTLE");
     if (autoScroll > 0 || (std::getenv("SOLAR_GUI_SCRIPT") && (!script.empty() || scriptQuiet < 6))) {
+    } else if (settle && std::getenv("SOLAR_GUI_SHOT") && Clock::now() - programStart < std::chrono::milliseconds(std::atoi(settle))) {
+      dirty = true;  // (again, until the time is up)
     } else if (const char* shot = settle && Clock::now() - programStart < std::chrono::milliseconds(std::atoi(settle)) ? nullptr : std::getenv("SOLAR_GUI_SHOT")) {
       UiCommand command;
       command.kind = UiCommand::Kind::Shot;
