@@ -243,7 +243,7 @@ const dom::Element* UpperElement(const dom::Element* element) {
 const Bloom& BloomWithSelf(const dom::Element* element) {
   static std::unordered_map<const dom::Element*, Bloom> memo;
   static uint64_t version = 0;
-  const uint64_t now = dom::TreeVersion();
+  const uint64_t now = dom::DocumentVersion();
   if (version != now) { memo.clear(); version = now; }
   const auto found = memo.find(element);
   if (found != memo.end()) return found->second;
@@ -340,7 +340,7 @@ struct RuleIndex {
 
 const RuleIndex& IndexOf(const std::vector<CssRule*>& rules) {
   static std::unordered_map<const void*, RuleIndex> indexes;
-  const uint64_t version = dom::TreeVersion() * 1000003 + g_authorVersion;
+  const uint64_t version = dom::DocumentVersion() * 1000003 + g_authorVersion;
   RuleIndex& index = indexes[&rules];
   if (index.version == version && index.size == rules.size()) return index;
   index = RuleIndex();
@@ -660,7 +660,7 @@ std::vector<CssStyleSheet*> SheetsOfTreeUncached(dom::Node* root, Quanta::Contex
 // The style sheets of a tree, kept until something changes: every element asks for them.
 std::vector<CssStyleSheet*> SheetsOfTree(dom::Node* root, Quanta::Context* ctx = nullptr) {
   static std::unordered_map<dom::Node*, std::pair<uint64_t, std::vector<CssStyleSheet*>>> cache;
-  const uint64_t version = dom::TreeVersion() * 1000003 + g_styleVersion;
+  const uint64_t version = dom::DocumentVersion() * 1000003 + g_styleVersion;
   auto found = cache.find(root);
   if (found != cache.end() && found->second.first == version) return found->second.second;
   std::vector<CssStyleSheet*> sheets = SheetsOfTreeUncached(root, ctx);
@@ -870,7 +870,7 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
       use.sibling = use.sibling || other.second.has.sibling;
     }
     // (The elements it looked at are under it, or after it; when it was for some other element in the selector, they can be anywhere: the styles are made anew at every change of the tree.)
-    if (use.other) good = entry.treeVersion == dom::TreeVersion();
+    if (use.other) good = entry.treeVersion == dom::DocumentVersion();
     else if (use.sibling) good = entry.subtree == element->subtreeVersion && (!parent || entry.parentSubtree == parent->subtreeVersion);
     else if (use.any) good = entry.subtree == element->subtreeVersion;
   }
@@ -887,14 +887,14 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   entry.parentChildren = parent ? parent->childrenVersion : 0;
   entry.parentChildAttr = parent ? parent->childAttrVersion : 0;
   entry.shadowed = shadowed;
-  entry.treeVersion = dom::TreeVersion();
+  entry.treeVersion = dom::DocumentVersion();
   entry.subtree = element->subtreeVersion;
   entry.parentSubtree = parent ? parent->subtreeVersion : 0;
 }
 
 ElementStyle& StyleOf(dom::Element* element, const std::string& pseudo = "") {
   static uint64_t cachedStyleVersion = 0;
-  const uint64_t version = dom::TreeVersion() * 1000003 + g_styleVersion;
+  const uint64_t version = dom::DocumentVersion() * 1000003 + g_styleVersion;
   const uint64_t treeVersion = version;  // (what animations give changes the version too, and is looked at element by element)
   if (cachedStyleVersion != g_cacheVersion || Cache().size() > 60000) {
     ClearShared();
@@ -949,7 +949,7 @@ double ViewportScrollbarsWith(dom::Document* document, const std::function<std::
     ViewportAuto autos;
   };
   static Kept kept;
-  const uint64_t version = dom::TreeVersion() * 1000003 + g_styleVersion;
+  const uint64_t version = dom::DocumentVersion() * 1000003 + g_styleVersion;
   if (kept.document == document && kept.version == version && document) {
     horizontal = kept.horizontal;
     if (autos) *autos = kept.autos;
@@ -1614,7 +1614,7 @@ std::optional<std::string> Resolver::Substitute(dom::Element* element, const std
 std::optional<RegisteredProperty> RegistrationOf(dom::Element* element, const std::string& name) {
   static std::map<std::pair<dom::Document*, std::string>, std::optional<RegisteredProperty>> cache;
   static uint64_t cachedVersion = 0;
-  const uint64_t version = dom::TreeVersion() * 1000003 + g_styleVersion;
+  const uint64_t version = dom::DocumentVersion() * 1000003 + g_styleVersion;
   if (version != cachedVersion) {
     cache.clear();
     cachedVersion = version;
@@ -2212,7 +2212,7 @@ void NoteAnimatedStyleChange() {
   ++g_styleVersion;
   if (g_anyContainerQueries) ++g_cacheVersion;  // (the size of a container may be what an animation gives)
 }
-uint64_t AuthorStyleVersion() { return dom::TreeVersion() * 1000003 + g_authorVersion; }
+uint64_t AuthorStyleVersion() { return dom::DocumentVersion() * 1000003 + g_authorVersion; }
 uint64_t StyleVersion() { return g_styleVersion; }
 
 namespace {
@@ -2439,7 +2439,7 @@ StyleReader::StyleReader(Quanta::Context& ctx, dom::Element* element, const std:
 StyleReader::~StyleReader() = default;
 
 std::string StyleReader::Get(const char* property) {
-  const uint64_t now = dom::TreeVersion() * 1000003 + g_styleVersion;
+  const uint64_t now = dom::DocumentVersion() * 1000003 + g_styleVersion;
   if (memo_ && version_ == now && !element_->nodeDocument->containerQueriesSeen && !AnimatedValuesSuppressed() && !StartingStyleFor(element_, pseudo_) &&
       (!element_->nodeDocument->animationStyleSeen || element_->nodeDocument->styleFlushedVersion == AuthorStyleVersion())) {
     const Memo& memo = *static_cast<const Memo*>(memo_.get());
@@ -2452,7 +2452,7 @@ std::string StyleReader::Get(const char* property) {
     dom::Node* tree = dom::ShadowIncludingRoot(element_);
     if (tree && tree->IsDocument()) {
       memo_ = StyleOf(element_, pseudo_).memo;
-      version_ = dom::TreeVersion() * 1000003 + g_styleVersion;
+      version_ = dom::DocumentVersion() * 1000003 + g_styleVersion;
     }
   }
   return value;

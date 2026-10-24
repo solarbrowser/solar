@@ -535,7 +535,7 @@ class Builder {
     };
     static std::map<std::pair<const void*, std::string>, Kept> kept;
     static uint64_t version = 0;
-    const uint64_t now = (dom::TreeVersion() * 1000003 + css::SheetsVersion()) * 1000003 + css::StyleVersion();
+    const uint64_t now = (dom::DocumentVersion() * 1000003 + css::SheetsVersion()) * 1000003 + css::StyleVersion();
     if (version != now || kept.size() > 20000) {
       kept.clear();
       version = now;

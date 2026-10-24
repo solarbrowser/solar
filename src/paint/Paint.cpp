@@ -452,6 +452,7 @@ class Painter {
     PaintContext(*html);
     EnsureClips({});
     list_->items.push_back(PopTransform{});
+    --transformDepth_;
     return out;
   }
 
@@ -470,7 +471,16 @@ class Painter {
     list_->items.push_back(item);
   }
 
+  // Whether something that takes the document rectangle is out of the viewport (with room for shadows, outlines and the like) and so need not be made: only
+  // where nothing but the scroll of the viewport moves the coordinates.
+  bool Culled(double x, double y, double width, double height) const {
+    if (transformDepth_ != 1 || std::getenv("SOLAR_PAINT_NO_CULL")) return false;
+    const double room = 300;
+    return x > scrollX_ + tree_.viewportWidth + room || x + width < scrollX_ - room || y > scrollY_ + tree_.viewportHeight + room || y + height < scrollY_ - room;
+  }
+
   void PushTransformOf(double dx, double dy) {
+    ++transformDepth_;
     PushTransform item;
     item.matrix.m[12] = F(dx);
     item.matrix.m[13] = F(dy);
@@ -569,6 +579,7 @@ class Painter {
     if (!box.style || box.style->visibility != layout::Visibility::Visible) return;
     const RectF borderBox = ToRectF(absolute);
     if (borderBox.width <= 0 && borderBox.height <= 0) return;
+    if (Culled(borderBox.x, borderBox.y, borderBox.width, borderBox.height)) return;
     const PaintProps& props = PropsOf(box, borderBox);
     const layout::BoxStyle& physical = box.style->Physical();
     // Outer shadows are under the background; the first one is the top one.
@@ -835,6 +846,7 @@ class Painter {
     if (!box || !box->style || box->style->visibility != layout::Visibility::Visible || !item.text.face) return;
     const layout::TextPiece& piece = item.text;
     if (piece.glyphs.empty()) return;
+    if (Culled(origin.x + item.rect.x, origin.y + item.rect.y, item.rect.width, item.rect.height)) return;
     const double size = piece.fontSize;
     const font::Metrics& metrics = piece.face->metrics();
     const double ascent = std::round(metrics.ascent * size);
@@ -1001,7 +1013,10 @@ class Painter {
   }
 
   void PopClipOf(const Box& box) {
-    if (scrollPushed_.erase(&box)) list_->items.push_back(PopTransform{});
+    if (scrollPushed_.erase(&box)) {
+      list_->items.push_back(PopTransform{});
+      --transformDepth_;
+    }
     list_->items.push_back(PopClip{});
   }
 
@@ -1071,6 +1086,7 @@ class Painter {
       const layout::Matrix total = to * matrix * back;
       for (int i = 0; i < 16; ++i) item.matrix.m[i] = F(total.m[i]);
       list_->items.push_back(item);
+      ++transformDepth_;
       transformed = true;
     }
     if (box.style->position == layout::Position::Fixed && (scrollX_ != 0 || scrollY_ != 0) && !transformed) {
@@ -1092,8 +1108,14 @@ class Painter {
       popped.layers = std::move(masks);
       list_->items.push_back(std::move(popped));
     }
-    if (fixedUndo) list_->items.push_back(PopTransform{});
-    if (transformed) list_->items.push_back(PopTransform{});
+    if (fixedUndo) {
+      list_->items.push_back(PopTransform{});
+      --transformDepth_;
+    }
+    if (transformed) {
+      list_->items.push_back(PopTransform{});
+      --transformDepth_;
+    }
     if (layer) list_->items.push_back(PopLayer{});
   }
 
@@ -1146,6 +1168,7 @@ class Painter {
   std::unordered_map<const Box*, Decoration> decorations_;
   std::unordered_map<const Box*, std::vector<const Box*>> clipChains_;
   std::set<const Box*> scrollPushed_;
+  int transformDepth_ = 0;
 };
 
 }  // namespace

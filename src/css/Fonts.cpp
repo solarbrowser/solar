@@ -253,7 +253,7 @@ std::map<dom::Document*, DocumentEntry>& Cache() {
 
 font::Database& DocumentFonts(dom::Document* document) {
   DocumentEntry& entry = Cache()[document];
-  const uint64_t version = (StyleVersion() * 1000003 + dom::TreeVersion()) * 1000003 + g_scriptVersion;
+  const uint64_t version = (StyleVersion() * 1000003 + dom::DocumentVersion()) * 1000003 + g_scriptVersion;
   if (entry.database && entry.version == version && entry.url == document->url) return *entry.database;
   entry.version = version;
   entry.url = document->url;

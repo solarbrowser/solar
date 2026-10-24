@@ -405,6 +405,9 @@ Attr* NewAttr(Quanta::Context& ctx, Document* document, std::string_view namespa
 // A number that changes whenever any tree does, which the live collections check to know whether what
 // they have found is still so.
 uint64_t TreeVersion();
+// The same, but for the changes of what is in a document: what happens to a node that is not in one does not change it.
+uint64_t DocumentVersion();
+void NoteTreeChangeAt(const Node* node);
 // The elements whose :focus, :hover, :active or :focus-within may have changed with a change of state: the element and every element above it
 // (through the hosts of shadow trees). Each is noted as if an attribute of it had changed, and the tree has changed.
 void NoteStateChange(Element* element);

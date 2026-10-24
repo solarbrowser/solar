@@ -116,7 +116,7 @@ FontCache& Cache() {
 const FontSet& FontsOf(LayoutContext& lc, const BoxStyle& style) {
   FontCache& cache = Cache();
   dom::Document* document = lc.tree.root ? static_cast<dom::Document*>(lc.tree.root->node) : nullptr;
-  const uint64_t version = dom::TreeVersion();
+  const uint64_t version = dom::DocumentVersion();
   if (cache.document != document || cache.version != version) {
     cache.sets.clear();
     cache.document = document;

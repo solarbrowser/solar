@@ -12,6 +12,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -161,7 +162,8 @@ class Browser : public solar::html::FrameEnvironment {
       done = true;
       if (owner->timing_) std::fprintf(stderr, "  fetch %5.0f ms  %7zu bytes  %s\n", std::chrono::duration<double, std::milli>(Clock::now() - started).count(), body.size(), url.substr(0, 100).c_str());
       if (owner->waiting_ == this) owner->loop_.Stop();
-      owner->arrived_ = true;
+      if (owner->layoutImages_.erase(url)) owner->sizesArrived_ = true;
+      else owner->arrived_ = true;
     }
   };
 
@@ -211,12 +213,18 @@ class Browser : public solar::html::FrameEnvironment {
     const auto found = resources_.find(absolute);
     if (found != resources_.end() && found->second->done) return false;  // here (or failed): the loader has it
     if (!Start(absolute)) return false;
+    if (!painting_) layoutImages_.insert(absolute);
     return true;
   }
-  // Pictures that came since: the page is laid out again with their sizes (the pictures are not waited for).
+  // Pictures that came since (the pictures are not waited for): the page is laid out again for the ones whose size layout wanted, and drawn again for the rest.
   bool TakeArrived() {
     const bool was = arrived_;
     arrived_ = false;
+    return was;
+  }
+  bool TakeSizesArrived() {
+    const bool was = sizesArrived_;
+    sizesArrived_ = false;
     return was;
   }
   bool Loading() const {
@@ -329,9 +337,11 @@ class Browser : public solar::html::FrameEnvironment {
   std::vector<std::unique_ptr<RealmBundle>> bundles_;
   std::map<std::string, std::unique_ptr<Resource>> resources_;
   Resource* waiting_ = nullptr;
-  bool arrived_ = false;
+  bool arrived_ = false, sizesArrived_ = false;
+  std::set<std::string> layoutImages_;
 
  public:
+  bool painting_ = false;
   bool timing_ = false;
   std::function<void()> pump_;
 };
@@ -417,6 +427,7 @@ int main(int argc, char** argv) {
     const auto settle = Clock::now() + std::chrono::milliseconds(30);
     while (Clock::now() < settle) events.Step(std::chrono::milliseconds(8));
     browser.TakeArrived();
+    browser.TakeSizesArrived();
     std::fprintf(stderr, "loaded in %.0f ms\n", std::chrono::duration<double, std::milli>(Clock::now() - started).count());
     SDL_SetWindowTitle(window, ("Solar - " + address).c_str());
     dirty = true;
@@ -512,6 +523,8 @@ int main(int argc, char** argv) {
     dirty = true;
   };
 
+  int autoScroll = std::getenv("SOLAR_GUI_SCROLL") ? std::atoi(std::getenv("SOLAR_GUI_SCROLL")) : 0;
+  const bool scrollTest = autoScroll > 0;
   bool running = true;
   while (running) {
     SDL_Event event;
@@ -577,16 +590,28 @@ int main(int argc, char** argv) {
       }
       any = SDL_PollEvent(&event);
     }
+    const uint64_t beforeStep = solar::dom::DocumentVersion();
     events.Step(std::chrono::milliseconds(4));
+    if (timing && solar::dom::DocumentVersion() != beforeStep) std::fprintf(stderr, "step changed the document by %llu\n", (unsigned long long)(solar::dom::DocumentVersion() - beforeStep));
     settleNavigation();
+    // (SOLAR_GUI_SCROLL=n: the page is scrolled n times, a step each frame, for timing it.)
+    if (autoScroll > 0 && !dirty && Clock::now() - programStart > std::chrono::milliseconds(std::getenv("SOLAR_GUI_SCROLL_AFTER") ? std::atoi(std::getenv("SOLAR_GUI_SCROLL_AFTER")) : 2500)) {
+      --autoScroll;
+      scrollBy(0, 120);
+    }
     // Pictures that came: the page is laid out again with them (a few at a time, not for each).
-    if (Clock::now() - lastRelayout > std::chrono::milliseconds(60) && browser.TakeArrived()) {
-      solar::dom::NoteTreeChange();
-      lastRelayout = Clock::now();
+    if (Clock::now() - lastRelayout > std::chrono::milliseconds(60)) {
+      if (browser.TakeSizesArrived()) {
+        if (timing) std::fprintf(stderr, "pictures came: laid out again\n");
+        solar::dom::NoteTreeChange();
+        lastRelayout = Clock::now();
+      }
+      if (browser.TakeArrived()) dirty = true;
     }
 
-    const uint64_t version = solar::dom::TreeVersion() * 1000003 + solar::css::StyleVersion();
+    const uint64_t version = solar::dom::DocumentVersion() * 1000003 + solar::css::StyleVersion();
     if (version != lastVersion) {
+      if (timing) std::fprintf(stderr, "version: tree %llu style %llu\n", (unsigned long long)solar::dom::TreeVersion(), (unsigned long long)solar::css::StyleVersion());
       lastVersion = version;
       dirty = true;
     }
@@ -597,7 +622,9 @@ int main(int argc, char** argv) {
     solar::layout::Tree* tree = currentTree();
     if (!tree) continue;
     const auto t1 = Clock::now();
+    browser.painting_ = true;
     solar::paint::DisplayList list = solar::paint::BuildDisplayList(realm->GetContext(), *tree);
+    browser.painting_ = false;
     const auto t2 = Clock::now();
 
     int pixelW = 0, pixelH = 0;
@@ -625,7 +652,8 @@ int main(int argc, char** argv) {
     // SOLAR_GUI_SHOT=file.png: the first frame is written to a file, and the program ends (for looking at what it paints without a screen).
     // (SOLAR_GUI_SETTLE=ms: not before the pictures had that long to come.)
     const char* settle = std::getenv("SOLAR_GUI_SETTLE");
-    if (const char* shot = settle && Clock::now() - programStart < std::chrono::milliseconds(std::atoi(settle)) ? nullptr : std::getenv("SOLAR_GUI_SHOT")) {
+    if (autoScroll > 0) {
+    } else if (const char* shot = settle && Clock::now() - programStart < std::chrono::milliseconds(std::atoi(settle)) ? nullptr : std::getenv("SOLAR_GUI_SHOT")) {
       SkDynamicMemoryWStream out;
       if (SkPngEncoder::Encode(&out, pixmap, SkPngEncoder::Options())) {
         sk_sp<SkData> png = out.detachAsData();
@@ -638,6 +666,7 @@ int main(int argc, char** argv) {
       const auto ms = [](Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
       std::fprintf(stderr, "frame: layout %.1f ms, display list %.1f ms (%zu items), draw %.1f ms\n", ms(t0, t1), ms(t1, t2), list.items.size(), ms(t2, t3));
     }
+    if (scrollTest && autoScroll == 0) running = false;
   }
 
   if (texture) SDL_DestroyTexture(texture);

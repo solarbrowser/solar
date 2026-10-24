@@ -92,9 +92,11 @@ void Element::Visit(Quanta::Visitor& visitor) {
 
 namespace {
 uint64_t g_treeVersion = 1;
+uint64_t g_documentVersion = 1;
 }
 
 uint64_t TreeVersion() { return g_treeVersion; }
+uint64_t DocumentVersion() { return g_documentVersion; }
 
 namespace {
 std::string (*g_baseUriProvider)(const Document*) = nullptr;
@@ -106,6 +108,24 @@ bool (*g_beingRenderedHook)(Element* element) = nullptr;
 void (*g_nodeRemovedHook)(Node* node) = nullptr;
 void NoteTreeChange() {
   ++g_treeVersion;
+  ++g_documentVersion;
+  if (g_treeChangeHook) g_treeChangeHook();
+}
+
+// A change of a node: the document changed with it only if the node is in one (what a script builds before it puts it in is not drawn).
+void NoteTreeChangeAt(const Node* node) {
+  bool connected = false;
+  for (const Node* n = node; n;) {
+    if (n->IsDocument()) {
+      connected = true;
+      break;
+    }
+    const Node* up = n->parentNode;
+    if (!up && n->IsFragment() && static_cast<const DocumentFragment*>(n)->isShadowRoot) up = static_cast<const DocumentFragment*>(n)->host;
+    n = up;
+  }
+  ++g_treeVersion;
+  if (connected) ++g_documentVersion;
   if (g_treeChangeHook) g_treeChangeHook();
 }
 
@@ -385,7 +405,7 @@ std::optional<DomError> Validate(Node* node, Node* parent, Node* child, bool rep
 }
 
 void Unlink(Node* node) {
-  NoteTreeChange();
+  NoteTreeChangeAt(node->parentNode);
   NoteDamage(node->parentNode, kDamageChildren);
   Node* parent = node->parentNode;
   if (node->previousSibling) {
@@ -409,7 +429,7 @@ void Unlink(Node* node) {
 }
 
 void Link(Node* node, Node* parent, Node* child) {
-  NoteTreeChange();
+  NoteTreeChangeAt(parent);
   NoteDamage(parent, kDamageChildren);
   node->parentNode = parent;
   node->previousSibling = child ? child->previousSibling : parent->lastChild;
@@ -736,11 +756,12 @@ void SetAttrValue(Attr* attribute, std::string value) {
   if (owner && HasMutationObservers()) QueueAttributeRecord(owner, attribute->localName, attribute->namespaceUri, attribute->value);
   const std::string old = attribute->value;
   attribute->value = std::move(value);
-  NoteTreeChange();
+  const bool same = old == attribute->value;  // (what is written again as it was is no change for style and layout)
+  if (!same) NoteTreeChangeAt(owner);
   if (owner && HasShadowTrees()) ShadowAttributeChanged(owner, attribute->localName, attribute->namespaceUri, old, attribute->value);
   if (owner) {
     CustomAttributeChanged(owner, attribute->localName, attribute->namespaceUri, old, attribute->value);
-    NoteDamage(owner, kDamageAttributes);
+    if (!same) NoteDamage(owner, kDamageAttributes);
     if (g_hooks.attributeChanged) g_hooks.attributeChanged(owner, attribute->localName);
   }
 }
@@ -751,7 +772,7 @@ void AppendAttr(Element* element, Attr* attribute) {
   element->attributes.push_back(attribute);
   element->NoteWrite();
   attribute->NoteWrite();
-  NoteTreeChange();
+  NoteTreeChangeAt(element);
   if (HasMutationObservers()) QueueAttributeRecord(element, attribute->localName, attribute->namespaceUri, std::nullopt);
   if (HasShadowTrees()) ShadowAttributeChanged(element, attribute->localName, attribute->namespaceUri, std::nullopt, attribute->value);
   CustomAttributeChanged(element, attribute->localName, attribute->namespaceUri, std::nullopt, attribute->value);
@@ -1065,7 +1086,7 @@ std::optional<DomError> SetAttributeNode(Element* element, Attr* attribute, Attr
     attribute->nodeDocument = element->nodeDocument;
     attribute->NoteWrite();
     element->NoteWrite();
-    NoteTreeChange();
+    NoteTreeChangeAt(element);
     if (HasMutationObservers()) QueueAttributeRecord(element, attribute->localName, attribute->namespaceUri, old->value);
     if (HasShadowTrees()) ShadowAttributeChanged(element, attribute->localName, attribute->namespaceUri, old->value, attribute->value);
     CustomAttributeChanged(element, attribute->localName, attribute->namespaceUri, old->value, attribute->value);
@@ -1083,7 +1104,7 @@ void RemoveAttributeNode(Element* element, Attr* attribute) {
   element->attributes.erase(std::find(element->attributes.begin(), element->attributes.end(), attribute));
   attribute->ownerElement = nullptr;
   attribute->NoteWrite();
-  NoteTreeChange();
+  NoteTreeChangeAt(element);
   if (HasShadowTrees()) ShadowAttributeChanged(element, attribute->localName, attribute->namespaceUri, attribute->value, std::nullopt);
   CustomAttributeChanged(element, attribute->localName, attribute->namespaceUri, attribute->value, std::nullopt);
   NoteDamage(element, kDamageAttributes);
