@@ -2808,7 +2808,6 @@ tests/wpt/css/css-writing-modes/bidi-inline-fragment-crash.html
 tests/wpt/css/css-writing-modes/bidi-line-break-001.html
 tests/wpt/css/css-writing-modes/forms/input-range-block-size.html
 tests/wpt/css/css-writing-modes/forms/input-range-inline-size.html
-tests/wpt/css/css-writing-modes/forms/select-multiple-options-visual-order.html
 tests/wpt/css/css-writing-modes/inheritance.html
 tests/wpt/css/css-writing-modes/orthogonal-parent-shrink-to-fit-001b.html
 tests/wpt/css/css-writing-modes/orthogonal-parent-shrink-to-fit-001f.html

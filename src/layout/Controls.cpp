@@ -115,7 +115,7 @@ bool ControlSize(LayoutContext& lc, dom::Element* element, Box& box) {
     box.naturalWidth = std::round(widest) + extra;
     box.naturalHeight = rows * lineHeight;
     box.emptyWidth = extra;
-    box.emptyHeight = (rows > 1 || multiple ? 2 : 1) * lineHeight;
+    box.emptyHeight = rows * lineHeight;
     return true;
   }
   const std::string type = Lower(Attr(element, "type"));

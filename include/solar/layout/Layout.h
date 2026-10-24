@@ -45,6 +45,9 @@ double LayoutMillis();
 void SetImageRequestHandler(ImageRequestHandler handler);
 std::string AbsoluteAddress(const std::string& address, const std::string& base);
 
+// The font a box's text is set in (the first of its family list that has a face), for text the program draws itself, as in form controls.
+std::shared_ptr<font::Face> FaceOf(Quanta::Context& ctx, Tree& tree, const Box& box);
+
 // A box's border box in the coordinates of the document (the initial containing block's origin).
 Rect AbsoluteBorderBox(const Box& box);
 double AbsoluteInset(const Box& box, int side, double viewportWidth, double viewportHeight);

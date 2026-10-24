@@ -620,6 +620,12 @@ std::shared_ptr<font::Face> PrimaryFace(LayoutContext& lc, const Box& box) {
   return set.faces.empty() ? nullptr : set.faces[0];
 }
 
+std::shared_ptr<font::Face> FaceOf(Quanta::Context& ctx, Tree& tree, const Box& box) {
+  if (!box.style) return nullptr;
+  LayoutContext lc{ctx, tree, tree.viewportWidth, tree.viewportHeight};
+  return PrimaryFace(lc, box);
+}
+
 namespace {
 
 // Splits each text atom at the break opportunities, makes chunks.

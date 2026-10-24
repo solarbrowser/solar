@@ -20,6 +20,7 @@
 #include "solar/css/Style.h"
 #include "solar/layout/Layout.h"
 #include "solar/paint/Paint.h"
+#include "solar/html/Frames.h"
 #include "solar/html/Xml.h"
 
 namespace solar::paint {
@@ -640,6 +641,179 @@ class Painter {
     if (!rightEdge) widths.right = 0;
     if (widths.top > 0 || widths.right > 0 || widths.bottom > 0 || widths.left > 0) PaintBorder(box, props, physical, borderBox, widths);
     if (leftEdge && rightEdge) PaintImageOf(box, borderBox, props);
+    if (leftEdge && rightEdge && box.formControl) PaintControl(box, borderBox);
+  }
+
+
+  // ---- Form controls ----
+  // What a control shows is not in the nodes of the document but in the state the page's script keeps (what was typed, what is checked), so it is
+  // asked for. The control's own box (border, background) is already drawn; this is what is in it.
+
+  static Color Rgb(int r, int g, int b, int a = 255) { return Color{static_cast<uint8_t>(r), static_cast<uint8_t>(g), static_cast<uint8_t>(b), static_cast<uint8_t>(a)}; }
+
+  static RoundedRect Round(const RectF& rect, float radius) {
+    RoundedRect out;
+    out.rect = rect;
+    for (float& r : out.radii) r = radius;
+    return out;
+  }
+
+  void FillRound(const RectF& rect, float radius, const Color& color) {
+    FillRoundedRect item;
+    item.rect = Round(rect, radius);
+    item.color = color;
+    list_->items.push_back(item);
+  }
+
+  // A rectangle turned by `degrees` about its own center.
+  void FillTurned(const RectF& rect, float degrees, const Color& color) {
+    const float a = degrees * 3.14159265f / 180, c = std::cos(a), s = std::sin(a);
+    const float cx = rect.x + rect.width / 2, cy = rect.y + rect.height / 2;
+    PushTransform push;
+    push.matrix.m[0] = c; push.matrix.m[1] = s; push.matrix.m[4] = -s; push.matrix.m[5] = c;
+    push.matrix.m[12] = cx - c * cx + s * cy;
+    push.matrix.m[13] = cy - s * cx - c * cy;
+    list_->items.push_back(push);
+    Fill(rect, color);
+    list_->items.push_back(PopTransform{});
+  }
+
+  // The bytes of a UTF-8 string that come before `units` UTF-16 units of it.
+  static size_t BytesBefore(const std::string& text, size_t units) {
+    size_t i = 0;
+    while (i < text.size() && units > 0) {
+      const unsigned char c = static_cast<unsigned char>(text[i]);
+      const size_t length = c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
+      const size_t u = length == 4 ? 2 : 1;
+      if (u > units) break;
+      units -= u;
+      i += length;
+    }
+    return i;
+  }
+
+  // A line of text at `x` with its baseline at `baseline`; returns its width.
+  double DrawLine(const std::shared_ptr<font::Face>& face, double size, const std::string& text, double x, double baseline, const Color& color) {
+    if (!face || text.empty()) return 0;
+    const std::vector<font::Glyph> glyphs = face->Shape(text);
+    DrawGlyphs run;
+    run.face = face;
+    run.size = F(size);
+    run.color = color;
+    run.x = F(x);
+    run.y = F(baseline);
+    double pen = 0;
+    for (const font::Glyph& g : glyphs) {
+      run.glyphs.push_back(g.id);
+      run.offsets.push_back(F(pen + g.xOffset * size));
+      run.offsets.push_back(F(-g.yOffset * size));
+      pen += g.advance * size;
+    }
+    list_->items.push_back(std::move(run));
+    return pen;
+  }
+
+  void PaintControl(const Box& box, const RectF& borderBox) {
+    dom::Element* element = box.element();
+    if (!element || !box.style || box.style->visibility != layout::Visibility::Visible) return;
+    if (!element->IsHtml("input") && !element->IsHtml("select") && !element->IsHtml("textarea")) return;
+    if (Culled(borderBox.x, borderBox.y, borderBox.width, borderBox.height)) return;
+    html::ControlView view;
+    if (!html::ReadControl(element, view)) return;
+    const RectF content{borderBox.x + F(box.border.left + box.padding.left), borderBox.y + F(box.border.top + box.padding.top),
+                        std::max(0.0f, borderBox.width - F(box.border.Horizontal() + box.padding.Horizontal())),
+                        std::max(0.0f, borderBox.height - F(box.border.Vertical() + box.padding.Vertical()))};
+    const Color accent = view.disabled ? Rgb(16, 16, 16, 77) : Rgb(0, 117, 255);
+    const Color ink = ParseColor(box.style->color);
+    (void)ink;
+    if (view.kind == "input" && (view.type == "checkbox" || view.type == "radio")) {
+      const float side = std::min(content.width, content.height);
+      const RectF square{content.x + (content.width - side) / 2, content.y + (content.height - side) / 2, side, side};
+      const bool radio = view.type == "radio";
+      const Color edge = view.disabled ? Rgb(118, 118, 118, 77) : Rgb(118, 118, 118);
+      if (view.checked || (view.indeterminate && !radio)) {
+        FillRound(square, radio ? side / 2 : 2.5f, accent);
+        if (radio) {
+          FillRound(RectF{square.x + side * 0.15f, square.y + side * 0.15f, side * 0.7f, side * 0.7f}, side * 0.35f, Rgb(255, 255, 255));
+          FillRound(RectF{square.x + side * 0.3f, square.y + side * 0.3f, side * 0.4f, side * 0.4f}, side * 0.2f, accent);
+        } else if (view.indeterminate) {
+          Fill(RectF{square.x + side * 0.22f, square.y + side * 0.43f, side * 0.56f, side * 0.14f}, Rgb(255, 255, 255));
+        } else {
+          FillTurned(RectF{square.x + side * 0.30f, square.y + side * 0.42f, side * 0.14f, side * 0.30f}, -45, Rgb(255, 255, 255));
+          FillTurned(RectF{square.x + side * 0.57f, square.y + side * 0.24f, side * 0.14f, side * 0.56f}, 45, Rgb(255, 255, 255));
+        }
+      } else {
+        FillRound(square, radio ? side / 2 : 2.5f, edge);
+        FillRound(RectF{square.x + 1, square.y + 1, side - 2, side - 2}, radio ? (side - 2) / 2 : 1.5f, view.disabled ? Rgb(239, 239, 239) : Rgb(255, 255, 255));
+      }
+      return;
+    }
+    const std::shared_ptr<font::Face> face = layout::FaceOf(ctx_, tree_, box);
+    if (!face) return;
+    const double size = box.style->fontSize;
+    const double ascent = std::round(face->metrics().ascent * size), descent = std::round(face->metrics().descent * size);
+    const Color text = view.disabled ? Rgb(110, 110, 110) : ParseColor(box.style->color);
+    PushClip clip;
+    clip.rect.rect = content;
+    list_->items.push_back(clip);
+    const auto baselineIn = [&](double top, double height) { return top + (height - (ascent + descent)) / 2 + ascent; };
+    if (view.kind == "select") {
+      DrawLine(face, size, view.label, content.x, baselineIn(content.y, content.height), text);
+      list_->items.push_back(PopClip{});
+      // The arrow of a drop-down: a chevron at the right.
+      const float cx = borderBox.x + borderBox.width - F(box.border.right) - 9, cy = borderBox.y + borderBox.height / 2 - 1;
+      FillTurned(RectF{cx - 2.9f, cy - 0.5f, 4.4f, 1.4f}, 45, text);
+      FillTurned(RectF{cx - 0.6f, cy - 0.5f, 4.4f, 1.4f}, -45, text);
+      return;
+    }
+    if (view.kind == "input" && (view.type == "submit" || view.type == "reset" || view.type == "button")) {
+      const double width = face->Measure(view.label) * size;
+      DrawLine(face, size, view.label, content.x + (content.width - width) / 2, baselineIn(content.y, content.height), text);
+      list_->items.push_back(PopClip{});
+      return;
+    }
+    if (view.kind == "input" && (view.type == "file")) {
+      DrawLine(face, size, "Choose File  No file chosen", content.x, baselineIn(content.y, content.height), text);
+      list_->items.push_back(PopClip{});
+      return;
+    }
+    if (view.kind == "input" && (view.type == "range" || view.type == "color")) {
+      list_->items.push_back(PopClip{});
+      if (view.type == "color") {
+        FillRound(RectF{content.x + 2, content.y + 2, content.width - 4, content.height - 4}, 2, ParseColor(view.value.empty() ? "#000000" : view.value));
+      } else {
+        const float mid = content.y + content.height / 2;
+        FillRound(RectF{content.x, mid - 2, content.width, 4}, 2, Rgb(176, 176, 176));
+        const double lo = 0, hi = 100, v = std::atof(view.value.c_str());
+        const float at = content.x + F(std::clamp((v - lo) / (hi - lo), 0.0, 1.0)) * (content.width - 14);
+        FillRound(RectF{at, mid - 7, 14, 14}, 7, accent);
+      }
+      return;
+    }
+    // A text field (and a text area, whose text is its own boxes: only the caret and the placeholder are drawn here).
+    const bool areaOwnsText = view.kind == "textarea";
+    const bool focused = element->nodeDocument && element->nodeDocument->focusedElement == element;
+    const double top = baselineIn(content.y, content.height);
+    if (!areaOwnsText) {
+      // (A caret in a field that is wider than the box keeps itself in view: the text moves left by what is past the right edge.)
+      const std::string before = view.value.substr(0, BytesBefore(view.value, view.end));
+      const double caretX = face->Measure(before) * size;
+      const double shift = focused && caretX > content.width - 1 ? caretX - (content.width - 1) : 0;
+      if (view.value.empty()) {
+        DrawLine(face, size, view.placeholder, content.x, top, Rgb(117, 117, 117));
+      } else {
+        if (focused && view.start != view.end) {
+          const size_t a = std::min(view.start, view.end), b = std::max(view.start, view.end);
+          const double x0 = face->Measure(view.value.substr(0, BytesBefore(view.value, a))) * size, x1 = face->Measure(view.value.substr(0, BytesBefore(view.value, b))) * size;
+          Fill(RectF{content.x + F(x0 - shift), content.y, F(x1 - x0), content.height}, Rgb(179, 212, 252));
+        }
+        DrawLine(face, size, view.value, content.x - shift, top, text);
+      }
+      if (focused && !view.disabled && !view.readOnly) Fill(RectF{content.x + F(caretX - shift), F(top - ascent), 1, F(ascent + descent)}, text);
+    } else if (view.value.empty() && !view.placeholder.empty()) {
+      DrawLine(face, size, view.placeholder, content.x, content.y + ascent, Rgb(117, 117, 117));
+    }
+    list_->items.push_back(PopClip{});
   }
 
   void PaintBorder(const Box& box, const PaintProps& props, const layout::BoxStyle& physical, const RectF& borderBox, const layout::Edges& widths) {

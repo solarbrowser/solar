@@ -48,15 +48,41 @@ class FrameEnvironment {
 
   // Told of a script that threw, with what it said.
   virtual void ScriptFailed(const std::string&) {}
+
+  // The page of `document` goes to another address (a script set location, or a form was submitted). Only the top document of a window asks;
+  // `method` is GET or POST, and a POST has its body and type. The program does it when what asked has returned.
+  virtual void Navigate(dom::Document*, const std::string& /*url*/, bool /*replace*/, const std::string& /*method*/, const std::string& /*body*/, const std::string& /*contentType*/) {}
 };
 
 void SetFrameEnvironment(FrameEnvironment* environment);
+// What the page's script asks for with location and forms: it goes to the environment.
+void RequestNavigation(dom::Document* document, const std::string& url, bool replace, const std::string& method = "GET", const std::string& body = "", const std::string& contentType = "");
 // How long scripts have run (for looking at where the time of a page goes).
 double ScriptMillis();
 
 // Host code that makes or touches the things of a realm has to run as that realm, or the prototypes and holders it
 // finds are those of the realm that happens to be running. RunInRealm runs `work` that way.
 void RunInRealm(Quanta::Embed::Realm& realm, const std::function<void()>& work);
+
+// What the user does to a page (Interaction.cpp). Each runs script, so it is run in the realm of the document. DispatchPointer fires a
+// mouse event at `target` (a press also moves the focus); DispatchClick fires a click and does what the target does for it (toggles,
+// submits, follows a label). Both say whether no script stopped the event. TypeInto types `text` into a text control, or edits it
+// (kind: "text", "backspace", "delete", "left", "right", "home", "end"); it says whether the control was one that took it.
+bool DispatchPointer(dom::Document* document, dom::Element* target, const char* type, double x, double y, int button, int buttons);
+bool DispatchClick(dom::Document* document, dom::Element* target, double x, double y, int button);
+bool TypeInto(dom::Document* document, dom::Element* target, const std::string& text, const char* kind);
+void FireChange(dom::Document* document, dom::Element* target);
+// The caret (or the selection, when the two differ) of a text control, in UTF-16 units of its value.
+void SetCaret(dom::Document* document, dom::Element* target, size_t start, size_t end);
+
+// What a form control shows (its value, whether it is checked, what it says when it is a button or a list), and where the caret and the
+// selection of a text control are, as the script of the window has them. False for an element that is not a control.
+struct ControlView {
+  std::string kind, type, value, placeholder, label;
+  bool checked = false, indeterminate = false, disabled = false, readOnly = false;
+  size_t start = 0, end = 0;  // in UTF-16 units of the value
+};
+bool ReadControl(dom::Element* element, ControlView& out);
 
 // Parses `markup` into `document`, a document made in `realm` that has had InstallWindow, runs its scripts, and
 // fires DOMContentLoaded and, once the frames in it have loaded, load. Returns whether every script ran.

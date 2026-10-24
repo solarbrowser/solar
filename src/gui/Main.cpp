@@ -387,6 +387,15 @@ class Browser : public solar::html::FrameEnvironment {
   bool painting_ = false;
   bool timing_ = false;
   std::function<void()> pump_;
+  // A page asked to go somewhere (script, or a form): the window does it when the page's script has returned.
+  struct Requested {
+    std::string url, method, body, type;
+    bool replace = false;
+  };
+  std::optional<Requested> requested_;
+  void Navigate(solar::dom::Document*, const std::string& url, bool replace, const std::string& method, const std::string& body, const std::string& type) override {
+    requested_ = Requested{url, method, body, type, replace};
+  }
 };
 
 // The address the user typed as one: a path of a file becomes a file: address.
@@ -457,16 +466,20 @@ int main(int argc, char** argv) {
   };
   setViewport();
   solar::css::SetOverlayScrollbars(true);
+  SDL_StartTextInput(window);
 
   // Puts the document that came for `where` in a new realm, and runs its scripts (what it fetches is waited for, with the window kept alive).
   solar::paint::SkiaPainter painter;
   qe::Realm* realm = nullptr;
   solar::dom::Document* document = nullptr;
   bool dirty = true;
+  solar::dom::Element* pressTarget = nullptr;
+  int pressButton = 0;
   const bool timing_log = std::getenv("SOLAR_GUI_TIMES") != nullptr;
   const auto commit = [&](const std::string& where, std::string markup, std::string type, const Clock::time_point& started) {
     qe::Realm* left = realm;
     solar::dom::Document* leftDocument = document;
+    pressTarget = nullptr;
     address = where;
     browser.SetPageUrl(address);
     browser.SetContentType(address, type);
@@ -511,7 +524,7 @@ int main(int argc, char** argv) {
   };
   std::vector<std::unique_ptr<Navigation>> navigations;  // (a fetch cannot be taken back: the ones that were left are kept until they end)
   Navigation* current = nullptr;
-  const auto navigate = [&](const std::string& where) -> bool {
+  const auto navigate = [&](const std::string& where, const std::string& method = "GET", const std::string& body = "", const std::string& bodyType = "") -> bool {
     std::fprintf(stderr, "loading %s\n", where.c_str());
     if (where.starts_with("file://")) {
       std::string markup;
@@ -529,7 +542,13 @@ int main(int argc, char** argv) {
     }
     auto navigation = std::make_unique<Navigation>();
     navigation->where = where;
-    client.Fetch(*parsed, navigation->collector, solar::net::FetchOptions());
+    solar::net::FetchOptions options;
+    if (method == "POST") {
+      options.method = "POST";
+      options.body = std::make_shared<const std::string>(body);
+      if (!bodyType.empty()) options.headers.emplace_back("Content-Type", bodyType);
+    }
+    client.Fetch(*parsed, navigation->collector, options);
     current = navigation.get();
     navigations.push_back(std::move(navigation));
     SDL_SetWindowTitle(window, ("Loading " + where).c_str());
@@ -600,6 +619,33 @@ int main(int argc, char** argv) {
     bar.maxY = maxY;
     bar.top = tree->scroll[document].second / maxY * (h - bar.height);
     return true;
+  };
+  // A link: the address it has, against the page's (the nearest one at or above `from`).
+  const auto followLink = [&](solar::dom::Element* from) {
+    for (solar::dom::Node* n = from; n; n = n->parentNode) {
+      if (!n->IsElement()) continue;
+      solar::dom::Element* element = static_cast<solar::dom::Element*>(n);
+      if (!element->IsHtml("a")) continue;
+      if (const solar::dom::Attr* href = element->FindAttribute("", "href")) {
+        std::optional<solar::url::Url> base = solar::url::Parse(address);
+        std::optional<solar::url::Url> target = base ? solar::url::Parse(href->value, &*base) : solar::url::Parse(href->value);
+        if (target && (target->scheme == "http" || target->scheme == "https" || target->scheme == "file")) navigate(solar::url::Serialize(*target));
+      }
+      break;
+    }
+  };
+  // The text control that has the focus, if one has.
+  const auto focusedTextControl = [&]() -> solar::dom::Element* {
+    solar::dom::Element* focused = document ? document->focusedElement : nullptr;
+    if (!focused) return nullptr;
+    if (focused->IsHtml("textarea")) return focused;
+    if (!focused->IsHtml("input")) return nullptr;
+    const solar::dom::Attr* type = focused->FindAttribute("", "type");
+    std::string t = type ? type->value : "";
+    for (char& c : t) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    static const char* const kText[] = {"", "text", "search", "tel", "url", "email", "password", "number"};
+    for (const char* k : kText) if (t == k) return focused;
+    return nullptr;
   };
   // What is under the pointer is what is hovered.
   double pointerX = 0, pointerY = 0;
@@ -685,6 +731,19 @@ int main(int argc, char** argv) {
     }
     return 0L;
   };
+  // (SOLAR_GUI_SCRIPT="c:x,y;t:text;k:backspace;k:enter": what a user would do, one step a frame, before SOLAR_GUI_SHOT takes its picture.)
+  std::vector<std::string> script;
+  if (const char* given = std::getenv("SOLAR_GUI_SCRIPT")) {
+    std::string all = given;
+    for (size_t at = 0; at < all.size();) {
+      size_t end = all.find(';', at);
+      if (end == std::string::npos) end = all.size();
+      script.push_back(all.substr(at, end - at));
+      at = end + 1;
+    }
+    std::reverse(script.begin(), script.end());
+  }
+  int scriptQuiet = 0;
   int wheelLeft = std::getenv("SOLAR_GUI_WHEEL") ? std::atoi(std::getenv("SOLAR_GUI_WHEEL")) : 0;
   Clock::time_point lastWheel = Clock::now(), wheelDone;
   const bool scrollTest = autoScroll > 0;
@@ -704,9 +763,47 @@ int main(int argc, char** argv) {
           dirty = true;
           break;
         case SDL_EVENT_MOUSE_WHEEL: scrollBy(-event.wheel.x * 60, -event.wheel.y * 60); break;
+        case SDL_EVENT_TEXT_INPUT: {
+          if (solar::dom::Element* field = focusedTextControl()) {
+            solar::html::RunInRealm(*realm, [&] { solar::html::TypeInto(document, field, event.text.text, "text"); });
+            dirty = true;
+          }
+          break;
+        }
         case SDL_EVENT_KEY_DOWN: {
           int w = 0, h = 0;
           SDL_GetWindowSize(window, &w, &h);
+          if (solar::dom::Element* field = focusedTextControl()) {
+            const char* kind = nullptr;
+            switch (event.key.key) {
+              case SDLK_BACKSPACE: kind = "backspace"; break;
+              case SDLK_DELETE: kind = "delete"; break;
+              case SDLK_LEFT: kind = "left"; break;
+              case SDLK_RIGHT: kind = "right"; break;
+              case SDLK_HOME: kind = "home"; break;
+              case SDLK_END: kind = "end"; break;
+              case SDLK_RETURN: case SDLK_KP_ENTER: kind = "enter"; break;
+              default: break;
+            }
+            if (kind) {
+              solar::html::RunInRealm(*realm, [&] { solar::html::TypeInto(document, field, "", kind); });
+              dirty = true;
+              break;
+            }
+            if (event.key.key != SDLK_ESCAPE && event.key.key != SDLK_PAGEDOWN && event.key.key != SDLK_PAGEUP) break;
+          } else if (solar::dom::Element* focused = document ? document->focusedElement : nullptr;
+                     focused && (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER || event.key.key == SDLK_SPACE) &&
+                     (focused->IsHtml("button") || focused->IsHtml("input") || focused->IsHtml("a") || focused->IsHtml("summary") || focused->IsHtml("select"))) {
+            // Enter presses a link, a button or a box; space the last two.
+            if (focused->IsHtml("a") && event.key.key == SDLK_SPACE) {}
+            else {
+              bool follow = true;
+              solar::html::RunInRealm(*realm, [&] { follow = solar::html::DispatchClick(document, focused, 0, 0, 0); });
+              if (follow) followLink(focused);
+              dirty = true;
+              break;
+            }
+          }
           switch (event.key.key) {
             case SDLK_ESCAPE: running = false; break;
             case SDLK_DOWN: scrollBy(0, 60); break;
@@ -765,7 +862,47 @@ int main(int argc, char** argv) {
             break;
           }
           if (hoverStale) updateHover();
-          if (event.button.button == SDL_BUTTON_LEFT && document->hoverElement) solar::dom::SetPressedElement(document, document->hoverElement);
+          pointerX = event.button.x;
+          pointerY = event.button.y;
+          pointerKnown = true;
+          updateHover();
+          pressTarget = document->hoverElement;
+          pressButton = event.button.button == SDL_BUTTON_LEFT ? 0 : event.button.button == SDL_BUTTON_MIDDLE ? 1 : 2;
+          if (pressTarget) {
+            bool proceed = true;
+            solar::html::RunInRealm(*realm, [&] { proceed = solar::html::DispatchPointer(document, pressTarget, "mousedown", event.button.x, event.button.y, pressButton, 1 << pressButton); });
+            // (A script may have taken the element away.)
+            if (proceed && event.button.button == SDL_BUTTON_LEFT && document->hoverElement) solar::dom::SetPressedElement(document, document->hoverElement);
+            // A press in a text field puts the caret between the letters nearest to it.
+            if (proceed && event.button.button == SDL_BUTTON_LEFT && pressTarget == focusedTextControl() && pressTarget) {
+              solar::layout::Tree* tree = currentTree();
+              const auto boxes = tree ? tree->boxesOf.find(pressTarget) : decltype(tree->boxesOf.end()){};
+              if (tree && boxes != tree->boxesOf.end() && !boxes->second.empty() && !pressTarget->IsHtml("textarea")) {
+                const solar::layout::Box& box = *boxes->second.front();
+                solar::html::ControlView view;
+                const auto face = solar::layout::FaceOf(realm->GetContext(), *tree, box);
+                bool read = false;
+                solar::html::RunInRealm(*realm, [&] { read = solar::html::ReadControl(pressTarget, view); });
+                if (read && face) {
+                  const solar::layout::Rect where = solar::layout::AbsoluteBorderBox(box);
+                  const double left = where.x - tree->scroll[document].first + box.ContentLeft();
+                  const double want = event.button.x - left;
+                  size_t units = 0, best = 0;
+                  double bestDistance = std::fabs(want), pen = 0;
+                  for (size_t i = 0; i < view.value.size();) {
+                    const unsigned char c = static_cast<unsigned char>(view.value[i]);
+                    const size_t length = c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
+                    i += length;
+                    units += length == 4 ? 2 : 1;
+                    pen = face->Measure(view.value.substr(0, i)) * box.style->fontSize;
+                    if (std::fabs(want - pen) < bestDistance) { bestDistance = std::fabs(want - pen); best = units; }
+                  }
+                  solar::html::RunInRealm(*realm, [&] { solar::html::SetCaret(document, pressTarget, best, best); });
+                }
+              }
+            }
+            dirty = true;
+          }
           break;
         }
         case SDL_EVENT_MOUSE_BUTTON_UP: {
@@ -776,23 +913,31 @@ int main(int argc, char** argv) {
           }
           solar::dom::Element* pressed = document->pressedElement;
           solar::dom::SetPressedElement(document, nullptr);
-          if (event.button.button == SDL_BUTTON_LEFT && pressed) {
-            // A link: the address it has, against the page's.
-            for (solar::dom::Node* n = pressed; n; n = n->parentNode) {
-              if (!n->IsElement()) continue;
-              solar::dom::Element* element = static_cast<solar::dom::Element*>(n);
-              if (!element->IsHtml("a")) continue;
-              if (const solar::dom::Attr* href = element->FindAttribute("", "href")) {
-                std::optional<solar::url::Url> base = solar::url::Parse(address);
-                std::optional<solar::url::Url> target = base ? solar::url::Parse(href->value, &*base) : solar::url::Parse(href->value);
-                if (target && (target->scheme == "http" || target->scheme == "https" || target->scheme == "file")) {
-                  const std::string next = solar::url::Serialize(*target);
-                  navigate(next);
-                }
-              }
-              break;
+          // The release goes to what is under the pointer; a click is the press and the release on the same element (or one inside the other).
+          pointerX = event.button.x;
+          pointerY = event.button.y;
+          pointerKnown = true;
+          updateHover();
+          solar::dom::Element* released = document->hoverElement;
+          solar::dom::Element* clicked = nullptr;
+          if (pressTarget && released) {
+            if (pressTarget == released) clicked = released;
+            else {
+              for (solar::dom::Node* n = released; n && !clicked; n = n->parentNode) if (n == pressTarget) clicked = pressTarget;
+              for (solar::dom::Node* n = pressTarget; n && !clicked; n = n->parentNode) if (n == released) clicked = released;
             }
           }
+          pressTarget = nullptr;
+          bool follow = true;
+          if (released) {
+            solar::html::RunInRealm(*realm, [&] {
+              solar::html::DispatchPointer(document, released, "mouseup", event.button.x, event.button.y, pressButton, 0);
+              if (clicked) follow = solar::html::DispatchClick(document, clicked, event.button.x, event.button.y, pressButton);
+            });
+            dirty = true;
+          }
+          if (event.button.button == SDL_BUTTON_LEFT && clicked && follow) followLink(clicked);
+          (void)pressed;
           break;
         }
         default: break;
@@ -804,6 +949,45 @@ int main(int argc, char** argv) {
       tourLast = Clock::now();
       if (tourAt < tour.size()) navigate(AddressOf(tour[tourAt++]));
       else running = false;
+    }
+    if (!script.empty() && Clock::now() - programStart > std::chrono::milliseconds(400)) {
+      const std::string step = script.back();
+      script.pop_back();
+      scriptQuiet = 0;
+      SDL_Event e{};
+      if (step.rfind("c:", 0) == 0 || step.rfind("m:", 0) == 0) {
+        float x = 0, y = 0;
+        std::sscanf(step.c_str() + 2, "%f,%f", &x, &y);
+        e.type = SDL_EVENT_MOUSE_MOTION;
+        e.motion.x = x;
+        e.motion.y = y;
+        SDL_PushEvent(&e);
+        if (step[0] == 'c') {
+          SDL_Event down{};
+          down.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+          down.button.button = SDL_BUTTON_LEFT;
+          down.button.x = x;
+          down.button.y = y;
+          SDL_PushEvent(&down);
+          SDL_Event up = down;
+          up.type = SDL_EVENT_MOUSE_BUTTON_UP;
+          SDL_PushEvent(&up);
+        }
+      } else if (step.rfind("t:", 0) == 0) {
+        e.type = SDL_EVENT_TEXT_INPUT;
+        static std::string typed;
+        typed = step.substr(2);
+        e.text.text = typed.c_str();
+        SDL_PushEvent(&e);
+      } else if (step.rfind("k:", 0) == 0) {
+        e.type = SDL_EVENT_KEY_DOWN;
+        const std::string name = step.substr(2);
+        e.key.key = name == "backspace" ? SDLK_BACKSPACE : name == "enter" ? SDLK_RETURN : name == "left" ? SDLK_LEFT : name == "right" ? SDLK_RIGHT : name == "delete" ? SDLK_DELETE : name == "home" ? SDLK_HOME : name == "end" ? SDLK_END : name == "space" ? SDLK_SPACE : SDLK_UNKNOWN;
+        SDL_PushEvent(&e);
+      }
+      dirty = true;
+    } else if (script.empty()) {
+      if (++scriptQuiet == 6) dirty = true;
     }
     // (SOLAR_GUI_WHEEL=n: n wheel steps, one every 16 ms, for looking at how scrolling goes.)
     if (wheelLeft > 0 && Clock::now() - programStart > std::chrono::milliseconds(7000) && Clock::now() - lastWheel > std::chrono::milliseconds(16)) {
@@ -832,6 +1016,11 @@ int main(int argc, char** argv) {
     events.Step(std::chrono::milliseconds(4));
     stepMs = std::chrono::duration<double, std::milli>(Clock::now() - s0).count();
     if (timing && solar::dom::DocumentVersion() != beforeStep) std::fprintf(stderr, "step changed the document by %llu\n", (unsigned long long)(solar::dom::DocumentVersion() - beforeStep));
+    if (browser.requested_) {
+      const Browser::Requested request = std::move(*browser.requested_);
+      browser.requested_.reset();
+      navigate(request.url, request.method, request.body, request.type);
+    }
     settleNavigation();
     // (SOLAR_GUI_SCROLL=n: the page is scrolled n times, a step each frame, for timing it.)
     if (autoScroll > 0 && !dirty && Clock::now() - programStart > std::chrono::milliseconds(std::getenv("SOLAR_GUI_SCROLL_AFTER") ? std::atoi(std::getenv("SOLAR_GUI_SCROLL_AFTER")) : 2500)) {
@@ -928,7 +1117,7 @@ int main(int argc, char** argv) {
     // SOLAR_GUI_SHOT=file.png: the first frame is written to a file, and the program ends (for looking at what it paints without a screen).
     // (SOLAR_GUI_SETTLE=ms: not before the pictures had that long to come.)
     const char* settle = std::getenv("SOLAR_GUI_SETTLE");
-    if (autoScroll > 0) {
+    if (autoScroll > 0 || (std::getenv("SOLAR_GUI_SCRIPT") && (!script.empty() || scriptQuiet < 6))) {
     } else if (const char* shot = settle && Clock::now() - programStart < std::chrono::milliseconds(std::atoi(settle)) ? nullptr : std::getenv("SOLAR_GUI_SHOT")) {
       SkDynamicMemoryWStream out;
       if (SkPngEncoder::Encode(&out, pixmap, SkPngEncoder::Options())) {

@@ -22,6 +22,8 @@ void InstallLayoutNatives(Quanta::Context& ctx);
 namespace solar::html {
 
 namespace qe = Quanta::Embed;
+
+const char* FormScript();  // JsForms.cpp
 using Quanta::Context;
 using Quanta::DOMObject;
 using Quanta::Heap;
@@ -503,6 +505,29 @@ Value SetHelper(Context& ctx, Value, qe::Args args, Value) {
   return qe::Undefined();
 }
 
+// __solarFormChanged(element): what a form control shows changed (its value, whether it is checked): the page has to be drawn again.
+Value FormChanged(Context& ctx, Value, qe::Args args, Value) {
+  if (!args.empty()) {
+    if (dom::Element* element = dom::ThisElement(ctx, args[0]); element && element->nodeDocument) {
+      element->nodeDocument->NoteWrite();
+      dom::NoteTreeChange();
+    }
+  }
+  return qe::Undefined();
+}
+
+// __solarNavigate(url, replace) and __solarSubmitPost(url, body, type): the window goes to another document.
+Value NavigateTo(Context& ctx, Value, qe::Args args, Value) {
+  dom::Document* document = dom::AssociatedDocument(ctx);
+  if (document && !args.empty()) RequestNavigation(document, qe::ToWtf8(ctx, args[0]), args.size() > 1 && qe::ToBoolean(args[1]));
+  return qe::Undefined();
+}
+Value SubmitPost(Context& ctx, Value, qe::Args args, Value) {
+  dom::Document* document = dom::AssociatedDocument(ctx);
+  if (document && args.size() >= 3) RequestNavigation(document, qe::ToWtf8(ctx, args[0]), false, "POST", qe::ToWtf8(ctx, args[1]), qe::ToWtf8(ctx, args[2]));
+  return qe::Undefined();
+}
+
 // __solarSetDocumentUrl(url): where a fragment navigation moves the page's address.
 Value SetDocumentUrl(Context& ctx, Value, qe::Args args, Value) {
   dom::Document* document = dom::AssociatedDocument(ctx);
@@ -562,6 +587,9 @@ void Install(Host& host) {
   qe::DefineGlobalFunction(ctx, "__solarSetWindow", SetWindowTarget, 1);
   qe::DefineGlobalFunction(ctx, "__solarSetDocumentUrl", SetDocumentUrl, 1);
   qe::DefineGlobalFunction(ctx, "__solarSetHelper", SetHelper, 2);
+  qe::DefineGlobalFunction(ctx, "__solarFormChanged", FormChanged, 1);
+  qe::DefineGlobalFunction(ctx, "__solarNavigate", NavigateTo, 2);
+  qe::DefineGlobalFunction(ctx, "__solarSubmitPost", SubmitPost, 3);
 
   qe::DefineStaticMethod(qe::Get(ctx, qe::FromObject(dom::InterfacePrototype(ctx, dom::Interface::Document)), "constructor").as_object(), "parseHTMLUnsafe", ParseHtmlUnsafe, 1);
   Value rangePrototype = qe::Get(ctx, qe::Get(ctx, qe::FromObject(ctx.get_global_object()), "Range"), "prototype");
@@ -743,6 +771,7 @@ const char* const kWindowScript = R"JS(
   __solarSetWindow(target);
   const getDocument = __solarDocument;
   const setDocumentUrl = __solarSetDocumentUrl;
+  const navigateTo = __solarNavigate;
   Object.defineProperty(globalThis, "__solarMoveUrl", { value: setDocumentUrl, configurable: true });
   const setHelper = __solarSetHelper;
   const parentWindow = __solarParent;
@@ -836,14 +865,16 @@ const char* const kWindowScript = R"JS(
   delete globalThis.__solarSetWindow;
   delete globalThis.__solarDocument;
   delete globalThis.__solarSetDocumentUrl;
-  // window.location: the address of the document, as the parts of a URL. Going to another document is not
-  // something a page can do yet, so only the fragment can change.
+  delete globalThis.__solarNavigate;
+  // window.location: the address of the document, as the parts of a URL. Going to another document is asked of the program.
   const url = () => new URL(getDocument().URL);
-  const fragmentOnly = (next) => {
+  const fragmentOnly = (next, replace) => {
     const current = url();
-    const target = new URL(next, current);
+    let target;
+    try { target = new URL(next, current); } catch (e) { throw new DOMException("Failed to parse the URL '" + next + "'", "SyntaxError"); }
     const withoutHash = (u) => { const copy = new URL(u.href); copy.hash = ""; return copy.href; };
-    if (withoutHash(current) === withoutHash(target)) setDocumentUrl(target.href);
+    if (withoutHash(current) === withoutHash(target) && target.hash !== "") setDocumentUrl(target.href);
+    else if (/^(https?|file):$/.test(target.protocol)) navigateTo(target.href, !!replace);
   };
   const location = {};
   for (const name of ["origin", "protocol", "host", "hostname", "port", "pathname", "search"]) {
@@ -852,9 +883,9 @@ const char* const kWindowScript = R"JS(
   Object.defineProperty(location, "href", { get() { return url().href; }, set(value) { fragmentOnly(String(value)); }, enumerable: true, configurable: false });
   Object.defineProperty(location, "hash", { get() { return url().hash; }, set(value) { const next = url(); next.hash = value; setDocumentUrl(next.href); }, enumerable: true, configurable: false });
   for (const name of ["assign", "replace"]) {
-    Object.defineProperty(location, name, { value: function (next) { fragmentOnly(String(next)); }, writable: false, enumerable: true, configurable: false });
+    Object.defineProperty(location, name, { value: function (next) { fragmentOnly(String(next), name === "replace"); }, writable: false, enumerable: true, configurable: false });
   }
-  Object.defineProperty(location, "reload", { value: function () {}, writable: false, enumerable: true, configurable: false });
+  Object.defineProperty(location, "reload", { value: function () { navigateTo(url().href, true); }, writable: false, enumerable: true, configurable: false });
   Object.defineProperty(location, "toString", { value: function () { return url().href; }, writable: false, enumerable: true, configurable: false });
   Object.defineProperty(globalThis, "location", { get() { return location; }, set(value) { fragmentOnly(String(value)); }, enumerable: true, configurable: false });
   Object.defineProperty(Document.prototype, "location", { get() { return this === getDocument() ? location : null; }, set(value) { if (this === getDocument()) fragmentOnly(String(value)); }, enumerable: true, configurable: true });
@@ -1122,7 +1153,6 @@ const char* const kEventHandlerScript = R"JS(
     try { handler = new Function("event", value); } catch (e) { return; }
     target[name] = handler;
   });
-  delete globalThis.__solarSetHelper;
 })();
 )JS";
 
@@ -1241,6 +1271,7 @@ void InstallWindowOn(Host& host, dom::Document* document, Quanta::Embed::Realm* 
   host.Evaluate(kWindowScript, "window.js");
   host.Evaluate(kEventHandlerScript, "handlers.js");
   { const auto platform = host.Evaluate(kPlatformScript, "platform.js"); if (!platform.ok) std::fprintf(stderr, "platform.js: %s\n", platform.error.c_str()); }
+  { const auto forms = host.Evaluate(FormScript(), "forms.js"); if (!forms.ok) std::fprintf(stderr, "forms.js: %s\n", forms.error.c_str()); }
   std::string xhr;
   for (const char* const* piece = web::kScriptXhr; *piece; ++piece) xhr += *piece;
   const auto xhrResult = host.Evaluate(xhr, "xhr.js");

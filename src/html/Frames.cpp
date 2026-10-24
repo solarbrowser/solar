@@ -612,6 +612,10 @@ void RunFrameLoad(dom::Element* iframe, uint64_t load) {
 
 }  // namespace
 
+void RequestNavigation(dom::Document* document, const std::string& url, bool replace, const std::string& method, const std::string& body, const std::string& contentType) {
+  if (g_environment && document && !document->frameElement) g_environment->Navigate(document, url, replace, method, body, contentType);
+}
+
 void SetFrameEnvironment(FrameEnvironment* environment) {
   g_environment = environment;
   dom::SetDocumentBaseUriProvider(&DocumentBaseUrl);
