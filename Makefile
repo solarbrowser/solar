@@ -29,6 +29,19 @@ HTML_OBJECTS = $(HTML_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
 DOM_SOURCES = $(wildcard src/dom/*.cpp)
 DOM_OBJECTS = $(DOM_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
 
+# Painting: the display list of a document, and (with Skia and SDL3, for solar-gui) its drawing in a window.
+PAINT_SOURCES = src/paint/Color.cpp src/paint/Paint.cpp
+PAINT_OBJECTS = $(PAINT_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
+SKIA_DIR = third_party/skia
+SKIA_OUT = $(SKIA_DIR)/out/Static
+SKIA_CFLAGS = -I$(SKIA_DIR) -DSK_RELEASE
+# (Skia's own static libraries, in one group: they refer to each other)
+SKIA_LIBS = -Wl,--start-group $(SKIA_OUT)/libskia.a $(SKIA_OUT)/libraw_ptr.a $(SKIA_OUT)/liballocator_core.a $(SKIA_OUT)/liballocator_base.a \
+            $(SKIA_OUT)/libfreetype2.a $(SKIA_OUT)/libpng.a $(SKIA_OUT)/libjpeg.a $(SKIA_OUT)/libwebp.a $(SKIA_OUT)/libwebp_sse41.a \
+            $(SKIA_OUT)/libzlib.a $(SKIA_OUT)/libexpat.a $(SKIA_OUT)/libskcms.a $(SKIA_OUT)/libwuffs.a -Wl,--end-group
+SDL_CFLAGS = $(shell pkg-config --cflags sdl3 2>/dev/null)
+SDL_LIBS = $(shell pkg-config --libs sdl3 2>/dev/null)
+
 UNAME := $(shell uname -s)
 ifeq ($(UNAME),Linux)
 PLATFORM = linux
@@ -126,7 +139,7 @@ PSL_URL = https://publicsuffix.org/list/public_suffix_list.dat
 PSL_FILE = $(BUILD_DIR)/psl/public_suffix_list.dat
 
 .DEFAULT_GOAL := all
-.PHONY: all test test-gc asan-test idna-tables public-suffix-tables html-tables clean quanta
+.PHONY: all solar-gui test test-gc asan-test idna-tables public-suffix-tables html-tables clean quanta
 
 all: solar
 
@@ -138,6 +151,13 @@ $(QUANTA_LIBS): | quanta
 solar: $(OBJ_DIR)/src/main.o $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS)
+
+# A page in a window.
+$(OBJ_DIR)/src/paint/SkiaPainter.o $(OBJ_DIR)/src/gui/Main.o: CXXFLAGS += $(SKIA_CFLAGS) $(SDL_CFLAGS)
+
+solar-gui: $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/paint/SkiaPainter.o $(PAINT_OBJECTS) $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
+	@echo "[LINK] $@"
+	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS) $(SKIA_LIBS) $(SDL_LIBS)
 
 $(BUILD_DIR)/UrlTest: $(OBJ_DIR)/tests/UrlTest.o $(URL_OBJECTS)
 	@echo "[LINK] $@"

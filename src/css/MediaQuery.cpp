@@ -360,10 +360,13 @@ std::optional<Tri> Condition(const ComponentValues& values, const MediaEnvironme
 
 }  // namespace
 
-const MediaEnvironment& CurrentMediaEnvironment() {
-  static const MediaEnvironment environment;
-  return environment;
+namespace {
+MediaEnvironment g_environment;
 }
+
+const MediaEnvironment& CurrentMediaEnvironment() { return g_environment; }
+
+void SetCurrentMediaEnvironment(const MediaEnvironment& environment) { g_environment = environment; }
 
 static bool MediaQueryMatchesUncached(const std::string& query, const MediaEnvironment& e);
 

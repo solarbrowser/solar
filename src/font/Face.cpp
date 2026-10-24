@@ -288,10 +288,19 @@ double Face::Measure(std::string_view text, const ShapeOptions& options) const {
   return width;
 }
 
+std::string_view Face::FileData() const {
+  unsigned length = 0;
+  const char* data = hb_blob_get_data(impl_->blob, &length);
+  return std::string_view(data ? data : "", length);
+}
+
+unsigned Face::Index() const { return hb_face_get_index(impl_->face); }
+
 std::shared_ptr<Face> Face::WithVariations(const std::vector<Axis>& axes) const {
   if (!description_.variable || axes.empty()) return std::const_pointer_cast<Face>(shared_from_this());
   std::shared_ptr<Face> result(new Face());
   result->parent_ = shared_from_this();
+  result->variations_ = axes;
   result->description_ = description_;
   result->impl_ = std::make_unique<Impl>();
   Impl& impl = *result->impl_;

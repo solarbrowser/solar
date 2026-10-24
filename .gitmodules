@@ -1,3 +1,8 @@
 [submodule "third_party/quanta"]
 	path = third_party/quanta
 	url = https://github.com/solarbrowser/quanta
+[submodule "third_party/skia"]
+	path = third_party/skia
+	url = https://github.com/google/skia
+	branch = chrome/m157
+	shallow = true

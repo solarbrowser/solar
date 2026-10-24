@@ -21,6 +21,8 @@ struct MediaEnvironment {
 };
 
 const MediaEnvironment& CurrentMediaEnvironment();
+// The window the pages are in: its size (and the pixels it has for each CSS pixel). What depends on it is worked out again when it changes.
+void SetCurrentMediaEnvironment(const MediaEnvironment& environment);
 // The environment of a document: the viewport of a document in a frame is the frame's size.
 MediaEnvironment EnvironmentFor(const dom::Document* document);
 

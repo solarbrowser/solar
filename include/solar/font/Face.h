@@ -94,6 +94,10 @@ class Face : public std::enable_shared_from_this<Face> {
     double value;
   };
   std::shared_ptr<Face> WithVariations(const std::vector<Axis>& axes) const;
+  // The font file itself (for a painter that draws the glyphs with its own rasterizer), which index of it this is, and the values of its axes when it is a variation.
+  std::string_view FileData() const;
+  unsigned Index() const;
+  const std::vector<Axis>& Variations() const { return variations_; }
   // A face of a file on disk (mapped, not copied).
   static std::shared_ptr<Face> OpenFile(const std::string& path, unsigned index = 0);
 
@@ -103,6 +107,7 @@ class Face : public std::enable_shared_from_this<Face> {
   static std::shared_ptr<Face> Finish(std::shared_ptr<Face> face);
   void ReadMetrics();
   std::shared_ptr<const Face> parent_;  // the face a variation is of
+  std::vector<Axis> variations_;
   std::string data_;
   Description description_;
   Metrics metrics_;

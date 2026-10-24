@@ -1288,12 +1288,14 @@ double LayoutInlineContentOnce(LayoutContext& lc, Box& container, double width, 
           tp.face = a.data->runs.empty() ? (set.faces.empty() ? nullptr : set.faces[0]) : a.data->runs[0].face;
           for (const Run& run : a.data->runs) {
             if (run.end <= a.begin || run.begin >= a.end) continue;
+            const size_t first = tp.glyphs.size();
             for (font::Glyph g : run.glyphs) {
               if (g.cluster >= a.begin && g.cluster < a.end) {
                 g.cluster -= static_cast<uint32_t>(a.begin);
                 tp.glyphs.push_back(g);
               }
             }
+            if (tp.glyphs.size() > first) tp.faceRuns.push_back({run.face, first, tp.glyphs.size()});
           }
           double w = p.width;
           if (justifyExtra > 0) {

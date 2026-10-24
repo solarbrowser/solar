@@ -1,0 +1,26 @@
+#pragma once
+
+#include <memory>
+
+#include "solar/paint/DisplayList.h"
+
+class SkCanvas;
+
+namespace solar::paint {
+
+// Runs a display list on a Skia canvas. It keeps what it makes of the fonts (a typeface for each face), so one is made for a page and kept.
+class SkiaPainter {
+ public:
+  SkiaPainter();
+  ~SkiaPainter();
+  SkiaPainter(const SkiaPainter&) = delete;
+  SkiaPainter& operator=(const SkiaPainter&) = delete;
+
+  void Draw(const DisplayList& list, SkCanvas& canvas);
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
+
+}  // namespace solar::paint

@@ -52,6 +52,12 @@ struct TextPiece {
   std::shared_ptr<font::Face> face;
   double fontSize = 16;
   std::vector<font::Glyph> glyphs;  // advances in em, clusters relative to `begin`
+  // The glyphs are of more than one face where the text is (a character the first face does not have is from another): each stretch with its face.
+  struct FaceRun {
+    std::shared_ptr<font::Face> face;
+    size_t begin = 0, end = 0;  // in `glyphs`
+  };
+  std::vector<FaceRun> faceRuns;
 };
 
 // Something placed on a line: text, or the edge of an inline box, or an atomic inline.
