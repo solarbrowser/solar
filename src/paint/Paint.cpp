@@ -20,6 +20,7 @@
 #include "solar/css/Style.h"
 #include "solar/layout/Layout.h"
 #include "solar/paint/Paint.h"
+#include "solar/html/Xml.h"
 
 namespace solar::paint {
 
@@ -740,8 +741,24 @@ class Painter {
   // The picture of an img (and the like): in its content box.
   void PaintImageOf(const Box& box, const RectF& borderBox, const PaintProps& props) {
     if (std::getenv("SOLAR_PAINT_DEBUG") && box.element() && box.element()->IsHtml("img")) std::fprintf(stderr, "paint img box replaced=%d kind=%d url=[%s] size %gx%g\n", box.replaced, (int)box.kind, box.imageUrl.c_str(), box.width, box.height);
-    if (!box.replaced || box.kind != Box::Kind::Block || box.imageUrl.empty()) return;
-    const ImageRef image = ImageFor(box.imageUrl);
+    if (!box.replaced || box.kind != Box::Kind::Block) return;
+    ImageRef image;
+    if (box.imageUrl.empty()) {
+      // An svg in the markup is drawn as the picture of its own source (with the color it is given, for currentColor).
+      dom::Element* svg = box.element();
+      if (!svg || svg->namespaceUri != dom::kSvgNamespace || svg->localName != "svg") return;
+      std::optional<std::string> source = html::SerializeXml(svg, false);
+      if (!source || source->compare(0, 4, "<svg") != 0) return;
+      std::string pseudo;
+      const std::string color = css::ComputedValue(ctx_, svg, "color", pseudo);
+      source->insert(4, " color=\"" + color + "\"");
+      auto data = std::make_shared<ImageData>();
+      data->url = "inline-svg:" + std::to_string(std::hash<std::string>{}(*source));
+      data->bytes = std::make_shared<const std::string>(std::move(*source));
+      image = data;
+    } else {
+      image = ImageFor(box.imageUrl);
+    }
     if (std::getenv("SOLAR_PAINT_DEBUG")) std::fprintf(stderr, "img %s -> %s\n", box.imageUrl.c_str(), image ? "bytes" : "none");
     if (!image) return;
     layout::Edges insets;
