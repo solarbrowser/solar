@@ -434,6 +434,18 @@ void QueueAttributeRecord(Element* element, const std::string& name, const std::
 }
 
 void QueueCharacterDataRecord(Node* node, const std::string& oldValue) {
+  // (The old data is copied for a record only if an observer will have the record: a text that grows by the piece, as the parser makes it, would be copied each time.)
+  bool observed = false;
+  for (Node* n = node; n && !observed; n = n->parentNode) {
+    if (!n->registrations) continue;
+    for (const Registration& registration : *n->registrations) {
+      if (registration.options.characterData && (n == node || registration.options.subtree)) {
+        observed = true;
+        break;
+      }
+    }
+  }
+  if (!observed) return;
   PendingRecord record;
   record.type = "characterData";
   record.target = node;
