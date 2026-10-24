@@ -11,11 +11,14 @@
 #include "include/core/SkColor.h"
 #include "include/core/SkData.h"
 #include "include/core/SkFont.h"
+#include "include/core/SkBlurTypes.h"
+#include "include/core/SkMaskFilter.h"
 #include "include/core/SkFontArguments.h"
 #include "include/core/SkFontMgr.h"
 #include "include/core/SkImage.h"
 #include "include/core/SkStream.h"
 #include "include/core/SkSurface.h"
+#include "include/effects/SkGradient.h"
 #include "include/core/SkM44.h"
 #include "include/core/SkPaint.h"
 #include "include/core/SkPath.h"
@@ -42,6 +45,22 @@ SkRRect ToSk(const RoundedRect& r) {
   out.setRectRadii(rect, radii);
   return out;
 }
+
+// The shape made larger by `d` on every side (smaller where negative): its corners follow.
+SkRRect Outset(const SkRRect& r, float d) {
+  const SkRect rect = r.rect().makeOutset(d, d);
+  if (r.isRect()) return SkRRect::MakeRect(rect);
+  SkVector radii[4];
+  for (int i = 0; i < 4; ++i) {
+    const SkVector v = r.radii(static_cast<SkRRect::Corner>(i));
+    radii[i] = {v.x() > 0 ? std::max(0.0f, v.x() + d) : 0.0f, v.y() > 0 ? std::max(0.0f, v.y() + d) : 0.0f};
+  }
+  SkRRect out;
+  out.setRectRadii(rect, radii);
+  return out;
+}
+
+sk_sp<SkMaskFilter> BlurOf(float blur) { return blur > 0 ? SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, blur / 2) : nullptr; }
 
 }  // namespace
 
@@ -121,6 +140,104 @@ struct SkiaPainter::Impl {
     return slot;
   }
 
+
+  // ---- Gradients ----
+
+  sk_sp<SkShader> GradientShader(const Gradient& g, const SkRect& t) {
+    const float w = t.width(), h = t.height();
+    const float cx = t.left() + g.centerX.Of(w), cy = t.top() + g.centerY.Of(h);
+    // The geometry first: how long the line is that the stops are along (a percent of a turn for a conic one).
+    SkPoint start{0, 0}, end{0, 0};
+    float length = 1, rx = 1, ry = 1;
+    float startAngle = 0;
+    if (g.kind == Gradient::Kind::Linear) {
+      float dx, dy;
+      if (g.toCorner) {
+        const float n = std::hypot(h, w);
+        dx = g.cornerX * h / n;
+        dy = g.cornerY * w / n;
+      } else {
+        const float a = g.angle * static_cast<float>(M_PI) / 180;
+        dx = std::sin(a);
+        dy = -std::cos(a);
+      }
+      length = std::fabs(w * dx) + std::fabs(h * dy);
+      const float mx = t.centerX(), my = t.centerY();
+      start = {mx - dx * length / 2, my - dy * length / 2};
+      end = {mx + dx * length / 2, my + dy * length / 2};
+    } else if (g.kind == Gradient::Kind::Radial) {
+      const float left = cx - t.left(), right = t.right() - cx, top = cy - t.top(), bottom = t.bottom() - cy;
+      const float nearX = std::min(std::fabs(left), std::fabs(right)), farX = std::max(std::fabs(left), std::fabs(right));
+      const float nearY = std::min(std::fabs(top), std::fabs(bottom)), farY = std::max(std::fabs(top), std::fabs(bottom));
+      switch (g.extent) {
+        case Gradient::Extent::Lengths:
+          rx = g.radiusX.Of(w);
+          ry = g.circle ? rx : g.radiusY.Of(h);
+          break;
+        case Gradient::Extent::ClosestSide:
+          if (g.circle) rx = ry = std::min(nearX, nearY); else { rx = nearX; ry = nearY; }
+          break;
+        case Gradient::Extent::FarthestSide:
+          if (g.circle) rx = ry = std::max(farX, farY); else { rx = farX; ry = farY; }
+          break;
+        case Gradient::Extent::ClosestCorner:
+          if (g.circle) rx = ry = std::hypot(nearX, nearY); else { rx = nearX * 1.41421356f; ry = nearY * 1.41421356f; }
+          break;
+        case Gradient::Extent::FarthestCorner:
+          if (g.circle) rx = ry = std::hypot(farX, farY); else { rx = farX * 1.41421356f; ry = farY * 1.41421356f; }
+          break;
+      }
+      rx = std::max(rx, 0.001f);
+      ry = std::max(ry, 0.001f);
+      length = rx;
+    } else {
+      length = 100;  // (positions are percents of the turn)
+      startAngle = g.angle - 90;
+    }
+    // The stops, as fractions of the line: those with no position are spread between the ones around them, and none goes back.
+    const size_t n = g.stops.size();
+    std::vector<float> pos(n, std::nanf(""));
+    for (size_t i = 0; i < n; ++i) {
+      if (g.stops[i].positioned) pos[i] = g.kind == Gradient::Kind::Conic ? g.stops[i].position.percent / 100 : g.stops[i].position.px / length + g.stops[i].position.percent / 100;
+    }
+    if (std::isnan(pos.front())) pos.front() = 0;
+    if (std::isnan(pos.back())) pos.back() = std::max(1.0f, pos[n - 2] == pos[n - 2] ? pos[n - 2] : 1.0f);
+    for (size_t i = 1; i < n; ++i) {
+      if (!std::isnan(pos[i])) continue;
+      size_t j = i;
+      while (std::isnan(pos[j])) ++j;
+      for (size_t k = i; k < j; ++k) pos[k] = pos[i - 1] + (pos[j] - pos[i - 1]) * static_cast<float>(k - i + 1) / static_cast<float>(j - i + 1);
+      i = j;
+    }
+    for (size_t i = 1; i < n; ++i) pos[i] = std::max(pos[i], pos[i - 1]);
+    std::vector<SkColor4f> colors;
+    for (const ColorStop& stop : g.stops) colors.push_back(SkColor4f::FromColor(ToSk(stop.color)));
+    SkGradient::Interpolation interpolation;
+    interpolation.fInPremul = SkGradient::Interpolation::InPremul::kYes;
+    float t0 = 0, t1 = 1;
+    SkTileMode mode = SkTileMode::kClamp;
+    if (g.repeating) {
+      t0 = pos.front();
+      t1 = pos.back();
+      if (t1 - t0 < 1e-5f) return SkShaders::Color(colors.back(), nullptr);
+      for (float& p : pos) p = (p - t0) / (t1 - t0);
+      mode = SkTileMode::kRepeat;
+    }
+    const SkGradient gradient(SkGradient::Colors(colors, pos, mode), interpolation);
+    if (g.kind == Gradient::Kind::Linear) {
+      const SkPoint points[2] = {{start.x() + (end.x() - start.x()) * t0, start.y() + (end.y() - start.y()) * t0}, {start.x() + (end.x() - start.x()) * t1, start.y() + (end.y() - start.y()) * t1}};
+      return SkShaders::LinearGradient(points, gradient);
+    }
+    if (g.kind == Gradient::Kind::Radial) {
+      SkMatrix scale = SkMatrix::Translate(cx, cy);
+      scale.preScale(1, ry / rx);
+      scale.preTranslate(-cx, -cy);
+      if (g.repeating && t0 > 0) return SkShaders::TwoPointConicalGradient({cx, cy}, rx * t0, {cx, cy}, rx * t1, gradient, &scale);
+      return SkShaders::RadialGradient({cx, cy}, rx * t1, gradient, &scale);
+    }
+    return SkShaders::SweepGradient({cx, cy}, startAngle, startAngle + 360, gradient);
+  }
+
   void DrawTile(SkCanvas& canvas, Decoded& decoded, const SkRect& destination, bool pixelated) {
     if (destination.width() <= 0 || destination.height() <= 0) return;
     const float scale = std::max(1.0f, canvas.getLocalToDevice().rc(0, 0));
@@ -131,14 +248,18 @@ struct SkiaPainter::Impl {
   }
 
   void DrawLayer(SkCanvas& canvas, const ImageLayer& layer) {
-    if (!layer.image || !layer.image->bytes) return;
-    Decoded& decoded = DecodedOf(layer.image);
-    if (decoded.failed) return;
+    Decoded* decoded = nullptr;
+    if (layer.image && layer.image->bytes) {
+      decoded = &DecodedOf(layer.image);
+      if (decoded->failed) return;
+    } else if (!layer.gradient) {
+      return;
+    }
     const RectF o = layer.origin;
     if (o.width <= 0 || o.height <= 0) return;
     // How large one picture is.
     float w = 0, h = 0;
-    const float iw = decoded.width, ih = decoded.height, ratio = decoded.ratio;
+    const float iw = decoded ? decoded->width : 0, ih = decoded ? decoded->height : 0, ratio = decoded ? decoded->ratio : 0;
     switch (layer.size) {
       case ImageLayer::Size::Cover:
       case ImageLayer::Size::Contain: {
@@ -164,6 +285,10 @@ struct SkiaPainter::Impl {
         else if (w <= 0) w = ratio > 0 ? h * ratio : o.width;
         else if (h <= 0) h = ratio > 0 ? w / ratio : o.height;
         break;
+    }
+    if (!decoded) {  // (a gradient has no size of its own: it is as large as the area)
+      if (w <= 0) w = o.width;
+      if (h <= 0) h = o.height;
     }
     if (w <= 0 || h <= 0) return;
     // `round` makes the picture fit a whole number of times, `space` spreads the whole ones.
@@ -200,7 +325,15 @@ struct SkiaPainter::Impl {
     else canvas.clipRRect(clip, true);
     for (int j = firstY; j <= lastY; ++j) {
       for (int i = firstX; i <= lastX; ++i) {
-        DrawTile(canvas, decoded, SkRect::MakeXYWH(startX + i * stepX, startY + j * stepY, w, h), layer.pixelated);
+        const SkRect tile = SkRect::MakeXYWH(startX + i * stepX, startY + j * stepY, w, h);
+        if (decoded) {
+          DrawTile(canvas, *decoded, tile, layer.pixelated);
+        } else {
+          SkPaint paint;
+          paint.setAntiAlias(false);
+          paint.setShader(GradientShader(*layer.gradient, tile));
+          canvas.drawRect(tile, paint);
+        }
       }
     }
     canvas.restore();
@@ -331,16 +464,56 @@ void SkiaPainter::Draw(const DisplayList& list, SkCanvas& canvas) {
         run.pos[2 * i + 1] = glyphs->offsets[2 * i + 1];
       }
       sk_sp<SkTextBlob> blob = builder.make();
+      if (!blob) continue;
+      // The first shadow is the top one: they are drawn from the last.
+      for (size_t i = glyphs->shadows.size(); i-- > 0;) {
+        const Shadow& shadow = glyphs->shadows[i];
+        if (shadow.color.Transparent()) continue;
+        SkPaint under;
+        under.setAntiAlias(true);
+        under.setColor(ToSk(shadow.color));
+        under.setMaskFilter(BlurOf(shadow.blur));
+        canvas.drawTextBlob(blob, glyphs->x + shadow.dx, glyphs->y + shadow.dy, under);
+      }
       SkPaint paint;
       paint.setAntiAlias(true);
       paint.setColor(ToSk(glyphs->color));
-      if (blob) canvas.drawTextBlob(blob, glyphs->x, glyphs->y, paint);
+      canvas.drawTextBlob(blob, glyphs->x, glyphs->y, paint);
     } else if (const auto* clip = std::get_if<PushClip>(&item)) {
       canvas.save();
       if (clip->rect.Rounded()) canvas.clipRRect(ToSk(clip->rect), true);
       else canvas.clipRect(SkRect::MakeXYWH(clip->rect.rect.x, clip->rect.rect.y, clip->rect.rect.width, clip->rect.rect.height), true);
     } else if (std::holds_alternative<PopClip>(item) || std::holds_alternative<PopLayer>(item) || std::holds_alternative<PopTransform>(item)) {
       canvas.restore();
+    } else if (const auto* box = std::get_if<DrawBoxShadow>(&item)) {
+      const SkRRect shape = ToSk(box->shape);
+      const Shadow& shadow = box->shadow;
+      SkPaint paint;
+      paint.setAntiAlias(true);
+      paint.setColor(ToSk(shadow.color));
+      paint.setMaskFilter(BlurOf(shadow.blur));
+      canvas.save();
+      if (!shadow.inset) {
+        // Outside the box only: what is under the box is its own.
+        canvas.clipRRect(shape, SkClipOp::kDifference, true);
+        SkRRect cast = Outset(shape, shadow.spread);
+        cast.offset(shadow.dx, shadow.dy);
+        canvas.drawRRect(cast, paint);
+      } else {
+        // Inside only: the ring between a far edge and the box moved and made smaller.
+        canvas.clipRRect(shape, true);
+        SkRRect hole = Outset(shape, -shadow.spread);
+        hole.offset(shadow.dx, shadow.dy);
+        const float reach = shadow.blur * 2 + std::fabs(shadow.dx) + std::fabs(shadow.dy) + std::fabs(shadow.spread) + 16;
+        canvas.drawDRRect(SkRRect::MakeRect(shape.rect().makeOutset(reach, reach)), hole, paint);
+      }
+      canvas.restore();
+    } else if (const auto* outline = std::get_if<DrawOutline>(&item)) {
+      const SkRRect shape = ToSk(outline->shape);
+      SkPaint paint;
+      paint.setAntiAlias(true);
+      paint.setColor(ToSk(outline->color));
+      canvas.drawDRRect(Outset(shape, outline->offset + outline->width), Outset(shape, outline->offset), paint);
     } else if (const auto* layers = std::get_if<DrawImageLayer>(&item)) {
       impl_->DrawLayer(canvas, layers->layer);
     } else if (const auto* image = std::get_if<DrawImage>(&item)) {

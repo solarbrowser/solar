@@ -167,6 +167,163 @@ bool ParseLength(const std::string& given, Length& out) {
   return add(text, 1);
 }
 
+
+// ---- Gradients ----
+
+// An angle in degrees: 90deg, 0.25turn, 1.5rad, 100grad.
+bool ParseAngle(const std::string& text, float& degrees) {
+  char* end = nullptr;
+  const double v = std::strtod(text.c_str(), &end);
+  if (end == text.c_str()) return false;
+  const std::string unit = end;
+  if (unit == "deg" || unit.empty()) degrees = static_cast<float>(v);
+  else if (unit == "grad") degrees = static_cast<float>(v * 0.9);
+  else if (unit == "rad") degrees = static_cast<float>(v * 180 / M_PI);
+  else if (unit == "turn") degrees = static_cast<float>(v * 360);
+  else return false;
+  return true;
+}
+
+bool IsColorWord(const std::string& w) {
+  if (w.empty()) return false;
+  const char c = w[0];
+  return w.find('(') != std::string::npos || c == '#' || std::isalpha(static_cast<unsigned char>(c));
+}
+
+// The gradient a computed value of an image is (linear-, radial- and conic-gradient, and their repeating forms); null if it is not one.
+GradientRef ParseGradient(const std::string& given) {
+  const std::string text = Trim(given);
+  const size_t open = text.find('(');
+  if (open == std::string::npos || text.back() != ')') return nullptr;
+  std::string name = text.substr(0, open);
+  auto g = std::make_shared<Gradient>();
+  if (name.rfind("repeating-", 0) == 0) {
+    g->repeating = true;
+    name = name.substr(10);
+  }
+  if (name == "-webkit-linear-gradient") name = "linear-gradient";
+  if (name == "linear-gradient") g->kind = Gradient::Kind::Linear;
+  else if (name == "radial-gradient") g->kind = Gradient::Kind::Radial;
+  else if (name == "conic-gradient") g->kind = Gradient::Kind::Conic;
+  else return nullptr;
+  std::vector<std::string> args = SplitList(text.substr(open + 1, text.size() - open - 2), ',');
+  size_t first = 0;
+  // The first argument, when it is not a color stop, says where it goes.
+  if (!args.empty()) {
+    const std::vector<std::string> words = SplitWords(args[0]);
+    bool config = false;
+    if (g->kind == Gradient::Kind::Linear) {
+      float angle = 0;
+      if (!words.empty() && words[0] == "to") {
+        config = true;
+        g->toCorner = true;
+        for (size_t i = 1; i < words.size(); ++i) {
+          if (words[i] == "right") g->cornerX = 1;
+          else if (words[i] == "left") g->cornerX = -1;
+          else if (words[i] == "bottom") g->cornerY = 1;
+          else if (words[i] == "top") g->cornerY = -1;
+        }
+        if (g->cornerX == 0 || g->cornerY == 0) {
+          // A side: the angle of it.
+          g->toCorner = false;
+          g->angle = g->cornerY == -1 ? 0 : g->cornerY == 1 ? 180 : g->cornerX == 1 ? 90 : 270;
+        }
+      } else if (words.size() == 1 && ParseAngle(words[0], angle)) {
+        config = true;
+        g->angle = angle;
+      }
+    } else if (g->kind == Gradient::Kind::Radial) {
+      for (const std::string& w : words) {
+        if (w == "circle" || w == "ellipse" || w == "closest-side" || w == "farthest-side" || w == "closest-corner" || w == "farthest-corner" || w == "at") config = true;
+      }
+      if (!config && !words.empty() && (std::isdigit(static_cast<unsigned char>(words[0][0])) || words[0][0] == '.')) config = true;
+      if (config) {
+        size_t i = 0;
+        std::vector<Length> lengths;
+        for (; i < words.size() && words[i] != "at"; ++i) {
+          const std::string& w = words[i];
+          if (w == "circle") g->circle = true;
+          else if (w == "ellipse") g->circle = false;
+          else if (w == "closest-side") g->extent = Gradient::Extent::ClosestSide;
+          else if (w == "farthest-side") g->extent = Gradient::Extent::FarthestSide;
+          else if (w == "closest-corner") g->extent = Gradient::Extent::ClosestCorner;
+          else if (w == "farthest-corner") g->extent = Gradient::Extent::FarthestCorner;
+          else {
+            Length l;
+            if (ParseLength(w, l)) lengths.push_back(l);
+          }
+        }
+        if (!lengths.empty()) {
+          g->extent = Gradient::Extent::Lengths;
+          g->radiusX = lengths[0];
+          g->radiusY = lengths.size() > 1 ? lengths[1] : lengths[0];
+          if (lengths.size() == 1) g->circle = true;
+        }
+        if (i < words.size() && words[i] == "at") {
+          std::vector<std::string> position(words.begin() + static_cast<std::ptrdiff_t>(i) + 1, words.end());
+          if (position.size() == 1) position.push_back("50%");
+          const auto keyword = [](const std::string& w) { return w == "left" || w == "top" ? "0%" : w == "right" || w == "bottom" ? "100%" : w == "center" ? "50%" : w.c_str(); };
+          if (position.size() >= 2) {
+            ParseLength(keyword(position[0]), g->centerX);
+            ParseLength(keyword(position[1]), g->centerY);
+          }
+        }
+      }
+    } else {
+      // conic: from <angle> at <position>
+      for (size_t i = 0; i < words.size(); ++i) {
+        if (words[i] == "from" || words[i] == "at") config = true;
+      }
+      if (config) {
+        for (size_t i = 0; i < words.size(); ++i) {
+          if (words[i] == "from" && i + 1 < words.size()) ParseAngle(words[i + 1], g->angle);
+          if (words[i] == "at" && i + 1 < words.size()) {
+            std::vector<std::string> position(words.begin() + static_cast<std::ptrdiff_t>(i) + 1, words.end());
+            if (position.size() == 1) position.push_back("50%");
+            const auto keyword = [](const std::string& w) { return w == "left" || w == "top" ? "0%" : w == "right" || w == "bottom" ? "100%" : w == "center" ? "50%" : w.c_str(); };
+            ParseLength(keyword(position[0]), g->centerX);
+            ParseLength(keyword(position[1]), g->centerY);
+            break;
+          }
+        }
+        if (g->kind == Gradient::Kind::Conic && words[0] != "from" && words[0] != "at") config = false;
+      }
+      if (g->kind == Gradient::Kind::Conic && !config) g->angle = 0;
+    }
+    if (config) first = 1;
+    else if (g->kind == Gradient::Kind::Conic) g->angle = 0;
+  }
+  // The color stops: a color and one or two positions. (A position alone is an interpolation hint, which is not kept.)
+  for (size_t i = first; i < args.size(); ++i) {
+    const std::vector<std::string> words = SplitWords(args[i]);
+    if (words.empty()) continue;
+    size_t colorAt = IsColorWord(words[0]) ? 0 : words.size() - 1;
+    if (!IsColorWord(words[colorAt])) continue;
+    ColorStop stop;
+    stop.color = ParseColor(words[colorAt]);
+    std::vector<std::string> positions;
+    for (size_t k = 0; k < words.size(); ++k) {
+      if (k != colorAt) positions.push_back(words[k]);
+    }
+    for (const std::string& p : positions) {
+      ColorStop copy = stop;
+      float angle = 0;
+      Length l;
+      if (g->kind == Gradient::Kind::Conic && ParseAngle(p, angle) && p.find('%') == std::string::npos) {
+        copy.position = Length{0, angle / 3.6f, false};
+        copy.positioned = true;
+      } else if (ParseLength(p, l)) {
+        copy.position = l;
+        copy.positioned = true;
+      }
+      g->stops.push_back(copy);
+    }
+    if (positions.empty()) g->stops.push_back(stop);
+  }
+  if (g->stops.size() < 2) return nullptr;
+  return g;
+}
+
 // The address in a url("...") (or url(...)); empty if it is not one.
 std::string UrlOf(const std::string& item) {
   const std::string t = Trim(item);
@@ -190,6 +347,39 @@ Repeat RepeatOf(const std::string& word) {
   return Repeat::Repeat;
 }
 
+// The shadows of a computed box-shadow or text-shadow: each is a color, two to four lengths and perhaps `inset`, the first drawn on top.
+std::vector<Shadow> ParseShadows(const std::string& text) {
+  std::vector<Shadow> out;
+  const std::string t = Trim(text);
+  if (t.empty() || t == "none") return out;
+  for (const std::string& item : SplitList(t, ',')) {
+    Shadow shadow;
+    std::vector<float> numbers;
+    bool colored = false;
+    for (const std::string& word : SplitWords(item)) {
+      if (word == "inset") {
+        shadow.inset = true;
+        continue;
+      }
+      const char c = word.empty() ? 0 : word[0];
+      if (std::isdigit(static_cast<unsigned char>(c)) || c == '-' || c == '+' || c == '.') {
+        numbers.push_back(static_cast<float>(std::atof(word.c_str())));
+      } else {
+        shadow.color = ParseColor(word);
+        colored = true;
+      }
+    }
+    if (numbers.size() < 2) continue;
+    (void)colored;
+    shadow.dx = numbers[0];
+    shadow.dy = numbers[1];
+    if (numbers.size() > 2) shadow.blur = std::max(0.0f, numbers[2]);
+    if (numbers.size() > 3) shadow.spread = numbers[3];
+    out.push_back(shadow);
+  }
+  return out;
+}
+
 LineStyle LineStyleOf(layout::BorderStyle s) {
   switch (s) {
     case layout::BorderStyle::None: return LineStyle::None;
@@ -210,6 +400,10 @@ struct PaintProps {
   Color borderColors[4];
   double radii[8] = {0, 0, 0, 0, 0, 0, 0, 0};  // top left, top right, bottom right, bottom left: x then y
   bool hasRadius = false;
+  std::vector<Shadow> boxShadows;
+  LineStyle outlineStyle = LineStyle::None;
+  double outlineWidth = 0, outlineOffset = 0;
+  Color outlineColor;
 };
 
 struct Decoration {
@@ -313,6 +507,14 @@ class Painter {
           if (rx > 0 || ry > 0) props.hasRadius = true;
         }
       }
+      props.boxShadows = ParseShadows(reader.Get("box-shadow"));
+      const std::string outline = reader.Get("outline-style");
+      if (!outline.empty() && outline != "none" && outline != "hidden") {
+        props.outlineStyle = outline == "dotted" ? LineStyle::Dotted : outline == "dashed" ? LineStyle::Dashed : outline == "double" ? LineStyle::Double : LineStyle::Solid;
+        props.outlineWidth = std::atof(reader.Get("outline-width").c_str());
+        props.outlineOffset = std::atof(reader.Get("outline-offset").c_str());
+        props.outlineColor = ParseColor(reader.Get("outline-color"));
+      }
       if (props.hasRadius) {
         // Radii that would overlap are scaled down together (https://www.w3.org/TR/css-backgrounds-3/#corner-overlap).
         double f = 1;
@@ -368,6 +570,14 @@ class Painter {
     if (borderBox.width <= 0 && borderBox.height <= 0) return;
     const PaintProps& props = PropsOf(box, borderBox);
     const layout::BoxStyle& physical = box.style->Physical();
+    // Outer shadows are under the background; the first one is the top one.
+    for (size_t i = props.boxShadows.size(); i-- > 0;) {
+      if (props.boxShadows[i].inset || props.boxShadows[i].color.Transparent()) continue;
+      DrawBoxShadow item;
+      item.shape = Rounded(box, borderBox, props, 0, nullptr);
+      item.shadow = props.boxShadows[i];
+      list_->items.push_back(std::move(item));
+    }
     if (&box != canvasFrom_) {  // (the background of the root element, or of the body, is the canvas's)
       const Color color = BackgroundOf(box);
       if (!color.Transparent()) {
@@ -381,6 +591,24 @@ class Painter {
       DrawImageLayer item;
       item.layer = std::move(layer);
       list_->items.push_back(std::move(item));
+    }
+    // Inner shadows are over the background, under the border.
+    for (size_t i = props.boxShadows.size(); i-- > 0;) {
+      if (!props.boxShadows[i].inset || props.boxShadows[i].color.Transparent()) continue;
+      layout::Edges noEdges;
+      DrawBoxShadow item;
+      item.shape = Rounded(box, borderBox, props, 0, &noEdges);
+      item.shadow = props.boxShadows[i];
+      list_->items.push_back(std::move(item));
+    }
+    if (props.outlineStyle != LineStyle::None && props.outlineWidth > 0 && !props.outlineColor.Transparent() && leftEdge && rightEdge) {
+      DrawOutline outline;
+      outline.shape = Rounded(box, borderBox, props, 0, nullptr);
+      outline.offset = F(props.outlineOffset);
+      outline.width = F(props.outlineWidth);
+      outline.style = props.outlineStyle;
+      outline.color = props.outlineColor;
+      outlines_.push_back(outline);
     }
     layout::Edges widths = box.border;
     if (!leftEdge) widths.left = 0;
@@ -456,10 +684,14 @@ class Painter {
     const std::string rendering = reader.Get("image-rendering");
     for (size_t k = items.size(); k-- > 0;) {
       const std::string url = UrlOf(items[k]);
-      if (url.empty()) continue;  // (gradients and the like are not yet)
       ImageLayer layer;
-      layer.image = ImageFor(url);
-      if (!layer.image) continue;
+      if (!url.empty()) {
+        layer.image = ImageFor(url);
+        if (!layer.image) continue;
+      } else {
+        layer.gradient = ParseGradient(items[k]);
+        if (!layer.gradient) continue;
+      }
       layer.pixelated = rendering == "pixelated" || rendering == "crisp-edges";
       layout::Edges insets;
       std::string origin = at(origins, k);
@@ -566,6 +798,21 @@ class Painter {
     return out;
   }
 
+  // The text-shadow of a piece of text: that of the element it is in.
+  const std::vector<Shadow>& TextShadowsOf(const Box& text) {
+    auto found = textShadows_.find(&text);
+    if (found != textShadows_.end()) return found->second;
+    std::vector<Shadow> shadows;
+    for (const Box* b = text.parent; b; b = b->parent) {
+      std::string pseudo;
+      if (dom::Element* element = ElementOf(*b, pseudo)) {
+        shadows = ParseShadows(css::ComputedValue(ctx_, element, "text-shadow", pseudo));
+        break;
+      }
+    }
+    return textShadows_.emplace(&text, std::move(shadows)).first->second;
+  }
+
   void PaintText(const Box& container, const LineItem& item, const Rect& origin) {
     const Box* box = item.box;
     if (!box || !box->style || box->style->visibility != layout::Visibility::Visible || !item.text.face) return;
@@ -579,6 +826,7 @@ class Painter {
     const Color color = ParseColor(box->style->color);
     if (!color.Transparent()) {
       // (Each stretch of glyphs is of its own face: the ids are of that font.)
+      const std::vector<Shadow>& shadows = TextShadowsOf(*box);
       std::vector<layout::TextPiece::FaceRun> faces = piece.faceRuns;
       if (faces.empty()) faces.push_back({piece.face, 0, piece.glyphs.size()});
       double pen = 0;
@@ -593,6 +841,7 @@ class Painter {
         run.color = color;
         run.x = F(x);
         run.y = F(baseline);
+        run.shadows = shadows;
         for (size_t i = stretch.begin; i < stretch.end; ++i) {
           const font::Glyph& g = piece.glyphs[i];
           run.glyphs.push_back(g.id);
@@ -823,6 +1072,17 @@ class Painter {
   }
 
   void PaintContext(const Box& root) {
+    const size_t outlinesFrom = outlines_.size();
+    PaintContextContents(root);
+    // Outlines are over everything of the context.
+    if (outlines_.size() > outlinesFrom) {
+      EnsureClipsFor(root);
+      for (size_t i = outlinesFrom; i < outlines_.size(); ++i) list_->items.push_back(outlines_[i]);
+      outlines_.resize(outlinesFrom);
+    }
+  }
+
+  void PaintContextContents(const Box& root) {
     if (root.style && root.style->visibility == layout::Visibility::Visible) {
       EnsureClipsFor(root);
       PaintDecoration(root, layout::AbsoluteBorderBox(root), true, true);
@@ -854,6 +1114,8 @@ class Painter {
   const Box* canvasFrom_ = nullptr;
   std::vector<Frame> frames_;
   std::vector<const Box*> clipStack_;
+  std::vector<DrawOutline> outlines_;
+  std::unordered_map<const Box*, std::vector<Shadow>> textShadows_;
   std::unordered_map<std::string, ImageRef> images_;
   std::unordered_map<const Box*, PaintProps> props_;
   std::unordered_map<const Box*, Decoration> decorations_;
