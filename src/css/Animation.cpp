@@ -273,7 +273,7 @@ void SetAnimatedValues(dom::Element* element, const std::string& pseudo, Animate
     }
   }
   ++element->animVersion;
-  for (dom::Node* n = element; n; n = n->parentNode) {
+  for (dom::Node* n = element; n; n = dom::ParentOf(n)) {
     if (n->IsElement()) ++static_cast<dom::Element*>(n)->subtreeVersion;
   }
   // What only changes how an element is drawn is nothing for a container query to see.

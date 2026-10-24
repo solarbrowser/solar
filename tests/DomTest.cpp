@@ -183,6 +183,36 @@ void TestPosition(Quanta::Context& ctx) {
 
 }  // namespace
 
+// Pending and committed: script changes the tree as it is; what style and layout read is what was committed, until the next commit.
+void TestCommitted(Quanta::Context& ctx) {
+  Document* document = NewDocument(ctx, true);
+  Element* html = NewElement(ctx, document, "html");
+  Element* body = NewElement(ctx, document, "body");
+  Element* a = NewElement(ctx, document, "a");
+  AppendChild(document, html);
+  AppendChild(html, body);
+  AppendChild(body, a);
+  Element* b = NewElement(ctx, document, "b");
+  {
+    CommittedViewScope view;
+    Check(FirstChildOf(body) == a && ParentOf(a) == body && ParentOf(body) == html, "the first scope commits what was done before it");
+    AppendChild(body, b);
+    RemoveChild(body, a);
+    Check(body->firstChild == b && a->parentNode == nullptr, "script sees its change at once");
+    Check(FirstChildOf(body) == a && ParentOf(a) == body && NextSiblingOf(a) == nullptr, "layout sees the tree as it was committed");
+    Check(body->NextInTree(html) == a, "a walk goes over the committed tree: the first thing after the body is the a it had");
+    {
+      CommittedViewSuspend suspend;
+      Check(FirstChildOf(body) == b && ParentOf(a) == nullptr, "script called from the middle sees the pending tree");
+    }
+  }
+  Check(FirstChildOf(body) == b, "outside a scope the pending tree is read");
+  {
+    CommittedViewScope view;
+    Check(FirstChildOf(body) == b && ParentOf(a) == nullptr, "the next scope commits the change");
+  }
+}
+
 void TestDamage(Quanta::Context& ctx) {
   Document* document = NewDocument(ctx, true);
   Element* html = NewElement(ctx, document, "html");
@@ -225,6 +255,7 @@ int main() {
   TestCloneAndEquality(ctx);
   TestPosition(ctx);
   TestDamage(ctx);
+  TestCommitted(ctx);
   std::printf("%d/%d passed\n", g_passed, g_passed + g_failed);
   return g_failed == 0 ? 0 : 1;
 }

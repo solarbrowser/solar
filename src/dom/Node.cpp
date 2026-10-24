@@ -24,6 +24,12 @@ void Node::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(lastChild);
   visitor.Mark(previousSibling);
   visitor.Mark(nextSibling);
+  // (A node that left the tree stays reachable from the committed tree until the next commit.)
+  visitor.Mark(committed.parent);
+  visitor.Mark(committed.first);
+  visitor.Mark(committed.last);
+  visitor.Mark(committed.previous);
+  visitor.Mark(committed.next);
   visitor.Mark(nodeDocument);
   visitor.Mark(childNodesList);
   visitor.Mark(childrenList);
@@ -88,6 +94,35 @@ void Element::Visit(Quanta::Visitor& visitor) {
   }
 }
 
+namespace {
+std::vector<Node*>& DirtyLinks() {
+  static std::vector<Node*> list;
+  return list;
+}
+void MarkLinks(Node* node) {
+  if (!node || node->linksDirty) return;
+  node->linksDirty = true;
+  DirtyLinks().push_back(node);
+}
+}  // namespace
+
+thread_local int g_committedViewDepth = 0;
+
+void CommitPending() {
+  std::vector<Node*>& list = DirtyLinks();
+  for (Node* node : list) {
+    node->committed = {node->parentNode, node->firstChild, node->lastChild, node->previousSibling, node->nextSibling};
+    node->linksDirty = false;
+  }
+  list.clear();
+}
+
+CommittedViewScope::CommittedViewScope() {
+  if (g_committedViewDepth == 0) CommitPending();
+  ++g_committedViewDepth;
+}
+CommittedViewScope::~CommittedViewScope() { --g_committedViewDepth; }
+
 // ---- Letting a document go ----
 
 void DisposeDocument(Document* document) {
@@ -109,6 +144,7 @@ void DisposeDocument(Document* document) {
   }
   for (Node* n : all) {
     n->parentNode = n->firstChild = n->lastChild = n->previousSibling = n->nextSibling = nullptr;
+    MarkLinks(n);
     n->childNodesList = n->childrenList = nullptr;
     n->assignedSlot = n->manualSlot = nullptr;
     n->registrations.reset();
@@ -153,7 +189,13 @@ namespace {
 size_t g_liveNodes = 0;
 }
 Node::Node() { ++g_liveNodes; }
-Node::~Node() { --g_liveNodes; }
+Node::~Node() {
+  --g_liveNodes;
+  if (linksDirty) {
+    std::vector<Node*>& list = DirtyLinks();
+    list.erase(std::remove(list.begin(), list.end(), this), list.end());
+  }
+}
 size_t LiveNodes() { return g_liveNodes; }
 size_t LiveDocuments() { return 0; }
 uint64_t DocumentVersion() { return g_documentVersion; }
@@ -334,18 +376,18 @@ Attr* NewAttr(Context& ctx, Document* document, std::string_view namespaceUri, s
 
 size_t Node::ChildCount() const {
   size_t count = 0;
-  for (const Node* child = firstChild; child; child = child->nextSibling) ++count;
+  for (const Node* child = FirstChildOf(this); child; child = NextSiblingOf(child)) ++count;
   return count;
 }
 
 Node* Node::Root() {
   Node* node = this;
-  while (node->parentNode) node = node->parentNode;
+  while (ParentOf(node)) node = ParentOf(node);
   return node;
 }
 
 bool Node::Contains(const Node* other) const {
-  for (; other; other = other->parentNode) {
+  for (; other; other = ParentOf(other)) {
     if (other == this) return true;
   }
   return false;
@@ -353,14 +395,14 @@ bool Node::Contains(const Node* other) const {
 
 size_t Node::IndexInParent() const {
   size_t index = 0;
-  for (const Node* node = previousSibling; node; node = node->previousSibling) ++index;
+  for (const Node* node = PreviousSiblingOf(this); node; node = PreviousSiblingOf(node)) ++index;
   return index;
 }
 
 Node* Node::NextInTree(const Node* root) {
-  if (firstChild) return firstChild;
-  for (Node* node = this; node && node != root; node = node->parentNode) {
-    if (node->nextSibling) return node->nextSibling;
+  if (FirstChildOf(this)) return FirstChildOf(this);
+  for (Node* node = this; node && node != root; node = ParentOf(node)) {
+    if (NextSiblingOf(node)) return NextSiblingOf(node);
   }
   return nullptr;
 }
@@ -476,6 +518,10 @@ void Unlink(Node* node) {
   NoteTreeChangeAt(node->parentNode);
   NoteDamage(node->parentNode, kDamageChildren);
   Node* parent = node->parentNode;
+  MarkLinks(node);
+  MarkLinks(parent);
+  MarkLinks(node->previousSibling);
+  MarkLinks(node->nextSibling);
   if (node->previousSibling) {
     node->previousSibling->nextSibling = node->nextSibling;
     node->previousSibling->NoteWrite();
@@ -499,6 +545,10 @@ void Unlink(Node* node) {
 void Link(Node* node, Node* parent, Node* child) {
   NoteTreeChangeAt(parent);
   NoteDamage(parent, kDamageChildren);
+  MarkLinks(node);
+  MarkLinks(parent);
+  MarkLinks(child ? child->previousSibling : parent->lastChild);
+  MarkLinks(child);
   node->parentNode = parent;
   node->previousSibling = child ? child->previousSibling : parent->lastChild;
   node->nextSibling = child;

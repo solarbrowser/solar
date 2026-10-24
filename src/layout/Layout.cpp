@@ -57,14 +57,14 @@ bool UpdateContentVisibility(Tree& tree, dom::Document* document, bool& eventsPe
       if (element->contentVisibilityReported != (element->contentVisible ? 0 : 1)) eventsPending = true;
       const Rect r = AbsoluteBorderBox(box);
       bool relevant = r.x <= right && r.x + r.width >= left && r.y <= bottom && r.y + r.height >= top;
-      for (dom::Node* focus = document->focusedElement; focus && !relevant; focus = focus->parentNode) relevant = focus == element;
+      for (dom::Node* focus = document->focusedElement; focus && !relevant; focus = dom::ParentOf(focus)) relevant = focus == element;
       // A selection with something of the element in it.
-      if (!relevant && element->parentNode) {
+      if (!relevant && dom::ParentOf(element)) {
         if (const dom::Range* selection = dom::SelectionRangeOf(document); selection && !selection->Collapsed() && selection->startNode && selection->endNode) {
           uint32_t index = 0;
-          for (const dom::Node* n = element->previousSibling; n; n = n->previousSibling) ++index;
-          relevant = dom::ComparePoints(selection->startNode, selection->startOffset, element->parentNode, index + 1) < 0 &&
-                     dom::ComparePoints(selection->endNode, selection->endOffset, element->parentNode, index) > 0;
+          for (const dom::Node* n = dom::PreviousSiblingOf(element); n; n = dom::PreviousSiblingOf(n)) ++index;
+          relevant = dom::ComparePoints(selection->startNode, selection->startOffset, dom::ParentOf(element), index + 1) < 0 &&
+                     dom::ComparePoints(selection->endNode, selection->endOffset, dom::ParentOf(element), index) > 0;
         }
       }
       if (relevant != element->contentVisible) {
@@ -175,6 +175,8 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
   static int layoutDepth = 0;
   ++layoutDepth;
   Timing timing{std::chrono::steady_clock::now(), layoutDepth};
+  // Layout works on the tree as it was committed; what script changes while it works is for the next frame.
+  dom::CommittedViewScope view;
   css::MediaEnvironment environment = css::EnvironmentFor(document);
   // The viewport of a frame is the room its element has, which is whatever style says of it.
   if (dom::Element* frame = document->frameElement; frame && frame->nodeDocument && frame->nodeDocument != document) {
@@ -726,7 +728,7 @@ std::vector<dom::Element*> ElementsAtPoint(Tree& tree, double x, double y) {
   const auto add = [&](dom::Node* node) {
     // (a text node directly in a shadow root is stood for by the host)
     while (node && !node->IsElement()) {
-      dom::Node* up = node->parentNode;
+      dom::Node* up = dom::ParentOf(node);
       if (up && up->IsFragment() && static_cast<dom::DocumentFragment*>(up)->isShadowRoot) up = static_cast<dom::DocumentFragment*>(up)->host;
       node = up;
     }
@@ -785,7 +787,7 @@ std::vector<dom::Element*> ElementsAtPoint(Tree& tree, double x, double y) {
 dom::Element* ViewportElement(dom::Document* document) {
   dom::Element* root = document ? document->DocumentElement() : nullptr;
   if (!root || document->mode != dom::Document::Mode::Quirks) return root;
-  for (dom::Node* child = root->firstChild; child; child = child->nextSibling) {
+  for (dom::Node* child = dom::FirstChildOf(root); child; child = dom::NextSiblingOf(child)) {
     if (child->IsElement() && static_cast<dom::Element*>(child)->IsHtml("body")) return static_cast<dom::Element*>(child);
   }
   return nullptr;

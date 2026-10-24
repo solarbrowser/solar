@@ -120,7 +120,7 @@ Value ClientRectsNative(Context& ctx, Value, qe::Args args, Value) {
 // The parent in the flat tree: the slot a slottable is assigned to, the host of a shadow root.
 dom::Node* FlatParentOf(dom::Node* node) {
   if (node->IsElement() && static_cast<dom::Element*>(node)->assignedSlot) return static_cast<dom::Element*>(node)->assignedSlot;
-  dom::Node* p = node->parentNode;
+  dom::Node* p = dom::ParentOf(node);
   if (p && p->IsFragment() && static_cast<dom::DocumentFragment*>(p)->isShadowRoot) return static_cast<dom::DocumentFragment*>(p)->host;
   return p;
 }

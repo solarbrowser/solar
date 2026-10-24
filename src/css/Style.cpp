@@ -238,7 +238,7 @@ struct Bloom {
 };
 
 const dom::Element* UpperElement(const dom::Element* element) {
-  const dom::Node* parent = element->parentNode;
+  const dom::Node* parent = dom::ParentOf(element);
   if (!parent) return nullptr;
   if (parent->IsElement()) return static_cast<const dom::Element*>(parent);
   if (parent->IsFragment() && static_cast<const dom::DocumentFragment*>(parent)->isShadowRoot) return static_cast<const dom::DocumentFragment*>(parent)->host;
@@ -556,13 +556,13 @@ struct Gatherer {
         case RuleKind::Scope: {
           // The scoping roots of the element: the elements it is inside of (or is) that <scope-start> matches, or the parent of
           // the sheet's owner; those with no <scope-end> element between them and the element.
-          const auto parentElement = [](const dom::Element* e) -> const dom::Element* { return e->parentNode ? dom::AsElement(e->parentNode) : nullptr; };
+          const auto parentElement = [](const dom::Element* e) -> const dom::Element* { return dom::ParentOf(e) ? dom::AsElement(dom::ParentOf(e)) : nullptr; };
           const dom::Element* implicitRoot = nullptr;
           if (!rule->scopeStart) {
             const CssStyleSheet* sheet = rule->parentSheet;
             while (sheet && sheet->ownerRule && sheet->ownerRule->parentSheet) sheet = sheet->ownerRule->parentSheet;
-            if (sheet && sheet->ownerNode && sheet->ownerNode->parentNode) {
-              const dom::Node* parent = sheet->ownerNode->parentNode;
+            if (sheet && sheet->ownerNode && dom::ParentOf(sheet->ownerNode)) {
+              const dom::Node* parent = dom::ParentOf(sheet->ownerNode);
               if (const dom::Element* e = dom::AsElement(parent)) implicitRoot = e;
               else if (parent->IsFragment() && static_cast<const dom::DocumentFragment*>(parent)->isShadowRoot) implicitRoot = static_cast<const dom::DocumentFragment*>(parent)->host;
             }
@@ -700,7 +700,7 @@ std::vector<CssStyleSheet*> SheetsOfTreeUncached(dom::Node* root, Quanta::Contex
 
 dom::Element* FlatParent(dom::Element* element) {
   if (element->assignedSlot) return element->assignedSlot;
-  dom::Node* parent = element->parentNode;
+  dom::Node* parent = dom::ParentOf(element);
   if (!parent) return nullptr;
   if (dom::Element* e = dom::AsElement(parent)) return e;
   if (parent->IsFragment() && static_cast<dom::DocumentFragment*>(parent)->isShadowRoot) return static_cast<dom::DocumentFragment*>(parent)->host;
@@ -888,7 +888,7 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   if (entry.checked == treeVersion) return;
   entry.checked = treeVersion;
   const StyleReuse reuse = element->nodeDocument ? StyleReuseFor(element->nodeDocument) : StyleReuse();
-  const dom::Node* parentNode = element->parentNode;
+  const dom::Node* parentNode = dom::ParentOf(element);
   dom::Element* parent = parentNode && parentNode->IsElement() ? const_cast<dom::Element*>(static_cast<const dom::Element*>(parentNode)) : nullptr;
   uint64_t parentEpoch = 0;
   if (parent) {
@@ -902,7 +902,7 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
     shadowed = element->shadowRoot || element->assignedSlot;
     if (!shadowed) {
       const dom::Node* top = element;
-      while (top->parentNode) top = top->parentNode;
+      while (dom::ParentOf(top)) top = dom::ParentOf(top);
       shadowed = !top->IsDocument();
     }
   }
@@ -1049,7 +1049,7 @@ double ViewportScrollbarsUncached(dom::Document* document, const std::function<s
   dom::Element* source = root;
   if (visible(root)) {
     source = nullptr;
-    for (dom::Node* child = root->firstChild; child; child = child->nextSibling) {
+    for (dom::Node* child = dom::FirstChildOf(root); child; child = dom::NextSiblingOf(child)) {
       if (child->IsElement() && static_cast<dom::Element*>(child)->IsHtml("body")) source = static_cast<dom::Element*>(child);
     }
     if (!source || visible(source)) source = root;  // (the overflow of the viewport is auto when it is visible)
@@ -1125,16 +1125,16 @@ bool SafeToShare(const DeclarationEntry* entry) {
 
 void Share(dom::Element* element, ElementStyle& style, const std::string& pseudo = "") {
   if (!style.memo->computed.empty() || !style.memo->custom.empty() || !style.storage.empty()) return;
-  if (element->animVersion != 0 || !element->parentNode || !element->parentNode->IsElement()) return;
+  if (element->animVersion != 0 || !dom::ParentOf(element) || !dom::ParentOf(element)->IsElement()) return;
   // (An element of a shadow tree, a shadow host, and one that is assigned to a slot are styled by more than the declarations around them.)
   if (dom::HasShadowTrees()) {
     if (element->shadowRoot || element->assignedSlot) return;
     dom::Node* top = element;
-    while (top->parentNode) top = top->parentNode;
+    while (dom::ParentOf(top)) top = dom::ParentOf(top);
     if (!top->IsDocument()) return;
   }
   if (element->FindAttribute("", "style")) return;
-  dom::Element* parent = static_cast<dom::Element*>(element->parentNode);
+  dom::Element* parent = static_cast<dom::Element*>(dom::ParentOf(element));
   if (parent->animVersion != 0) return;
   // A pseudo-element inherits from the element it is of; it is shared among those of the same style and the same name.
   ElementStyle& parentStyle = pseudo.empty() ? StyleOf(parent) : StyleOf(element);
@@ -1185,7 +1185,7 @@ void Share(dom::Element* element, ElementStyle& style, const std::string& pseudo
 void Prepare(dom::Element* element) {
   ElementStyle& style = StyleOf(element);
   if (style.built) return;
-  if (element->parentNode && element->parentNode->IsElement()) Prepare(static_cast<dom::Element*>(element->parentNode));
+  if (dom::ParentOf(element) && dom::ParentOf(element)->IsElement()) Prepare(static_cast<dom::Element*>(dom::ParentOf(element)));
   Build(element, style, "");
   Share(element, style);
 }
@@ -1379,7 +1379,7 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
   // The tree the element is in: a shadow tree's elements are styled by that tree's sheets (and the document's own are not for
   // them). The root of the element's own tree is not the document's when it is in a shadow tree.
   dom::Node* treeRoot = element;
-  while (treeRoot->parentNode) treeRoot = treeRoot->parentNode;
+  while (dom::ParentOf(treeRoot)) treeRoot = dom::ParentOf(treeRoot);
   if (treeRoot && (treeRoot->IsDocument() || treeRoot->IsFragment())) {
     if (treeRoot->IsFragment() && static_cast<dom::DocumentFragment*>(treeRoot)->isShadowRoot) gatherer.matchContext.host = static_cast<dom::DocumentFragment*>(treeRoot)->host;
     std::vector<CssStyleSheet*> sheets = SheetsOfTree(treeRoot, element->nodeDocument ? element->nodeDocument->context : nullptr);
@@ -1468,7 +1468,7 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
     // ::slotted() rules of the trees of the slots the element is assigned to.
     for (const dom::Element* slot = element->assignedSlot; slot; slot = slot->assignedSlot) {
       dom::Node* slotRoot = const_cast<dom::Element*>(slot);
-      while (slotRoot->parentNode) slotRoot = slotRoot->parentNode;
+      while (dom::ParentOf(slotRoot)) slotRoot = dom::ParentOf(slotRoot);
       if (!slotRoot->IsFragment() || !static_cast<dom::DocumentFragment*>(slotRoot)->isShadowRoot) break;
       Gatherer g{element, gatherer.matchContext, style.cascade};
       g.mode = Gatherer::Mode::Slotted;
@@ -1485,7 +1485,7 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
       int rank = 1;
       while (host && !names.empty()) {
         dom::Node* outer = const_cast<dom::Element*>(host);
-        while (outer->parentNode) outer = outer->parentNode;
+        while (dom::ParentOf(outer)) outer = dom::ParentOf(outer);
         if (outer->IsDocument() || outer->IsFragment()) {
           Gatherer g{element, gatherer.matchContext, style.cascade};
           g.mode = Gatherer::Mode::Part;
@@ -2533,11 +2533,11 @@ bool PseudoNameMayHaveRules(dom::Element* element, const std::string& pseudo) {
   static dom::Node* lastTree = nullptr;
   static uint64_t lastVersion = 0;
   dom::Node* tree = nullptr;
-  if (element->parentNode && element->parentNode == lastParent && lastVersion == dom::DocumentVersion()) {
+  if (dom::ParentOf(element) && dom::ParentOf(element) == lastParent && lastVersion == dom::DocumentVersion()) {
     tree = lastTree;
   } else {
     tree = dom::ShadowIncludingRoot(element);
-    lastParent = element->parentNode;
+    lastParent = dom::ParentOf(element);
     lastTree = tree;
     lastVersion = dom::DocumentVersion();
   }
@@ -2744,6 +2744,8 @@ std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std
     inLayoutHook = false;
   };
   bringLayout();
+  // (The style is made from the tree as it was committed, however script changes it meanwhile.)
+  dom::CommittedViewScope view;
   Resolver resolver(ctx);
   std::string result = resolver.Compute(element, property, pseudo);
   if (document && document->containerQueriesSeen && g_layoutHook && !inLayoutHook && depth == 1) {
@@ -2760,7 +2762,10 @@ std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std
       document->animationStyleSeen = true;
       document->styleFlushedVersion = 0;
       depth = 0;
-      flush();
+      {
+        dom::CommittedViewSuspend suspend;
+        flush();
+      }
       depth = 1;
     }
   }
@@ -2894,7 +2899,7 @@ const bool g_stateHookInstalled = [] {
     // The elements whose state changes are this one and the ones above it: if none is what a rule asks the state of, the elements under them are as they were.
     MatchContext context;
     context.quirks = document->mode == dom::Document::Mode::Quirks;
-    for (const dom::Element* chain = element; chain; chain = chain->parentNode ? dom::AsElement(chain->parentNode) : nullptr) {
+    for (const dom::Element* chain = element; chain; chain = dom::ParentOf(chain) ? dom::AsElement(dom::ParentOf(chain)) : nullptr) {
       for (const ComplexSelector& compound : StateCompounds()) {
         if (MatchesComplex(compound, chain, context)) {
           return false;

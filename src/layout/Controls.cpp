@@ -22,7 +22,7 @@ std::string Lower(std::string s) {
 }
 
 void CollectText(const dom::Node* node, std::string& out) {
-  for (const dom::Node* child = node->firstChild; child; child = child->nextSibling) {
+  for (const dom::Node* child = dom::FirstChildOf(node); child; child = dom::NextSiblingOf(child)) {
     if (child->IsText()) out += static_cast<const dom::CharacterData*>(child)->data;
     else if (child->IsElement()) CollectText(child, out);
   }
@@ -95,7 +95,7 @@ bool ControlSize(LayoutContext& lc, dom::Element* element, Box& box) {
     const long rows = PositiveInt(Attr(element, "size"), multiple ? 4 : 1);
     double widest = 0;
     const std::function<void(const dom::Node*)> walk = [&](const dom::Node* parent) {
-      for (const dom::Node* child = parent->firstChild; child; child = child->nextSibling) {
+      for (const dom::Node* child = dom::FirstChildOf(parent); child; child = dom::NextSiblingOf(child)) {
         if (!child->IsElement()) continue;
         const dom::Element* e = static_cast<const dom::Element*>(child);
         if (e->IsHtml("option")) {

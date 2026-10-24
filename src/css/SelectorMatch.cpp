@@ -32,25 +32,25 @@ bool EqualsIgnoreCase(std::string_view a, std::string_view b) {
 // An HTML element of an HTML document: where names compare without regard to case.
 bool InHtmlDocument(const Element* element) { return element->IsHtml() && element->nodeDocument && element->nodeDocument->isHtml; }
 
-const Element* ParentElement(const Element* element) { return dom::AsElement(element->parentNode); }
+const Element* ParentElement(const Element* element) { return dom::AsElement(dom::ParentOf(element)); }
 
 // The parent, and for the child of a shadow root whose host the rules are of, that host.
 const Element* ParentOrHost(const Element* element, const MatchContext& context) {
   if (const Element* parent = ParentElement(element)) return parent;
-  const dom::Node* node = element->parentNode;
+  const dom::Node* node = dom::ParentOf(element);
   if (context.host && node && node->IsFragment() && static_cast<const dom::DocumentFragment*>(node)->isShadowRoot && static_cast<const dom::DocumentFragment*>(node)->host == context.host) return context.host;
   return nullptr;
 }
 
 const Element* PreviousElement(const Element* element) {
-  for (const Node* node = element->previousSibling; node; node = node->previousSibling) {
+  for (const Node* node = dom::PreviousSiblingOf(element); node; node = dom::PreviousSiblingOf(node)) {
     if (node->IsElement()) return static_cast<const Element*>(node);
   }
   return nullptr;
 }
 
 const Element* NextElement(const Element* element) {
-  for (const Node* node = element->nextSibling; node; node = node->nextSibling) {
+  for (const Node* node = dom::NextSiblingOf(element); node; node = dom::NextSiblingOf(node)) {
     if (node->IsElement()) return static_cast<const Element*>(node);
   }
   return nullptr;
@@ -177,8 +177,8 @@ bool FocusPath(const Element* element, bool within) {
   if (node == element) return true;
   for (;;) {
     const dom::Node* root = node;
-    while (root->parentNode) {
-      root = root->parentNode;
+    while (dom::ParentOf(root)) {
+      root = dom::ParentOf(root);
       if (within && root == element) return true;
     }
     if (!root->IsFragment() || !static_cast<const dom::DocumentFragment*>(root)->isShadowRoot) return false;
@@ -187,10 +187,10 @@ bool FocusPath(const Element* element, bool within) {
   }
 }
 
-bool IsRoot(const Element* element) { return element->parentNode && element->parentNode->IsDocument(); }
+bool IsRoot(const Element* element) { return dom::ParentOf(element) && dom::ParentOf(element)->IsDocument(); }
 
 bool IsEmpty(const Element* element) {
-  for (const Node* child = element->firstChild; child; child = child->nextSibling) {
+  for (const Node* child = dom::FirstChildOf(element); child; child = dom::NextSiblingOf(child)) {
     if (child->IsElement()) return false;
     if (child->IsText() && !static_cast<const dom::CharacterData*>(child)->data.empty()) return false;
   }
@@ -285,7 +285,7 @@ std::string DirectionOf(const Element* element) {
 bool OnPointerPath(const Element* element, const Element* pointed) {
   for (const dom::Node* node = pointed; node;) {
     if (node == element) return true;
-    const dom::Node* up = node->parentNode;
+    const dom::Node* up = dom::ParentOf(node);
     if (up && up->IsFragment() && static_cast<const dom::DocumentFragment*>(up)->isShadowRoot) up = static_cast<const dom::DocumentFragment*>(up)->host;
     node = up;
   }
@@ -445,7 +445,7 @@ bool MatchesSimple(const SimpleSelector& selector, const Element* element, const
       // :host-context(): the host or one of the elements around it.
       for (const Element* up = element; up;) {
         if (MatchesSelectorListAt(*selector.list, up, outer)) return true;
-        const dom::Node* parent = up->parentNode;
+        const dom::Node* parent = dom::ParentOf(up);
         if (!parent) break;
         if (const Element* e = dom::AsElement(parent)) up = e;
         else if (parent->IsFragment() && static_cast<const dom::DocumentFragment*>(parent)->isShadowRoot) up = static_cast<const dom::DocumentFragment*>(parent)->host;

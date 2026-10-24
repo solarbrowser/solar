@@ -178,7 +178,7 @@ std::vector<Node*> FindFlattenedSlottables(Element* slot) {
   if (!AsShadowRoot(slot->Root())) return result;
   std::vector<Node*> slottables = FindSlottables(slot);
   if (slottables.empty()) {
-    for (Node* child = slot->firstChild; child; child = child->nextSibling) {
+    for (Node* child = FirstChildOf(slot); child; child = NextSiblingOf(child)) {
       if (IsSlottable(child)) slottables.push_back(child);
     }
   }

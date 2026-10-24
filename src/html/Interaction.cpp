@@ -17,6 +17,8 @@ namespace {
 Value CallHelper(dom::Document* document, const char* name, Value* arguments, size_t count) {
   if (!document || !document->context) return qe::Undefined();
   Context& ctx = *document->context;
+  // (Script reads and writes the tree as it is, not as it was committed.)
+  dom::CommittedViewSuspend suspend;
   Object* holder = dom::RealmHolder(ctx);
   if (!holder) return qe::Undefined();
   Value function = qe::Get(ctx, qe::FromObject(holder), name);

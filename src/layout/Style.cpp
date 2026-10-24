@@ -475,7 +475,7 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
   {
     const std::string lb = get("line-break");
     s.lineBreak = lb == "loose" ? 1 : lb == "strict" ? 2 : lb == "anywhere" ? 3 : 0;
-    for (const dom::Node* n = element; n; n = n->parentNode) {
+    for (const dom::Node* n = element; n; n = dom::ParentOf(n)) {
       if (!n->IsElement()) continue;
       const dom::Element* e = static_cast<const dom::Element*>(n);
       const dom::Attr* a = e->FindAttribute("", "lang");

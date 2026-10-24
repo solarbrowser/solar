@@ -60,7 +60,7 @@ bool OnlyCollapsibleSpace(const Box& text) {
 bool ReplacedSize(dom::Element* element, const std::string& base, Box& box) {
   const std::string& name = element->localName;
   const bool html = element->IsHtml();
-  const bool svgRoot = element->namespaceUri == dom::kSvgNamespace && name == "svg" && !(element->parentNode && element->parentNode->IsElement() && static_cast<dom::Element*>(element->parentNode)->namespaceUri == dom::kSvgNamespace);
+  const bool svgRoot = element->namespaceUri == dom::kSvgNamespace && name == "svg" && !(dom::ParentOf(element) && dom::ParentOf(element)->IsElement() && static_cast<dom::Element*>(dom::ParentOf(element))->namespaceUri == dom::kSvgNamespace);
   if (!html && !svgRoot) return false;
   const auto attribute = [&](const char* attr) -> double {
     const dom::Attr* a = element->FindAttribute(attr);
@@ -294,7 +294,7 @@ class Builder {
           if (const dom::Attr* a = element->FindAttribute("start")) start = std::atoi(a->value.c_str()) - 1;
           if (element->FindAttribute("reversed")) {
             int count = 0;
-            for (dom::Node* c = element->firstChild; c; c = c->nextSibling) if (c->IsElement() && static_cast<dom::Element*>(c)->IsHtml("li")) ++count;
+            for (dom::Node* c = dom::FirstChildOf(element); c; c = dom::NextSiblingOf(c)) if (c->IsElement() && static_cast<dom::Element*>(c)->IsHtml("li")) ++count;
             const dom::Attr* a = element->FindAttribute("start");
             start = (a ? std::atoi(a->value.c_str()) : count) + 1;
           }
@@ -311,7 +311,7 @@ class Builder {
     if (listItem && !incrementsListItem) {
       if (counters_["list-item"].empty()) Instantiate("list-item", 0);
       const bool reversed = [&] {
-        for (dom::Node* p = element ? element->parentNode : nullptr; p; p = nullptr) return p->IsElement() && static_cast<dom::Element*>(p)->FindAttribute("reversed") != nullptr;
+        for (dom::Node* p = element ? dom::ParentOf(element) : nullptr; p; p = nullptr) return p->IsElement() && static_cast<dom::Element*>(p)->FindAttribute("reversed") != nullptr;
         return false;
       }();
       counters_["list-item"].back() += reversed ? -1 : 1;
@@ -468,7 +468,7 @@ class Builder {
     {
       const Box* holder = old->parent;
       while (holder && holder->anonymous && holder->parent) holder = holder->parent;
-      if (!holder || holder->node != element->parentNode) return nullptr;
+      if (!holder || holder->node != dom::ParentOf(element)) return nullptr;
     }
     auto slot = slots_.find(old);
     if (slot == slots_.end()) {
@@ -489,12 +489,12 @@ class Builder {
     if (node->IsElement()) {
       dom::Element* element = static_cast<dom::Element*>(node);
       if (element->shadowRoot) {
-        for (dom::Node* c = element->shadowRoot->firstChild; c; c = c->nextSibling) out.push_back(c);
+        for (dom::Node* c = dom::FirstChildOf(element->shadowRoot); c; c = dom::NextSiblingOf(c)) out.push_back(c);
         return out;
       }
       if (dom::IsSlot(element) && !element->assignedNodes.empty()) return dom::FindFlattenedSlottables(element);
     }
-    for (dom::Node* c = node->firstChild; c; c = c->nextSibling) out.push_back(c);
+    for (dom::Node* c = dom::FirstChildOf(node); c; c = dom::NextSiblingOf(c)) out.push_back(c);
     return out;
   }
 
@@ -523,7 +523,7 @@ class Builder {
 
   // The language of an element, from the nearest lang attribute above it (the only thing in the style layout reads that is of the element and not of what it shares).
   static std::string LangOf(const dom::Element* element) {
-    for (const dom::Node* n = element; n; n = n->parentNode) {
+    for (const dom::Node* n = element; n; n = dom::ParentOf(n)) {
       if (!n->IsElement()) continue;
       const dom::Element* e = static_cast<const dom::Element*>(n);
       const dom::Attr* a = e->FindAttribute("", "lang");
@@ -563,7 +563,7 @@ class Builder {
 
   // The style layout reads of an element: what was made of it before, while nothing it depends on has changed, and else worked out again.
   std::shared_ptr<const BoxStyle> StyleFor(dom::Element* element, bool& recomputed) {
-    const dom::Node* parent = element->parentNode;
+    const dom::Node* parent = dom::ParentOf(element);
     const dom::Element* parentElement = parent && parent->IsElement() ? static_cast<const dom::Element*>(parent) : nullptr;
     dom::Element::LayoutStamp want;
     want.author = css::SheetsVersion();

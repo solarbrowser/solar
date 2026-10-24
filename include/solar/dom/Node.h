@@ -104,6 +104,16 @@ struct Node : web::JsEventTarget {
   Node* lastChild = nullptr;
   Node* previousSibling = nullptr;
   Node* nextSibling = nullptr;
+  // The places of the node in the tree as style and layout see them: the committed ones. Script changes the fields above (the pending ones);
+  // CommitPending takes them over into these, for the nodes that changed, when a frame is begun (see CommittedView).
+  struct Links {
+    Node* parent = nullptr;
+    Node* first = nullptr;
+    Node* last = nullptr;
+    Node* previous = nullptr;
+    Node* next = nullptr;
+  } committed;
+  bool linksDirty = false;  // changed since it was committed (it is in the list of CommitPending)
   // The document the node belongs to; null only for a Document itself.
   Document* nodeDocument = nullptr;
   // What script gets from childNodes and children, which is the same object each time.
@@ -137,6 +147,30 @@ struct Node : web::JsEventTarget {
   Node* NextInTree(const Node* root);
   // The descendant text, concatenated: the textContent of an element or a fragment.
   std::string DescendantText() const;
+};
+
+// Pending and committed. Script reads and writes the fields of a node as they are (pending). Style and layout work from what was committed at the
+// start of the frame, so that what script does while they work does not reach them half way. They read through these, which give the committed
+// links inside a CommittedViewScope and the pending ones outside it (so that the same code can serve script, as the selector matcher does).
+extern thread_local int g_committedViewDepth;
+inline bool InCommittedView() { return g_committedViewDepth > 0; }
+inline Node* ParentOf(const Node* n) { return g_committedViewDepth ? n->committed.parent : n->parentNode; }
+inline Node* FirstChildOf(const Node* n) { return g_committedViewDepth ? n->committed.first : n->firstChild; }
+inline Node* LastChildOf(const Node* n) { return g_committedViewDepth ? n->committed.last : n->lastChild; }
+inline Node* PreviousSiblingOf(const Node* n) { return g_committedViewDepth ? n->committed.previous : n->previousSibling; }
+inline Node* NextSiblingOf(const Node* n) { return g_committedViewDepth ? n->committed.next : n->nextSibling; }
+// Takes what script changed into the committed state. Nothing is lost by calling it again; it does nothing when nothing changed.
+void CommitPending();
+// Begins a frame's work on the committed state (and commits what is pending, if this is the outermost one). Where script runs in the middle of
+// it, CommittedViewSuspend puts the pending state back for as long as it lives.
+struct CommittedViewScope {
+  CommittedViewScope();
+  ~CommittedViewScope();
+};
+struct CommittedViewSuspend {
+  int saved;
+  CommittedViewSuspend() : saved(g_committedViewDepth) { g_committedViewDepth = 0; }
+  ~CommittedViewSuspend() { g_committedViewDepth = saved; }
 };
 
 // A node whose content is a string: Text, CDATASection, Comment and ProcessingInstruction.

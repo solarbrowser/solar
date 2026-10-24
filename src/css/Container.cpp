@@ -26,7 +26,7 @@ std::string Lower(std::string_view text) {
 
 dom::Element* FlatParentOf(dom::Element* element) {
   if (element->assignedSlot) return const_cast<dom::Element*>(element->assignedSlot);
-  dom::Node* parent = element->parentNode;
+  dom::Node* parent = dom::ParentOf(element);
   if (!parent) return nullptr;
   if (dom::Element* e = dom::AsElement(parent)) return e;
   if (parent->IsFragment() && static_cast<dom::DocumentFragment*>(parent)->isShadowRoot) return const_cast<dom::Element*>(static_cast<dom::DocumentFragment*>(parent)->host);
