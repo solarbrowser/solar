@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 
@@ -29,6 +30,8 @@ class TimerHost {
   std::optional<int64_t> NextDelayMs() const;
   // Drops the tasks of a realm that is going (a page that was left keeps no timers running).
   void DropRealm(Quanta::Embed::Realm* realm);
+  // Told after each task that ran (the program shows what the page has, between one task and the next).
+  std::function<void()> afterTask;
   // How many tasks wait.
   size_t Size() const { return queue_.size(); }
 

@@ -1,3 +1,5 @@
+#include <cstdio>
+#include <cstdlib>
 #include "solar/web/TimerHost.h"
 
 #include <algorithm>
@@ -51,8 +53,14 @@ bool TimerHost::RunDue() {
   }
   for (qe::Task& task : due) {
     if (task.IsCancelled()) continue;
+    const auto began = Clock::now();
     task.Run();
     ran = true;
+    if (std::getenv("SOLAR_TASK_DEBUG")) {
+      const double ms = std::chrono::duration<double, std::milli>(Clock::now() - began).count();
+      if (ms > 100) std::fprintf(stderr, "  a task ran %.0f ms\n", ms);
+    }
+    if (afterTask) afterTask();
     // A repeating task stays armed, and is scheduled for its next run.
     if (task.IsRepeating() && !task.IsCancelled()) Schedule(task);
   }

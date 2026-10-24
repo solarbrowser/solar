@@ -96,6 +96,20 @@ std::optional<std::string> LoadResource(const std::string& url) {
   return g_environment ? g_environment->Load(url) : std::nullopt;
 }
 
+namespace {
+thread_local int g_sheetLoads = 0;
+}  // namespace
+
+bool LoadingStyleSheet() { return g_sheetLoads > 0; }
+
+// The text of a style sheet: it is a resource whose wait the page must not be shown through (it is not drawn before its rules are known).
+std::optional<std::string> LoadSheetResource(const std::string& url) {
+  ++g_sheetLoads;
+  std::optional<std::string> text = LoadResource(url);
+  --g_sheetLoads;
+  return text;
+}
+
 namespace reflect {
 std::string ResolveAgainst(const dom::Element* element, const std::string& value) {
   return element->nodeDocument ? Resolve(value, BaseOf(element->nodeDocument)) : value;
@@ -436,7 +450,7 @@ void UpdateLink(dom::Element* link) {
     });
     return;
   }
-  const std::optional<std::string> text = LoadResource(address);
+  const std::optional<std::string> text = LoadSheetResource(address);
   if (!text) {
     const bool counted = DelayLoad(document);
     QueueTask(document, "link error", link, [link, document, counted] {
@@ -447,7 +461,7 @@ void UpdateLink(dom::Element* link) {
   }
   Context& ctx = *document->context;
   css::CssStyleSheet* sheet = css::NewLinkedSheet(ctx, link, address, *text);
-  css::ProcessImports(ctx, sheet, [](const std::string& url) { return LoadResource(url); });
+  css::ProcessImports(ctx, sheet, [](const std::string& url) { return LoadSheetResource(url); });
   // An alternate style sheet with a title is off until it is chosen.
   if (HasToken(rel->value, "alternate") && sheet->hasTitle && !link->linkExplicitlyEnabled) sheet->disabled = true;
   if (sheet->hasTitle && !sheet->disabled && !document->hasPreferredSheetSet) {
@@ -474,7 +488,7 @@ void UpdateStyle(dom::Element* style) {
   bool imports = false;
   for (const css::CssRule* rule : sheet->rules) imports = imports || rule->kind == css::RuleKind::Import;
   if (imports) {
-    css::ProcessImports(ctx, sheet, [](const std::string& url) { return LoadResource(url); });
+    css::ProcessImports(ctx, sheet, [](const std::string& url) { return LoadSheetResource(url); });
     css::NoteStyleChange();
   }
   const bool counted = DelayLoad(document);
@@ -619,7 +633,7 @@ void RequestNavigation(dom::Document* document, const std::string& url, bool rep
 void SetFrameEnvironment(FrameEnvironment* environment) {
   g_environment = environment;
   dom::SetDocumentBaseUriProvider(&DocumentBaseUrl);
-  css::SetSheetLoader([](const std::string& url) { return LoadResource(url); });
+  css::SetSheetLoader([](const std::string& url) { return LoadSheetResource(url); });
 }
 
 void RunInRealm(Quanta::Embed::Realm& realm, const std::function<void()>& work) { RunAs(realm, work); }

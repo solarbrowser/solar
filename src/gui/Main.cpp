@@ -212,6 +212,8 @@ class Browser : public solar::html::FrameEnvironment {
     while (!resource->done) {
       events_.Step(std::chrono::milliseconds(std::getenv("SOLAR_SLICE") ? std::atoi(std::getenv("SOLAR_SLICE")) : 8));
       if (pump_) pump_();
+      // (What the page has so far can be shown while what it waits for comes, unless that is a style sheet.)
+      if (idle_ && !resource->done && !solar::html::LoadingStyleSheet()) idle_();
     }
     const double thisWait = std::chrono::duration<double, std::milli>(Clock::now() - waitStart).count();
     waited_ += thisWait;
@@ -393,6 +395,7 @@ class Browser : public solar::html::FrameEnvironment {
   bool painting_ = false;
   bool timing_ = false;
   std::function<void()> pump_;
+  std::function<void()> idle_;  // called while a resource is waited for
   // A page asked to go somewhere (script, or a form): the window does it when the page's script has returned.
   struct Requested {
     std::string url, method, body, type;
@@ -882,6 +885,9 @@ int PageMain(Shared& shared, int argc, char** argv) {
   qe::Realm* realm = nullptr;
   solar::dom::Document* document = nullptr;
   bool dirty = true;
+  bool loadingPage = false, firstEarly = true;  // (see paintEarly)
+  Clock::time_point nextEarly = Clock::now();
+  double builtX = 0, builtY = 0;  // the scroll the list the window has was made at
   solar::dom::Element* pressTarget = nullptr;
   int pressButton = 0;
   const bool timing_log = std::getenv("SOLAR_GUI_TIMES") != nullptr;
@@ -901,6 +907,9 @@ int PageMain(Shared& shared, int argc, char** argv) {
     });
     const auto loadStart = Clock::now();
     if (timing_log) std::fprintf(stderr, "[%.0f ms] LoadPage begins\n", std::chrono::duration<double, std::milli>(loadStart.time_since_epoch()).count());
+    loadingPage = true;
+    firstEarly = true;
+    nextEarly = Clock::now() + std::chrono::milliseconds(150);
     solar::html::LoadPage(*realm, document, markup, type);
     if (timing_log) std::fprintf(stderr, "[%.0f ms] LoadPage ends\n", std::chrono::duration<double, std::milli>(Clock::now().time_since_epoch()).count());
     if (timing_log) std::fprintf(stderr, "  LoadPage took %.0f ms (%.0f ms of it waiting; scripts %.0f ms, style sheets parsed %.0f ms, layout %.0f ms)\n", std::chrono::duration<double, std::milli>(Clock::now() - loadStart).count(), browser.waited_, solar::html::ScriptMillis(), solar::css::SheetParseMillis(), solar::layout::LayoutMillis());
@@ -935,6 +944,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
       lap("garbage collected");
     }
     std::fprintf(stderr, "loaded in %.0f ms\n", std::chrono::duration<double, std::milli>(Clock::now() - started).count());
+    loadingPage = false;
     {
       UiCommand title;
       title.kind = UiCommand::Kind::Title;
@@ -1013,6 +1023,52 @@ int PageMain(Shared& shared, int argc, char** argv) {
     const std::string type = collector.contentType.find("xml") != std::string::npos ? "application/xhtml+xml" : "text/html";
     commit(collector.address.empty() ? arrived->where : collector.address, std::move(collector.body), type, arrived->started);
   };
+  // (What the form controls show is asked of the page's script before the frame, on the thread the script is on; the frame reads it as it was committed.)
+  const auto currentTree = [&]() -> solar::layout::Tree* {
+    solar::html::RunInRealm(*realm, [&] { solar::html::RefreshControls(document); });
+    return solar::layout::UpdateLayout(realm->GetContext(), document);
+  };
+  // The page is shown while it is still being loaded (what the parser has made, once a script or a picture is waited for): a page that takes seconds to be
+  // loaded has its first part drawn in the first one. How often is held to what a frame costs, so that showing it does not slow the loading.
+  const auto paintEarly = [&] {
+    if (!loadingPage || !document || !realm || Clock::now() < nextEarly) return;
+    // Nothing is drawn before the body has something in it.
+    solar::dom::Element* root = document->DocumentElement();
+    solar::dom::Element* body = nullptr;
+    if (root) {
+      for (solar::dom::Node* c = root->firstChild; c; c = c->nextSibling) {
+        if (c->IsElement() && static_cast<solar::dom::Element*>(c)->IsHtml("body")) body = static_cast<solar::dom::Element*>(c);
+      }
+    }
+    if (!body || !body->firstChild) return;
+    const auto t0 = Clock::now();
+    solar::layout::Tree* tree = currentTree();
+    if (!tree) return;
+    browser.painting_ = true;
+    auto list = std::make_shared<const solar::paint::DisplayList>(solar::paint::BuildDisplayList(realm->GetContext(), *tree, shared.height.load()));
+    browser.painting_ = false;
+    builtX = list->scrollX;
+    builtY = list->scrollY;
+    Frame frame;
+    frame.list = list;
+    solar::layout::ScrollRange(*tree, nullptr, frame.maxX, frame.maxY);
+    shared.PostFrame(std::move(frame));
+    if (firstEarly) {
+      firstEarly = false;
+      UiCommand top;
+      top.kind = UiCommand::Kind::ScrollTo;
+      shared.Post(std::move(top));
+      UiCommand title;
+      title.kind = UiCommand::Kind::Title;
+      title.text = "Solar - " + address;
+      shared.Post(std::move(title));
+    }
+    const double cost = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+    if (timing_log) std::fprintf(stderr, "  early frame while loading: %.0f ms (at %.0f ms of the program)\n", cost, std::chrono::duration<double, std::milli>(Clock::now() - programStart).count());
+    nextEarly = Clock::now() + std::chrono::milliseconds(static_cast<long>(100 + 4 * cost));
+  };
+  browser.idle_ = paintEarly;
+  timers.afterTask = paintEarly;
   if (!navigate(address)) return 1;
   // (The first page is waited for, as a program that starts with one.)
   while (current && !current->collector.done) {
@@ -1026,11 +1082,6 @@ int PageMain(Shared& shared, int argc, char** argv) {
   uint64_t lastVersion = 0;
   const bool timing = std::getenv("SOLAR_GUI_TIMES") != nullptr;
 
-  // (What the form controls show is asked of the page's script before the frame, on the thread the script is on; the frame reads it as it was committed.)
-  const auto currentTree = [&]() -> solar::layout::Tree* {
-    solar::html::RunInRealm(*realm, [&] { solar::html::RefreshControls(document); });
-    return solar::layout::UpdateLayout(realm->GetContext(), document);
-  };
   // A link: the address it has, against the page's (the nearest one at or above `from`).
   const auto followLink = [&](solar::dom::Element* from) {
     for (solar::dom::Node* n = from; n; n = n->parentNode) {
@@ -1082,7 +1133,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
   };
   // What the window scrolled to, put in the tree; what script scrolled to, told to the window. (Which of the two moved since the last time decides.)
   uint64_t appliedSerial = 0;
-  double appliedX = 0, appliedY = 0, builtX = 0, builtY = 0;
+  double appliedX = 0, appliedY = 0;
   const auto syncScroll = [&] {
     solar::layout::Tree* tree = document ? document->layoutTree.get() : nullptr;
     if (!tree) return;

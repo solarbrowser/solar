@@ -95,6 +95,8 @@ bool LoadPage(Quanta::Embed::Realm& realm, dom::Document* document, std::string_
 // URL's bytes included).
 std::string DocumentBaseUrl(const dom::Document* document);
 std::optional<std::string> LoadResource(const std::string& url);
+// Whether what is being loaded is a style sheet (the page is not to be drawn while it is waited for).
+bool LoadingStyleSheet();
 // What a data: URL holds.
 std::optional<std::string> DecodeDataUrlText(const std::string& address);
 
