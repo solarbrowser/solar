@@ -87,6 +87,9 @@ struct PopLayer {};
 // What is drawn after is moved by the matrix, until the matching PopTransform.
 struct PushTransform {
   Matrix4 matrix;
+  // The box stays where it is in the viewport (position: fixed): whoever draws moves it by how far the viewport is scrolled when it is drawn
+  // (the matrix is the same move for the scroll the list was made at).
+  bool followsScroll = false;
 };
 struct PopTransform {};
 
@@ -181,6 +184,10 @@ using Item = std::variant<FillRoundedRect, DrawBorder, DrawGlyphs, PushClip, Pop
 
 struct DisplayList {
   std::vector<Item> items;
+  // The coordinates of the items are those of the document: the viewport is scrolled by these when it is drawn (the scroll the list was made at, which
+  // is what it has the items for, with some room around). A list can be drawn at another scroll, as far as the room it has goes.
+  float scrollX = 0, scrollY = 0;
+  float roomY = 0;  // how far above and below the viewport it has items for
   float width = 0, height = 0;  // the extent of the document (the scrollable overflow of the viewport)
 };
 

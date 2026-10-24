@@ -428,7 +428,7 @@ ImageRef KeptImage(const std::string& key, const std::shared_ptr<const std::stri
 
 class Painter {
  public:
-  Painter(Quanta::Context& ctx, Tree& tree) : ctx_(ctx), tree_(tree) {}
+  Painter(Quanta::Context& ctx, Tree& tree, double overscan) : ctx_(ctx), tree_(tree), overscan_(overscan) {}
 
   DisplayList Run() {
     DisplayList out;
@@ -461,11 +461,13 @@ class Painter {
       canvasFrom_ = html;
     }
     if (!canvas.Transparent()) Fill(RectF{0, 0, out.width, out.height}, canvas);
-    // Everything is moved by how far the viewport is scrolled.
-    PushTransformOf(-scrollX_, -scrollY_);
+    // Everything is in the coordinates of the document: whoever draws moves it by how far the viewport is scrolled (as `out` says).
+    out.scrollX = F(scrollX_);
+    out.scrollY = F(scrollY_);
+    out.roomY = F(overscan_);
+    ++transformDepth_;
     PaintContext(*html);
     EnsureClips({});
-    list_->items.push_back(PopTransform{});
     --transformDepth_;
     return out;
   }
@@ -490,7 +492,8 @@ class Painter {
   bool Culled(double x, double y, double width, double height) const {
     if (transformDepth_ != 1 || std::getenv("SOLAR_PAINT_NO_CULL")) return false;
     const double room = 300;
-    return x > scrollX_ + tree_.viewportWidth + room || x + width < scrollX_ - room || y > scrollY_ + tree_.viewportHeight + room || y + height < scrollY_ - room;
+    const double roomY = room + overscan_;
+    return x > scrollX_ + tree_.viewportWidth + room || x + width < scrollX_ - room || y > scrollY_ + tree_.viewportHeight + roomY || y + height < scrollY_ - roomY;
   }
 
   void PushTransformOf(double dx, double dy) {
@@ -1270,6 +1273,7 @@ class Painter {
     }
     if (box.style->position == layout::Position::Fixed && (scrollX_ != 0 || scrollY_ != 0) && !transformed) {
       PushTransformOf(scrollX_, scrollY_);  // (a fixed box stays where it is in the viewport)
+      std::get<PushTransform>(list_->items.back()).followsScroll = true;
       fixedUndo = true;
     }
     std::vector<ImageLayer> masks;
@@ -1337,6 +1341,7 @@ class Painter {
   Tree& tree_;
   DisplayList* list_ = nullptr;
   double scrollX_ = 0, scrollY_ = 0;
+  double overscan_ = 0;
   const Box* canvasFrom_ = nullptr;
   std::vector<Frame> frames_;
   std::vector<const Box*> clipStack_;
@@ -1352,10 +1357,10 @@ class Painter {
 
 }  // namespace
 
-DisplayList BuildDisplayList(Quanta::Context& ctx, layout::Tree& tree) {
+DisplayList BuildDisplayList(Quanta::Context& ctx, layout::Tree& tree, double overscan) {
   // What is painted is the tree as it was committed (see dom::CommittedViewScope).
   dom::CommittedViewScope view;
-  Painter painter(ctx, tree);
+  Painter painter(ctx, tree, overscan);
   return painter.Run();
 }
 

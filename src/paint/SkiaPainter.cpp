@@ -503,8 +503,17 @@ void DrawBorderSide(SkCanvas& canvas, const DrawBorder& b, int side, const SkRRe
 
 }  // namespace
 
-void SkiaPainter::Draw(const DisplayList& list, SkCanvas& canvas) {
+void SkiaPainter::Draw(const DisplayList& list, SkCanvas& canvas) { Draw(list, canvas, list.scrollX, list.scrollY); }
+
+void SkiaPainter::Draw(const DisplayList& list, SkCanvas& canvas, double scrollX, double scrollY) {
   if (impl_->images.size() > 700) impl_->images.clear();
+  // The document is moved by how far the viewport is scrolled.
+  canvas.save();
+  canvas.translate(static_cast<float>(-scrollX), static_cast<float>(-scrollY));
+  struct Restore {
+    SkCanvas& canvas;
+    ~Restore() { canvas.restore(); }
+  } restore{canvas};
   for (const Item& item : list.items) {
     if (const auto* fill = std::get_if<FillRoundedRect>(&item)) {
       SkPaint paint;
@@ -617,6 +626,10 @@ void SkiaPainter::Draw(const DisplayList& list, SkCanvas& canvas) {
       canvas.saveLayerAlphaf(nullptr, layer->opacity);
     } else if (const auto* transform = std::get_if<PushTransform>(&item)) {
       canvas.save();
+      if (transform->followsScroll) {
+        canvas.translate(static_cast<float>(scrollX), static_cast<float>(scrollY));
+        continue;
+      }
       const float* m = transform->matrix.m;
       canvas.concat(SkM44(m[0], m[4], m[8], m[12], m[1], m[5], m[9], m[13], m[2], m[6], m[10], m[14], m[3], m[7], m[11], m[15]));
     }

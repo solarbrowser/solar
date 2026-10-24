@@ -2,8 +2,14 @@
 // sheets fetched as it asks), laid out for the size of the window, painted as a display list and drawn by Skia into a texture SDL shows.
 #include <SDL3/SDL.h>
 
+#include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <thread>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -408,9 +414,428 @@ std::string AddressOf(const std::string& given) {
 
 }  // namespace
 
+namespace {
+
+// ---- The two threads ----
+// The window lives on the thread the program starts on: it takes the events, keeps the scroll of the page (a wheel step is a glide), draws the
+// display list the page made for the scroll it has now, and draws the scrollbar. The page (its scripts, style, layout and the making of the display
+// list) is on a thread of its own, so that a script that runs long does not stop the page from scrolling. They tell each other through Shared.
+
+struct UiEvent {
+  SDL_Event event{};
+  std::string text;  // a text input's text (the event's own is gone with the next poll)
+};
+
+struct Frame {
+  std::shared_ptr<const solar::paint::DisplayList> list;
+  double maxX = 0, maxY = 0;  // how far the page can be scrolled
+};
+
+struct UiCommand {
+  enum class Kind { Title, ScrollBy, ScrollTo, Forget, Shot, Quit } kind = Kind::Title;
+  std::string text;
+  double x = 0, y = 0;
+  bool instant = false;
+};
+
+class Shared {
+ public:
+  // The window, as the thread of the page needs to know it (in points, and the pixels they come to).
+  std::atomic<int> width{1280}, height{800}, pixelWidth{1280}, pixelHeight{800};
+  std::atomic<float> density{1.f};
+  std::atomic<bool> quit{false}, pageDone{false};
+  // The scroll of the page as the window has it; the serial moves with each change.
+  std::atomic<double> scrollX{0}, scrollY{0};
+  std::atomic<uint64_t> scrollSerial{0};
+  std::atomic<bool> gliding{false};
+  std::atomic<int64_t> scrollInputNs{0};  // when the user last asked for scrolling (the steady clock)
+
+  // The window to the page.
+  void PushEvent(UiEvent event) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      events_.push_back(std::move(event));
+    }
+    cv_.notify_one();
+  }
+  // The next event, waiting at most `wait` for one.
+  bool WaitEvent(UiEvent& out, std::chrono::milliseconds wait) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    if (events_.empty() && wait.count() > 0) cv_.wait_for(lock, wait, [&] { return !events_.empty() || quit.load(); });
+    if (events_.empty()) return false;
+    out = std::move(events_.front());
+    events_.pop_front();
+    return true;
+  }
+  // The page to the window.
+  void PostFrame(Frame frame) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      frame_ = std::move(frame);
+      hasFrame_ = true;
+    }
+    WakeWindow();
+  }
+  bool TakeFrame(Frame& out) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!hasFrame_) return false;
+    out = std::move(frame_);
+    hasFrame_ = false;
+    return true;
+  }
+  void Post(UiCommand command) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      commands_.push_back(std::move(command));
+    }
+    WakeWindow();
+  }
+  std::vector<UiCommand> TakeCommands() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<UiCommand> out(commands_.begin(), commands_.end());
+    commands_.clear();
+    return out;
+  }
+  void WakeWindow() {
+    SDL_Event wake{};
+    wake.type = SDL_EVENT_USER;
+    SDL_PushEvent(&wake);
+  }
+  void WakePage() { cv_.notify_all(); }
+
+ private:
+  std::mutex mutex_;
+  std::condition_variable cv_;
+  std::deque<UiEvent> events_;
+  std::deque<UiCommand> commands_;
+  Frame frame_;
+  bool hasFrame_ = false;
+};
+
+int64_t NowNs() { return std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count(); }
+
+// The window: events in, pixels out. Returns when the program is to end.
+void RunWindow(Shared& shared, SDL_Window* window, SDL_Renderer* renderer) {
+  solar::paint::SkiaPainter painter;
+  sk_sp<SkSurface> surface;
+  SDL_Texture* texture = nullptr;
+  int surfaceW = 0, surfaceH = 0;
+  Frame frame;
+  // Scrolling goes toward where it was asked to, a part of the way each frame (it eases out), so that a wheel step is a glide and not a jump.
+  double x = 0, y = 0, targetX = 0, targetY = 0;
+  bool gliding = false;
+  Clock::time_point lastGlide = Clock::now();
+  Clock::time_point scrollActive = Clock::now() - std::chrono::seconds(10);
+  // The scrollbar of the window floats over the page: it shows while the page is scrolled (and under the pointer), then fades; it can be dragged.
+  bool barDrag = false, barHover = false;
+  double barGrab = 0;
+  struct Bar {
+    double top = 0, height = 0, track = 0, maxY = 0;
+  };
+  const auto barOf = [&](Bar& bar) -> bool {
+    const int h = shared.height.load();
+    if (frame.maxY <= 0.5 || h <= 0) return false;
+    bar.track = h;
+    bar.height = std::max(32.0, double(h) * h / (h + frame.maxY));
+    bar.maxY = frame.maxY;
+    bar.top = y / frame.maxY * (h - bar.height);
+    return true;
+  };
+  bool dirty = true;
+  bool running = true;
+  std::string shotPath;
+  const auto publish = [&] {
+    shared.scrollX = x;
+    shared.scrollY = y;
+    ++shared.scrollSerial;
+    shared.gliding = gliding;
+    shared.WakePage();
+  };
+  const auto clampTargets = [&] {
+    targetX = std::clamp(targetX, 0.0, std::max(0.0, frame.maxX));
+    targetY = std::clamp(targetY, 0.0, std::max(0.0, frame.maxY));
+  };
+  const auto scrollBy = [&](double dx, double dy, bool instant) {
+    if (!gliding) {
+      targetX = x;
+      targetY = y;
+    }
+    targetX += dx;
+    targetY += dy;
+    clampTargets();
+    scrollActive = Clock::now();
+    shared.scrollInputNs = NowNs();
+    if (instant) {
+      x = targetX;
+      y = targetY;
+      gliding = false;
+      publish();
+    } else {
+      if (!gliding) lastGlide = Clock::now();
+      gliding = true;
+      shared.gliding = true;
+    }
+    dirty = true;
+  };
+  const auto scrollTo = [&](double nx, double ny) {
+    targetX = x = std::clamp(nx, 0.0, std::max(0.0, frame.maxX));
+    targetY = y = std::clamp(ny, 0.0, std::max(0.0, frame.maxY));
+    gliding = false;
+    publish();
+    dirty = true;
+  };
+  const auto geometry = [&] {
+    int w = 0, h = 0, pw = 0, ph = 0;
+    SDL_GetWindowSize(window, &w, &h);
+    SDL_GetWindowSizeInPixels(window, &pw, &ph);
+    shared.width = w;
+    shared.height = h;
+    shared.pixelWidth = pw;
+    shared.pixelHeight = ph;
+    shared.density = SDL_GetWindowPixelDensity(window);
+  };
+  geometry();
+  while (running && !shared.quit.load()) {
+    const bool animating = gliding || (std::chrono::duration<double>(Clock::now() - scrollActive).count() < 1.5 && frame.maxY > 0.5);
+    SDL_Event event;
+    bool any = SDL_WaitEventTimeout(&event, dirty || animating ? 0 : 50);
+    while (any) {
+      switch (event.type) {
+        case SDL_EVENT_QUIT: running = false; break;
+        case SDL_EVENT_WINDOW_RESIZED:
+        case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED: {
+          geometry();
+          UiEvent forward;
+          forward.event = event;
+          shared.PushEvent(std::move(forward));
+          dirty = true;
+          break;
+        }
+        case SDL_EVENT_MOUSE_WHEEL: scrollBy(-event.wheel.x * 60, -event.wheel.y * 60, false); break;
+        case SDL_EVENT_TEXT_INPUT: {
+          UiEvent forward;
+          forward.event = event;
+          forward.text = event.text.text ? event.text.text : "";
+          shared.PushEvent(std::move(forward));
+          break;
+        }
+        case SDL_EVENT_KEY_DOWN: {
+          UiEvent forward;
+          forward.event = event;
+          shared.PushEvent(std::move(forward));
+          break;
+        }
+        case SDL_EVENT_MOUSE_MOTION: {
+          const int ww = shared.width.load();
+          if (barDrag) {
+            Bar bar;
+            if (barOf(bar) && bar.track > bar.height) {
+              const double ny = std::clamp((event.motion.y - barGrab) / (bar.track - bar.height), 0.0, 1.0) * bar.maxY;
+              scrollTo(x, ny);
+              scrollActive = Clock::now();
+              shared.scrollInputNs = NowNs();
+            }
+            break;
+          }
+          const bool over = event.motion.x >= ww - 16;
+          if (over != barHover) {
+            barHover = over;
+            scrollActive = Clock::now();
+            dirty = true;
+          }
+          UiEvent forward;
+          forward.event = event;
+          shared.PushEvent(std::move(forward));
+          break;
+        }
+        case SDL_EVENT_MOUSE_BUTTON_DOWN: {
+          const int ww = shared.width.load(), wh = shared.height.load();
+          Bar bar;
+          if (event.button.button == SDL_BUTTON_LEFT && event.button.x >= ww - 16 && barOf(bar)) {
+            if (event.button.y >= bar.top && event.button.y <= bar.top + bar.height) {
+              barDrag = true;
+              barGrab = event.button.y - bar.top;
+            } else {
+              scrollBy(0, event.button.y < bar.top ? -wh * 0.9 : wh * 0.9, false);
+            }
+            dirty = true;
+            break;
+          }
+          UiEvent forward;
+          forward.event = event;
+          shared.PushEvent(std::move(forward));
+          break;
+        }
+        case SDL_EVENT_MOUSE_BUTTON_UP: {
+          if (barDrag) {
+            barDrag = false;
+            dirty = true;
+            break;
+          }
+          UiEvent forward;
+          forward.event = event;
+          shared.PushEvent(std::move(forward));
+          break;
+        }
+        default: break;
+      }
+      any = SDL_PollEvent(&event);
+    }
+    for (UiCommand& command : shared.TakeCommands()) {
+      switch (command.kind) {
+        case UiCommand::Kind::Title: SDL_SetWindowTitle(window, command.text.c_str()); break;
+        case UiCommand::Kind::ScrollBy: scrollBy(command.x, command.y, command.instant); break;
+        case UiCommand::Kind::ScrollTo: scrollTo(command.x, command.y); break;
+        case UiCommand::Kind::Forget: painter.Forget(); break;
+        case UiCommand::Kind::Shot: shotPath = command.text; dirty = true; break;
+        case UiCommand::Kind::Quit: running = false; break;
+      }
+    }
+    if (Frame next; shared.TakeFrame(next)) {
+      frame = std::move(next);
+      // (What can be scrolled to is what the page says it is now.)
+      clampTargets();
+      if (y > std::max(0.0, frame.maxY) || x > std::max(0.0, frame.maxX)) scrollTo(x, y);
+      dirty = true;
+    }
+    if (gliding) {
+      const auto now = Clock::now();
+      const double dt = std::chrono::duration<double>(now - lastGlide).count();
+      lastGlide = now;
+      const double k = 1 - std::exp(-dt / 0.07);
+      x += (targetX - x) * k;
+      y += (targetY - y) * k;
+      if (std::abs(targetX - x) < 0.5 && std::abs(targetY - y) < 0.5) {
+        x = targetX;
+        y = targetY;
+        gliding = false;
+      }
+      publish();
+      dirty = true;
+    }
+    if (!dirty && !animating) continue;
+    dirty = false;
+
+    const int pixelW = shared.pixelWidth.load(), pixelH = shared.pixelHeight.load();
+    if (pixelW <= 0 || pixelH <= 0) continue;
+    if (!surface || surfaceW != pixelW || surfaceH != pixelH) {
+      surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(pixelW, pixelH));
+      if (texture) SDL_DestroyTexture(texture);
+      texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, pixelW, pixelH);
+      surfaceW = pixelW;
+      surfaceH = pixelH;
+    }
+    const auto d0 = Clock::now();
+    SkCanvas* canvas = surface->getCanvas();
+    canvas->resetMatrix();
+    canvas->clear(SK_ColorWHITE);
+    const float density = shared.density.load();
+    canvas->scale(density, density);
+    if (frame.list) painter.Draw(*frame.list, *canvas, x, y);
+    {
+      Bar bar;
+      const double idle = std::chrono::duration<double>(Clock::now() - scrollActive).count();
+      const double alpha = barHover || barDrag ? 1.0 : std::clamp(1.0 - (idle - 1.0) / 0.4, 0.0, 1.0);
+      const int ww = shared.width.load(), wh = shared.height.load();
+      if (alpha > 0 && barOf(bar)) {
+        const float width = barHover || barDrag ? 10.f : 6.f;
+        SkPaint paint;
+        paint.setAntiAlias(true);
+        if (barHover || barDrag) {
+          paint.setColor(SkColorSetARGB(40, 0, 0, 0));
+          canvas->drawRect(SkRect::MakeXYWH(ww - width - 4, 0, width + 4, wh), paint);
+        }
+        paint.setColor(SkColorSetARGB(static_cast<U8CPU>((barDrag ? 170 : 120) * alpha), 0, 0, 0));
+        canvas->drawRRect(SkRRect::MakeRectXY(SkRect::MakeXYWH(ww - width - 2, bar.top + 2, width, bar.height - 4), width / 2, width / 2), paint);
+        if (alpha < 1.0 || idle < 1.4) dirty = true;
+      }
+    }
+    SkPixmap pixmap;
+    surface->peekPixels(&pixmap);
+    SDL_UpdateTexture(texture, nullptr, pixmap.addr(), static_cast<int>(pixmap.rowBytes()));
+    SDL_RenderClear(renderer);
+    SDL_RenderTexture(renderer, texture, nullptr, nullptr);
+    SDL_RenderPresent(renderer);
+    if (std::getenv("SOLAR_GUI_TIMES")) {
+      static int count = 0;
+      if (++count % 30 == 0 || !shotPath.empty()) std::fprintf(stderr, "window: draw %.1f ms (scroll %.0f)\n", std::chrono::duration<double, std::milli>(Clock::now() - d0).count(), y);
+    }
+    // SOLAR_GUI_SHOT=file.png: the frame is written to a file, and the program ends (for looking at what it paints without a screen).
+    if (!shotPath.empty()) {
+      SkDynamicMemoryWStream out;
+      if (SkPngEncoder::Encode(&out, pixmap, SkPngEncoder::Options())) {
+        sk_sp<SkData> png = out.detachAsData();
+        std::ofstream file(shotPath, std::ios::binary);
+        file.write(static_cast<const char*>(png->data()), static_cast<std::streamsize>(png->size()));
+      }
+      running = false;
+    }
+  }
+  shared.quit = true;
+  shared.WakePage();
+  if (texture) SDL_DestroyTexture(texture);
+}
+
+int PageMain(Shared& shared, int argc, char** argv);
+}  // namespace
+
 int main(int argc, char** argv) {
-  const auto programStart = Clock::now();
   std::setbuf(stdout, nullptr);
+  if (!SDL_Init(SDL_INIT_VIDEO)) {
+    std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
+    return 1;
+  }
+  SDL_Window* window = SDL_CreateWindow("Solar", 1280, 800, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+  SDL_Renderer* renderer = window ? SDL_CreateRenderer(window, nullptr) : nullptr;
+  if (renderer) {
+    const bool ok = SDL_SetRenderVSync(renderer, 1);
+    int on = 0;
+    SDL_GetRenderVSync(renderer, &on);
+    if (std::getenv("SOLAR_GUI_TIMES")) std::fprintf(stderr, "vsync: asked %s, renderer says %d, driver %s\n", ok ? "ok" : "failed", on, SDL_GetRendererName(renderer));
+  }
+  if (!renderer) {
+    std::fprintf(stderr, "window: %s\n", SDL_GetError());
+    return 1;
+  }
+  SDL_StartTextInput(window);
+  Shared shared;
+  {
+    int w = 0, h = 0, pw = 0, ph = 0;
+    SDL_GetWindowSize(window, &w, &h);
+    SDL_GetWindowSizeInPixels(window, &pw, &ph);
+    shared.width = w;
+    shared.height = h;
+    shared.pixelWidth = pw;
+    shared.pixelHeight = ph;
+    shared.density = SDL_GetWindowPixelDensity(window);
+  }
+  int result = 0;
+  std::thread page([&] {
+    result = PageMain(shared, argc, argv);
+    shared.pageDone = true;
+    shared.quit = true;
+    shared.WakeWindow();
+  });
+  RunWindow(shared, window, renderer);
+  // The page is asked to stop; one that is in the middle of a long script is not waited for for long.
+  for (int i = 0; i < 100 && !shared.pageDone.load(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  if (!shared.pageDone.load()) {
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    std::_Exit(0);
+  }
+  page.join();
+  SDL_DestroyRenderer(renderer);
+  SDL_DestroyWindow(window);
+  SDL_Quit();
+  return result;
+}
+
+namespace {
+
+int PageMain(Shared& shared, int argc, char** argv) {
+  const auto programStart = Clock::now();
   const std::string given = argc > 1 ? argv[1] : "https://example.com/";
   std::string address = AddressOf(given);
 
@@ -436,40 +861,19 @@ int main(int argc, char** argv) {
   solar::layout::SetImageRequestHandler([&](const std::string& absolute) { return browser.RequestImage(absolute); });
   solar::html::SetFrameEnvironment(&browser);
 
-  // The window.
-  if (!SDL_Init(SDL_INIT_VIDEO)) {
-    std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
-    return 1;
-  }
-  SDL_Window* window = SDL_CreateWindow("Solar", 1280, 800, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
-  SDL_Renderer* renderer = window ? SDL_CreateRenderer(window, nullptr) : nullptr;
-  if (renderer) {
-    const bool ok = SDL_SetRenderVSync(renderer, 1);
-    int on = 0;
-    SDL_GetRenderVSync(renderer, &on);
-    if (std::getenv("SOLAR_GUI_TIMES")) std::fprintf(stderr, "vsync: asked %s, renderer says %d, driver %s\n", ok ? "ok" : "failed", on, SDL_GetRendererName(renderer));
-  }
-  if (!renderer) {
-    std::fprintf(stderr, "window: %s\n", SDL_GetError());
-    return 1;
-  }
-
   // The size the page is laid out for is the window's, in CSS pixels.
   const auto setViewport = [&] {
-    int w = 0, h = 0;
-    SDL_GetWindowSize(window, &w, &h);
+    const int w = shared.width.load(), h = shared.height.load();
     solar::css::MediaEnvironment environment = solar::css::CurrentMediaEnvironment();
     environment.width = environment.deviceWidth = w;
     environment.height = environment.deviceHeight = h;
-    environment.resolution = SDL_GetWindowPixelDensity(window);
+    environment.resolution = shared.density.load();
     solar::css::SetCurrentMediaEnvironment(environment);
   };
   setViewport();
   solar::css::SetOverlayScrollbars(true);
-  SDL_StartTextInput(window);
 
   // Puts the document that came for `where` in a new realm, and runs its scripts (what it fetches is waited for, with the window kept alive).
-  solar::paint::SkiaPainter painter;
   qe::Realm* realm = nullptr;
   solar::dom::Document* document = nullptr;
   bool dirty = true;
@@ -507,12 +911,21 @@ int main(int argc, char** argv) {
       if (leftDocument) solar::css::ForgetDocument(leftDocument);
       browser.ReleaseRealm(left);
       solar::layout::ForgetImages();
-      painter.Forget();
+      shared.Post({UiCommand::Kind::Forget});
       browser.TrimResources(48u << 20);
       isolate->CollectGarbage();
     }
     std::fprintf(stderr, "loaded in %.0f ms\n", std::chrono::duration<double, std::milli>(Clock::now() - started).count());
-    SDL_SetWindowTitle(window, ("Solar - " + address).c_str());
+    {
+      UiCommand title;
+      title.kind = UiCommand::Kind::Title;
+      title.text = "Solar - " + address;
+      shared.Post(std::move(title));
+      // (A page that came is at the top; the window's scroll is put there.)
+      UiCommand top;
+      top.kind = UiCommand::Kind::ScrollTo;
+      shared.Post(std::move(top));
+    }
     dirty = true;
   };
 
@@ -551,21 +964,17 @@ int main(int argc, char** argv) {
     client.Fetch(*parsed, navigation->collector, options);
     current = navigation.get();
     navigations.push_back(std::move(navigation));
-    SDL_SetWindowTitle(window, ("Loading " + where).c_str());
+    {
+      UiCommand title;
+      title.kind = UiCommand::Kind::Title;
+      title.text = "Loading " + where;
+      shared.Post(std::move(title));
+    }
     return true;
   };
-  // What the window does while a page is waited for: it keeps answering (to be closed, to be resized).
-  bool quit = false;
+  // (The window is on a thread of its own: it keeps answering while the page waits.)
   browser.pump_ = [&] {
-    SDL_Event event;
-    while (SDL_PollEvent(&event)) {
-      if (event.type == SDL_EVENT_QUIT) quit = true;
-      if (event.type == SDL_EVENT_WINDOW_RESIZED || event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) setViewport();
-    }
-    if (quit) {
-      SDL_Quit();
-      std::_Exit(0);
-    }
+    if (shared.quit.load()) std::_Exit(0);
   };
   // The document that came: it is put in a realm, unless a newer address was asked for since.
   const auto settleNavigation = [&] {
@@ -575,7 +984,10 @@ int main(int argc, char** argv) {
     Collector& collector = arrived->collector;
     if (collector.failed) {
       std::fprintf(stderr, "fetch failed: %s\n", collector.error.c_str());
-      SDL_SetWindowTitle(window, ("Solar - " + address).c_str());
+      UiCommand title;
+      title.kind = UiCommand::Kind::Title;
+      title.text = "Solar - " + address;
+      shared.Post(std::move(title));
       return;
     }
     if (std::getenv("SOLAR_GUI_TIMES")) std::fprintf(stderr, "  document fetched at %.0f ms (%zu bytes)\n", std::chrono::duration<double, std::milli>(Clock::now() - arrived->started).count(), collector.body.size());
@@ -591,9 +1003,6 @@ int main(int argc, char** argv) {
   settleNavigation();
   if (!document) return 1;
 
-  sk_sp<SkSurface> surface;
-  SDL_Texture* texture = nullptr;
-  int surfaceW = 0, surfaceH = 0;
   Clock::time_point lastRelayout = Clock::now();
   uint64_t lastVersion = 0;
   const bool timing = std::getenv("SOLAR_GUI_TIMES") != nullptr;
@@ -602,27 +1011,6 @@ int main(int argc, char** argv) {
   const auto currentTree = [&]() -> solar::layout::Tree* {
     solar::html::RunInRealm(*realm, [&] { solar::html::RefreshControls(document); });
     return solar::layout::UpdateLayout(realm->GetContext(), document);
-  };
-  // The scrollbar of the window floats over the page: it shows while the page is scrolled (and under the pointer), then fades; it can be dragged.
-  Clock::time_point scrollActive = Clock::now() - std::chrono::seconds(10);
-  bool barDrag = false, barHover = false;
-  double barGrab = 0;
-  struct Bar {
-    double top = 0, height = 0, track = 0, maxY = 0;
-  };
-  const auto barOf = [&](Bar& bar) -> bool {
-    solar::layout::Tree* tree = currentTree();
-    if (!tree) return false;
-    double maxX = 0, maxY = 0;
-    solar::layout::ScrollRange(*tree, nullptr, maxX, maxY);
-    int w = 0, h = 0;
-    SDL_GetWindowSize(window, &w, &h);
-    if (maxY <= 0.5 || h <= 0) return false;
-    bar.track = h;
-    bar.height = std::max(32.0, h * h / (h + maxY));
-    bar.maxY = maxY;
-    bar.top = tree->scroll[document].second / maxY * (h - bar.height);
-    return true;
   };
   // A link: the address it has, against the page's (the nearest one at or above `from`).
   const auto followLink = [&](solar::dom::Element* from) {
@@ -663,60 +1051,48 @@ int main(int argc, char** argv) {
     const std::vector<solar::dom::Element*> elements = solar::layout::ElementsAtPoint(*tree, pointerX, pointerY);
     solar::dom::SetHoverElement(document, elements.empty() ? nullptr : elements.front());
   };
-  // Scrolling goes toward where it was asked to, a part of the way each frame (it eases out), so that a wheel step is a glide and not a jump.
-  double targetX = 0, targetY = 0;
-  bool gliding = false;
-  const solar::dom::Document* glidingIn = nullptr;
-  Clock::time_point lastGlide = Clock::now();
+  // The scroll is the window's (it glides, it is dragged by the scrollbar): the page asks it to move, and is told where it is.
   const bool scrollTestMode = std::getenv("SOLAR_GUI_SCROLL") != nullptr;
   const auto scrollBy = [&](double dx, double dy) {
-    solar::layout::Tree* tree = currentTree();
-    if (!tree) return;
-    double maxX = 0, maxY = 0;
-    solar::layout::ScrollRange(*tree, nullptr, maxX, maxY);
-    auto& at = tree->scroll[document];
-    if (scrollTestMode) {
-      at.first = std::clamp(at.first + dx, 0.0, maxX);
-      at.second = std::clamp(at.second + dy, 0.0, maxY);
-      solar::layout::ApplySticky(*tree);
-      dirty = true;
-      scrollActive = Clock::now();
-      return;
-    }
-    if (!gliding || glidingIn != document) {
-      targetX = at.first;
-      targetY = at.second;
-      glidingIn = document;
-    }
-    targetX = std::clamp(targetX + dx, 0.0, maxX);
-    targetY = std::clamp(targetY + dy, 0.0, maxY);
-    if (!gliding) lastGlide = Clock::now();
-    gliding = true;
-    scrollActive = Clock::now();
-    lastScrollInput = scrollActive;
-    hoverStale = pointerKnown;
+    UiCommand command;
+    command.kind = UiCommand::Kind::ScrollBy;
+    command.x = dx;
+    command.y = dy;
+    command.instant = scrollTestMode;
+    shared.Post(std::move(command));
   };
-  const auto glide = [&] {
-    if (!gliding) return;
-    solar::layout::Tree* tree = currentTree();
-    if (!tree || glidingIn != document) {
-      gliding = false;
+  // What the window scrolled to, put in the tree; what script scrolled to, told to the window. (Which of the two moved since the last time decides.)
+  uint64_t appliedSerial = 0;
+  double appliedX = 0, appliedY = 0, builtX = 0, builtY = 0;
+  const auto syncScroll = [&] {
+    solar::layout::Tree* tree = document ? document->layoutTree.get() : nullptr;
+    if (!tree) return;
+    auto& at = tree->scroll[document];
+    if (at.first != appliedX || at.second != appliedY) {
+      // Script scrolled the page (or a link to a fragment did): the window goes there.
+      appliedX = at.first;
+      appliedY = at.second;
+      UiCommand command;
+      command.kind = UiCommand::Kind::ScrollTo;
+      command.x = appliedX;
+      command.y = appliedY;
+      shared.Post(std::move(command));
+      appliedSerial = shared.scrollSerial.load();
+      dirty = true;
       return;
     }
-    const auto now = Clock::now();
-    const double dt = std::chrono::duration<double>(now - lastGlide).count();
-    lastGlide = now;
-    const double k = 1 - std::exp(-dt / 0.07);
-    auto& at = tree->scroll[document];
-    at.first += (targetX - at.first) * k;
-    at.second += (targetY - at.second) * k;
-    if (std::abs(targetX - at.first) < 0.5 && std::abs(targetY - at.second) < 0.5) {
-      at.first = targetX;
-      at.second = targetY;
-      gliding = false;
-    }
+    const uint64_t serial = shared.scrollSerial.load();
+    if (serial == appliedSerial) return;
+    appliedSerial = serial;
+    const double sx = shared.scrollX.load(), sy = shared.scrollY.load();
+    if (sx == appliedX && sy == appliedY) return;
+    appliedX = at.first = sx;
+    appliedY = at.second = sy;
     solar::layout::ApplySticky(*tree);
-    dirty = true;
+    lastScrollInput = Clock::now();
+    hoverStale = pointerKnown;
+    // The list that was made has items for some way above and below where it was made; past a part of that it is made again.
+    if (std::abs(sy - builtY) > 0.25 * shared.height.load() || std::abs(sx - builtX) > 1) dirty = true;
   };
 
   int autoScroll = std::getenv("SOLAR_GUI_SCROLL") ? std::atoi(std::getenv("SOLAR_GUI_SCROLL")) : 0;
@@ -753,12 +1129,14 @@ int main(int argc, char** argv) {
   const bool scrollTest = autoScroll > 0;
   bool running = true;
   double barMs = 0, stepMs = 0, glideMs = 0;
-  while (running) {
+  while (running && !shared.quit.load()) {
     const auto iterStart = Clock::now();
     barMs = stepMs = glideMs = 0;
-    SDL_Event event;
-    bool any = SDL_WaitEventTimeout(&event, dirty ? 0 : 8);
+    UiEvent incoming;
+    bool any = shared.WaitEvent(incoming, std::chrono::milliseconds(dirty ? 0 : 8));
     while (any) {
+      SDL_Event& event = incoming.event;
+      if (event.type == SDL_EVENT_TEXT_INPUT) event.text.text = incoming.text.c_str();
       switch (event.type) {
         case SDL_EVENT_QUIT: running = false; break;
         case SDL_EVENT_WINDOW_RESIZED:
@@ -766,7 +1144,6 @@ int main(int argc, char** argv) {
           setViewport();
           dirty = true;
           break;
-        case SDL_EVENT_MOUSE_WHEEL: scrollBy(-event.wheel.x * 60, -event.wheel.y * 60); break;
         case SDL_EVENT_TEXT_INPUT: {
           if (solar::dom::Element* field = focusedTextControl()) {
             solar::html::RunInRealm(*realm, [&] { solar::html::TypeInto(document, field, event.text.text, "text"); });
@@ -775,8 +1152,7 @@ int main(int argc, char** argv) {
           break;
         }
         case SDL_EVENT_KEY_DOWN: {
-          int w = 0, h = 0;
-          SDL_GetWindowSize(window, &w, &h);
+          const int h = shared.height.load();
           if (solar::dom::Element* field = focusedTextControl()) {
             const char* kind = nullptr;
             switch (event.key.key) {
@@ -821,50 +1197,15 @@ int main(int argc, char** argv) {
           break;
         }
         case SDL_EVENT_MOUSE_MOTION: {
-          int ww = 0, wh = 0;
-          SDL_GetWindowSize(window, &ww, &wh);
-          if (barDrag) {
-            Bar bar;
-            solar::layout::Tree* t = currentTree();
-            if (t && barOf(bar) && bar.track > bar.height) {
-              const double y = std::clamp((event.motion.y - barGrab) / (bar.track - bar.height), 0.0, 1.0) * bar.maxY;
-              t->scroll[document].second = y;
-              targetY = y;
-              gliding = false;
-              solar::layout::ApplySticky(*t);
-              scrollActive = Clock::now();
-              dirty = true;
-            }
-            break;
-          }
-          const bool over = event.motion.x >= ww - 16;
-          if (over != barHover) {
-            barHover = over;
-            scrollActive = Clock::now();
-            dirty = true;
-          }
           pointerX = event.motion.x;
           pointerY = event.motion.y;
           pointerKnown = true;
           // (While the page is scrolling, what is under the pointer is looked at when it stops: a change of hover is a change of style, and a frame is not the time for one.)
-          if (gliding || Clock::now() - lastScrollInput < std::chrono::milliseconds(150)) hoverStale = true;
+          if (shared.gliding.load() || Clock::now() - lastScrollInput < std::chrono::milliseconds(150)) hoverStale = true;
           else updateHover();
           break;
         }
         case SDL_EVENT_MOUSE_BUTTON_DOWN: {
-          int ww = 0, wh = 0;
-          SDL_GetWindowSize(window, &ww, &wh);
-          Bar bar;
-          if (event.button.button == SDL_BUTTON_LEFT && event.button.x >= ww - 16 && barOf(bar)) {
-            if (event.button.y >= bar.top && event.button.y <= bar.top + bar.height) {
-              barDrag = true;
-              barGrab = event.button.y - bar.top;
-            } else {
-              scrollBy(0, event.button.y < bar.top ? -wh * 0.9 : wh * 0.9);
-            }
-            dirty = true;
-            break;
-          }
           if (hoverStale) updateHover();
           pointerX = event.button.x;
           pointerY = event.button.y;
@@ -910,11 +1251,6 @@ int main(int argc, char** argv) {
           break;
         }
         case SDL_EVENT_MOUSE_BUTTON_UP: {
-          if (barDrag) {
-            barDrag = false;
-            dirty = true;
-            break;
-          }
           solar::dom::Element* pressed = document->pressedElement;
           solar::dom::SetPressedElement(document, nullptr);
           // The release goes to what is under the pointer; a click is the press and the release on the same element (or one inside the other).
@@ -946,7 +1282,8 @@ int main(int argc, char** argv) {
         }
         default: break;
       }
-      any = SDL_PollEvent(&event);
+      any = shared.WaitEvent(incoming, std::chrono::milliseconds(0));
+      if (any) {}
     }
     if (!tour.empty() && !current && Clock::now() - tourLast > std::chrono::milliseconds(3500)) {
             std::fprintf(stderr, "memory: %ld kB in use (%zu pages seen; %zu nodes alive, resources %zu kB)\n", anonymousKb(), tourAt, solar::dom::LiveNodes(), browser.CachedBytes() / 1024);
@@ -987,6 +1324,10 @@ int main(int argc, char** argv) {
             SDL_PushEvent(&up);
           }
         }
+      } else if (step.rfind("w:", 0) == 0) {
+        e.type = SDL_EVENT_MOUSE_WHEEL;
+        e.wheel.y = -static_cast<float>(std::atof(step.c_str() + 2));
+        SDL_PushEvent(&e);
       } else if (step.rfind("t:", 0) == 0) {
         e.type = SDL_EVENT_TEXT_INPUT;
         static std::string typed;
@@ -1029,10 +1370,10 @@ int main(int argc, char** argv) {
       }
       if (wheelLeft == 0) wheelDone = Clock::now();
     }
-    if (wheelDone != Clock::time_point() && !gliding && Clock::now() - wheelDone > std::chrono::milliseconds(300)) running = false;
-    if (hoverStale && !gliding && Clock::now() - lastScrollInput > std::chrono::milliseconds(150)) updateHover();
+    if (wheelDone != Clock::time_point() && !shared.gliding.load() && Clock::now() - wheelDone > std::chrono::milliseconds(300)) running = false;
+    syncScroll();
+    if (hoverStale && !shared.gliding.load() && Clock::now() - lastScrollInput > std::chrono::milliseconds(150)) updateHover();
     const auto g0 = Clock::now();
-    glide();
     glideMs = std::chrono::duration<double, std::milli>(Clock::now() - g0).count();
     const uint64_t beforeStep = solar::dom::DocumentVersion();
     const auto s0 = Clock::now();
@@ -1090,77 +1431,40 @@ int main(int argc, char** argv) {
     if (!tree) continue;
     const auto t1 = Clock::now();
     browser.painting_ = true;
-    solar::paint::DisplayList list = solar::paint::BuildDisplayList(realm->GetContext(), *tree);
+    // (The list has items for some way above and below the viewport too, so that the window can scroll without waiting for the page.)
+    auto list = std::make_shared<const solar::paint::DisplayList>(solar::paint::BuildDisplayList(realm->GetContext(), *tree, shared.height.load()));
     browser.painting_ = false;
     const auto t2 = Clock::now();
-
-    int pixelW = 0, pixelH = 0;
-    SDL_GetWindowSizeInPixels(window, &pixelW, &pixelH);
-    if (!surface || surfaceW != pixelW || surfaceH != pixelH) {
-      surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(pixelW, pixelH));
-      if (texture) SDL_DestroyTexture(texture);
-      texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, pixelW, pixelH);
-      surfaceW = pixelW;
-      surfaceH = pixelH;
-    }
-    SkCanvas* canvas = surface->getCanvas();
-    canvas->resetMatrix();
-    canvas->clear(SK_ColorWHITE);
-    const float density = SDL_GetWindowPixelDensity(window);
-    canvas->scale(density, density);
-    painter.Draw(list, *canvas);
-    {
-      const auto b0 = Clock::now();
-      Bar bar;
-      const double idle = std::chrono::duration<double>(Clock::now() - scrollActive).count();
-      const double alpha = barHover || barDrag ? 1.0 : std::clamp(1.0 - (idle - 1.0) / 0.4, 0.0, 1.0);
-      int ww = 0, wh = 0;
-      SDL_GetWindowSize(window, &ww, &wh);
-      if (alpha > 0 && barOf(bar)) {
-        const float width = barHover || barDrag ? 10.f : 6.f;
-        SkPaint paint;
-        paint.setAntiAlias(true);
-        if (barHover || barDrag) {
-          paint.setColor(SkColorSetARGB(40, 0, 0, 0));
-          canvas->drawRect(SkRect::MakeXYWH(ww - width - 4, 0, width + 4, wh), paint);
-        }
-        paint.setColor(SkColorSetARGB(static_cast<U8CPU>((barDrag ? 170 : 120) * alpha), 0, 0, 0));
-        canvas->drawRRect(SkRRect::MakeRectXY(SkRect::MakeXYWH(ww - width - 2, bar.top + 2, width, bar.height - 4), width / 2, width / 2), paint);
-        if (alpha < 1.0 || idle < 1.4) dirty = true;
-      }
-      barMs = std::chrono::duration<double, std::milli>(Clock::now() - b0).count();
-    }
-    SkPixmap pixmap;
-    surface->peekPixels(&pixmap);
-    SDL_UpdateTexture(texture, nullptr, pixmap.addr(), static_cast<int>(pixmap.rowBytes()));
-    SDL_RenderClear(renderer);
-    SDL_RenderTexture(renderer, texture, nullptr, nullptr);
-    SDL_RenderPresent(renderer);
-    const auto t3 = Clock::now();
-    // SOLAR_GUI_SHOT=file.png: the first frame is written to a file, and the program ends (for looking at what it paints without a screen).
+    builtX = list->scrollX;
+    builtY = list->scrollY;
+    Frame frame;
+    frame.list = list;
+    solar::layout::ScrollRange(*tree, nullptr, frame.maxX, frame.maxY);
+    const size_t itemCount = list->items.size();
+    shared.PostFrame(std::move(frame));
+    // SOLAR_GUI_SHOT=file.png: the frame is written to a file by the window, and the program ends (for looking at what it paints without a screen).
     // (SOLAR_GUI_SETTLE=ms: not before the pictures had that long to come.)
     const char* settle = std::getenv("SOLAR_GUI_SETTLE");
     if (autoScroll > 0 || (std::getenv("SOLAR_GUI_SCRIPT") && (!script.empty() || scriptQuiet < 6))) {
     } else if (const char* shot = settle && Clock::now() - programStart < std::chrono::milliseconds(std::atoi(settle)) ? nullptr : std::getenv("SOLAR_GUI_SHOT")) {
-      SkDynamicMemoryWStream out;
-      if (SkPngEncoder::Encode(&out, pixmap, SkPngEncoder::Options())) {
-        sk_sp<SkData> png = out.detachAsData();
-        std::ofstream file(shot, std::ios::binary);
-        file.write(static_cast<const char*>(png->data()), static_cast<std::streamsize>(png->size()));
-      }
+      UiCommand command;
+      command.kind = UiCommand::Kind::Shot;
+      command.text = shot;
+      shared.Post(std::move(command));
+      // (The window ends the program once it has written the file.)
+      for (int i = 0; i < 1000 && !shared.quit.load(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(5));
       running = false;
     }
     if (timing) {
       const auto ms = [](Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
-      std::fprintf(stderr, "frame: layout %.1f ms, display list %.1f ms (%zu items), draw %.1f ms; step %.1f, glide %.1f, scrollbar %.1f, iteration %.1f\n", ms(t0, t1), ms(t1, t2), list.items.size(), ms(t2, t3), stepMs, glideMs, barMs, ms(iterStart, Clock::now()));
+      std::fprintf(stderr, "frame: layout %.1f ms, display list %.1f ms (%zu items), step %.1f, iteration %.1f\n", ms(t0, t1), ms(t1, t2), itemCount, stepMs, ms(iterStart, Clock::now()));
     }
     if (scrollTest && autoScroll == 0) running = false;
   }
 
-  if (texture) SDL_DestroyTexture(texture);
-  SDL_DestroyRenderer(renderer);
-  SDL_DestroyWindow(window);
-  SDL_Quit();
+  shared.quit = true;
   solar::html::SetFrameEnvironment(nullptr);
   return 0;
 }
+
+}  // namespace

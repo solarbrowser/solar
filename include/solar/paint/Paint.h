@@ -16,6 +16,7 @@ namespace solar::paint {
 Color ParseColor(const std::string& text);
 
 // The display list of the document in `tree`. The scroll position of the viewport and of the scroll containers is the one in the tree.
-DisplayList BuildDisplayList(Quanta::Context& ctx, layout::Tree& tree);
+// `overscan` is how far above and below the viewport items are made for, so that the list can be drawn at other scrolls than the one it was made at.
+DisplayList BuildDisplayList(Quanta::Context& ctx, layout::Tree& tree, double overscan = 0);
 
 }  // namespace solar::paint
