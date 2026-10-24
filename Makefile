@@ -130,6 +130,14 @@ LIBQUANTA = $(QUANTA_DIR)/build/lib/libquanta.a
 # only a plain object makes the whole process allocate through mimalloc.
 QUANTA_OVERRIDE = $(QUANTA_DIR)/build/lib/quanta_mimalloc_override.o
 QUANTA_LIBS = $(LIBQUANTA) $(QUANTA_OVERRIDE)
+# Quanta builds its allocator override as LLVM bitcode (ThinLTO), so the link goes through lld.
+QUANTA_LINK = -fuse-ld=lld -flto=thin
+# Intl (ICU4X): the library is linked in; its locale data is a file (quanta-icu.postcard) that Quanta looks for next to the executable
+# (make -C third_party/quanta icu-data ICU4X=1 makes it, then copy build/quanta-icu.postcard here). ICU4X=0 builds without Intl.
+ICU4X ?= 1
+ifeq ($(ICU4X),1)
+QUANTA_LIBS += $(QUANTA_DIR)/third_party/quanta_icu/target/release/libquanta_icu.a -ldl
+endif
 
 # IdnaTables.cpp must be regenerated from the same Unicode version's data files.
 UNICODE_VERSION = 18.0.0
@@ -144,7 +152,8 @@ PSL_FILE = $(BUILD_DIR)/psl/public_suffix_list.dat
 all: solar solar-cli
 
 quanta:
-	@$(MAKE) --no-print-directory -C $(QUANTA_DIR) lib
+	@$(MAKE) --no-print-directory -C $(QUANTA_DIR) lib ICU4X=$(ICU4X)
+	@if [ "$(ICU4X)" = 1 ]; then $(MAKE) --no-print-directory -C $(QUANTA_DIR) third_party/quanta_icu/target/release/libquanta_icu.a ICU4X=1; fi
 
 $(QUANTA_LIBS): | quanta
 
@@ -153,11 +162,11 @@ $(OBJ_DIR)/src/paint/SkiaPainter.o $(OBJ_DIR)/src/gui/Main.o: CXXFLAGS += $(SKIA
 
 solar: $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/paint/SkiaPainter.o $(PAINT_OBJECTS) $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
-	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS) $(SKIA_LIBS) $(SDL_LIBS)
+	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS) $(SKIA_LIBS) $(SDL_LIBS)
 
 solar-cli: $(OBJ_DIR)/src/main.o $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
-	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS)
+	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS)
 
 $(BUILD_DIR)/UrlTest: $(OBJ_DIR)/tests/UrlTest.o $(URL_OBJECTS)
 	@echo "[LINK] $@"
@@ -185,23 +194,23 @@ $(BUILD_DIR)/HstsTest: $(OBJ_DIR)/tests/HstsTest.o $(OBJ_DIR)/src/net/Hsts.o $(U
 
 $(BUILD_DIR)/ResolverTest: $(OBJ_DIR)/tests/ResolverTest.o $(NET_OBJECTS) $(URL_OBJECTS)
 	@echo "[LINK] $@"
-	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
+	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS)
 
 $(BUILD_DIR)/LoopTest: $(OBJ_DIR)/tests/LoopTest.o $(NET_OBJECTS) $(URL_OBJECTS)
 	@echo "[LINK] $@"
-	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
+	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS)
 
 $(BUILD_DIR)/HttpClientTest: $(OBJ_DIR)/tests/HttpClientTest.o $(OBJ_DIR)/tests/support/TestServer.o $(OBJ_DIR)/tests/support/Compress.o $(URL_OBJECTS) $(NET_OBJECTS)
 	@echo "[LINK] $@"
-	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
+	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS)
 
 $(BUILD_DIR)/TlsTest: $(OBJ_DIR)/tests/TlsTest.o $(OBJ_DIR)/tests/support/TestServer.o $(OBJ_DIR)/tests/support/TlsTestServer.o $(OBJ_DIR)/tests/support/Pki.o $(URL_OBJECTS) $(NET_OBJECTS)
 	@echo "[LINK] $@"
-	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
+	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS)
 
 $(BUILD_DIR)/Http2Test: $(OBJ_DIR)/tests/Http2Test.o $(OBJ_DIR)/tests/support/Http2TestServer.o $(OBJ_DIR)/tests/support/TlsTestServer.o $(OBJ_DIR)/tests/support/Pki.o $(OBJ_DIR)/tests/support/Compress.o $(URL_OBJECTS) $(NET_OBJECTS)
 	@echo "[LINK] $@"
-	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
+	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS)
 
 $(BUILD_DIR)/ContentDecoderTest: $(OBJ_DIR)/tests/ContentDecoderTest.o $(OBJ_DIR)/tests/support/Compress.o $(OBJ_DIR)/src/net/ContentDecoder.o $(OBJ_DIR)/src/net/Http1Parser.o
 	@echo "[LINK] $@"
@@ -237,11 +246,11 @@ $(BUILD_DIR)/ValidationErrorTest: $(OBJ_DIR)/tests/ValidationErrorTest.o $(URL_O
 
 $(BUILD_DIR)/UrlBindingsTest: $(OBJ_DIR)/tests/UrlBindingsTest.o $(URL_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
-	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
+	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS)
 
 $(BUILD_DIR)/UrlRealmsTest: $(OBJ_DIR)/tests/UrlRealmsTest.o $(URL_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
-	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
+	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS)
 
 # The value grammar does not need the DOM either.
 $(BUILD_DIR)/CssValuesTest: $(OBJ_DIR)/tests/CssValuesTest.o $(OBJ_DIR)/src/css/Tokenizer.o $(OBJ_DIR)/src/css/Syntax.o $(OBJ_DIR)/src/css/Values.o $(OBJ_DIR)/src/css/Calc.o $(OBJ_DIR)/src/css/Color.o $(OBJ_DIR)/src/css/Shorthands.o $(OBJ_DIR)/src/css/Properties.o $(OBJ_DIR)/src/css/PropertyData.o $(URL_OBJECTS)
@@ -264,19 +273,19 @@ $(BUILD_DIR)/HtmlTokenizerTest: $(OBJ_DIR)/tests/HtmlTokenizerTest.o $(OBJ_DIR)/
 
 $(BUILD_DIR)/HtmlTreeTest: $(OBJ_DIR)/tests/HtmlTreeTest.o $(HTML_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(URL_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
-	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS)
+	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS)
 
 $(BUILD_DIR)/DomTest: $(OBJ_DIR)/tests/DomTest.o $(URL_OBJECTS) $(DOM_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
-	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
+	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS)
 
 $(BUILD_DIR)/WptTest: $(OBJ_DIR)/tests/WptTest.o $(URL_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
-	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS)
+	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS)
 
 $(BUILD_DIR)/FetchBindingsTest: $(OBJ_DIR)/tests/FetchBindingsTest.o $(OBJ_DIR)/tests/support/TestServer.o $(URL_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
-	@$(CXX) $(CXXFLAGS) -o $@ $^ $(NET_LIBS)
+	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS)
 
 $(BUILD_DIR)/GenIdnaTables: tools/GenIdnaTables.cpp
 	@mkdir -p $(BUILD_DIR)
