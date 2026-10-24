@@ -271,6 +271,9 @@ Element* NewElement(Context& ctx, Document* document, std::string_view localName
   element->localName = localName;
   element->namespaceUri = namespaceUri;
   element->prefix = prefix;
+  if (namespaceUri == kSvgNamespace) {
+    if (Object* prototype = SvgElementPrototype(ctx, localName)) element->initialize_prototype(prototype);
+  }
   if (namespaceUri == kHtmlNamespace && IsValidCustomElementName(localName)) element->customState = CustomState::Undefined;
   if (namespaceUri == kHtmlNamespace && localName == "template" && document) {
     DocumentFragment* contents = NewDocumentFragment(ctx, TemplateContentsOwner(ctx, document));

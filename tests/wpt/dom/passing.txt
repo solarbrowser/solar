@@ -503,7 +503,6 @@ tests/wpt/html/semantics/scripting-1/the-script-element/module/dynamic-import/pr
 tests/wpt/html/semantics/scripting-1/the-script-element/module/dynamic-import/propagate-nonce-external-module.html
 tests/wpt/html/semantics/scripting-1/the-script-element/module/dynamic-import/propagate-nonce-inline-classic.html
 tests/wpt/html/semantics/scripting-1/the-script-element/module/dynamic-import/propagate-nonce-inline-module.html
-tests/wpt/html/semantics/scripting-1/the-script-element/module/dynamic-import/shared-dependency-repeated-import.https.html
 tests/wpt/html/semantics/scripting-1/the-script-element/module/errorhandling.html
 tests/wpt/html/semantics/scripting-1/the-script-element/module/import-meta/import-meta-resolve-multiple-scripts.html
 tests/wpt/html/semantics/scripting-1/the-script-element/module/imports.html
@@ -515,7 +514,6 @@ tests/wpt/html/semantics/scripting-1/the-script-element/module/module-vs-script-
 tests/wpt/html/semantics/scripting-1/the-script-element/module/module-vs-script-2.html
 tests/wpt/html/semantics/scripting-1/the-script-element/module/nomodule-attribute.html
 tests/wpt/html/semantics/scripting-1/the-script-element/module/script-for-event.html
-tests/wpt/html/semantics/scripting-1/the-script-element/module/shared-dependency-repeated-import.https.html
 tests/wpt/html/semantics/scripting-1/the-script-element/module/single-evaluation-1.html
 tests/wpt/html/semantics/scripting-1/the-script-element/module/single-evaluation-2.html
 tests/wpt/html/semantics/scripting-1/the-script-element/module/type.html

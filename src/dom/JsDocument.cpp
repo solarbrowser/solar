@@ -34,9 +34,13 @@ char g_htmlTableKey;
 
 struct HtmlTable : DOMObject {
   std::unordered_map<std::string, Object*> byTag;
+  std::unordered_map<std::string, Object*> svgByTag;  // the interfaces of SVG elements by name
+  Object* svgElement = nullptr;                          // SVGElement: the ones that have none of their own
   Object* unknown = nullptr;
   void Visit(Quanta::Visitor& visitor) {
     for (auto& entry : byTag) visitor.Mark(entry.second);
+    for (auto& entry : svgByTag) visitor.Mark(entry.second);
+    visitor.Mark(svgElement);
     visitor.Mark(unknown);
   }
 };
@@ -480,6 +484,20 @@ Object* HtmlElementPrototype(Context& ctx, std::string_view localName) {
 
 void RegisterHtmlElementInterface(Context& ctx, std::string_view localName, Object* prototype) {
   if (HtmlTable* table = TableOf(ctx, true)) table->byTag[std::string(localName)] = prototype;
+}
+
+void RegisterSvgElementInterface(Context& ctx, std::string_view localName, Object* prototype) {
+  if (HtmlTable* table = TableOf(ctx, true)) {
+    if (localName.empty()) table->svgElement = prototype;
+    else table->svgByTag[std::string(localName)] = prototype;
+  }
+}
+
+Object* SvgElementPrototype(Context& ctx, std::string_view localName) {
+  HtmlTable* table = TableOf(ctx, false);
+  if (!table) return nullptr;
+  const auto found = table->svgByTag.find(std::string(localName));
+  return found != table->svgByTag.end() ? found->second : table->svgElement;
 }
 
 Object* UnknownHtmlElementPrototype(Context& ctx) {

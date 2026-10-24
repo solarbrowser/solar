@@ -465,7 +465,7 @@ Value InsertBefore(Context& ctx, Value t, qe::Args args, Value) {
   Node* node = NodeArgument(ctx, args, 0, "Failed to execute 'insertBefore' on 'Node'");
   if (!node) return qe::Undefined();
   Node* child = nullptr;
-  if (!qe::IsNull(args[1])) {
+  if (!qe::IsNull(args[1]) && !qe::IsUndefined(args[1])) {  // (a nullable argument that is undefined is null)
     child = NodeArgument(ctx, args, 1, "Failed to execute 'insertBefore' on 'Node'");
     if (!child) return qe::Undefined();
   }

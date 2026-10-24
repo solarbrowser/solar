@@ -158,6 +158,7 @@ Value Scroll(Context& ctx, Value, qe::Args args, Value) {
   Value out = qe::NewArray(ctx);
   if (!document) return out;
   Tree* tree = UpdateLayout(ctx, document);
+  if (!tree) return out;  // (layout is being made: what asks for it from inside it is told nothing)
   const bool viewport = !element || element == ViewportElement(document);
   const dom::Node* key = viewport ? static_cast<const dom::Node*>(document) : element;
   double minX = 0, minY = 0, maxX = 0, maxY = 0;
@@ -189,6 +190,7 @@ Value ElementsAt(Context& ctx, Value, qe::Args args, Value) {
   dom::Document* document = dom::AssociatedDocument(ctx);
   if (!document || args.size() < 2) return out;
   Tree* tree = UpdateLayout(ctx, document);
+  if (!tree) return qe::Null();  // (layout is being made: what asks for it from inside it is told nothing)
   for (dom::Element* e : ElementsAtPoint(*tree, qe::ToNumber(ctx, args[0]), qe::ToNumber(ctx, args[1]))) qe::ArrayPush(ctx, out, dom::NodeValue(e));
   return out;
 }
@@ -197,6 +199,7 @@ Value Dump(Context& ctx, Value, qe::Args args, Value) {
   dom::Document* document = args.empty() ? dom::AssociatedDocument(ctx) : nullptr;
   if (!document) return qe::Undefined();
   Tree* tree = UpdateLayout(ctx, document);
+  if (!tree) return qe::Null();  // (layout is being made: what asks for it from inside it is told nothing)
   return qe::FromWtf8(ctx, DumpTree(*tree));
 }
 
@@ -218,6 +221,7 @@ Value ProcessedText(Context& ctx, Value, qe::Args args, Value) {
   dom::Node* node = args.empty() ? nullptr : dom::ThisNode(ctx, args[0]);
   if (!node || !node->nodeDocument) return qe::Null();
   Tree* tree = UpdateLayout(ctx, node->nodeDocument);
+  if (!tree) return qe::Null();  // (layout is being made: what asks for it from inside it is told nothing)
   std::string out;
   bool any = false;
   for (Box* box : BoxesOf(*tree, node)) {
@@ -239,6 +243,7 @@ Value RangeRects(Context& ctx, Value, qe::Args args, Value) {
   if (!node || !node->nodeDocument || args.size() < 3) return out;
   const dom::CharacterData* text = static_cast<const dom::CharacterData*>(node);
   Tree* tree = UpdateLayout(ctx, node->nodeDocument);
+  if (!tree) return qe::Null();  // (layout is being made: what asks for it from inside it is told nothing)
   const size_t from = ByteOfUnit(text->data, static_cast<uint32_t>(qe::ToNumber(ctx, args[1])));
   const size_t to = ByteOfUnit(text->data, static_cast<uint32_t>(qe::ToNumber(ctx, args[2])));
   if (to <= from) return out;
@@ -309,6 +314,7 @@ Value BoxSizes(Context& ctx, Value, qe::Args args, Value) {
   dom::Element* element = args.empty() ? nullptr : DOMObject::Cast<dom::Element>(args[0]);
   if (!element || !element->nodeDocument) return qe::Null();
   Tree* tree = UpdateLayout(ctx, element->nodeDocument);
+  if (!tree) return qe::Null();  // (layout is being made: what asks for it from inside it is told nothing)
   const std::vector<Box*>& boxes = BoxesOf(*tree, element);
   Value out = qe::NewArray(ctx);
   for (double v : {0.0, 0.0, 0.0, 0.0, 0.0, 0.0}) qe::ArrayPush(ctx, out, qe::FromNumber(v));
@@ -341,6 +347,7 @@ Value CvTake(Context& ctx, Value, qe::Args, Value) {
   dom::Document* document = dom::AssociatedDocument(ctx);
   if (!document || !(document->contentVisibilityAutoSeen || css::g_contentVisibilityAutoMentioned)) return out;
   Tree* tree = UpdateLayout(ctx, document);
+  if (!tree) return qe::Null();  // (layout is being made: what asks for it from inside it is told nothing)
   const auto walk = [&](auto&& self, const Box& box) -> void {
     // The size of what is rendered in a frame is what a skipped box has next, if it asks for the last size (contain-intrinsic-size: auto, and content-visibility: auto).
     if (box.kind == Box::Kind::Block && box.node && box.node->IsElement() && box.style && !box.style->skipContents &&

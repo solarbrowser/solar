@@ -148,4 +148,7 @@ void FollowSignal(Quanta::Context& ctx, JsAbortSignal* follower, JsAbortSignal* 
 // it is undefined), runs its algorithms, fires abort and aborts the signals that follow it.
 void SignalAbort(Quanta::Context& ctx, JsAbortSignal* signal, Quanta::Value reason);
 
+// The target the window's own events go to: a method of EventTarget called on the window is for it.
+void SetWindowEventTarget(Quanta::Context& ctx, JsEventTarget* target);
+
 }  // namespace solar::web

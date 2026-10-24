@@ -57,8 +57,15 @@ JsEvent* ThisEvent(Context& ctx, const Value& thisValue) {
   return self;
 }
 
+char g_windowTargetKey;
+
 JsEventTarget* ThisTarget(Context& ctx, const Value& thisValue) {
   JsEventTarget* self = DOMObject::Cast<JsEventTarget>(thisValue);
+  if (!self) {
+    // The window is the target of its own events: a method of EventTarget called with it (taken from the prototype, as libraries do) is for the target it has.
+    const bool window = qe::IsUndefined(thisValue) || qe::IsNull(thisValue) || (qe::IsObject(thisValue) && (thisValue.as_object() == ctx.get_global_object() || qe::UnwrapWindowProxy(thisValue).as_object() == ctx.get_global_object()));
+    if (window) self = static_cast<JsEventTarget*>(qe::GetRealmData(ctx, &g_windowTargetKey));
+  }
   if (!self) qe::ThrowTypeError(ctx, "Illegal invocation");
   return self;
 }
@@ -154,6 +161,7 @@ Value InitCustomEvent(Context& ctx, Value t, qe::Args args, Value) {
   const std::string type = qe::ToUsvUtf8(ctx, args[0]);
   if (qe::HasException(ctx)) return qe::Undefined();
   if (self->dispatching) return qe::Undefined();
+  self->initialized = true;
   self->type = type;
   self->bubbles = args.size() > 1 && args[1].to_boolean();
   self->cancelable = args.size() > 2 && args[2].to_boolean();
@@ -288,6 +296,7 @@ Value InitEvent(Context& ctx, Value t, qe::Args args, Value) {
   const std::string type = qe::ToUsvUtf8(ctx, args[0]);
   if (qe::HasException(ctx)) return qe::Undefined();
   if (self->dispatching) return qe::Undefined();
+  self->initialized = true;
   self->type = type;
   self->bubbles = args.size() > 1 && args[1].to_boolean();
   self->cancelable = args.size() > 2 && args[2].to_boolean();
@@ -698,5 +707,7 @@ void DefineEventClasses(Context& ctx) {
   qe::DefineMethod(target.prototype, "dispatchEvent", DispatchEvent, 1);
   qe::DefineGlobal(ctx, "EventTarget", target.constructor);
 }
+
+void SetWindowEventTarget(Context& ctx, JsEventTarget* target) { qe::SetRealmData(ctx, &g_windowTargetKey, target); }
 
 }  // namespace solar::web

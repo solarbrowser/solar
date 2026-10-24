@@ -519,6 +519,7 @@ Value SetWindowTarget(Context& ctx, Value, qe::Args args, Value) {
   if (document && target) {
     document->window = target;
     document->NoteWrite();
+    web::SetWindowEventTarget(ctx, target);
   }
   return qe::Undefined();
 }
@@ -583,12 +584,166 @@ namespace {
 
 // A page's global object, in script: window and its other names for itself, the document, and the
 // EventTarget methods the window has (an event on the document goes on to it).
+// What pages take for granted of a browser, and a page that is not shown to anyone has little to say of: the history, storage (kept for the page only), cookies,
+// the visibility of the document, random values and idle callbacks.
+const char* const kPlatformScript = R"JS(
+(function () {
+  const define = (target, name, value) => Object.defineProperty(target, name, { value, writable: true, enumerable: false, configurable: true });
+  const moveUrl = globalThis.__solarMoveUrl;
+  delete globalThis.__solarMoveUrl;
+
+  // ---- History ----
+  class History {
+    constructor(access) { access.history = this; }
+  }
+  const entries = [{ state: null, url: document.URL }];
+  let index = 0;
+  let scrollRestoration = "auto";
+  const urlFor = (url) => {
+    const target = new URL(url === undefined || url === null ? document.URL : String(url), document.URL);
+    const here = new URL(document.URL);
+    if (target.origin !== here.origin && !(here.protocol === "file:" && target.protocol === "file:")) throw new DOMException("A history state object with URL '" + target.href + "' cannot be created in a document with origin '" + here.origin + "'.", "SecurityError");
+    return target.href;
+  };
+  const history = Object.create(History.prototype);
+  Object.defineProperties(History.prototype, {
+    length: { get() { return entries.length; }, enumerable: true, configurable: true },
+    state: { get() { return entries[index].state; }, enumerable: true, configurable: true },
+    scrollRestoration: { get() { return scrollRestoration; }, set(value) { if (value === "auto" || value === "manual") scrollRestoration = value; }, enumerable: true, configurable: true },
+    pushState: { value(state, title, url) { const href = url === undefined ? entries[index].url : urlFor(url); entries.length = index + 1; entries.push({ state: state === undefined ? null : state, url: href }); index = entries.length - 1; moveUrl(href); }, writable: true, enumerable: true, configurable: true },
+    replaceState: { value(state, title, url) { const href = url === undefined ? entries[index].url : urlFor(url); entries[index] = { state: state === undefined ? null : state, url: href }; moveUrl(href); }, writable: true, enumerable: true, configurable: true },
+    go: { value(delta = 0) {
+      const next = index + Math.trunc(Number(delta) || 0);
+      if (delta === 0 || next < 0 || next >= entries.length) return;
+      index = next;
+      const entry = entries[index];
+      setTimeout(() => { moveUrl(entry.url); window.dispatchEvent(new PopStateEvent("popstate", { state: entry.state })); }, 0);
+    }, writable: true, enumerable: true, configurable: true },
+    back: { value() { this.go(-1); }, writable: true, enumerable: true, configurable: true },
+    forward: { value() { this.go(1); }, writable: true, enumerable: true, configurable: true },
+  });
+  define(globalThis, "History", History);
+  Object.defineProperty(globalThis, "history", { value: history, writable: true, enumerable: true, configurable: true });
+  if (typeof PopStateEvent === "undefined") {
+    class PopStateEvent extends Event { constructor(type, init = {}) { super(type, init); this.state = init.state === undefined ? null : init.state; } }
+    define(globalThis, "PopStateEvent", PopStateEvent);
+  }
+
+  // ---- Storage ----
+  class Storage {
+    constructor() { throw new TypeError("Illegal constructor"); }
+  }
+  const makeStorage = () => {
+    const data = new Map();
+    const target = Object.create(Storage.prototype);
+    const api = {
+      getItem: (key) => (data.has(String(key)) ? data.get(String(key)) : null),
+      setItem: (key, value) => { data.set(String(key), String(value)); },
+      removeItem: (key) => { data.delete(String(key)); },
+      clear: () => { data.clear(); },
+      key: (i) => { const keys = [...data.keys()]; return i >= 0 && i < keys.length ? keys[i] : null; },
+    };
+    return new Proxy(target, {
+      get(object, key, receiver) {
+        if (key === "length") return data.size;
+        if (typeof key === "string" && key in api) return api[key];
+        if (typeof key === "string" && data.has(key)) return data.get(key);
+        return Reflect.get(object, key, receiver);
+      },
+      set(object, key, value) { if (typeof key === "string") data.set(key, String(value)); return true; },
+      deleteProperty(object, key) { if (typeof key === "string") data.delete(key); return true; },
+      has(object, key) { return (typeof key === "string" && (data.has(key) || key in api || key === "length")) || key in object; },
+      ownKeys() { return [...data.keys()]; },
+      getOwnPropertyDescriptor(object, key) { return typeof key === "string" && data.has(key) ? { value: data.get(key), writable: true, enumerable: true, configurable: true } : undefined; },
+    });
+  };
+  for (const name of ["getItem", "setItem", "removeItem", "clear", "key"]) define(Storage.prototype, name, function () { throw new TypeError("Illegal invocation"); });
+  define(globalThis, "Storage", Storage);
+  Object.defineProperty(globalThis, "localStorage", { value: makeStorage(), writable: true, enumerable: true, configurable: true });
+  Object.defineProperty(globalThis, "sessionStorage", { value: makeStorage(), writable: true, enumerable: true, configurable: true });
+
+  // ---- Document state ----
+  const cookies = new Map();
+  const documentProto = Document.prototype;
+  const accessors = {
+    visibilityState: { get() { return "visible"; } },
+    hidden: { get() { return false; } },
+    webkitHidden: { get() { return false; } },
+    webkitVisibilityState: { get() { return "visible"; } },
+    referrer: { get() { return ""; } },
+    fullscreenEnabled: { get() { return false; } },
+    fullscreenElement: { get() { return null; } },
+    pictureInPictureEnabled: { get() { return false; } },
+    cookie: {
+      get() { return [...cookies].map(([k, v]) => (v === "" ? k : k + "=" + v)).join("; "); },
+      set(text) {
+        const parts = String(text).split(";");
+        const first = parts[0];
+        const at = first.indexOf("=");
+        const name = (at < 0 ? "" : first.slice(0, at)).trim(), value = (at < 0 ? first : first.slice(at + 1)).trim();
+        const attributes = parts.slice(1).map((p) => p.trim().toLowerCase());
+        const expired = attributes.some((a) => a.startsWith("max-age=") && Number(a.slice(8)) <= 0) || attributes.some((a) => a.startsWith("expires=") && Date.parse(a.slice(8)) < Date.now());
+        if (expired) cookies.delete(name); else cookies.set(name, value);
+      },
+    },
+  };
+  for (const [name, accessor] of Object.entries(accessors)) {
+    if (!Object.getOwnPropertyDescriptor(documentProto, name)) Object.defineProperty(documentProto, name, { ...accessor, enumerable: true, configurable: true });
+  }
+  if (!documentProto.exitFullscreen) define(documentProto, "exitFullscreen", function exitFullscreen() { return Promise.resolve(); });
+  if (!documentProto.execCommand) define(documentProto, "execCommand", function execCommand() { return false; });
+  if (!documentProto.queryCommandSupported) define(documentProto, "queryCommandSupported", function queryCommandSupported() { return false; });
+
+  // ---- Random values, idle callbacks, beacons ----
+  if (typeof crypto === "undefined") {
+    const fill = (array) => {
+      if (!ArrayBuffer.isView(array) || array instanceof Float32Array || array instanceof Float64Array) throw new TypeError("The data argument must be an integer-type TypedArray.");
+      if (array.byteLength > 65536) throw new DOMException("The ArrayBufferView's byte length (" + array.byteLength + ") exceeds the number of bytes of entropy available via this API (65536).", "QuotaExceededError");
+      const bytes = new Uint8Array(array.buffer, array.byteOffset, array.byteLength);
+      for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+      return array;
+    };
+    class Crypto {
+      getRandomValues(array) { return fill(array); }
+      randomUUID() {
+        const b = new Uint8Array(16);
+        fill(b);
+        b[6] = (b[6] & 0x0f) | 0x40;
+        b[8] = (b[8] & 0x3f) | 0x80;
+        const hex = [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+        return hex.slice(0, 8) + "-" + hex.slice(8, 12) + "-" + hex.slice(12, 16) + "-" + hex.slice(16, 20) + "-" + hex.slice(20);
+      }
+      get subtle() { return undefined; }
+    }
+    define(globalThis, "Crypto", Crypto);
+    Object.defineProperty(globalThis, "crypto", { value: new Crypto(), writable: true, enumerable: true, configurable: true });
+  }
+  if (typeof requestIdleCallback === "undefined") {
+    define(globalThis, "requestIdleCallback", function requestIdleCallback(callback) {
+      const start = Date.now();
+      return setTimeout(() => callback({ didTimeout: false, timeRemaining: () => Math.max(0, 50 - (Date.now() - start)) }), 1);
+    });
+    define(globalThis, "cancelIdleCallback", function cancelIdleCallback(handle) { clearTimeout(handle); });
+  }
+  if (typeof navigator !== "undefined") {
+    if (!navigator.sendBeacon) define(navigator, "sendBeacon", function sendBeacon() { return true; });
+    if (!("connection" in navigator)) Object.defineProperty(navigator, "connection", { value: Object.assign(new EventTarget(), { effectiveType: "4g", downlink: 10, rtt: 50, saveData: false }), configurable: true, enumerable: true });
+    if (!("deviceMemory" in navigator)) Object.defineProperty(navigator, "deviceMemory", { value: 8, configurable: true, enumerable: true });
+    if (!("clipboard" in navigator)) Object.defineProperty(navigator, "clipboard", { value: { writeText: () => Promise.reject(new DOMException("Write permission denied.", "NotAllowedError")), readText: () => Promise.reject(new DOMException("Read permission denied.", "NotAllowedError")) }, configurable: true, enumerable: true });
+    if (!("mediaDevices" in navigator)) Object.defineProperty(navigator, "mediaDevices", { value: Object.assign(new EventTarget(), { enumerateDevices: () => Promise.resolve([]), getUserMedia: () => Promise.reject(new DOMException("Requested device not found", "NotFoundError")), getSupportedConstraints: () => ({}) }), configurable: true, enumerable: true });
+    if (!("serviceWorker" in navigator)) Object.defineProperty(navigator, "serviceWorker", { value: Object.assign(new EventTarget(), { controller: null, ready: new Promise(() => {}), register: () => Promise.reject(new DOMException("Service workers are not supported.", "SecurityError")), getRegistrations: () => Promise.resolve([]) }), configurable: true, enumerable: true });
+  }
+  if (!("visualViewport" in globalThis)) Object.defineProperty(globalThis, "visualViewport", { get() { return Object.assign(new EventTarget(), { width: innerWidth, height: innerHeight, scale: 1, offsetLeft: 0, offsetTop: 0, pageLeft: scrollX, pageTop: scrollY }); }, configurable: true, enumerable: true });
+})();
+)JS";
+
 const char* const kWindowScript = R"JS(
 (function () {
   const target = new EventTarget();
   __solarSetWindow(target);
   const getDocument = __solarDocument;
   const setDocumentUrl = __solarSetDocumentUrl;
+  Object.defineProperty(globalThis, "__solarMoveUrl", { value: setDocumentUrl, configurable: true });
   const setHelper = __solarSetHelper;
   const parentWindow = __solarParent;
   const frameElement = __solarFrameElement;
@@ -725,7 +880,97 @@ const char* const kWindowScript = R"JS(
   // performance.now(), from the clock the page started on, and animation frames: there is no display to wait for,
   // so a frame is a 16 ms timer.
   const timeOrigin = Date.now();
-  Object.defineProperty(globalThis, "performance", { value: { now() { return Date.now() - timeOrigin; }, timeOrigin, toJSON() { return { timeOrigin }; } }, writable: true, enumerable: true, configurable: true });
+  {
+    // The performance timeline: marks and measures the page makes, and the navigation timing of a page that is not timed in more than its start.
+    const now = () => Date.now() - timeOrigin;
+    class PerformanceEntry {
+      constructor(name, entryType, startTime, duration) { this.name = name; this.entryType = entryType; this.startTime = startTime; this.duration = duration; }
+      toJSON() { return { name: this.name, entryType: this.entryType, startTime: this.startTime, duration: this.duration }; }
+    }
+    class PerformanceMark extends PerformanceEntry {
+      constructor(name, options = {}) { super(String(name), "mark", options.startTime === undefined ? now() : Number(options.startTime), 0); this.detail = options.detail === undefined ? null : options.detail; }
+    }
+    class PerformanceMeasure extends PerformanceEntry {
+      constructor(name, startTime, duration, detail) { super(name, "measure", startTime, duration); this.detail = detail === undefined ? null : detail; }
+    }
+    const entries = [];
+    const observers = new Set();
+    let flushing = false;
+    const note = (entry) => {
+      entries.push(entry);
+      for (const observer of observers) if (observer.types.has(entry.entryType)) observer.queue.push(entry);
+      // (Observers are told once the script that made the entry is done.)
+      if (!flushing && observers.size) {
+        flushing = true;
+        queueMicrotask(() => { flushing = false; for (const observer of [...observers]) if (observer.queue.length) observer.flush(); });
+      }
+    };
+    const timing = {};
+    for (const name of ["navigationStart", "unloadEventStart", "unloadEventEnd", "redirectStart", "redirectEnd", "fetchStart", "domainLookupStart", "domainLookupEnd", "connectStart", "connectEnd", "secureConnectionStart",
+                        "requestStart", "responseStart", "responseEnd", "domLoading", "domInteractive", "domContentLoadedEventStart", "domContentLoadedEventEnd", "domComplete", "loadEventStart", "loadEventEnd"]) {
+      timing[name] = name === "unloadEventStart" || name === "unloadEventEnd" || name === "redirectStart" || name === "redirectEnd" || name === "secureConnectionStart" ? 0 : timeOrigin;
+    }
+    timing.toJSON = () => ({ ...timing });
+    const navigationEntry = Object.assign(new PerformanceEntry(getDocument().URL, "navigation", 0, 0), { initiatorType: "navigation", type: "navigate", redirectCount: 0, transferSize: 0, encodedBodySize: 0, decodedBodySize: 0, nextHopProtocol: "h2", responseStart: 0, requestStart: 0, domInteractive: 0, domComplete: 0, loadEventStart: 0, loadEventEnd: 0, domContentLoadedEventStart: 0, domContentLoadedEventEnd: 0 });
+    const timeFor = (value) => {
+      if (value === undefined) return now();
+      if (typeof value === "number") return value;
+      const named = entries.slice().reverse().find((e) => e.entryType === "mark" && e.name === String(value));
+      if (named) return named.startTime;
+      if (String(value) in timing) return timing[String(value)] - timeOrigin;
+      throw new DOMException("The mark '" + value + "' does not exist.", "SyntaxError");
+    };
+    class Performance extends EventTarget {
+      get timeOrigin() { return timeOrigin; }
+      get timing() { return timing; }
+      get navigation() { return { type: 0, redirectCount: 0 }; }
+      get memory() { return { jsHeapSizeLimit: 2172649472, totalJSHeapSize: 20000000, usedJSHeapSize: 16000000 }; }
+      get eventCounts() { return new Map(); }
+      now() { return now(); }
+      mark(name, options) { const mark = new PerformanceMark(name, options); note(mark); return mark; }
+      measure(name, startOrOptions, end) {
+        let start = 0, finish = now(), detail;
+        if (startOrOptions && typeof startOrOptions === "object") {
+          if (startOrOptions.start !== undefined) start = timeFor(startOrOptions.start);
+          if (startOrOptions.end !== undefined) finish = timeFor(startOrOptions.end);
+          else if (startOrOptions.duration !== undefined) finish = start + startOrOptions.duration;
+          detail = startOrOptions.detail;
+        } else {
+          if (startOrOptions !== undefined) start = timeFor(startOrOptions);
+          if (end !== undefined) finish = timeFor(end);
+        }
+        const measure = new PerformanceMeasure(String(name), start, finish - start, detail);
+        note(measure);
+        return measure;
+      }
+      getEntries() { return entries.slice(); }
+      getEntriesByType(type) { return type === "navigation" ? [navigationEntry] : entries.filter((e) => e.entryType === type); }
+      getEntriesByName(name, type) { return entries.filter((e) => e.name === name && (type === undefined || e.entryType === type)); }
+      clearMarks(name) { for (let i = entries.length - 1; i >= 0; i--) if (entries[i].entryType === "mark" && (name === undefined || entries[i].name === name)) entries.splice(i, 1); }
+      clearMeasures(name) { for (let i = entries.length - 1; i >= 0; i--) if (entries[i].entryType === "measure" && (name === undefined || entries[i].name === name)) entries.splice(i, 1); }
+      clearResourceTimings() {}
+      setResourceTimingBufferSize() {}
+      toJSON() { return { timeOrigin, timing: timing.toJSON() }; }
+    }
+    class PerformanceObserver {
+      constructor(callback) { this.callback = callback; this.types = new Set(); this.queue = []; }
+      observe(options = {}) {
+        const types = options.entryTypes || (options.type ? [options.type] : []);
+        for (const type of types) this.types.add(type);
+        observers.add(this);
+        if (options.buffered) for (const entry of entries) if (this.types.has(entry.entryType)) this.queue.push(entry);
+        if (this.queue.length) queueMicrotask(() => this.flush());
+      }
+      flush() { const batch = this.queue.splice(0); if (batch.length && observers.has(this)) this.callback({ getEntries: () => batch, getEntriesByType: (t) => batch.filter((e) => e.entryType === t), getEntriesByName: (n) => batch.filter((e) => e.name === n) }, this); }
+      disconnect() { observers.delete(this); this.queue = []; }
+      takeRecords() { return this.queue.splice(0); }
+      static get supportedEntryTypes() { return ["mark", "measure", "navigation", "resource"]; }
+    }
+    for (const [name, value] of [["PerformanceEntry", PerformanceEntry], ["PerformanceMark", PerformanceMark], ["PerformanceMeasure", PerformanceMeasure], ["Performance", Performance], ["PerformanceObserver", PerformanceObserver]]) {
+      Object.defineProperty(globalThis, name, { value, writable: true, enumerable: false, configurable: true });
+    }
+    Object.defineProperty(globalThis, "performance", { value: new Performance(), writable: true, enumerable: true, configurable: true });
+  }
   if (typeof navigator === "undefined") {
     const navigator = { userAgent: "Mozilla/5.0 (X11; Linux x86_64) Solar/1.0", appName: "Netscape", appVersion: "5.0 (X11)", appCodeName: "Mozilla", platform: "Linux x86_64", product: "Gecko", productSub: "20030107", vendor: "", vendorSub: "", language: "en-US", languages: Object.freeze(["en-US"]), onLine: true, cookieEnabled: true, hardwareConcurrency: 4, webdriver: false, maxTouchPoints: 0, doNotTrack: null, pdfViewerEnabled: false };
     Object.defineProperty(navigator, Symbol.toStringTag, { value: "Navigator", configurable: true });
@@ -995,6 +1240,7 @@ void InstallWindowOn(Host& host, dom::Document* document, Quanta::Embed::Realm* 
   SetUpWindowInterface(ctx);
   host.Evaluate(kWindowScript, "window.js");
   host.Evaluate(kEventHandlerScript, "handlers.js");
+  { const auto platform = host.Evaluate(kPlatformScript, "platform.js"); if (!platform.ok) std::fprintf(stderr, "platform.js: %s\n", platform.error.c_str()); }
   std::string xhr;
   for (const char* const* piece = web::kScriptXhr; *piece; ++piece) xhr += *piece;
   const auto xhrResult = host.Evaluate(xhr, "xhr.js");

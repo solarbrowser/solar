@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <map>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -419,6 +420,103 @@ Value SetInnerText(Context& ctx, Value t, qe::Args args, Value) {
   return qe::Undefined();
 }
 
+// ---- SVG elements ----
+
+namespace {
+
+Value GetSvgClassName(Context& ctx, Value t, qe::Args, Value) {
+  dom::Element* self = dom::ThisElement(ctx, t);
+  if (!self) return qe::Undefined();
+  // An SVGAnimatedString: the value, and the value as animations leave it (no animation changes it).
+  const std::string value = dom::GetAttribute(self, "class").value_or("");
+  Value object = qe::NewObject(ctx);
+  qe::Set(ctx, object, "baseVal", qe::FromWtf8(ctx, value));
+  qe::Set(ctx, object, "animVal", qe::FromWtf8(ctx, value));
+  return object;
+}
+
+Value EmptyBox(Context& ctx, Value, qe::Args, Value) {
+  Value box = qe::NewObject(ctx);
+  for (const char* name : {"x", "y", "width", "height"}) qe::Set(ctx, box, name, qe::FromNumber(0));
+  return box;
+}
+
+Value NullResult(Context&, Value, qe::Args, Value) { return qe::Null(); }
+
+struct SvgInterface {
+  const char* name;
+  const char* parent;  // the interface it is under
+  std::initializer_list<const char*> tags;
+};
+
+// The interfaces of SVG 2 for the elements that have one.
+const SvgInterface kSvgInterfaces[] = {
+    {"SVGElement", "Element", {}},
+    {"SVGGraphicsElement", "SVGElement", {}},
+    {"SVGGeometryElement", "SVGGraphicsElement", {}},
+    {"SVGSVGElement", "SVGGraphicsElement", {"svg"}},
+    {"SVGGElement", "SVGGraphicsElement", {"g"}},
+    {"SVGDefsElement", "SVGGraphicsElement", {"defs"}},
+    {"SVGUseElement", "SVGGraphicsElement", {"use"}},
+    {"SVGSwitchElement", "SVGGraphicsElement", {"switch"}},
+    {"SVGImageElement", "SVGGraphicsElement", {"image"}},
+    {"SVGForeignObjectElement", "SVGGraphicsElement", {"foreignObject"}},
+    {"SVGTextContentElement", "SVGGraphicsElement", {}},
+    {"SVGTextPositioningElement", "SVGTextContentElement", {}},
+    {"SVGTextElement", "SVGTextPositioningElement", {"text"}},
+    {"SVGTSpanElement", "SVGTextPositioningElement", {"tspan"}},
+    {"SVGPathElement", "SVGGeometryElement", {"path"}},
+    {"SVGRectElement", "SVGGeometryElement", {"rect"}},
+    {"SVGCircleElement", "SVGGeometryElement", {"circle"}},
+    {"SVGEllipseElement", "SVGGeometryElement", {"ellipse"}},
+    {"SVGLineElement", "SVGGeometryElement", {"line"}},
+    {"SVGPolylineElement", "SVGGeometryElement", {"polyline"}},
+    {"SVGPolygonElement", "SVGGeometryElement", {"polygon"}},
+    {"SVGSymbolElement", "SVGElement", {"symbol"}},
+    {"SVGMarkerElement", "SVGElement", {"marker"}},
+    {"SVGClipPathElement", "SVGElement", {"clipPath"}},
+    {"SVGMaskElement", "SVGElement", {"mask"}},
+    {"SVGPatternElement", "SVGElement", {"pattern"}},
+    {"SVGFilterElement", "SVGElement", {"filter"}},
+    {"SVGGradientElement", "SVGElement", {}},
+    {"SVGLinearGradientElement", "SVGGradientElement", {"linearGradient"}},
+    {"SVGRadialGradientElement", "SVGGradientElement", {"radialGradient"}},
+    {"SVGStopElement", "SVGElement", {"stop"}},
+    {"SVGStyleElement", "SVGElement", {"style"}},
+    {"SVGScriptElement", "SVGElement", {"script"}},
+    {"SVGTitleElement", "SVGElement", {"title"}},
+    {"SVGDescElement", "SVGElement", {"desc"}},
+    {"SVGMetadataElement", "SVGElement", {"metadata"}},
+    {"SVGAElement", "SVGGraphicsElement", {"a"}},
+    {"SVGViewElement", "SVGElement", {"view"}},
+    {"SVGAnimationElement", "SVGElement", {}},
+    {"SVGAnimateElement", "SVGAnimationElement", {"animate"}},
+    {"SVGSetElement", "SVGAnimationElement", {"set"}},
+    {"SVGAnimateTransformElement", "SVGAnimationElement", {"animateTransform"}},
+};
+
+void DefineSvgElementInterfaces(Context& ctx) {
+  std::map<std::string, Object*> prototypes;
+  prototypes["Element"] = dom::InterfacePrototype(ctx, dom::Interface::Element);
+  for (const SvgInterface& interface : kSvgInterfaces) {
+    qe::ClassRef definition = qe::DefineClass(ctx, interface.name, IllegalConstructor, 0, prototypes[interface.parent]);
+    qe::DefineGlobal(ctx, interface.name, definition.constructor);
+    prototypes[interface.name] = definition.prototype;
+    for (const char* tag : interface.tags) dom::RegisterSvgElementInterface(ctx, tag, definition.prototype);
+    if (std::string_view(interface.name) == "SVGElement") {
+      dom::RegisterSvgElementInterface(ctx, "", definition.prototype);
+      qe::DefineAccessor(definition.prototype, "className", GetSvgClassName, nullptr);
+    }
+    if (std::string_view(interface.name) == "SVGGraphicsElement") {
+      qe::DefineMethod(definition.prototype, "getBBox", EmptyBox, 0);
+      qe::DefineMethod(definition.prototype, "getCTM", NullResult, 0);
+      qe::DefineMethod(definition.prototype, "getScreenCTM", NullResult, 0);
+    }
+  }
+}
+
+}  // namespace
+
 void DefineHtmlElementInterfaces(Context& ctx) {
   Object* htmlElement = dom::InterfacePrototype(ctx, dom::Interface::HtmlElement);
 
@@ -467,6 +565,7 @@ void DefineHtmlElementInterfaces(Context& ctx) {
     }
   }
   for (const char* tag : kPlainTags) dom::RegisterHtmlElementInterface(ctx, tag, htmlElement);
+  DefineSvgElementInterfaces(ctx);
 }
 
 }  // namespace solar::html

@@ -412,6 +412,7 @@ int main(int argc, char** argv) {
   isolate->SetSerializationHooks(solar::web::MakeSerializationHooks());
   isolate->SetUncaughtExceptionHandler(solar::html::MakeUncaughtExceptionHandler());
   isolate->SetPromiseRejectionHandler(solar::html::MakeRejectionHandler());
+  if (std::getenv("SOLAR_GUI_POSITIONS")) isolate->SetSourcePositionTracking(true);
   auto loop = solar::net::Loop::Create();
   if (!loop) {
     std::fprintf(stderr, "cannot start the event loop\n");

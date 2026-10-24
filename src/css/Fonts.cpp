@@ -242,6 +242,7 @@ struct DocumentEntry {
   std::string url;
   std::unique_ptr<font::Database> database;
   size_t ruleCount = 0;
+  std::vector<std::unique_ptr<font::Database>> retired;  // the ones before, kept while one of them is being asked (a font that is fetched lets script run)
 };
 
 std::map<dom::Document*, DocumentEntry>& Cache() {
@@ -258,13 +259,16 @@ void ForgetDocumentFonts(dom::Document* document) {
 
 font::Database& DocumentFonts(dom::Document* document) {
   DocumentEntry& entry = Cache()[document];
-  const uint64_t version = (StyleVersion() * 1000003 + dom::DocumentVersion()) * 1000003 + g_scriptVersion;
+  // (What the fonts are is what the sheets say and what script made: not the elements, which change all the time.)
+  const std::vector<CssStyleSheet*> sheetsNow = SheetsOfTreeRoot(document);
+  const uint64_t version = (SheetsVersion() * 1000003 + sheetsNow.size()) * 1000003 + g_scriptVersion;
   if (entry.database && entry.version == version && entry.url == document->url) return *entry.database;
   entry.version = version;
   entry.url = document->url;
+  if (entry.database) entry.retired.push_back(std::move(entry.database));
   entry.database = std::make_unique<font::Database>();
   std::vector<FaceRule> rules;
-  for (const CssStyleSheet* sheet : SheetsOfTreeRoot(document)) {
+  for (const CssStyleSheet* sheet : sheetsNow) {
     if (!sheet->disabled) CollectFaceRules(sheet->rules, sheet->baseUrl, rules, 0);
   }
   for (const FaceRule& rule : rules) {
@@ -317,6 +321,18 @@ font::Request MakeFontRequest(const std::string& familyText, double weight, doub
 }
 
 std::vector<std::shared_ptr<font::Face>> FontsForRequest(dom::Document* document, const font::Request& request) {
+  static int depth = 0;
+  struct Depth {
+    dom::Document* document;
+    explicit Depth(dom::Document* d) : document(d) { ++depth; }
+    ~Depth() {
+      // The databases of before are let go when none is being asked.
+      if (--depth == 0 && document) {
+        const auto found = Cache().find(document);
+        if (found != Cache().end()) found->second.retired.clear();
+      }
+    }
+  } guard(document);
   std::vector<std::shared_ptr<font::Face>> faces;
   font::Database& system = font::Database::System();
   font::Database* web = document ? &DocumentFonts(document) : nullptr;

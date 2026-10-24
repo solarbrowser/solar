@@ -42,6 +42,7 @@ struct CeState : DOMObject {
   Value processBackup;
   Value htmlElementConstructor;
   std::vector<CustomDefinition*> definitions;
+  CustomDefinition* building = nullptr;  // the one being defined, which script runs under (a getter of the constructor): nothing else holds it yet
   std::vector<Pending> pending;
   std::vector<std::vector<Element*>> stack;
   std::vector<Element*> backup;
@@ -59,6 +60,7 @@ struct CeState : DOMObject {
     visitor.Mark(processBackup);
     visitor.Mark(htmlElementConstructor);
     for (CustomDefinition* definition : definitions) visitor.Mark(definition);
+    if (building) visitor.Mark(building);
     for (const Pending& entry : pending) {
       visitor.Mark(entry.promise);
       visitor.Mark(entry.resolve);
@@ -107,9 +109,11 @@ void EnqueueElement(Context& ctx, Element* element) {
   if (!state) return;
   if (!state->stack.empty()) {
     state->stack.back().push_back(element);
+    state->NoteWrite();
     return;
   }
   state->backup.push_back(element);
+  state->NoteWrite();
   if (state->backupQueued) return;
   state->backupQueued = true;
   Value process = state->processBackup;
@@ -550,6 +554,8 @@ Value Define(Context& ctx, Value t, qe::Args args, Value) {
   definition->name = name;
   definition->localName = localName;
   definition->constructor = constructor;
+  state->building = definition;
+  state->NoteWrite();
   // The callbacks of the prototype and the observed attributes of the constructor, which are read once, now.
   bool ok = false;
   do {
@@ -630,9 +636,14 @@ Value Define(Context& ctx, Value t, qe::Args args, Value) {
     ok = true;
   } while (false);
   running.reset();
-  if (!ok) return qe::Undefined();
+  if (!ok) {
+    state->building = nullptr;
+    return qe::Undefined();
+  }
   definition->NoteWrite();
   state->definitions.push_back(definition);
+  state->building = nullptr;
+  state->NoteWrite();  // (a young object is held by an old one: the collector has to be told)
   g_anyDefinition = true;
   // The elements of the document that were waiting for this definition.
   if (Document* document = AssociatedDocument(ctx)) {
@@ -707,6 +718,7 @@ Value WhenDefined(Context& ctx, Value t, qe::Args args, Value) {
     if (entry.name == name) return entry.promise;
   }
   state->pending.push_back({name, failure.promise, failure.resolve});
+  state->NoteWrite();
   return failure.promise;
 }
 

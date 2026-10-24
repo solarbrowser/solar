@@ -443,6 +443,9 @@ void NoteTreeChange();
 Quanta::Object* HtmlElementPrototype(Quanta::Context& ctx, std::string_view localName);
 void RegisterHtmlElementInterface(Quanta::Context& ctx, std::string_view localName, Quanta::Object* prototype);
 void SetUnknownHtmlElementInterface(Quanta::Context& ctx, Quanta::Object* prototype);
+// The same for SVG elements: SVGPathElement for "path", SVGElement (an empty name) for the rest.
+Quanta::Object* SvgElementPrototype(Quanta::Context& ctx, std::string_view localName);
+void RegisterSvgElementInterface(Quanta::Context& ctx, std::string_view localName, Quanta::Object* prototype);
 // HTMLUnknownElement's prototype, and whether `localName` is a name no built-in element has (and is no custom element's).
 Quanta::Object* UnknownHtmlElementPrototype(Quanta::Context& ctx);
 bool IsUnknownHtmlElementName(Quanta::Context& ctx, std::string_view localName);
