@@ -488,11 +488,11 @@ class Builder {
     std::vector<dom::Node*> out;
     if (node->IsElement()) {
       dom::Element* element = static_cast<dom::Element*>(node);
-      if (element->shadowRoot) {
-        for (dom::Node* c = dom::FirstChildOf(element->shadowRoot); c; c = dom::NextSiblingOf(c)) out.push_back(c);
+      if (element->ShadowRootInView()) {
+        for (dom::Node* c = dom::FirstChildOf(element->ShadowRootInView()); c; c = dom::NextSiblingOf(c)) out.push_back(c);
         return out;
       }
-      if (dom::IsSlot(element) && !element->assignedNodes.empty()) return dom::FindFlattenedSlottables(element);
+      if (dom::IsSlot(element) && !element->AssignedNodesInView().empty()) return dom::FindFlattenedSlottables(element);
     }
     for (dom::Node* c = dom::FirstChildOf(node); c; c = dom::NextSiblingOf(c)) out.push_back(c);
     return out;

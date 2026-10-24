@@ -228,6 +228,16 @@ void TestCommitted(Quanta::Context& ctx) {
     CommittedViewScope view;
     Check(d->FindAttribute("", "class")->Value() == "two" && d->FindAttribute("", "id") && text->Data() == "bye", "the next scope commits them");
   }
+  // Hover and focus.
+  {
+    CommittedViewScope view;
+    SetHoverElement(document, d);
+    Check(document->hoverElement == d && document->HoverInView() == nullptr, "the hover is pending for layout until the next scope");
+  }
+  {
+    CommittedViewScope view;
+    Check(document->HoverInView() == d, "and committed after");
+  }
   {
     CommittedViewScope view;
     Check(FirstChildOf(body) == b && ParentOf(a) == nullptr, "the next scope commits the change");

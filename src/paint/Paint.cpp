@@ -792,7 +792,7 @@ class Painter {
     }
     // A text field (and a text area, whose text is its own boxes: only the caret and the placeholder are drawn here).
     const bool areaOwnsText = view.kind == "textarea";
-    const bool focused = element->nodeDocument && element->nodeDocument->focusedElement == element;
+    const bool focused = element->nodeDocument && element->nodeDocument->FocusedInView() == element;
     const double top = baselineIn(content.y, content.height);
     if (!areaOwnsText) {
       // (A caret in a field that is wider than the box keeps itself in view: the text moves left by what is past the right edge.)
@@ -1353,6 +1353,8 @@ class Painter {
 }  // namespace
 
 DisplayList BuildDisplayList(Quanta::Context& ctx, layout::Tree& tree) {
+  // What is painted is the tree as it was committed (see dom::CommittedViewScope).
+  dom::CommittedViewScope view;
   Painter painter(ctx, tree);
   return painter.Run();
 }

@@ -159,6 +159,7 @@ void MoveFocus(Context& ctx, dom::Document* document, dom::Element* target) {
   // An iframe holds the focus of its parent while an element in it does.
   if (document->frameElement && document->frameElement->nodeDocument && target) {
     document->frameElement->nodeDocument->focusedElement = document->frameElement;
+    dom::MarkPending(document->frameElement->nodeDocument, dom::kPendingDocumentState);
     document->frameElement->nodeDocument->NoteWrite();
   }
   if (target) {

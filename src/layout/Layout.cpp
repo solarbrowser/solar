@@ -57,7 +57,7 @@ bool UpdateContentVisibility(Tree& tree, dom::Document* document, bool& eventsPe
       if (element->contentVisibilityReported != (element->contentVisible ? 0 : 1)) eventsPending = true;
       const Rect r = AbsoluteBorderBox(box);
       bool relevant = r.x <= right && r.x + r.width >= left && r.y <= bottom && r.y + r.height >= top;
-      for (dom::Node* focus = document->focusedElement; focus && !relevant; focus = dom::ParentOf(focus)) relevant = focus == element;
+      for (dom::Node* focus = document->FocusedInView(); focus && !relevant; focus = dom::ParentOf(focus)) relevant = focus == element;
       // A selection with something of the element in it.
       if (!relevant && dom::ParentOf(element)) {
         if (const dom::Range* selection = dom::SelectionRangeOf(document); selection && !selection->Collapsed() && selection->startNode && selection->endNode) {

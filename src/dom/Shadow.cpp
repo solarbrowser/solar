@@ -131,6 +131,7 @@ std::optional<DomError> AttachShadow(Quanta::Context& ctx, Element* element, Sha
   shadow->clonable = clonable;
   shadow->serializable = serializable;
   element->shadowRoot = shadow;
+  MarkPending(element, kPendingShadow);
   element->NoteWrite();
   ++g_shadowRoots;
   out = shadow;
@@ -198,12 +199,15 @@ void AssignSlottablesForSlot(Element* slot) {
   for (Node* old : slot->assignedNodes) {
     if (old->assignedSlot == slot && !Contains(slottables, old)) {
       old->assignedSlot = nullptr;
+      MarkPending(old, kPendingShadow);
       old->NoteWrite();
     }
   }
   slot->assignedNodes = slottables;
+  MarkPending(slot, kPendingShadow);
   for (Node* slottable : slottables) {
     slottable->assignedSlot = slot;
+    MarkPending(slottable, kPendingShadow);
     slottable->NoteWrite();
   }
   slot->NoteWrite();

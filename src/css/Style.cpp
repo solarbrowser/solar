@@ -699,7 +699,7 @@ std::vector<CssStyleSheet*> SheetsOfTreeUncached(dom::Node* root, Quanta::Contex
 }
 
 dom::Element* FlatParent(dom::Element* element) {
-  if (element->assignedSlot) return element->assignedSlot;
+  if (dom::AssignedSlotOf(element)) return dom::AssignedSlotOf(element);
   dom::Node* parent = dom::ParentOf(element);
   if (!parent) return nullptr;
   if (dom::Element* e = dom::AsElement(parent)) return e;
@@ -899,7 +899,7 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   // An element of a shadow tree, a shadow host and one assigned to a slot are styled by more than what is around them in the tree.
   bool shadowed = false;
   if (reuse.shadows) {
-    shadowed = element->shadowRoot || element->assignedSlot;
+    shadowed = element->ShadowRootInView() || dom::AssignedSlotOf(element);
     if (!shadowed) {
       const dom::Node* top = element;
       while (dom::ParentOf(top)) top = dom::ParentOf(top);
@@ -1128,7 +1128,7 @@ void Share(dom::Element* element, ElementStyle& style, const std::string& pseudo
   if (element->animVersion != 0 || !dom::ParentOf(element) || !dom::ParentOf(element)->IsElement()) return;
   // (An element of a shadow tree, a shadow host, and one that is assigned to a slot are styled by more than the declarations around them.)
   if (dom::HasShadowTrees()) {
-    if (element->shadowRoot || element->assignedSlot) return;
+    if (element->ShadowRootInView() || dom::AssignedSlotOf(element)) return;
     dom::Node* top = element;
     while (dom::ParentOf(top)) top = dom::ParentOf(top);
     if (!top->IsDocument()) return;
@@ -1425,13 +1425,13 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
     }
   }
   // A shadow host also takes the :host rules of its shadow tree, below the rules of the tree it is in.
-  if (element->shadowRoot && pseudo.empty()) {
+  if (element->ShadowRootInView() && pseudo.empty()) {
     Gatherer inner{element, gatherer.matchContext, style.cascade};
     inner.startingMode = gatherer.startingMode;
     inner.matchContext.host = element;
     inner.order = gatherer.order;
     inner.ruleSerial = gatherer.ruleSerial + 1000000;
-    const std::vector<CssStyleSheet*> sheets = SheetsOfTree(element->shadowRoot, element->nodeDocument ? element->nodeDocument->context : nullptr);
+    const std::vector<CssStyleSheet*> sheets = SheetsOfTree(element->ShadowRootInView(), element->nodeDocument ? element->nodeDocument->context : nullptr);
     inner.hostScoped = true;
     inner.layerBase = -1000000;
     inner.collecting = true;
@@ -1466,7 +1466,7 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
       gatherer.ruleSerial = std::max(gatherer.ruleSerial, g.ruleSerial);
     };
     // ::slotted() rules of the trees of the slots the element is assigned to.
-    for (const dom::Element* slot = element->assignedSlot; slot; slot = slot->assignedSlot) {
+    for (const dom::Element* slot = dom::AssignedSlotOf(element); slot; slot = dom::AssignedSlotOf(slot)) {
       dom::Node* slotRoot = const_cast<dom::Element*>(slot);
       while (dom::ParentOf(slotRoot)) slotRoot = dom::ParentOf(slotRoot);
       if (!slotRoot->IsFragment() || !static_cast<dom::DocumentFragment*>(slotRoot)->isShadowRoot) break;

@@ -30,6 +30,7 @@ void Node::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(committed.last);
   visitor.Mark(committed.previous);
   visitor.Mark(committed.next);
+  visitor.Mark(committed.assignedSlot);
   visitor.Mark(nodeDocument);
   visitor.Mark(childNodesList);
   visitor.Mark(childrenList);
@@ -46,6 +47,9 @@ void Document::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(templateContentsOwner);
   visitor.Mark(currentScript);
   visitor.Mark(focusedElement);
+  visitor.Mark(committedFocused);
+  visitor.Mark(committedHover);
+  visitor.Mark(committedPressed);
   visitor.Mark(hoverElement);
   visitor.Mark(pressedElement);
   for (Quanta::Object* collection : specialCollections) visitor.Mark(collection);
@@ -78,6 +82,8 @@ void Element::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(contentWindow);
   for (Attr* attribute : attributes) visitor.Mark(attribute);
   for (Attr* attribute : committedAttributes) visitor.Mark(attribute);
+  visitor.Mark(committedShadowRoot);
+  for (Node* node : committedAssignedNodes) visitor.Mark(node);
   visitor.Mark(attributeMap);
   visitor.Mark(tokenList);
   visitor.Mark(styleSheet);
@@ -119,13 +125,33 @@ void CommitPending() {
   for (Node* node : list) {
     const uint8_t mask = node->pendingMask;
     node->pendingMask = 0;
-    if (mask & kPendingLinks) node->committed = {node->parentNode, node->firstChild, node->lastChild, node->previousSibling, node->nextSibling};
+    if (mask & kPendingLinks) {
+      node->committed.parent = node->parentNode;
+      node->committed.first = node->firstChild;
+      node->committed.last = node->lastChild;
+      node->committed.previous = node->previousSibling;
+      node->committed.next = node->nextSibling;
+    }
     if ((mask & kPendingAttributes) && node->IsElement()) {
       Element* element = static_cast<Element*>(node);
       element->committedAttributes = element->attributes;
       for (Attr* attribute : element->attributes) {
         if (attribute->committedValue != attribute->value) attribute->committedValue = attribute->value;
       }
+    }
+    if (mask & kPendingShadow) {
+      node->committed.assignedSlot = node->assignedSlot;
+      if (node->IsElement()) {
+        Element* element = static_cast<Element*>(node);
+        element->committedShadowRoot = element->shadowRoot;
+        element->committedAssignedNodes = element->assignedNodes;
+      }
+    }
+    if ((mask & kPendingDocumentState) && node->IsDocument()) {
+      Document* document = static_cast<Document*>(node);
+      document->committedFocused = document->focusedElement;
+      document->committedHover = document->hoverElement;
+      document->committedPressed = document->pressedElement;
     }
     if ((mask & kPendingText) && node->IsCharacterData()) {
       CharacterData* text = static_cast<CharacterData*>(node);
@@ -167,6 +193,7 @@ void DisposeDocument(Document* document) {
     MarkLinks(n);
     n->childNodesList = n->childrenList = nullptr;
     n->assignedSlot = n->manualSlot = nullptr;
+    MarkPending(n, kPendingShadow);
     n->registrations.reset();
     n->listeners.clear();
     n->eventHandlers.clear();
@@ -191,6 +218,7 @@ void DisposeDocument(Document* document) {
   document->layoutTree.reset();
   document->damage.reset();
   document->focusedElement = document->hoverElement = document->pressedElement = document->currentScript = nullptr;
+  MarkPending(document, kPendingDocumentState);
   document->templateContentsOwner = nullptr;
   document->frameElement = nullptr;
 }
@@ -254,6 +282,7 @@ void NoteTreeChangeAt(const Node* node) {
 }
 
 void NoteStateChange(Element* element) {
+  if (element && element->nodeDocument) MarkPending(element->nodeDocument, kPendingDocumentState);
   const bool local = g_stateIsLocalHook && element && element->nodeDocument && g_stateIsLocalHook(element->nodeDocument, element);
   for (Node* node = element; node;) {
     NoteDamage(node, local ? kDamageState : kDamageAttributes);

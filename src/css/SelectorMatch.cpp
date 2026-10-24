@@ -172,8 +172,8 @@ bool IsTarget(const Element* element) {
 // :focus is the focused element and the hosts of the shadow trees it is in; :focus-within is also all that contain them.
 bool FocusPath(const Element* element, bool within) {
   const dom::Document* document = element->nodeDocument;
-  if (!document || !document->focusedElement) return false;
-  const dom::Node* node = document->focusedElement;
+  if (!document || !document->FocusedInView()) return false;
+  const dom::Node* node = document->FocusedInView();
   if (node == element) return true;
   for (;;) {
     const dom::Node* root = node;
@@ -294,8 +294,8 @@ bool OnPointerPath(const Element* element, const Element* pointed) {
 
 bool MatchesPseudo(PseudoClass pseudo, const Element* element, const MatchContext& context) {
   switch (pseudo) {
-    case PseudoClass::Hover: return element->nodeDocument && element->nodeDocument->hoverElement && OnPointerPath(element, element->nodeDocument->hoverElement);
-    case PseudoClass::Active: return element->nodeDocument && element->nodeDocument->pressedElement && OnPointerPath(element, element->nodeDocument->pressedElement);
+    case PseudoClass::Hover: return element->nodeDocument && element->nodeDocument->HoverInView() && OnPointerPath(element, element->nodeDocument->HoverInView());
+    case PseudoClass::Active: return element->nodeDocument && element->nodeDocument->PressedInView() && OnPointerPath(element, element->nodeDocument->PressedInView());
     case PseudoClass::Root: return IsRoot(element);
     case PseudoClass::Empty: return IsEmpty(element);
     case PseudoClass::Target: return IsTarget(element);

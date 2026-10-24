@@ -112,6 +112,7 @@ struct Node : web::JsEventTarget {
     Node* last = nullptr;
     Node* previous = nullptr;
     Node* next = nullptr;
+    Element* assignedSlot = nullptr;  // the slot a slottable is assigned to
   } committed;
   uint8_t pendingMask = 0;  // what of it changed since it was committed (kPending...: it is in the list of CommitPending)
   // The document the node belongs to; null only for a Document itself.
@@ -152,7 +153,7 @@ struct Node : web::JsEventTarget {
 // Pending and committed. Script reads and writes the fields of a node as they are (pending). Style and layout work from what was committed at the
 // start of the frame, so that what script does while they work does not reach them half way. They read through these, which give the committed
 // links inside a CommittedViewScope and the pending ones outside it (so that the same code can serve script, as the selector matcher does).
-enum PendingKind : uint8_t { kPendingLinks = 1, kPendingAttributes = 2, kPendingText = 4 };
+enum PendingKind : uint8_t { kPendingLinks = 1, kPendingAttributes = 2, kPendingText = 4, kPendingShadow = 8, kPendingDocumentState = 16 };
 // Notes that the node changed in the way, to be committed.
 void MarkPending(Node* node, uint8_t kinds);
 extern thread_local int g_committedViewDepth;
@@ -162,6 +163,7 @@ inline Node* FirstChildOf(const Node* n) { return g_committedViewDepth ? n->comm
 inline Node* LastChildOf(const Node* n) { return g_committedViewDepth ? n->committed.last : n->lastChild; }
 inline Node* PreviousSiblingOf(const Node* n) { return g_committedViewDepth ? n->committed.previous : n->previousSibling; }
 inline Node* NextSiblingOf(const Node* n) { return g_committedViewDepth ? n->committed.next : n->nextSibling; }
+inline Element* AssignedSlotOf(const Node* n) { return g_committedViewDepth ? n->committed.assignedSlot : n->assignedSlot; }
 // Takes what script changed into the committed state. Nothing is lost by calling it again; it does nothing when nothing changed.
 void CommitPending();
 // Begins a frame's work on the committed state (and commits what is pending, if this is the outermost one). Where script runs in the middle of
@@ -268,6 +270,10 @@ struct Element : Node {
   // A template element's contents, which are not its children.
   DocumentFragment* templateContents = nullptr;
   ShadowRoot* shadowRoot = nullptr;
+  ShadowRoot* committedShadowRoot = nullptr;  // what style and layout read of the two above and below (see CommitPending)
+  std::vector<Node*> committedAssignedNodes;
+  ShadowRoot* ShadowRootInView() const { return g_committedViewDepth ? committedShadowRoot : shadowRoot; }
+  const std::vector<Node*>& AssignedNodesInView() const { return g_committedViewDepth ? committedAssignedNodes : assignedNodes; }
   // A slot's: the slottables it has been given, and those a script asked it to take in (slot assignment "manual").
   std::vector<Node*> assignedNodes;
   std::vector<Node*> manuallyAssignedNodes;
@@ -345,6 +351,12 @@ struct Document : Node {
   Element* currentScript = nullptr;
   // The focused area of the document, if an element is: what document.activeElement is, once it is retargeted.
   Element* focusedElement = nullptr;
+  Element* committedFocused = nullptr;  // what style and layout read of the focus, the hover and the press (see CommitPending)
+  Element* committedHover = nullptr;
+  Element* committedPressed = nullptr;
+  Element* FocusedInView() const { return g_committedViewDepth ? committedFocused : focusedElement; }
+  Element* HoverInView() const { return g_committedViewDepth ? committedHover : hoverElement; }
+  Element* PressedInView() const { return g_committedViewDepth ? committedPressed : pressedElement; }
   // The element the pointer is over (:hover is its, and its ancestors') and the one that is being pressed (:active): set by the input, never by script.
   Element* hoverElement = nullptr;
   Element* pressedElement = nullptr;
