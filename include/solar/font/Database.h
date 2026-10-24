@@ -74,13 +74,14 @@ class Database {
     std::string fullName, postScriptName;  // for local()
     std::shared_ptr<Face> face;
     bool loaded = false;
+    bool loading = false;
   };
   void EnsureScanned();
   std::shared_ptr<Face> FaceOf(Entry& entry);
   std::shared_ptr<Face> BestIn(const std::string& family, const Request& request);
   std::vector<Entry*> InFamily(const std::string& family);
 
-  std::mutex mutex_;
+  std::recursive_mutex mutex_;  // (a font that is fetched lets script run, which asks for fonts again)
   std::vector<std::unique_ptr<Entry>> entries_;
   std::multimap<std::string, Entry*> byFamily_;  // lowercased
   std::vector<std::string> directories_;

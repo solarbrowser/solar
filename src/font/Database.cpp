@@ -149,7 +149,7 @@ Database& Database::System() {
 }
 
 void Database::Add(Source source) {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   auto entry = std::make_unique<Entry>();
   entry->source = std::move(source);
   Entry* raw = entry.get();
@@ -158,7 +158,7 @@ void Database::Add(Source source) {
 }
 
 void Database::AddDirectory(const std::string& directory) {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   directories_.push_back(directory);
   scanned_ = false;
 }
@@ -264,7 +264,10 @@ void Database::EnsureScanned() {
 
 std::shared_ptr<Face> Database::FaceOf(Entry& entry) {
   if (!entry.loaded) {
+    if (entry.loading) return nullptr;  // (being fetched, and what runs meanwhile asked for it again: it has none yet)
+    entry.loading = true;
     entry.face = entry.source.load ? entry.source.load() : nullptr;
+    entry.loading = false;
     entry.loaded = true;
   }
   return entry.face;
@@ -387,7 +390,7 @@ std::shared_ptr<Face> Database::BestIn(const std::string& family, const Request&
 }
 
 std::shared_ptr<Face> Database::Match(const Request& request) {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   EnsureScanned();
   for (const std::string& family : request.families) {
     const std::string lower = Lower(family);
@@ -404,7 +407,7 @@ std::shared_ptr<Face> Database::Match(const Request& request) {
 }
 
 std::vector<std::shared_ptr<Face>> Database::MatchAll(const Request& request) {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   EnsureScanned();
   std::vector<std::shared_ptr<Face>> faces;
   const auto add = [&](const std::shared_ptr<Face>& face) {
@@ -428,7 +431,7 @@ std::vector<std::shared_ptr<Face>> Database::MatchAll(const Request& request) {
 }
 
 std::shared_ptr<Face> Database::Fallback(char32_t codePoint, const Request& request) {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   EnsureScanned();
   // The generic sans-serif and serif first, then any font with the character.
   for (const char* generic : {"sans-serif", "serif", "system-ui"}) {
@@ -445,7 +448,7 @@ std::shared_ptr<Face> Database::Fallback(char32_t codePoint, const Request& requ
 }
 
 std::shared_ptr<Face> Database::FindLocal(const std::string& name) {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   EnsureScanned();
   const std::string wanted = Lower(name);
   for (const auto& entry : entries_) {
@@ -457,23 +460,23 @@ std::shared_ptr<Face> Database::FindLocal(const std::string& name) {
 }
 
 size_t Database::Count() {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   return entries_.size();
 }
 
 int Database::State(size_t index) {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (index >= entries_.size() || !entries_[index]->loaded) return 0;
   return entries_[index]->face ? 1 : 2;
 }
 
 bool Database::Load(size_t index) {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   return index < entries_.size() && FaceOf(*entries_[index]) != nullptr;
 }
 
 std::vector<std::string> Database::Families() {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   EnsureScanned();
   std::set<std::string> names;
   for (const auto& entry : entries_) names.insert(entry->source.family);
