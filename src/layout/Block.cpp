@@ -1,3 +1,9 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+
 // Block layout (https://www.w3.org/TR/CSS22/visudet.html, https://www.w3.org/TR/CSS22/box.html#collapsing-margins), floats
 // (https://www.w3.org/TR/CSS22/visuren.html#floats) and absolute positioning (https://www.w3.org/TR/CSS22/visuren.html#absolute-positioning).
 #include <algorithm>

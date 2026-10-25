@@ -1,3 +1,9 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+
 #include <unordered_map>
 // Container queries (https://www.w3.org/TR/css-conditional-5/#container-queries): whether an @container rule applies to an element, from the size layout
 // found for the nearest ancestor that is a container, or from its style.

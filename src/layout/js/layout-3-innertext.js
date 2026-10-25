@@ -1,3 +1,9 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+
 // innerText and outerText (https://html.spec.whatwg.org/multipage/dom.html#the-innertext-idl-attribute): the text of an element as it is rendered, and the setters
 // that make text and <br> of a string.
 (function () {

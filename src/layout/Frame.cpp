@@ -1,3 +1,9 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+
 // Writing modes: layout works in the logical frame of each box (x along the lines, y from block-start to block-end); these turn what
 // one frame came to into another's, and into physical coordinates at the end.
 #include <algorithm>

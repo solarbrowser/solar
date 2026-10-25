@@ -1,3 +1,9 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+
 // ::first-letter (https://www.w3.org/TR/css-pseudo-4/#first-letter-pseudo): the first typographic letter unit of the first formatted line of a block
 // container, with the punctuation around it, is a box of its own, styled by the pseudo-element's rules.
 #include "Internal.h"

@@ -1,3 +1,9 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+
 // The IDL attributes of the HTML elements that are only a content attribute seen through a property (href, alt,
 // colSpan, open ...), the URL decomposition members of a and area, and the table interfaces' own methods. They are
 // written once, from a table of what each interface reflects, and put on the prototypes that do not have them.

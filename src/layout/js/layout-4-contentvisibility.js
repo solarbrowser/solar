@@ -1,3 +1,9 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+
 // ContentVisibilityAutoStateChangeEvent (https://drafts.csswg.org/css-contain-2/#content-visibility-auto-state-change): sent in a frame to the content-visibility: auto
 // elements whose contents were skipped, or stopped being.
 (function () {

@@ -1,3 +1,9 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+
 // Line breaking (https://www.unicode.org/reports/tr14/), with the tailoring CSS asks for (https://drafts.csswg.org/css-text-3/#line-break-property).
 #include "solar/text/Unicode.h"
 

@@ -1,3 +1,9 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+
 // Web Animations, the timing model: easing functions, the timing of an effect and what it comes to at a time.
 // The pieces are shared with the other animations-*.js files through globalThis.__solarAnim, which the last of them takes away.
 (function () {

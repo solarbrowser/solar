@@ -1,3 +1,9 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+
 // Inline layout (https://www.w3.org/TR/CSS22/visuren.html#inline-formatting, https://www.w3.org/TR/css-text-3/): the text and inline boxes of a
 // block container, broken into lines and placed on them.
 #include <algorithm>

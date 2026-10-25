@@ -1,3 +1,9 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+
 // XMLHttpRequest (https://xhr.spec.whatwg.org/), written on top of fetch and of the program's own loader. A request
 // the loader can answer (the files of a page and its frames) is answered from it, which is the only way a request
 // can be synchronous; any other is sent with fetch, and only asynchronously.

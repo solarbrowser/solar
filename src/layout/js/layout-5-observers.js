@@ -1,3 +1,9 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+
 // ResizeObserver (https://drafts.csswg.org/resize-observer/) and IntersectionObserver (https://w3c.github.io/IntersectionObserver/): observations are gathered at the
 // end of the rendering update, from the geometry layout gives.
 (function () {

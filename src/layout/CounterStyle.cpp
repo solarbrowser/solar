@@ -1,3 +1,9 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+
 // Counter styles (https://www.w3.org/TR/css-counter-styles-3/): the numbering of list markers and of counter(), from the styles the
 // standard defines and the @counter-style rules of the document.
 #include <algorithm>

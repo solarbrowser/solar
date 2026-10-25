@@ -1,3 +1,9 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+
 // The Streams Standard (https://streams.spec.whatwg.org/), written as the script it is. It is one program,
 // the files of src/web/js in order, run in each realm that has the Fetch API. Everything it uses from the
 // language is taken once, here, before any page script can change it, and the standard's internal slots

@@ -1,3 +1,9 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+
 // Multiple columns (https://www.w3.org/TR/css-multicol-1/) with the breaking of css-break: the contents of a multicol container are laid out as
 // if in one column as wide as the columns are and as tall as they need, and then cut into the columns, each piece taking its place in its column.
 #include <algorithm>

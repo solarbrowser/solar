@@ -1,3 +1,9 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+
 // Painting (https://www.w3.org/TR/CSS22/zindex.html, Appendix E): the boxes of layout in the order they are painted, as a display list.
 //
 // A stacking context is painted as the standard says: its own background and border, the contexts below it (negative z-index), the backgrounds of the

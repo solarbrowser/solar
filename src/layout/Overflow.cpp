@@ -1,3 +1,9 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+
 // The scrollable overflow of a box (https://www.w3.org/TR/css-overflow-3/#scrollable): the area that can be scrolled to, from the padding box and what
 // sticks out of it, but not on the side where scrolling starts.
 #include <algorithm>

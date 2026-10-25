@@ -1,3 +1,9 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+
 // The event interfaces of the specifications that sit on the DOM's Event: UI Events, HTML's and the others
 // that a page makes with `new`, and Document.createEvent, which makes them from the old names. Each is a class
 // whose members live in a slot of its own, where only this program reaches, so that a getter can tell the

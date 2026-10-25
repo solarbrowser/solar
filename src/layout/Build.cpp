@@ -1,3 +1,9 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+
 // The box tree: boxes for elements and text (https://www.w3.org/TR/CSS22/visuren.html#box-gen), with the anonymous boxes the model needs.
 #include <cstdlib>
 #include "solar/dom/Node.h"

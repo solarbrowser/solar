@@ -1,3 +1,9 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+
 // ::first-line (https://www.w3.org/TR/css-pseudo-4/#first-line-pseudo): the first formatted line of a block container is styled by the pseudo-element's
 // rules. The font of the line decides where it breaks, so it is laid out with the style first, and then the boxes that run over the end of it are split
 // where it broke: the pieces on the line keep the style, the rest are as they were. The split is undone before the block is laid out again.

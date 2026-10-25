@@ -1,3 +1,9 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+
 // Table layout (https://www.w3.org/TR/CSS22/tables.html): the grid of cells, column widths (automatic and fixed), row heights,
 // vertical alignment of cells and collapsing borders.
 #include <algorithm>

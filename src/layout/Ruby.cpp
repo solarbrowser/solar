@@ -1,3 +1,9 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+
 // Ruby (https://www.w3.org/TR/css-ruby-1/): a base with annotations over it and under it, in columns as wide as the widest of what is in them, the whole of it
 // an atomic inline whose baseline is that of the bases.
 #include <algorithm>
