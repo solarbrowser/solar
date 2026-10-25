@@ -46,6 +46,7 @@ bool g_overlayScrollbars = false;
 int g_sheetParsing = 0;
 bool g_styleChangedInParse = false;
 bool g_wakeAfterParse = false;
+uint64_t g_cacheGeneration = 1;  // changed whenever the entries of the style cache are dropped (a reference to one is no longer good)
 uint64_t g_cacheVersion = 1;   // changed when what the kept styles were made from is (not for the values animations give: each element has its own number for those)
 LayoutHook g_layoutHook = nullptr;
 Quanta::Context* g_activeContext = nullptr;  // the realm a style is being worked out in, for what a rule's condition needs of other elements
@@ -1012,9 +1013,19 @@ ElementStyle& StyleOf(dom::Element* element, const std::string& pseudo = "") {
   static uint64_t cachedStyleVersion = 0;
   const uint64_t version = dom::DocumentVersion() * 1000003 + g_styleVersion;
   const uint64_t treeVersion = (version * 1000003 + g_animationVersion) * 1000003 + dom::StateVersion();  // (what animations give is looked at element by element)
+  // The same element asked again with nothing changed (a style is read property by property): the answer is the one given last.
+  struct Last {
+    dom::Element* element = nullptr;
+    uint64_t serial = 0, generation = 0, cacheVersion = 0, treeVersion = 0;
+    ElementStyle* style = nullptr;
+  };
+  static Last last;
+  const bool plainAsk = pseudo.empty() && !AnimatedValuesSuppressed() && !StartingStyleFor(element, pseudo);
+  if (plainAsk && last.element == element && last.serial == element->serial && last.generation == g_cacheGeneration && last.cacheVersion == g_cacheVersion && last.treeVersion == treeVersion) return *last.style;
   if (cachedStyleVersion != g_cacheVersion || Cache().size() > 60000) {
     ClearShared();
     Cache().clear();
+    ++g_cacheGeneration;
     cachedStyleVersion = g_cacheVersion;
   }
   // The elements that share what was worked out are found anew when anything changes (what is kept of an element is still good for it).
@@ -1033,6 +1044,7 @@ ElementStyle& StyleOf(dom::Element* element, const std::string& pseudo = "") {
         if (state.signature != 0) {
           ClearShared();
           Cache().clear();
+          ++g_cacheGeneration;
         }
         state.signature = signature;
       }
@@ -1043,6 +1055,7 @@ ElementStyle& StyleOf(dom::Element* element, const std::string& pseudo = "") {
   const bool suppressed = AnimatedValuesSuppressed(), starting = StartingStyleFor(element, pseudo);
   ElementStyle& style = pseudo.empty() && !suppressed && !starting ? entry.plain : entry.others[(suppressed ? pseudo + "\x03" : pseudo) + (starting ? "\x04" : "")];
   style.version = version;
+  if (plainAsk && Cache().size() <= 60000) last = {element, element->serial, g_cacheGeneration, g_cacheVersion, treeVersion, &style};
   return style;
 }
 
@@ -1267,6 +1280,8 @@ class Resolver {
 
  private:
   bool plainInherit_ = false;  // Specified answered with the parent's value
+  const char* lastKind_ = "other";
+  std::string ComputeInner(dom::Element* element, const std::string& property, const std::string& pseudo);
   std::optional<std::string> Substitute(dom::Element* element, const std::string& pseudo, const std::string& text, int depth, std::set<std::string>& stack);
   bool SubstituteValues(dom::Element* element, const std::string& pseudo, const ComponentValues& in, ComponentValues& out, int depth, std::set<std::string>& stack);
   ComputeContext ContextFor(dom::Element* element, const std::string& property, const std::string& pseudo, const std::string& text);
@@ -2292,7 +2307,10 @@ void NoteInitial(const PropertyDefinition& definition, const std::string& comput
   if (ContextFreeInitial(definition)) InitialComputed()[&definition] = computed;
 }
 
-std::string Resolver::Compute(dom::Element* element, const std::string& property, const std::string& pseudo) {
+std::string Resolver::Compute(dom::Element* element, const std::string& property, const std::string& pseudo) { return ComputeInner(element, property, pseudo); }
+
+std::string Resolver::ComputeInner(dom::Element* element, const std::string& property, const std::string& pseudo) {
+  lastKind_ = "other";
   if (!element) return "";
   // The initial value, asked for by the root of the tree.
   bool initialOnly = false;
@@ -2308,9 +2326,13 @@ std::string Resolver::Compute(dom::Element* element, const std::string& property
   ElementStyle& style = StyleOf(element, pseudo);
   if (!initialOnly) {
     const auto cached = style.memo->computed.find(name);
-    if (cached != style.memo->computed.end()) return cached->second;
+    if (cached != style.memo->computed.end()) {
+      lastKind_ = "memo hit";
+      return cached->second;
+    }
   }
   if (name.starts_with("--")) {
+    lastKind_ = "custom";
     std::optional<std::string> value = Custom(element, name, pseudo);
     return value.value_or("");
   }
@@ -2339,6 +2361,7 @@ std::string Resolver::Compute(dom::Element* element, const std::string& property
     plainInherit_ = false;
     style.resolving.erase("\x02" + name);
     StyleOf(element, pseudo).memo->computed[name] = specified;
+    lastKind_ = "inherited as it is";
     return specified;
   }
   plainInherit_ = false;
@@ -2346,11 +2369,13 @@ std::string Resolver::Compute(dom::Element* element, const std::string& property
     if (const std::string* fast = FastInitial(*definition)) {
       style.resolving.erase("\x02" + name);
       if (!initialOnly) StyleOf(element, pseudo).memo->computed[name] = *fast;
+      lastKind_ = "fast initial";
       return *fast;
     }
   }
   ComputeContext context = ContextFor(element, name, pseudo, specified == "initial" ? InitialValueText(*definition) : specified);
   std::string result = Finish(element, name, *definition, specified, context, pseudo);
+  lastKind_ = specified == "initial" ? "initial, finished" : "declared, finished";
   if (specified == "initial") NoteInitial(*definition, result);
   style.resolving.erase("\x02" + name);
   if (!initialOnly) StyleOf(element, pseudo).memo->computed[name] = result;
@@ -3369,6 +3394,7 @@ void ForgetDocument(dom::Document* document) {
   // What was kept of its elements: their styles are of nothing now.
   ClearShared();
   Cache().clear();
+  ++g_cacheGeneration;
   ++g_cacheVersion;
 }
 
