@@ -1,11 +1,19 @@
-this is the engine that powers solar browser
+development will be slow due to my school life
 
-repo will be empty until some stage of vexel's development
+plans for solar;
 
-and it depends on quanta
+first version with broad web support:  february 2027
 
-while waiting, to support me you can star the repos of both and give me a motivation!
 
-[Quanta ECMAScript (js) engine](https://github.com/solarbrowser/quanta) 
-[Vexel layout engine](https://github.com/solarbrowser/vexel)
+## Screenshots
 
+![Acid3](docs/screenshots/acid3.png)
+![Arch Linux](docs/screenshots/archlinux.png)
+![GitHub](docs/screenshots/github.jpg)
+![krillion.io](docs/screenshots/krillionio.jpg)
+![Wikipedia](docs/screenshots/wikipedia.png)
+![YouTube](docs/screenshots/youtube.jpg)
+
+## Note
+
+If you get errors while trying to build, especially on the network side, that is expected for now: the project relies on the system's packages at the moment. This will be sorted out once the project settles.
