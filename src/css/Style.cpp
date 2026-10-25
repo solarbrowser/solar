@@ -479,18 +479,37 @@ struct Gatherer {
     const bool indexed = !picked && !collecting && mode == Mode::Own && keys.usable && all.size() >= 48;
     if (indexed) {
       const RuleIndex& index = IndexOf(all);
-      std::vector<uint32_t> positions = index.always;
       const uint64_t marker = PseudoMarker(matchContext.pseudoElement);
+      // The rules of the buckets of the element's keys and the rules that have no key, each list in the order of the rules: merged, without copying them first.
+      struct Run {
+        const uint32_t* at;
+        const uint32_t* end;
+      };
+      std::vector<Run> runs;
+      runs.reserve(keys.keys.size() + 3);
+      if (!index.always.empty()) runs.push_back({index.always.data(), index.always.data() + index.always.size()});
       const auto take = [&](uint64_t key) {
         const auto found = index.buckets.find(key);
-        if (found != index.buckets.end()) positions.insert(positions.end(), found->second.begin(), found->second.end());
+        if (found != index.buckets.end() && !found->second.empty()) runs.push_back({found->second.data(), found->second.data() + found->second.size()});
       };
       for (uint64_t key : keys.keys) take(key ^ marker);
       if (marker) take(marker);
-      std::sort(positions.begin(), positions.end());
-      positions.erase(std::unique(positions.begin(), positions.end()), positions.end());
-      candidates.reserve(positions.size());
-      for (uint32_t i : positions) candidates.push_back(all[i]);
+      size_t total = 0;
+      for (const Run& run : runs) total += static_cast<size_t>(run.end - run.at);
+      candidates.reserve(total);
+      uint32_t last = UINT32_MAX;
+      for (;;) {
+        Run* best = nullptr;
+        for (Run& run : runs) {
+          if (run.at != run.end && (!best || *run.at < *best->at)) best = &run;
+        }
+        if (!best) break;
+        const uint32_t position = *best->at++;
+        if (position != last) {
+          candidates.push_back(all[position]);
+          last = position;
+        }
+      }
     }
     const std::vector<CssRule*>& rules = indexed ? candidates : all;
     for (CssRule* rule : rules) {
@@ -669,17 +688,19 @@ struct Gatherer {
 
 std::vector<CssStyleSheet*> SheetsOfTreeUncached(dom::Node* root, Quanta::Context* ctx);
 
-// The style sheets of a tree, kept until something changes: every element asks for them.
-std::vector<CssStyleSheet*> SheetsOfTree(dom::Node* root, Quanta::Context* ctx = nullptr) {
-  static std::unordered_map<dom::Node*, std::pair<uint64_t, std::vector<CssStyleSheet*>>> cache;
+// The style sheets of a tree, kept until something changes: every element asks for them (what is kept is shared, not copied for each).
+std::shared_ptr<const std::vector<CssStyleSheet*>> SheetsOfTreeShared(dom::Node* root, Quanta::Context* ctx = nullptr) {
+  static std::unordered_map<dom::Node*, std::pair<uint64_t, std::shared_ptr<const std::vector<CssStyleSheet*>>>> cache;
   const uint64_t version = dom::DocumentVersion() * 1000003 + g_styleVersion;
   auto found = cache.find(root);
   if (found != cache.end() && found->second.first == version) return found->second.second;
-  std::vector<CssStyleSheet*> sheets = SheetsOfTreeUncached(root, ctx);
+  auto sheets = std::make_shared<const std::vector<CssStyleSheet*>>(SheetsOfTreeUncached(root, ctx));
   if (cache.size() > 64) cache.clear();
   cache[root] = {version, sheets};
   return sheets;
 }
+
+std::vector<CssStyleSheet*> SheetsOfTree(dom::Node* root, Quanta::Context* ctx = nullptr) { return *SheetsOfTreeShared(root, ctx); }
 
 std::vector<CssStyleSheet*> SheetsOfTreeUncached(dom::Node* root, Quanta::Context* ctx) {
   std::vector<CssStyleSheet*> sheets;
@@ -1384,12 +1405,17 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
   while (dom::ParentOf(treeRoot)) treeRoot = dom::ParentOf(treeRoot);
   if (treeRoot && (treeRoot->IsDocument() || treeRoot->IsFragment())) {
     if (treeRoot->IsFragment() && static_cast<dom::DocumentFragment*>(treeRoot)->isShadowRoot) gatherer.matchContext.host = static_cast<dom::DocumentFragment*>(treeRoot)->host;
-    std::vector<CssStyleSheet*> sheets = SheetsOfTree(treeRoot, element->nodeDocument ? element->nodeDocument->context : nullptr);
+    const std::shared_ptr<const std::vector<CssStyleSheet*>> allSheets = SheetsOfTreeShared(treeRoot, element->nodeDocument ? element->nodeDocument->context : nullptr);
+    std::vector<CssStyleSheet*> preferredOnly;
+    const std::vector<CssStyleSheet*>* sheetsPointer = allSheets.get();
     // The preferred set is named by the first sheet with a title that was on; sheets with another title are alternates, and off.
     if (element->nodeDocument && element->nodeDocument->hasPreferredSheetSet) {
       const std::string& preferred = element->nodeDocument->preferredSheetSet;
-      sheets.erase(std::remove_if(sheets.begin(), sheets.end(), [&](const CssStyleSheet* sheet) { return sheet->hasTitle && sheet->ownerNode && sheet->title != preferred; }), sheets.end());
+      preferredOnly = *allSheets;
+      preferredOnly.erase(std::remove_if(preferredOnly.begin(), preferredOnly.end(), [&](const CssStyleSheet* sheet) { return sheet->hasTitle && sheet->ownerNode && sheet->title != preferred; }), preferredOnly.end());
+      sheetsPointer = &preferredOnly;
     }
+    const std::vector<CssStyleSheet*>& sheets = *sheetsPointer;
     // The layers there are, and their order, are the same for every element of the tree (unless a container query decides on them): they are worked out once.
     struct LayerSnapshot {
       uint64_t version = 0;
