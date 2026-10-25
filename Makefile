@@ -130,8 +130,13 @@ LIBQUANTA = $(QUANTA_DIR)/build/lib/libquanta.a
 # only a plain object makes the whole process allocate through mimalloc.
 QUANTA_OVERRIDE = $(QUANTA_DIR)/build/lib/quanta_mimalloc_override.o
 QUANTA_LIBS = $(LIBQUANTA) $(QUANTA_OVERRIDE)
-# Quanta builds its allocator override as LLVM bitcode (ThinLTO), so the link goes through lld.
+# Quanta builds its allocator override as LLVM bitcode (ThinLTO), so the link goes through lld (on macOS the system linker reads bitcode itself,
+# and clang there has no lld to name).
+ifeq ($(shell uname -s),Darwin)
+QUANTA_LINK = -flto=thin
+else
 QUANTA_LINK = -fuse-ld=lld -flto=thin
+endif
 # Intl (ICU4X): the library is linked in; its locale data is a file (quanta-icu.postcard) that Quanta looks for next to the executable
 # (make -C third_party/quanta icu-data ICU4X=1 makes it, then copy build/quanta-icu.postcard here). ICU4X=0 builds without Intl.
 ICU4X ?= 1
