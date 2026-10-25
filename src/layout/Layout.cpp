@@ -260,6 +260,7 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
     static bool waking = false;
     if (!waking) {
       waking = true;
+      dom::CommittedViewSuspend suspend;  // (script runs on the tree as script sees it)
       Quanta::Embed::Call(ctx, Quanta::Embed::FromObject(document->contentVisibilityWake), Quanta::Embed::Undefined());
       waking = false;
     }

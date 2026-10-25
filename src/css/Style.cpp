@@ -2578,6 +2578,7 @@ void SetAnimationWake(Quanta::Context& ctx, dom::Document* document) {
 void WakeAnimations() {
   if (g_wakeDocument && g_wakeDocument->animationWake && g_wakeContext && !g_inWake) {
     g_inWake = true;
+    dom::CommittedViewSuspend suspend;
     Quanta::Embed::Call(*g_wakeContext, Quanta::Embed::FromObject(g_wakeDocument->animationWake), Quanta::Embed::Undefined());
     g_inWake = false;
   }
@@ -3235,6 +3236,7 @@ std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std
     const uint64_t version = FlushVersion();
     if (document->styleFlushedVersion == version) return;
     flushing = true;
+    dom::CommittedViewSuspend suspend;
     Quanta::Embed::Call(ctx, Quanta::Embed::FromObject(document->styleFlush), Quanta::Embed::Undefined());
     flushing = false;
     document->styleFlushedVersion = FlushVersion();

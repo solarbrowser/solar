@@ -300,6 +300,7 @@ void AskForContentVisibilityFrame() {
   dom::Document* document = dom::AssociatedDocument(*g_cvContext);
   if (!document || !document->contentVisibilityWake) return;
   g_cvRequested = true;
+  dom::CommittedViewSuspend suspend;
   Quanta::Embed::Call(*g_cvContext, qe::FromObject(document->contentVisibilityWake), qe::Undefined());
 }
 

@@ -10,6 +10,7 @@
 #include "solar/html/Frames.h"
 #include "solar/html/Modules.h"
 #include <algorithm>
+#include <fstream>
 #include "solar/html/Parser.h"
 #include "solar/html/Serializer.h"
 #include "solar/html/Xml.h"
@@ -1425,6 +1426,12 @@ void InstallWindowOn(Host& host, dom::Document* document, Quanta::Embed::Realm* 
   host.Evaluate(kWindowScript, "window.js");
   host.Evaluate(kEventHandlerScript, "handlers.js");
   { const auto platform = host.Evaluate(kPlatformScript, "platform.js"); if (!platform.ok) std::fprintf(stderr, "platform.js: %s\n", platform.error.c_str()); }
+  // SOLAR_PRELUDE=file runs a script of the developer's before anything of the page's, for looking into what a site does.
+  if (const char* prelude = std::getenv("SOLAR_PRELUDE")) {
+    std::ifstream in(prelude, std::ios::binary);
+    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    host.Evaluate(text, "prelude.js");
+  }
   { const auto stubs = host.Evaluate(kStubScript, "stubs.js"); if (!stubs.ok) std::fprintf(stderr, "stubs.js: %s\n", stubs.error.c_str()); }
   { const auto reflect = host.Evaluate(ReflectScript(), "reflect.js"); if (!reflect.ok) std::fprintf(stderr, "reflect.js: %s\n", reflect.error.c_str()); }
   { const auto forms = host.Evaluate(FormScript(), "forms.js"); if (!forms.ok) std::fprintf(stderr, "forms.js: %s\n", forms.error.c_str()); }
