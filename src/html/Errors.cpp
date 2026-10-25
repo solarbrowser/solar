@@ -23,6 +23,8 @@ void Print(const char* prefix, const qe::ErrorInfo& info) {
   std::fprintf(stderr, "%s%s%s%s", prefix, info.name.c_str(), info.name.empty() ? "" : ": ", info.message.c_str());
   if (!info.filename.empty()) std::fprintf(stderr, " (%s:%u:%u)", info.filename.c_str(), info.line, info.column);
   std::fprintf(stderr, "\n");
+  // SOLAR_ERROR_STACKS=1 gives the frames of the stack under the line, for finding where a site's error came from.
+  if (std::getenv("SOLAR_ERROR_STACKS") && !info.stack.empty()) std::fprintf(stderr, "%s\n", info.stack.c_str());
 }
 
 Value HolderFunction(Context& ctx, const char* name) {

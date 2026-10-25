@@ -1165,37 +1165,38 @@ const char* const kStubScript = R"JS(
 
   // Media: a player that cannot play anything. The elements sit under HTMLMediaElement, which they lacked.
   if (typeof HTMLMediaElement === "undefined" && typeof HTMLElement === "function") {
-    class HTMLMediaElement extends HTMLElement {
-      constructor() { super(); }
-      load() {}
-      pause() {}
-      play() { return Promise.reject(new DOMException("The element has no supported sources.", "NotSupportedError")); }
-      canPlayType() { return ""; }
-      addTextTrack() { return null; }
-      get paused() { return true; }
-      get ended() { return false; }
-      get seeking() { return false; }
-      get readyState() { return 0; }
-      get networkState() { return 0; }
-      get duration() { return NaN; }
-      get error() { return null; }
-      get buffered() { return { length: 0, start() { throw new DOMException("Index out of range.", "IndexSizeError"); }, end() { throw new DOMException("Index out of range.", "IndexSizeError"); } }; }
-      get currentTime() { return 0; }
-      set currentTime(v) {}
-      get volume() { return 1; }
-      set volume(v) {}
-      get muted() { return false; }
-      set muted(v) {}
-      get playbackRate() { return 1; }
-      set playbackRate(v) {}
+    function HTMLMediaElement() { illegal(); }
+    HTMLMediaElement.prototype = Object.create(HTMLElement.prototype, { constructor: { value: HTMLMediaElement, writable: true, configurable: true } });
+    const members = {
+      load() {},
+      pause() {},
+      play() { return Promise.reject(new DOMException("The element has no supported sources.", "NotSupportedError")); },
+      canPlayType() { return ""; },
+      addTextTrack() { return null; },
+      paused: { get() { return true; } },
+      ended: { get() { return false; } },
+      seeking: { get() { return false; } },
+      readyState: { get() { return 0; } },
+      networkState: { get() { return 0; } },
+      duration: { get() { return NaN; } },
+      error: { get() { return null; } },
+      buffered: { get() { return { length: 0, start() { throw new DOMException("Index out of range.", "IndexSizeError"); }, end() { throw new DOMException("Index out of range.", "IndexSizeError"); } }; } },
+      currentTime: { get() { return 0; }, set(v) {} },
+      volume: { get() { return 1; }, set(v) {} },
+      muted: { get() { return false; }, set(v) {} },
+      playbackRate: { get() { return 1; }, set(v) {} },
+    };
+    for (const [name, member] of Object.entries(members)) {
+      Object.defineProperty(HTMLMediaElement.prototype, name, typeof member === "function" ? { value: member, writable: true, enumerable: true, configurable: true } : { ...member, enumerable: true, configurable: true });
     }
     for (const [name, value] of Object.entries({ NETWORK_EMPTY: 0, NETWORK_IDLE: 1, NETWORK_LOADING: 2, NETWORK_NO_SOURCE: 3, HAVE_NOTHING: 0, HAVE_METADATA: 1, HAVE_CURRENT_DATA: 2, HAVE_FUTURE_DATA: 3, HAVE_ENOUGH_DATA: 4 })) {
       Object.defineProperty(HTMLMediaElement, name, { value, enumerable: true });
       Object.defineProperty(HTMLMediaElement.prototype, name, { value, enumerable: true });
     }
     define(globalThis, "HTMLMediaElement", HTMLMediaElement);
+    // The elements sit under it by their prototypes; their constructors are left as they are.
     for (const name of ["HTMLVideoElement", "HTMLAudioElement"]) {
-      if (typeof globalThis[name] === "function") { Object.setPrototypeOf(globalThis[name].prototype, HTMLMediaElement.prototype); Object.setPrototypeOf(globalThis[name], HTMLMediaElement); }
+      if (typeof globalThis[name] === "function") Object.setPrototypeOf(globalThis[name].prototype, HTMLMediaElement.prototype);
     }
   }
 
@@ -1223,7 +1224,6 @@ const char* const kStubScript = R"JS(
         clearWatch() {},
       }, enumerable: true, configurable: true });
     }
-    if (!("getBattery" in navigator)) define(navigator, "getBattery", function getBattery() { return Promise.reject(new DOMException("Battery status is not available.", "NotSupportedError")); });
   }
 
   if (typeof Document === "function" && !Object.getOwnPropertyDescriptor(Document.prototype, "domain")) {

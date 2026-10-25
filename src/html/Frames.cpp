@@ -1,4 +1,5 @@
 #include <chrono>
+#include <fstream>
 #include "solar/html/Frames.h"
 
 #include <map>
@@ -233,6 +234,12 @@ bool RunScript(Quanta::Embed::Realm& realm, dom::Document* document, dom::Elemen
   } else {
     if (!ScriptAllowed(realm.GetContext(), document, script, nullptr)) return true;
     code = script->DescendantText();
+  }
+  // SOLAR_DUMP_SCRIPTS=dir writes each classic script that runs to dir/N.js, for looking at what a site ran.
+  if (const char* dumpDir = std::getenv("SOLAR_DUMP_SCRIPTS")) {
+    static int dumped = 0;
+    std::ofstream out(std::string(dumpDir) + "/" + std::to_string(++dumped) + ".js", std::ios::binary);
+    out << "// " << filename << "\n" << code;
   }
   // A script in a shadow tree is not the document's current script.
   const dom::Node* root = script->Root();
