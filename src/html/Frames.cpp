@@ -740,12 +740,15 @@ bool LoadPageIn(Quanta::Embed::Realm& realm, dom::Document* document, const std:
   Context& ctx = realm.GetContext();
   document->readyState = "loading";
   bool ok = true;
-  // Module scripts the parser meets wait until it is done, in order, unless they are async.
+  // Module scripts (and classic ones that defer) the parser meets wait until it is done, in order, unless they are async.
   std::vector<dom::Element*> deferred;
   Quanta::Embed::ValueList keep;
   const auto run = [&](dom::Element* script) {
     script->scriptStarted = true;
-    if (LowerType(script) == "module" && !script->FindAttribute("", "async")) {
+    // A module waits for the end of parsing unless it is async; so does a classic script from a file that says defer.
+    const bool module = LowerType(script) == "module";
+    const bool deferredClassic = !module && script->FindAttribute("", "src") && script->FindAttribute("", "defer") && !script->FindAttribute("", "async");
+    if ((module && !script->FindAttribute("", "async")) || deferredClassic) {
       deferred.push_back(script);
       keep.Append(qe::FromObject(script));
       return;
@@ -766,6 +769,8 @@ bool LoadPageIn(Quanta::Embed::Realm& realm, dom::Document* document, const std:
       dom::AppendChild(document, error);
     }
   }
+  // Parsing is over: the page is interactive while the scripts that waited run.
+  document->readyState = "interactive";
   for (dom::Element* script : deferred) {
     if (!RunScript(realm, document, script)) ok = false;
   }
