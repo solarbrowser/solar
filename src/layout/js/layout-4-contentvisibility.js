@@ -26,7 +26,7 @@
   let scheduled = false;
   const send = () => {
     scheduled = false;
-    const changes = take();
+    const changes = take() || [];
     for (let i = 0; i < changes.length; i += 2) {
       const element = changes[i];
       try {
