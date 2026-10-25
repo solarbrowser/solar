@@ -467,6 +467,7 @@ void RegisterTransientObservers(Node* node, Node* oldParent) {
       transient.transient = true;
       transient.source = registration.id;
       node->registrations->push_back(std::move(transient));
+      node->NoteWrite();
       ++g_registrations;
       auto* observer = static_cast<JsMutationObserver*>(registration.observer);
       observer->nodes.push_back(node);

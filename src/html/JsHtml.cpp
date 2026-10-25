@@ -24,6 +24,7 @@ namespace solar::html {
 namespace qe = Quanta::Embed;
 
 const char* FormScript();  // JsForms.cpp
+const char* ReflectScript();  // JsReflect.cpp
 using Quanta::Context;
 using Quanta::DOMObject;
 using Quanta::Heap;
@@ -1228,6 +1229,11 @@ const char* const kStubScript = R"JS(
   if (typeof Document === "function" && !Object.getOwnPropertyDescriptor(Document.prototype, "domain")) {
     Object.defineProperty(Document.prototype, "domain", { get() { return location.hostname; }, set(value) {}, enumerable: true, configurable: true });
   }
+  if (!("isSecureContext" in globalThis)) {
+    Object.defineProperty(globalThis, "isSecureContext", { get() { return location.protocol === "https:" || location.protocol === "file:" || location.hostname === "localhost" || location.hostname === "127.0.0.1"; }, set: undefined, enumerable: true, configurable: true });
+  }
+  if (!("crossOriginIsolated" in globalThis)) Object.defineProperty(globalThis, "crossOriginIsolated", { value: false, enumerable: true, configurable: true });
+  defineGlobal("CryptoKey", class CryptoKey { constructor() { illegal(); } });
   // A window that opens nothing: a pop-up is blocked.
   ensure(globalThis, "open", function open() { return null; });
   ensure(globalThis, "close", function close() {});
@@ -1408,7 +1414,10 @@ void InstallWindowOn(Host& host, dom::Document* document, Quanta::Embed::Realm* 
     } else {
       proxy = qe::NewWindowProxy(*realm, WindowCrossOriginHooks());
     }
-    if (document && qe::IsObject(proxy)) document->globalObject = proxy.as_object();
+    if (document && qe::IsObject(proxy)) {
+      document->globalObject = proxy.as_object();
+      document->NoteWrite();
+    }
   }
   // The window is a Window, which has a named properties object in its prototype chain, between Window.prototype and
   // EventTarget.prototype, for window[name].
@@ -1417,6 +1426,7 @@ void InstallWindowOn(Host& host, dom::Document* document, Quanta::Embed::Realm* 
   host.Evaluate(kEventHandlerScript, "handlers.js");
   { const auto platform = host.Evaluate(kPlatformScript, "platform.js"); if (!platform.ok) std::fprintf(stderr, "platform.js: %s\n", platform.error.c_str()); }
   { const auto stubs = host.Evaluate(kStubScript, "stubs.js"); if (!stubs.ok) std::fprintf(stderr, "stubs.js: %s\n", stubs.error.c_str()); }
+  { const auto reflect = host.Evaluate(ReflectScript(), "reflect.js"); if (!reflect.ok) std::fprintf(stderr, "reflect.js: %s\n", reflect.error.c_str()); }
   { const auto forms = host.Evaluate(FormScript(), "forms.js"); if (!forms.ok) std::fprintf(stderr, "forms.js: %s\n", forms.error.c_str()); }
   std::string xhr;
   for (const char* const* piece = web::kScriptXhr; *piece; ++piece) xhr += *piece;

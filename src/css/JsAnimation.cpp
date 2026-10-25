@@ -97,6 +97,7 @@ Value OnFlush(Context& ctx, Value, qe::Args args, Value) {
   dom::Document* document = dom::AssociatedDocument(ctx);
   if (!document || args.empty()) return qe::Undefined();
   document->styleFlush = qe::IsObject(args[0]) ? args[0].as_object() : nullptr;
+  document->NoteWrite();
   return qe::Undefined();
 }
 
@@ -199,6 +200,7 @@ Value OnWake(Context& ctx, Value, qe::Args args, Value) {
   dom::Document* document = dom::AssociatedDocument(ctx);
   if (!document || args.empty()) return qe::Undefined();
   document->animationWake = qe::IsObject(args[0]) ? args[0].as_object() : nullptr;
+  document->NoteWrite();
   SetAnimationWake(ctx, document);
   return qe::Undefined();
 }
