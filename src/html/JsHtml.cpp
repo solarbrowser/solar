@@ -651,6 +651,8 @@ const char* const kPlatformScript = R"JS(
     back: { value() { this.go(-1); }, writable: true, enumerable: true, configurable: true },
     forward: { value() { this.go(1); }, writable: true, enumerable: true, configurable: true },
   });
+  // What the window's back and forward keys ask first: whether this page has an entry that way (then it moves there, and nothing else does).
+  Object.defineProperty(globalThis, "__solarHistoryStep", { value: (delta) => { const next = index + delta; if (next < 0 || next >= entries.length) return false; history.go(delta); return true; }, writable: true, enumerable: false, configurable: true });
   define(globalThis, "History", History);
   Object.defineProperty(globalThis, "history", { value: history, writable: true, enumerable: true, configurable: true });
   if (typeof PopStateEvent === "undefined") {

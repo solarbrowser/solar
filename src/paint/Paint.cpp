@@ -5,6 +5,7 @@
 // z-index auto or 0, and the contexts above it. What a box does to what is painted after (a clip of its overflow, how far it is scrolled, its opacity
 // and transform) is the display list's PushClip / PushLayer / PushTransform, kept in step with the boxes that are being painted.
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -18,6 +19,7 @@
 
 #include "quanta/Embed.h"
 #include "solar/css/Style.h"
+#include "solar/dom/Range.h"
 #include "solar/layout/Layout.h"
 #include "solar/paint/Paint.h"
 #include "solar/html/Frames.h"
@@ -26,6 +28,9 @@
 namespace solar::paint {
 
 namespace {
+
+std::atomic<bool> g_caretOn{true};  // the caret blinks: it is drawn in the frames that are made while this is set
+Popup g_popup;  // the drop-down list that is open, if any (set and read on the thread that makes the frames)
 
 using layout::Box;
 using layout::Line;
@@ -469,6 +474,7 @@ class Painter {
     PaintContext(*html);
     EnsureClips({});
     --transformDepth_;
+    if (g_popup.select) PaintPopup();
     return out;
   }
 
@@ -607,7 +613,9 @@ class Painter {
       item.shadow = props.boxShadows[i];
       list_->items.push_back(std::move(item));
     }
-    if (&box != canvasFrom_) {  // (the background of the root element, or of the body, is the canvas's)
+    // A control no style touched has the look of the platform's: its own frame is drawn instead of the border of its style.
+    const bool native = leftEdge && rightEdge && NativeFrame(box, props, borderBox);
+    if (&box != canvasFrom_ && !native) {  // (the background of the root element, or of the body, is the canvas's)
       const Color color = BackgroundOf(box);
       if (!color.Transparent()) {
         FillRoundedRect item;
@@ -642,7 +650,8 @@ class Painter {
     layout::Edges widths = box.border;
     if (!leftEdge) widths.left = 0;
     if (!rightEdge) widths.right = 0;
-    if (widths.top > 0 || widths.right > 0 || widths.bottom > 0 || widths.left > 0) PaintBorder(box, props, physical, borderBox, widths);
+    if (!native && (widths.top > 0 || widths.right > 0 || widths.bottom > 0 || widths.left > 0)) PaintBorder(box, props, physical, borderBox, widths);
+    if (leftEdge && rightEdge) PaintFocusRing(box, props, borderBox);
     if (leftEdge && rightEdge) PaintImageOf(box, borderBox, props);
     if (leftEdge && rightEdge && box.formControl) PaintControl(box, borderBox);
   }
@@ -651,6 +660,12 @@ class Painter {
   // ---- Form controls ----
   // What a control shows is not in the nodes of the document but in the state the page's script keeps (what was typed, what is checked), so it is
   // asked for. The control's own box (border, background) is already drawn; this is what is in it.
+
+  static Color HexColor(const std::string& text) {
+    if (text.size() != 7 || text[0] != '#') return Rgb(0, 0, 0);
+    const auto byte = [&](size_t at) { return static_cast<int>(std::strtol(text.substr(at, 2).c_str(), nullptr, 16)); };
+    return Rgb(byte(1), byte(3), byte(5));
+  }
 
   static Color Rgb(int r, int g, int b, int a = 255) { return Color{static_cast<uint8_t>(r), static_cast<uint8_t>(g), static_cast<uint8_t>(b), static_cast<uint8_t>(a)}; }
 
@@ -716,6 +731,95 @@ class Painter {
     return pen;
   }
 
+  void PaintPopup() {
+    PopupGeometry g;
+    if (!PopupGeometryOf(ctx_, tree_, g_popup.select, g_popup.top, g)) return;
+    html::ControlView view;
+    if (!html::ReadControl(g_popup.select, view)) return;
+    const auto boxes = tree_.boxesOf.find(g_popup.select);
+    if (boxes == tree_.boxesOf.end() || boxes->second.empty()) return;
+    const Box& box = *boxes->second.front();
+    const std::shared_ptr<font::Face> face = layout::FaceOf(ctx_, tree_, box);
+    if (!face) return;
+    const double size = box.style->fontSize;
+    const double ascent = std::round(face->metrics().ascent * size);
+    const RectF frame{F(g.x), F(g.y), F(g.width), F(g.height)};
+    FillRound(RectF{frame.x - 1, frame.y - 1, frame.width + 2, frame.height + 2}, 2, Rgb(118, 118, 118));
+    FillRound(frame, 1, Rgb(255, 255, 255));
+    for (size_t row = 0; row < g.rows; ++row) {
+      const size_t i = g_popup.top + row;
+      if (i >= view.options.size()) break;
+      const html::ControlView::Option& option = view.options[i];
+      const double y = g.y + static_cast<double>(row) * g.rowHeight;
+      Color ink = option.disabled || option.group ? Rgb(110, 110, 110) : Rgb(0, 0, 0);
+      if (i == g_popup.hover && !option.disabled && !option.group) {
+        Fill(RectF{frame.x, F(y), frame.width, F(g.rowHeight)}, Rgb(0, 117, 255));
+        ink = Rgb(255, 255, 255);
+      } else if (option.selected) {
+        Fill(RectF{frame.x, F(y), frame.width, F(g.rowHeight)}, Rgb(224, 224, 224));
+      }
+      DrawLine(face, size, option.label, g.x + (option.indented ? 20 : 4), y + 1 + ascent, ink);
+    }
+  }
+
+  // Whether a control looks as the platform draws it (nothing of its border or background was written by a style), and if so draws its frame.
+  bool NativeFrame(const Box& box, const PaintProps& props, const RectF& borderBox) {
+    dom::Element* element = box.element();
+    if (!element || !box.style) return false;
+    if (!element->IsHtml("input") && !element->IsHtml("select") && !element->IsHtml("textarea") && !element->IsHtml("button")) return false;
+    html::ControlView view;
+    if (!html::ReadControl(element, view)) return false;
+    const layout::BoxStyle& physical = box.style->Physical();
+    if (!BackgroundOf(box).Transparent()) return false;
+    const auto all = [&](layout::BorderStyle style) { return physical.borderStyle[0] == style && physical.borderStyle[1] == style && physical.borderStyle[2] == style && physical.borderStyle[3] == style; };
+    const bool buttonLike = view.kind == "button" || (view.kind == "input" && (view.type == "submit" || view.type == "reset" || view.type == "button" || view.type == "file"));
+    const bool fieldLike = view.kind == "input" && view.type != "checkbox" && view.type != "radio" && view.type != "range" && view.type != "color" && !buttonLike;
+    const Color ink = ParseColor(box.style->color);
+    const auto inkBorder = [&] { return props.borderColors[0].r == ink.r && props.borderColors[0].g == ink.g && props.borderColors[0].b == ink.b && props.borderColors[0].a == ink.a; };
+    const bool disabled = view.disabled;
+    if (buttonLike) {
+      if (!all(layout::BorderStyle::Outset)) return false;
+      FillRound(borderBox, 3, disabled ? Rgb(118, 118, 118, 77) : Rgb(118, 118, 118));
+      FillRound(RectF{borderBox.x + 1, borderBox.y + 1, std::max(0.0f, borderBox.width - 2), std::max(0.0f, borderBox.height - 2)}, 2,
+                disabled ? Rgb(239, 239, 239, 77) : Rgb(239, 239, 239));
+      return true;
+    }
+    if (fieldLike && all(layout::BorderStyle::Inset)) {
+      FillRound(borderBox, 2, disabled ? Rgb(118, 118, 118, 77) : Rgb(118, 118, 118));
+      FillRound(RectF{borderBox.x + 1, borderBox.y + 1, std::max(0.0f, borderBox.width - 2), std::max(0.0f, borderBox.height - 2)}, 1,
+                disabled ? Rgb(239, 239, 239, 77) : Rgb(255, 255, 255));
+      return true;
+    }
+    if ((view.kind == "textarea" || view.kind == "select" || (view.kind == "input" && view.type == "color")) && all(layout::BorderStyle::Solid) && inkBorder()) {
+      FillRound(borderBox, 2, disabled ? Rgb(118, 118, 118, 77) : Rgb(118, 118, 118));
+      FillRound(RectF{borderBox.x + 1, borderBox.y + 1, std::max(0.0f, borderBox.width - 2), std::max(0.0f, borderBox.height - 2)}, 1,
+                disabled ? Rgb(239, 239, 239, 77) : Rgb(255, 255, 255));
+      return true;
+    }
+    return false;
+  }
+
+  // The ring round the element that has the focus: for a text field always, for anything else when a key put the focus there (a style may draw its own).
+  void PaintFocusRing(const Box& box, const PaintProps& props, const RectF& borderBox) {
+    dom::Element* element = box.element();
+    if (!element || props.outlineStyle != LineStyle::None) return;
+    dom::Document* document = element->nodeDocument;
+    if (!document || document->FocusedInView() != element) return;
+    bool textEntry = element->IsHtml("textarea");
+    if (element->IsHtml("input")) {
+      html::ControlView view;
+      if (html::ReadControl(element, view)) textEntry = view.type != "checkbox" && view.type != "radio" && view.type != "range" && view.type != "color" && view.type != "submit" && view.type != "reset" && view.type != "button" && view.type != "file";
+    }
+    if (!textEntry && !document->focusByKeyboard) return;
+    DrawOutline ring;
+    ring.shape = Rounded(box, borderBox, props, 0, nullptr);
+    ring.offset = 0;
+    ring.width = 2;
+    ring.style = LineStyle::Solid;
+    ring.color = Rgb(16, 16, 16);
+    outlines_.push_back(ring);
+  }
+
   void PaintControl(const Box& box, const RectF& borderBox) {
     dom::Element* element = box.element();
     if (!element || !box.style || box.style->visibility != layout::Visibility::Visible) return;
@@ -760,6 +864,24 @@ class Painter {
     clip.rect.rect = content;
     list_->items.push_back(clip);
     const auto baselineIn = [&](double top, double height) { return top + (height - (ascent + descent)) / 2 + ascent; };
+    const bool focusedNow = element->nodeDocument && element->nodeDocument->FocusedInView() == element;
+    if (view.kind == "select" && (view.rows > 1 || view.multiple)) {
+      // A list: the options in rows, the first one shown at the top; what is selected is lit (strongly where the list has the focus).
+      const double rowHeight = std::max(1.0, ascent + descent);
+      for (size_t i = view.top; i < view.options.size(); ++i) {
+        const double y = content.y + static_cast<double>(i - view.top) * rowHeight;
+        if (y >= content.y + content.height) break;
+        const html::ControlView::Option& option = view.options[i];
+        Color ink2 = option.disabled || view.disabled ? Rgb(110, 110, 110) : text;
+        if (option.selected) {
+          Fill(RectF{content.x, F(y), content.width, F(rowHeight)}, focusedNow ? Rgb(0, 117, 255) : Rgb(200, 200, 200));
+          if (focusedNow) ink2 = Rgb(255, 255, 255);
+        }
+        DrawLine(face, size, option.label, content.x + (option.indented ? 20 : 2), y + ascent, ink2);
+      }
+      list_->items.push_back(PopClip{});
+      return;
+    }
     if (view.kind == "select") {
       DrawLine(face, size, view.label, content.x, baselineIn(content.y, content.height), text);
       list_->items.push_back(PopClip{});
@@ -783,12 +905,11 @@ class Painter {
     if (view.kind == "input" && (view.type == "range" || view.type == "color")) {
       list_->items.push_back(PopClip{});
       if (view.type == "color") {
-        FillRound(RectF{content.x + 2, content.y + 2, content.width - 4, content.height - 4}, 2, ParseColor(view.value.empty() ? "#000000" : view.value));
+        FillRound(RectF{content.x + 2, content.y + 2, content.width - 4, content.height - 4}, 2, HexColor(view.value));
       } else {
         const float mid = content.y + content.height / 2;
         FillRound(RectF{content.x, mid - 2, content.width, 4}, 2, Rgb(176, 176, 176));
-        const double lo = 0, hi = 100, v = std::atof(view.value.c_str());
-        const float at = content.x + F(std::clamp((v - lo) / (hi - lo), 0.0, 1.0)) * (content.width - 14);
+        const float at = content.x + F(std::clamp(view.fraction, 0.0, 1.0)) * (content.width - 14);
         FillRound(RectF{at, mid - 7, 14, 14}, 7, accent);
       }
       return;
@@ -812,9 +933,38 @@ class Painter {
         }
         DrawLine(face, size, view.value, content.x - shift, top, text);
       }
-      if (focused && !view.disabled && !view.readOnly) Fill(RectF{content.x + F(caretX - shift), F(top - ascent), 1, F(ascent + descent)}, text);
-    } else if (view.value.empty() && !view.placeholder.empty()) {
-      DrawLine(face, size, view.placeholder, content.x, content.y + ascent, Rgb(117, 117, 117));
+      if (focused && !view.disabled && !view.readOnly && g_caretOn) Fill(RectF{content.x + F(caretX - shift), F(top - ascent), 1, F(ascent + descent)}, text);
+    } else if (view.value.empty()) {
+      if (!view.placeholder.empty()) DrawLine(face, size, view.placeholder, content.x, content.y + ascent, Rgb(117, 117, 117));
+      if (focused && !view.disabled && !view.readOnly && g_caretOn) Fill(RectF{content.x, content.y, 1, F(ascent + descent)}, text);
+    } else {
+      // The text of an area: its lines wrapped to the width (the scrollbar's room left out), the part with the caret in view when the area has the focus.
+      const double rowHeight = std::max(1.0, ascent + descent);
+      const std::vector<layout::TextLine> lines = layout::WrapText(*face, size, view.value, std::max(1.0, content.width - 15.0));
+      const size_t caretByte = BytesBefore(view.value, view.end);
+      size_t caretLine = 0;
+      for (size_t i = 0; i < lines.size(); ++i) {
+        if (caretByte >= lines[i].begin) caretLine = i;
+      }
+      const size_t visible = std::max<size_t>(1, static_cast<size_t>(content.height / rowHeight));
+      size_t first = 0;
+      if (focused && caretLine >= visible) first = caretLine - visible + 1;
+      const size_t from = std::min(view.start, view.end), to = std::max(view.start, view.end);
+      const size_t byteFrom = BytesBefore(view.value, from), byteTo = BytesBefore(view.value, to);
+      for (size_t i = first; i < lines.size() && i - first < visible + 1; ++i) {
+        const double y = content.y + static_cast<double>(i - first) * rowHeight;
+        const std::string line = view.value.substr(lines[i].begin, lines[i].end - lines[i].begin);
+        if (focused && byteFrom != byteTo && byteTo > lines[i].begin && byteFrom <= lines[i].end) {
+          const size_t a = std::max(byteFrom, lines[i].begin), b = std::min(byteTo, lines[i].end);
+          const double x0 = face->Measure(view.value.substr(lines[i].begin, a - lines[i].begin)) * size, x1 = face->Measure(view.value.substr(lines[i].begin, b - lines[i].begin)) * size;
+          Fill(RectF{content.x + F(x0), F(y), F(std::max(x1 - x0, byteTo > lines[i].end ? 4.0 : 0.0)), F(rowHeight)}, Rgb(179, 212, 252));
+        }
+        DrawLine(face, size, line, content.x, y + ascent, text);
+        if (focused && !view.disabled && !view.readOnly && g_caretOn && i == caretLine) {
+          const double cx = face->Measure(view.value.substr(lines[i].begin, std::min(caretByte, lines[i].end) - lines[i].begin)) * size;
+          Fill(RectF{content.x + F(cx), F(y), 1, F(rowHeight)}, text);
+        }
+      }
     }
     list_->items.push_back(PopClip{});
   }
@@ -1023,6 +1173,42 @@ class Painter {
     return textShadows_.emplace(&text, std::move(shadows)).first->second;
   }
 
+  // The part of a piece of text the selection of the page covers is lit.
+  void PaintSelection(const Box& box, const layout::TextPiece& piece, double x, double top, double height, double size) {
+    if (!box.node || !box.node->IsText()) return;
+    const dom::Document* document = box.node->nodeDocument;
+    const dom::Range* range = document ? dom::SelectionRangeOf(const_cast<dom::Document*>(document)) : nullptr;
+    if (!range || range->Collapsed() || !range->startNode || !range->endNode) return;
+    dom::Node* node = const_cast<dom::Node*>(box.node);
+    const std::string& data = static_cast<const dom::CharacterData*>(node)->Data();
+    const uint32_t length = static_cast<uint32_t>(layout::UnitsBeforeByte(data, data.size()));
+    // The units of the node's data that are inside the range.
+    int64_t lo = range->startNode == node ? range->startOffset : (dom::ComparePoints(node, 0, range->startNode, range->startOffset) >= 0 ? 0 : static_cast<int64_t>(length) + 1);
+    int64_t hi = range->endNode == node ? range->endOffset : (dom::ComparePoints(node, length, range->endNode, range->endOffset) <= 0 ? static_cast<int64_t>(length) : -1);
+    if (lo > hi || lo > length) return;
+    const size_t loByte = layout::BytesBeforeUnit(data, static_cast<size_t>(lo)), hiByte = layout::BytesBeforeUnit(data, static_cast<size_t>(std::max<int64_t>(hi, 0)));
+    // Where the piece's processed text has those bytes of the data: the first processed byte that comes from at or after each.
+    const auto processedAt = [&](size_t dataByte) {
+      for (size_t p = piece.begin; p < piece.end && p < box.processedSource.size(); ++p) {
+        if (box.textOffset + box.processedSource[p] >= dataByte) return p;
+      }
+      return piece.end;
+    };
+    const size_t from = processedAt(loByte), to = processedAt(hiByte);
+    if (to <= from) return;
+    // The pen position of a processed byte: the advances of the glyphs before it.
+    const auto penAt = [&](size_t processed) {
+      double pen = 0;
+      for (const font::Glyph& g : piece.glyphs) {
+        if (piece.begin + g.cluster >= processed) break;
+        pen += g.advance * size;
+      }
+      return pen;
+    };
+    const double x0 = penAt(from), x1 = to >= piece.end ? penAt(piece.end + 1) : penAt(to);
+    Fill(RectF{F(x + x0), F(top), F(std::max(0.0, x1 - x0)), F(height)}, Rgb(179, 212, 252));
+  }
+
   void PaintText(const Box& container, const LineItem& item, const Rect& origin) {
     const Box* box = item.box;
     if (!box || !box->style || box->style->visibility != layout::Visibility::Visible || !item.text.face) return;
@@ -1035,6 +1221,7 @@ class Painter {
     const double x = origin.x + item.rect.x;
     const double baseline = origin.y + item.rect.y + ascent;
     const Color color = ParseColor(box->style->color);
+    PaintSelection(*box, piece, x, origin.y + item.rect.y, item.rect.height, size);
     if (!color.Transparent()) {
       // (Each stretch of glyphs is of its own face: the ids are of that font.)
       const std::vector<Shadow>& shadows = TextShadowsOf(*box);
@@ -1217,7 +1404,9 @@ class Painter {
   };
 
   void Collect(const Box& parent, Lists& lists) {
-    if (parent.kind == Box::Kind::Block && parent.hasInlineContent && !parent.lines.empty()) lists.inlineOwners.push_back(&parent);
+    // (The text of a text area is drawn by the control from its value, not from the text it was made with.)
+    const bool areaText = parent.formControl && parent.element() && parent.element()->IsHtml("textarea");
+    if (parent.kind == Box::Kind::Block && parent.hasInlineContent && !parent.lines.empty() && !areaText) lists.inlineOwners.push_back(&parent);
     for (const auto& child : parent.children) {
       const Box& c = *child;
       if (!c.style) continue;
@@ -1374,6 +1563,102 @@ DisplayList BuildDisplayList(Quanta::Context& ctx, layout::Tree& tree, double ov
   dom::CommittedViewScope view;
   Painter painter(ctx, tree, overscan);
   return painter.Run();
+}
+
+void SetCaretVisible(bool visible) { g_caretOn = visible; }
+
+void SetPopup(const Popup& popup) { g_popup = popup; }
+
+bool TextPointAt(layout::Tree& tree, double x, double y, dom::Node*& node, uint32_t& offset, dom::Element** block) {
+  using layout::Box;
+  using layout::LineItem;
+  // The piece of text nearest to the point: first by how far it is from the point up or down, then sideways.
+  double bestDy = 1e18, bestDx = 1e18;
+  const Box* bestOwner = nullptr;
+  const LineItem* best = nullptr;
+  Rect bestOrigin;
+  std::function<void(const Box&)> walk = [&](const Box& box) {
+    if (box.kind == Box::Kind::Block && box.hasInlineContent && !box.lines.empty() && !(box.formControl && box.element() && box.element()->IsHtml("textarea"))) {
+      const Rect origin = layout::AbsoluteBorderBox(box);
+      for (const layout::Line& line : box.lines) {
+        for (const LineItem& item : line.items) {
+          if (item.kind != LineItem::Kind::Text || !item.box || !item.box->node || !item.box->node->IsText() || item.text.glyphs.empty()) continue;
+          if (item.box->style && item.box->style->visibility != layout::Visibility::Visible) continue;
+          const double top = origin.y + item.rect.y, left = origin.x + item.rect.x;
+          const double dy = y < top ? top - y : y > top + item.rect.height ? y - (top + item.rect.height) : 0;
+          const double dx = x < left ? left - x : x > left + item.rect.width ? x - (left + item.rect.width) : 0;
+          if (dy < bestDy || (dy == bestDy && dx < bestDx)) {
+            bestDy = dy;
+            bestDx = dx;
+            best = &item;
+            bestOwner = &box;
+            bestOrigin = origin;
+          }
+        }
+      }
+    }
+    for (const auto& child : box.children) {
+      if (child->kind == Box::Kind::Block || child->kind == Box::Kind::Inline) walk(*child);
+    }
+  };
+  if (!tree.root) return false;
+  walk(*tree.root);
+  if (!best) return false;
+  const layout::TextPiece& piece = best->text;
+  const Box& text = *best->box;
+  const double size = piece.fontSize;
+  const double want = x - (bestOrigin.x + best->rect.x);
+  // The boundary between the glyphs nearest to the point (the end of the piece included).
+  size_t at = piece.begin;
+  double pen = 0, bestDistance = std::fabs(want);
+  for (const font::Glyph& g : piece.glyphs) {
+    pen += g.advance * size;
+    if (std::fabs(want - pen) < bestDistance) {
+      bestDistance = std::fabs(want - pen);
+      at = piece.end;
+      // (The boundary after this glyph is where the next one's cluster begins.)
+      const size_t index = static_cast<size_t>(&g - piece.glyphs.data());
+      if (index + 1 < piece.glyphs.size()) at = piece.begin + piece.glyphs[index + 1].cluster;
+    }
+  }
+  // The processed byte back to the node's data, and that to UTF-16 units.
+  size_t dataByte = text.textOffset + text.text.size();
+  if (at < text.processedSource.size()) dataByte = text.textOffset + text.processedSource[at];
+  const std::string& data = static_cast<const dom::CharacterData*>(text.node)->Data();
+  node = text.node;
+  offset = static_cast<uint32_t>(layout::UnitsBeforeByte(data, std::min(dataByte, data.size())));
+  if (block) *block = bestOwner ? bestOwner->element() : nullptr;
+  return true;
+}
+
+bool PopupGeometryOf(Quanta::Context& ctx, layout::Tree& tree, dom::Element* select, size_t top, PopupGeometry& out) {
+  const auto boxes = tree.boxesOf.find(select);
+  if (boxes == tree.boxesOf.end() || boxes->second.empty()) return false;
+  const Box& box = *boxes->second.front();
+  if (!box.style) return false;
+  html::ControlView view;
+  if (!html::ReadControl(select, view) || view.options.empty()) return false;
+  const std::shared_ptr<font::Face> face = layout::FaceOf(ctx, tree, box);
+  if (!face) return false;
+  const double size = box.style->fontSize;
+  const double ascent = std::round(face->metrics().ascent * size), descent = std::round(face->metrics().descent * size);
+  const layout::Rect where = layout::AbsoluteBorderBox(box);
+  out.rowHeight = ascent + descent + 2;
+  double widest = 0;
+  for (const html::ControlView::Option& option : view.options) widest = std::max(widest, face->Measure(option.label) * size + (option.indented ? 20 : 4) + 8);
+  out.width = std::max(where.width, widest);
+  out.rows = std::min<size_t>(20, view.options.size() - std::min(top, view.options.size() - 1));
+  out.height = static_cast<double>(out.rows) * out.rowHeight;
+  out.x = where.x;
+  out.y = where.y + where.height;
+  // Not enough room under it in the window: over it, if there is room there.
+  double scrollY = 0;
+  if (const dom::Document* document = select->nodeDocument) {
+    const auto found = tree.scroll.find(document);
+    if (found != tree.scroll.end()) scrollY = found->second.second;
+  }
+  if (out.y + out.height > scrollY + tree.viewportHeight && where.y - out.height >= scrollY) out.y = where.y - out.height;
+  return true;
 }
 
 }  // namespace solar::paint

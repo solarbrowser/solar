@@ -160,6 +160,15 @@ struct ControlState {
   std::string kind, type, value, placeholder, label;
   bool checked = false, indeterminate = false, disabled = false, readOnly = false;
   size_t start = 0, end = 0;  // the caret and the selection, in UTF-16 units of the value
+  // A select: its options (the label, whether it is selected, disabled, or a group's heading), how many rows a list shows, and the first one it shows.
+  struct Option {
+    std::string label;
+    bool selected = false, disabled = false, group = false, indented = false;
+  };
+  std::vector<Option> options;
+  size_t rows = 1, top = 0;
+  bool multiple = false;
+  double fraction = 0;  // a range: where the thumb is, from 0 to 1
 };
 // Notes that the node changed in the way, to be committed.
 void MarkPending(Node* node, uint8_t kinds);
@@ -372,6 +381,7 @@ struct Document : Node {
   std::shared_ptr<layout::Tree> layoutTree;
   // The script element that is running, for document.currentScript.
   Element* currentScript = nullptr;
+  bool focusByKeyboard = false;  // the last thing that moved the focus was a key (a focus ring is drawn for it on any element)
   // The focused area of the document, if an element is: what document.activeElement is, once it is retargeted.
   Element* focusedElement = nullptr;
   Element* committedFocused = nullptr;  // what style and layout read of the focus, the hover and the press (see CommitPending)

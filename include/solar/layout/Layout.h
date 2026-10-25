@@ -51,6 +51,16 @@ std::string AbsoluteAddress(const std::string& address, const std::string& base)
 // The font a box's text is set in (the first of its family list that has a face), for text the program draws itself, as in form controls.
 std::shared_ptr<font::Face> FaceOf(Quanta::Context& ctx, Tree& tree, const Box& box);
 
+// The lines a text area shows: where each begins and ends in the text (bytes; a line ends before its newline), wrapped at spaces and, for a word longer than
+// the line, anywhere, to `width`. At least one line, an empty one for an empty text.
+struct TextLine {
+  size_t begin = 0, end = 0;
+};
+std::vector<TextLine> WrapText(const font::Face& face, double size, const std::string& text, double width);
+// UTF-16 units of the value (what the selection of a control counts in) and bytes of the UTF-8 the program holds.
+size_t BytesBeforeUnit(const std::string& text, size_t units);
+size_t UnitsBeforeByte(const std::string& text, size_t bytes);
+
 // A box's border box in the coordinates of the document (the initial containing block's origin).
 Rect AbsoluteBorderBox(const Box& box);
 double AbsoluteInset(const Box& box, int side, double viewportWidth, double viewportHeight);

@@ -75,6 +75,26 @@ bool DispatchKey(dom::Document* document, dom::Element* target, const char* type
 // The pointer went from one element to another (either may be null): mouseout/leave and mouseover/enter.
 void DispatchHover(dom::Document* document, dom::Element* from, dom::Element* to, double x, double y);
 bool TypeInto(dom::Document* document, dom::Element* target, const std::string& text, const char* kind);
+// The option at `index` of a select chosen by the user (mode 0 alone, 1 toggled, 2 extending the last choice); true if the selection changed (input and change fired).
+bool ChooseOption(dom::Document* document, dom::Element* select, size_t index, int mode);
+// The first row a list shows (a select with a size or several).
+void SetListTop(dom::Document* document, dom::Element* select, size_t top);
+// The focus moves to the next thing the keyboard reaches (the one before, going backwards); false when there is none.
+bool FocusNext(dom::Document* document, bool backwards);
+// A range input dragged to `fraction` of its length (the release is `final`), and the arrow keys on a range or a number input.
+bool SetRange(dom::Document* document, dom::Element* target, double fraction, bool final);
+bool StepControl(dom::Document* document, dom::Element* target, int direction);
+// The arrow keys on a radio button.
+bool MoveInRadioGroup(dom::Document* document, dom::Element* target, int direction);
+// Back or forward along the entries a page's script made with history.pushState; false when there is none that way (the window goes along its pages instead).
+bool HistoryStep(dom::Document* document, int delta);
+// The selection of the text of the page: from one point (a text node and units into its data) to another, a whole element's contents, none; and what it holds.
+void SelectText(dom::Document* document, dom::Node* anchor, uint32_t anchorOffset, dom::Node* focus, uint32_t focusOffset);
+void SelectContents(dom::Document* document, dom::Element* element);
+void ClearSelection(dom::Document* document);
+std::string SelectedText(dom::Document* document);
+// A turn of the wheel over `target`; false if a script cancelled it.
+bool DispatchWheel(dom::Document* document, dom::Element* target, double x, double y, double dx, double dy);
 void FireChange(dom::Document* document, dom::Element* target);
 // The caret (or the selection, when the two differ) of a text control, in UTF-16 units of its value.
 void SetCaret(dom::Document* document, dom::Element* target, size_t start, size_t end);
@@ -85,6 +105,14 @@ struct ControlView {
   std::string kind, type, value, placeholder, label;
   bool checked = false, indeterminate = false, disabled = false, readOnly = false;
   size_t start = 0, end = 0;  // in UTF-16 units of the value
+  struct Option {
+    std::string label;
+    bool selected = false, disabled = false, group = false, indented = false;
+  };
+  std::vector<Option> options;  // a select's
+  size_t rows = 1, top = 0;
+  bool multiple = false;
+  double fraction = 0;  // a range's thumb, 0 to 1
 };
 bool ReadControl(dom::Element* element, ControlView& out);
 // Asks the script of the window for the state of the controls that changed since, and keeps it for ReadControl (which gives it as it was committed).

@@ -407,6 +407,119 @@ const char* const kFormScript = R"JS(
     return true;
   });
   const sanitizeTyping = (e, v) => (typeOf(e) === "number" || typeOf(e) === "range" || typeOf(e) === "color") ? v : sanitize(e, v);
+  // An option chosen with the pointer or a key: mode 0 chooses it alone, 1 toggles it (a list that allows several), 2 extends from the one chosen last.
+  setHelper("choose", (sel, index, mode) => {
+    const options = optionsOf(sel), o = options[index];
+    if (!o || o.hasAttribute("disabled") || disabledNow(sel)) return false;
+    resetSelection(sel);
+    const before = options.map((x) => x.selected);
+    const put = (x, v) => { const s = stateOf(x); s.checked = v; s.checkedDirty = true; };
+    const st = stateOf(sel);
+    if (sel.multiple) {
+      if (mode === 1) put(o, !o.selected);
+      else if (mode === 2) { const a = st.anchor === undefined ? before.indexOf(true) : st.anchor; const from = a < 0 ? index : a; options.forEach((x, i) => put(x, i >= Math.min(from, index) && i <= Math.max(from, index) && !x.hasAttribute("disabled"))); }
+      else options.forEach((x) => put(x, x === o));
+      if (mode !== 2) st.anchor = index;
+    } else options.forEach((x) => put(x, x === o));
+    formChanged(sel);
+    if (!options.some((x, i) => x.selected !== before[i])) return false;
+    sel.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+    sel.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  });
+  setHelper("historyGo", (delta) => (typeof globalThis.__solarHistoryStep === "function" ? globalThis.__solarHistoryStep(delta) : false));
+  // The selection of the page's text, as the pointer and the keys move it.
+  setHelper("selectText", (an, ao, fn, fo) => { getSelection().setBaseAndExtent(an, ao, fn, fo); });
+  setHelper("selectBlock", (el) => { getSelection().selectAllChildren(el); });
+  setHelper("clearSelection", () => { getSelection().removeAllRanges(); });
+  setHelper("selectedText", () => String(getSelection()));
+  setHelper("listTop", (sel, top) => { stateOf(sel).top = Math.max(0, top | 0); formChanged(sel); });
+  // Tab: the focus goes to the next (or, back, the previous) thing the keyboard reaches.
+  setHelper("tab", (back) => {
+    const tabIndex = (e) => { const n = parseInt(e.getAttribute("tabindex"), 10); return Number.isFinite(n) ? n : null; };
+    const tabbable = (e) => {
+      if (e instanceof HTMLInputElement && typeOf(e) === "hidden") return false;
+      if ((e instanceof HTMLInputElement || e instanceof HTMLButtonElement || e instanceof HTMLSelectElement || e instanceof HTMLTextAreaElement) && disabledNow(e)) return false;
+      const ti = tabIndex(e);
+      if (ti !== null && ti < 0) return false;
+      if (e.localName === "summary" && ti === null && !(e.parentNode instanceof HTMLDetailsElement && e.parentNode.firstElementChild === e)) return false;
+      if (e.localName === "area" || e.localName === "a" && !e.hasAttribute("href") && ti === null) return false;
+      if (e.hasAttribute("contenteditable") && e.getAttribute("contenteditable") === "false" && ti === null) return false;
+      if (e instanceof HTMLInputElement && typeOf(e) === "radio" && e.getAttribute("name")) { const g = groupOf(e).filter((r) => !disabledNow(r)); const on = g.find((r) => r.checked); if ((on || g[0]) !== e) return false; }
+      if (e.getClientRects().length === 0) return false;
+      const v = getComputedStyle(e).visibility;
+      return v !== "hidden" && v !== "collapse";
+    };
+    const list = Array.from(document.querySelectorAll("a[href], button, input, select, textarea, summary, [tabindex], [contenteditable]")).filter(tabbable);
+    const order = list.filter((e) => (tabIndex(e) || 0) > 0).sort((a, b) => tabIndex(a) - tabIndex(b)).concat(list.filter((e) => !((tabIndex(e) || 0) > 0)));
+    if (!order.length) return false;
+    const cur = document.activeElement;
+    let at = cur && cur !== document.body ? order.indexOf(cur) : -1;
+    if (at < 0 && cur && cur !== document.body) {
+      // The focus is on something the keyboard does not reach: it goes on from where that is in the document.
+      const after = order.findIndex((e) => (cur.compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0);
+      at = back ? (after < 0 ? order.length : after) : (after < 0 ? order.length - 1 : after - 1);
+    }
+    const next = back ? (at <= 0 ? order.length - 1 : at - 1) : (at + 1) % order.length;
+    const target = order[next];
+    target.focus();
+    if (target instanceof HTMLInputElement && selectionApplies(target)) { const s = stateOf(target); s.start = 0; s.end = target.value.length; formChanged(target); }
+    return true;
+  });
+  const rangeBounds = (e) => {
+    const lo = e.hasAttribute("min") ? parseFloat(e.min) || 0 : 0;
+    let hi = e.hasAttribute("max") ? parseFloat(e.max) : 100;
+    if (!(hi >= lo)) hi = lo;
+    const step = parseFloat(e.step) > 0 ? parseFloat(e.step) : 1;
+    return { lo, hi, step };
+  };
+  const decimals = (n) => (String(n).split(".")[1] || "").length;
+  const snapTo = (e, v) => {
+    const { lo, hi, step } = rangeBounds(e);
+    v = lo + Math.round((v - lo) / step) * step;
+    v = Math.min(hi, Math.max(lo, v));
+    return Number(v.toFixed(Math.max(decimals(step), decimals(lo), 0)));
+  };
+  const putValue = (e, v) => {
+    const st = stateOf(e), text = String(v);
+    if (e.value === text) return false;
+    st.value = text; st.dirty = true; formChanged(e);
+    e.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+    return true;
+  };
+  // A range dragged: the thumb is at `fraction` of the way. `final` is the release, which is the change.
+  setHelper("range", (e, fraction, final) => {
+    if (!(e instanceof HTMLInputElement) || typeOf(e) !== "range" || disabledNow(e)) return false;
+    const { lo, hi } = rangeBounds(e), st = stateOf(e);
+    if (putValue(e, snapTo(e, lo + (hi - lo) * Math.min(1, Math.max(0, fraction))))) st.moved = true;
+    if (final && st.moved) { st.moved = false; e.dispatchEvent(new Event("change", { bubbles: true })); }
+    return true;
+  });
+  // Up and down (or left and right) on a range or a number field.
+  setHelper("step", (e, dir) => {
+    if (!(e instanceof HTMLInputElement) || disabledNow(e) || e.readOnly) return false;
+    const t = typeOf(e);
+    let v;
+    if (t === "range") { const cur = parseFloat(e.value); v = snapTo(e, (Number.isFinite(cur) ? cur : rangeBounds(e).lo) + dir * rangeBounds(e).step); }
+    else if (t === "number") {
+      const step = parseFloat(e.step) > 0 ? parseFloat(e.step) : 1, cur = parseFloat(e.value);
+      v = (Number.isFinite(cur) ? cur : 0) + dir * step;
+      if (e.hasAttribute("max") && v > parseFloat(e.max)) v = parseFloat(e.max);
+      if (e.hasAttribute("min") && v < parseFloat(e.min)) v = parseFloat(e.min);
+      v = Number(v.toFixed(Math.max(decimals(step), decimals(cur), 0)));
+    } else return false;
+    if (putValue(e, v)) e.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  });
+  // The arrow keys on a radio button: the one before or after in its group is checked.
+  setHelper("radio", (e, dir) => {
+    const g = groupOf(e).filter((r) => !disabledNow(r)), i = g.indexOf(e);
+    if (i < 0 || g.length < 2) return false;
+    const n = g[(i + dir + g.length) % g.length];
+    n.focus(); n.click();
+    return true;
+  });
+  setHelper("wheel", (target, x, y, dx, dy) => target.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, composed: true, view: globalThis, clientX: x, clientY: y, deltaX: dx, deltaY: dy, deltaMode: 0 })));
   setHelper("caret", (target, a, b) => { if (target.setSelectionRange) target.setSelectionRange(a, b); formChanged(target); });
   setHelper("change", (target) => { target.dispatchEvent(new Event("change", { bubbles: true })); });
   setHelper("formMeta", (target) => {
@@ -418,10 +531,22 @@ const char* const kFormScript = R"JS(
       else if (t === "reset") label = target.hasAttribute("value") ? target.value : "Reset";
       else if (t === "button") label = target.getAttribute("value") || "";
       else if (t === "file") label = "Choose File";
-      return Object.assign(base, { kind: "input", type: t, value: t === "password" ? "\u2022".repeat(target.value.length) : target.value, placeholder: target.placeholder, checked: target.checked, indeterminate: s.indeterminate, label, start: s.start, end: s.end, disabled: disabledNow(target), readonly: target.readOnly });
+      let fraction = 0;
+      if (t === "range") { const lo = target.hasAttribute("min") ? parseFloat(target.min) || 0 : 0, hi = target.hasAttribute("max") ? parseFloat(target.max) : 100, v = parseFloat(target.value); fraction = hi > lo && Number.isFinite(v) ? Math.min(1, Math.max(0, (v - lo) / (hi - lo))) : 0; }
+      return Object.assign(base, { fraction, kind: "input", type: t, value: t === "password" ? "\u2022".repeat(target.value.length) : target.value, placeholder: target.placeholder, checked: target.checked, indeterminate: s.indeterminate, label, start: s.start, end: s.end, disabled: disabledNow(target), readonly: target.readOnly });
     }
     if (target instanceof HTMLTextAreaElement) { const s = clampSel(target); return Object.assign(base, { kind: "textarea", type: "textarea", value: target.value, placeholder: target.placeholder, start: s.start, end: s.end, disabled: disabledNow(target), readonly: target.readOnly }); }
-    if (target instanceof HTMLSelectElement) { resetSelection(target); const o = optionsOf(target).find((x) => x.selected); return Object.assign(base, { kind: "select", type: target.type, value: target.value, label: o ? o.label : "", disabled: disabledNow(target) }); }
+    if (target instanceof HTMLSelectElement) {
+      resetSelection(target);
+      const list = optionsOf(target), o = list.find((x) => x.selected);
+      const size = parseInt(target.getAttribute("size"), 10);
+      const rows = size > 0 ? size : target.multiple ? 4 : 1;
+      // (A group's heading is a row of its own in a list.)
+      const rowsOf = []; for (const c of target.children) { if (c instanceof HTMLOptionElement) rowsOf.push(c); else if (c instanceof HTMLOptGroupElement) { rowsOf.push(c); for (const x of c.children) if (x instanceof HTMLOptionElement) rowsOf.push(x); } }
+      const packed = rowsOf.map((x) => (x instanceof HTMLOptGroupElement ? 4 | (x.hasAttribute("disabled") ? 2 : 0) : (x.selected ? 1 : 0) | (x.hasAttribute("disabled") || (x.parentNode instanceof HTMLOptGroupElement && x.parentNode.hasAttribute("disabled")) ? 2 : 0) | (x.parentNode instanceof HTMLOptGroupElement ? 8 : 0)) + "\x1f" + (x instanceof HTMLOptGroupElement ? x.getAttribute("label") || "" : x.label)).join("\x1e");
+      const st = stateOf(target);
+      return Object.assign(base, { kind: "select", type: target.type, value: target.value, label: o ? o.label : "", disabled: disabledNow(target), rows, top: st.top || 0, multiple: target.multiple, options: packed });
+    }
     if (target instanceof HTMLButtonElement) return Object.assign(base, { kind: "button", type: target.type, disabled: disabledNow(target) });
     return null;
   });

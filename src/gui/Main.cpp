@@ -427,6 +427,7 @@ namespace {
 struct UiEvent {
   SDL_Event event{};
   std::string text;  // a text input's text (the event's own is gone with the next poll)
+  std::string clipboard;  // what the clipboard held when a key that pastes was pressed
 };
 
 // What a key of the keyboard is to a page: KeyboardEvent.key, .code and .keyCode.
@@ -497,13 +498,68 @@ KeyInfo DescribeKey(const SDL_KeyboardEvent& k) {
   return info;
 }
 
+// ---- Editing: where the caret goes ----
+// (The text is UTF-8 and the positions are bytes; whoever talks to the page converts to the UTF-16 units its selection counts in.)
+bool IsWordByte(unsigned char c) { return std::isalnum(c) || c == '_' || c >= 0x80; }
+
+size_t CharBefore(const std::string& s, size_t at) {
+  if (at == 0) return 0;
+  --at;
+  while (at > 0 && (static_cast<unsigned char>(s[at]) & 0xC0) == 0x80) --at;
+  return at;
+}
+
+size_t CharAfter(const std::string& s, size_t at) {
+  if (at >= s.size()) return s.size();
+  const unsigned char c = static_cast<unsigned char>(s[at]);
+  return std::min(s.size(), at + (c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4));
+}
+
+// The start of the word at or before `at` (white space and punctuation before it are passed first), and the end of the word at or after it.
+size_t WordStartBefore(const std::string& s, size_t at) {
+  while (at > 0 && !IsWordByte(static_cast<unsigned char>(s[at - 1]))) --at;
+  while (at > 0 && IsWordByte(static_cast<unsigned char>(s[at - 1]))) --at;
+  return at;
+}
+
+size_t WordEndAfter(const std::string& s, size_t at) {
+  while (at < s.size() && !IsWordByte(static_cast<unsigned char>(s[at]))) ++at;
+  while (at < s.size() && IsWordByte(static_cast<unsigned char>(s[at]))) ++at;
+  return at;
+}
+
+// The word that has `at` in it (or the white space run, or the one punctuation mark), for a double click.
+void WordAround(const std::string& s, size_t at, size_t& from, size_t& to) {
+  at = std::min(at, s.size());
+  from = to = at;
+  if (s.empty()) return;
+  const size_t probe = at < s.size() ? at : at - 1;
+  const bool word = IsWordByte(static_cast<unsigned char>(s[probe]));
+  const bool space = s[probe] == ' ' || s[probe] == '\t';
+  const auto same = [&](unsigned char c) { return word ? IsWordByte(c) : space ? (c == ' ' || c == '\t') : !IsWordByte(c) && c != ' ' && c != '\t'; };
+  from = probe;
+  to = probe + 1;
+  while (from > 0 && same(static_cast<unsigned char>(s[from - 1]))) --from;
+  while (to < s.size() && same(static_cast<unsigned char>(s[to]))) ++to;
+}
+
+size_t LineStartAt(const std::string& s, size_t at) {
+  const size_t newline = at == 0 ? std::string::npos : s.rfind('\n', at - 1);
+  return newline == std::string::npos ? 0 : newline + 1;
+}
+
+size_t LineEndAt(const std::string& s, size_t at) {
+  const size_t newline = s.find('\n', at);
+  return newline == std::string::npos ? s.size() : newline;
+}
+
 struct Frame {
   std::shared_ptr<const solar::paint::DisplayList> list;
   double maxX = 0, maxY = 0;  // how far the page can be scrolled
 };
 
 struct UiCommand {
-  enum class Kind { Title, ScrollBy, ScrollTo, Forget, Shot, Quit } kind = Kind::Title;
+  enum class Kind { Title, ScrollBy, ScrollTo, Forget, Shot, Quit, Clipboard } kind = Kind::Title;
   std::string text;
   double x = 0, y = 0;
   bool instant = false;
@@ -682,7 +738,14 @@ void RunWindow(Shared& shared, SDL_Window* window, SDL_Renderer* renderer) {
           dirty = true;
           break;
         }
-        case SDL_EVENT_MOUSE_WHEEL: scrollBy(-event.wheel.x * 60, -event.wheel.y * 60, false); break;
+        case SDL_EVENT_MOUSE_WHEEL: {
+          scrollBy(-event.wheel.x * 60, -event.wheel.y * 60, false);
+          // (The page hears of it too, for what it does with the wheel besides scrolling; it cannot hold the scroll back.)
+          UiEvent forward;
+          forward.event = event;
+          shared.PushEvent(std::move(forward));
+          break;
+        }
         case SDL_EVENT_TEXT_INPUT: {
           UiEvent forward;
           forward.event = event;
@@ -694,6 +757,11 @@ void RunWindow(Shared& shared, SDL_Window* window, SDL_Renderer* renderer) {
         case SDL_EVENT_KEY_UP: {
           UiEvent forward;
           forward.event = event;
+          if (event.type == SDL_EVENT_KEY_DOWN && (((event.key.mod & SDL_KMOD_CTRL) && event.key.key == SDLK_V) || ((event.key.mod & SDL_KMOD_SHIFT) && event.key.key == SDLK_INSERT))) {
+            char* held = SDL_GetClipboardText();
+            forward.clipboard = held ? held : "";
+            SDL_free(held);
+          }
           shared.PushEvent(std::move(forward));
           break;
         }
@@ -766,6 +834,7 @@ void RunWindow(Shared& shared, SDL_Window* window, SDL_Renderer* renderer) {
           dirty = true;
           break;
         case UiCommand::Kind::Quit: running = false; break;
+        case UiCommand::Kind::Clipboard: SDL_SetClipboardText(command.text.c_str()); break;
       }
     }
     if (Frame next; shared.TakeFrame(next)) {
@@ -915,6 +984,10 @@ int PageMain(Shared& shared, int argc, char** argv) {
   const auto programStart = Clock::now();
   const std::string given = argc > 1 ? argv[1] : "https://example.com/";
   std::string address = AddressOf(given);
+  // The pages this window went through, and where in them it is (back and forward move along them); a page left by going back or forward is not added again.
+  std::vector<std::string> session;
+  size_t sessionAt = 0;
+  bool historyMove = false;
 
   // The page: an isolate, the network, and a window's worth of APIs in a realm.
   auto isolate = qe::Isolate::Create();
@@ -965,6 +1038,14 @@ int PageMain(Shared& shared, int argc, char** argv) {
     solar::dom::Document* leftDocument = document;
     pressTarget = nullptr;
     address = where;
+    if (!historyMove && (session.empty() || session[sessionAt] != where)) {
+      if (!session.empty()) session.resize(sessionAt + 1);
+      session.push_back(where);
+      sessionAt = session.size() - 1;
+    }
+    historyMove = false;
+    // (The drop-down of the page that was left is gone with it.)
+    solar::paint::SetPopup(solar::paint::Popup{});
     browser.SetPageUrl(address);
     browser.SetContentType(address, type);
     browser.Prefetch(markup, address);
@@ -1166,6 +1247,20 @@ int PageMain(Shared& shared, int argc, char** argv) {
       break;
     }
   };
+  // Back (-1) and forward (1): along the entries a script made with pushState if there are any that way, else along the pages of the window.
+  const auto goInHistory = [&](int delta) {
+    bool handled = false;
+    solar::html::RunInRealm(*realm, [&] { handled = solar::html::HistoryStep(document, delta); });
+    if (handled) {
+      dirty = true;
+      return;
+    }
+    const long target = static_cast<long>(sessionAt) + delta;
+    if (target < 0 || target >= static_cast<long>(session.size())) return;
+    sessionAt = static_cast<size_t>(target);
+    historyMove = true;
+    if (!navigate(session[sessionAt])) historyMove = false;
+  };
   // The text control that has the focus, if one has.
   const auto focusedTextControl = [&]() -> solar::dom::Element* {
     solar::dom::Element* focused = document ? document->focusedElement : nullptr;
@@ -1175,9 +1270,396 @@ int PageMain(Shared& shared, int argc, char** argv) {
     const solar::dom::Attr* type = focused->FindAttribute("", "type");
     std::string t = type ? type->value : "";
     for (char& c : t) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    static const char* const kText[] = {"", "text", "search", "tel", "url", "email", "password", "number"};
+    static const char* const kText[] = {"", "text", "search", "tel", "url", "email", "password", "number", "date", "time", "month", "week", "datetime-local"};
     for (const char* k : kText) if (t == k) return focused;
     return nullptr;
+  };
+
+  // ---- Editing, lists and the drop-down ----
+  constexpr size_t kNone = static_cast<size_t>(-1);
+  solar::dom::Element* popupSelect = nullptr;  // the select whose drop-down is open
+  const void* popupDocument = nullptr;
+  size_t popupHover = kNone, popupTop = 0;
+  solar::dom::Element* dragField = nullptr;  // the text control a drag of the pointer is selecting in, and where the drag began (UTF-16 units)
+  size_t dragAnchor = 0;
+  solar::dom::Element* anchorField = nullptr;  // the control the selection of the keyboard grows from, and where that is
+  size_t keyAnchor = 0;
+  solar::dom::Element* dragRange = nullptr;  // the range input the thumb of which is being dragged
+  bool swallowRelease = false;
+  int pressCount = 0;
+  Clock::time_point lastPress = Clock::now() - std::chrono::seconds(10);
+  double lastPressX = 0, lastPressY = 0;
+  bool caretOn = true;
+  Clock::time_point caretSince = Clock::now();
+  const auto caretReset = [&] {
+    caretOn = true;
+    caretSince = Clock::now();
+    solar::paint::SetCaretVisible(true);
+  };
+  // What a control shows now (the state script keeps, asked for first if it moved).
+  const auto readControl = [&](solar::dom::Element* e, solar::html::ControlView& v) {
+    currentTree();
+    return solar::html::ReadControl(e, v);
+  };
+  const auto showPopup = [&] {
+    solar::paint::Popup popup;
+    popup.select = popupSelect;
+    popup.hover = popupHover;
+    popup.top = popupTop;
+    solar::paint::SetPopup(popup);
+    dirty = true;
+  };
+  const auto closePopup = [&] {
+    if (!popupSelect) return;
+    popupSelect = nullptr;
+    solar::paint::SetPopup(solar::paint::Popup{});
+    dirty = true;
+  };
+  // The option a row of a list is (headings of groups are rows, not options).
+  const auto optionOfRow = [&](const solar::html::ControlView& v, size_t row) -> size_t {
+    if (row >= v.options.size() || v.options[row].group) return kNone;
+    size_t n = 0;
+    for (size_t i = 0; i < row; ++i) {
+      if (!v.options[i].group) ++n;
+    }
+    return n;
+  };
+  const auto selectedRow = [&](const solar::html::ControlView& v) -> size_t {
+    for (size_t i = 0; i < v.options.size(); ++i) {
+      if (v.options[i].selected) return i;
+    }
+    return kNone;
+  };
+  const auto pickable = [&](const solar::html::ControlView& v, size_t row) { return row < v.options.size() && !v.options[row].group && !v.options[row].disabled; };
+  const auto openPopup = [&](solar::dom::Element* select) {
+    solar::html::ControlView v;
+    if (!readControl(select, v) || v.disabled || v.options.empty()) return;
+    popupSelect = select;
+    popupDocument = document;
+    popupHover = selectedRow(v);
+    popupTop = popupHover != kNone && popupHover >= 20 ? popupHover - 19 : 0;
+    showPopup();
+  };
+  const auto chooseRow = [&](size_t row) {
+    solar::html::ControlView v;
+    if (!popupSelect || !readControl(popupSelect, v) || !pickable(v, row)) return;
+    solar::dom::Element* select = popupSelect;
+    const size_t option = optionOfRow(v, row);
+    closePopup();
+    solar::html::RunInRealm(*realm, [&] { solar::html::ChooseOption(document, select, option, 0); });
+    dirty = true;
+  };
+  // The row of the open drop-down under a point of the window (kNone outside it); `inside` says whether the point is on the list.
+  const auto popupRowAt = [&](double x, double y, bool& inside) -> size_t {
+    inside = false;
+    solar::layout::Tree* tree = currentTree();
+    solar::paint::PopupGeometry g;
+    if (!tree || !popupSelect || !solar::paint::PopupGeometryOf(realm->GetContext(), *tree, popupSelect, popupTop, g)) return kNone;
+    const auto& scroll = tree->scroll[document];
+    const double dx = x + scroll.first, dy = y + scroll.second;
+    if (dx < g.x || dx >= g.x + g.width || dy < g.y || dy >= g.y + g.height) return kNone;
+    inside = true;
+    return popupTop + static_cast<size_t>((dy - g.y) / g.rowHeight);
+  };
+  // Moves what the drop-down's keys are on to the next row that can be chosen (`toEnd`: the last one in that direction).
+  const auto movePopup = [&](int direction, bool toEnd) {
+    solar::html::ControlView v;
+    if (!popupSelect || !readControl(popupSelect, v)) return;
+    long row = popupHover == kNone ? (direction > 0 ? -1 : static_cast<long>(v.options.size())) : static_cast<long>(popupHover);
+    if (toEnd) row = direction > 0 ? static_cast<long>(v.options.size()) : -1;
+    for (;;) {
+      row += direction;
+      if (row < 0 || row >= static_cast<long>(v.options.size())) break;
+      if (pickable(v, static_cast<size_t>(row))) {
+        popupHover = static_cast<size_t>(row);
+        if (popupHover < popupTop) popupTop = popupHover;
+        if (popupHover >= popupTop + 20) popupTop = popupHover - 19;
+        showPopup();
+        return;
+      }
+    }
+  };
+  // The row after `from` (round the list) whose label begins with what was typed; kNone if none does.
+  const auto typeAhead = [&](const solar::html::ControlView& v, size_t from, const std::string& typed) -> size_t {
+    if (typed.empty() || v.options.empty()) return kNone;
+    std::string lowered = typed;
+    for (char& c : lowered) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    for (size_t step = 1; step <= v.options.size(); ++step) {
+      const size_t row = ((from == kNone ? v.options.size() - 1 : from) + step) % v.options.size();
+      if (!pickable(v, row)) continue;
+      std::string label = v.options[row].label;
+      for (char& c : label) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      if (label.rfind(lowered, 0) == 0) return row;
+    }
+    return kNone;
+  };
+  // The key of a select that is not open (a drop-down changes with the arrows, and opens with space; a list moves its choice).
+  const auto selectKey = [&](solar::dom::Element* select, const SDL_KeyboardEvent& k) -> bool {
+    solar::html::ControlView v;
+    if (!readControl(select, v) || v.disabled || v.options.empty()) return false;
+    const bool list = v.rows > 1 || v.multiple;
+    const bool shift = (k.mod & SDL_KMOD_SHIFT) != 0, ctrl = (k.mod & SDL_KMOD_CTRL) != 0;
+    const size_t current = selectedRow(v);
+    if (!list && (k.key == SDLK_SPACE || k.key == SDLK_RETURN || k.key == SDLK_KP_ENTER || k.key == SDLK_F4 || ((k.mod & SDL_KMOD_ALT) && (k.key == SDLK_DOWN || k.key == SDLK_UP)))) {
+      openPopup(select);
+      return true;
+    }
+    if (list && v.multiple && k.key == SDLK_SPACE && current != kNone) {
+      solar::html::RunInRealm(*realm, [&] { solar::html::ChooseOption(document, select, optionOfRow(v, current), 1); });
+      dirty = true;
+      return true;
+    }
+    int direction = 0;
+    bool toEnd = false;
+    size_t jump = 1;
+    switch (k.key) {
+      case SDLK_UP: case SDLK_LEFT: direction = -1; break;
+      case SDLK_DOWN: case SDLK_RIGHT: direction = 1; break;
+      case SDLK_HOME: direction = 1; toEnd = true; break;
+      case SDLK_END: direction = -1; toEnd = true; break;
+      case SDLK_PAGEUP: direction = -1; jump = std::max<size_t>(1, v.rows - 1); break;
+      case SDLK_PAGEDOWN: direction = 1; jump = std::max<size_t>(1, v.rows - 1); break;
+      default: return false;
+    }
+    long row = current == kNone ? (direction > 0 ? -1 : static_cast<long>(v.options.size())) : static_cast<long>(current);
+    long found = -1;
+    if (toEnd) {
+      // (Home is the first row that can be chosen, End the last.)
+      for (long r = direction > 0 ? 0 : static_cast<long>(v.options.size()) - 1; r >= 0 && r < static_cast<long>(v.options.size()); r += direction) {
+        if (pickable(v, static_cast<size_t>(r))) { found = r; break; }
+      }
+    } else {
+      for (size_t n = 0; n < jump; ++n) {
+        for (long r = row + direction; r >= 0 && r < static_cast<long>(v.options.size()); r += direction) {
+          if (pickable(v, static_cast<size_t>(r))) { found = r; row = r; break; }
+        }
+      }
+    }
+    if (found < 0) return true;
+    solar::html::RunInRealm(*realm, [&] {
+      solar::html::ChooseOption(document, select, optionOfRow(v, static_cast<size_t>(found)), list && v.multiple && shift && !ctrl ? 2 : 0);
+      if (list) {
+        size_t top = v.top;
+        if (static_cast<size_t>(found) < top) top = static_cast<size_t>(found);
+        if (static_cast<size_t>(found) >= top + v.rows) top = static_cast<size_t>(found) - v.rows + 1;
+        if (top != v.top) solar::html::SetListTop(document, select, top);
+      }
+    });
+    dirty = true;
+    return true;
+  };
+  // The keys while the drop-down is open.
+  const auto popupKey = [&](SDL_Keycode key) {
+    switch (key) {
+      case SDLK_ESCAPE: closePopup(); break;
+      case SDLK_UP: movePopup(-1, false); break;
+      case SDLK_DOWN: movePopup(1, false); break;
+      case SDLK_HOME: movePopup(1, true); break;
+      case SDLK_END: movePopup(-1, true); break;
+      case SDLK_PAGEUP: for (int i = 0; i < 10; ++i) movePopup(-1, false); break;
+      case SDLK_PAGEDOWN: for (int i = 0; i < 10; ++i) movePopup(1, false); break;
+      case SDLK_RETURN: case SDLK_KP_ENTER: case SDLK_SPACE:
+        if (popupHover != kNone) chooseRow(popupHover);
+        else closePopup();
+        break;
+      case SDLK_TAB: closePopup(); break;
+      default: break;
+    }
+  };
+
+  // Where in the text of a control (UTF-16 units) a point of the window is; for a text area, in the lines it shows.
+  struct AreaView {
+    std::vector<solar::layout::TextLine> lines;
+    double rowHeight = 1, contentLeft = 0, contentTop = 0, contentWidth = 0, size = 0;
+    size_t first = 0, visible = 1;
+    std::shared_ptr<solar::font::Face> face;
+  };
+  const auto viewOf = [&](solar::dom::Element* el, const solar::html::ControlView& v, AreaView& out) -> bool {
+    solar::layout::Tree* tree = currentTree();
+    if (!tree) return false;
+    const auto boxes = tree->boxesOf.find(el);
+    if (boxes == tree->boxesOf.end() || boxes->second.empty() || !boxes->second.front()->style) return false;
+    const solar::layout::Box& box = *boxes->second.front();
+    out.face = solar::layout::FaceOf(realm->GetContext(), *tree, box);
+    if (!out.face) return false;
+    const solar::layout::Rect where = solar::layout::AbsoluteBorderBox(box);
+    const auto& scroll = tree->scroll[document];
+    out.size = box.style->fontSize;
+    out.contentLeft = where.x - scroll.first + box.ContentLeft();
+    out.contentTop = where.y - scroll.second + box.ContentTop();
+    out.contentWidth = std::max(0.0, where.width - box.border.Horizontal() - box.padding.Horizontal());
+    const double contentHeight = std::max(0.0, where.height - box.border.Vertical() - box.padding.Vertical());
+    out.rowHeight = std::max(1.0, std::round(out.face->metrics().ascent * out.size) + std::round(out.face->metrics().descent * out.size));
+    if (v.kind == "textarea") {
+      out.lines = solar::layout::WrapText(*out.face, out.size, v.value, std::max(1.0, out.contentWidth - 15.0));
+      out.visible = std::max<size_t>(1, static_cast<size_t>(contentHeight / out.rowHeight));
+      const size_t caretByte = solar::layout::BytesBeforeUnit(v.value, v.end);
+      size_t caretLine = 0;
+      for (size_t i = 0; i < out.lines.size(); ++i) {
+        if (caretByte >= out.lines[i].begin) caretLine = i;
+      }
+      out.first = document->focusedElement == el && caretLine >= out.visible ? caretLine - out.visible + 1 : 0;
+    } else {
+      out.lines = {solar::layout::TextLine{0, v.value.size()}};
+    }
+    return true;
+  };
+  // The byte of a line whose left edge is nearest to `x` (measured from the line's own start).
+  const auto nearestByte = [&](const AreaView& a, const std::string& text, const solar::layout::TextLine& line, double x) -> size_t {
+    size_t best = line.begin, at = line.begin;
+    double bestDistance = std::fabs(x);
+    while (at < line.end) {
+      at = CharAfter(text, at);
+      const double pen = a.face->Measure(text.substr(line.begin, at - line.begin)) * a.size;
+      if (std::fabs(x - pen) < bestDistance) {
+        bestDistance = std::fabs(x - pen);
+        best = at;
+      }
+    }
+    return best;
+  };
+  const auto textPositionAt = [&](solar::dom::Element* el, double mx, double my) -> size_t {
+    solar::html::ControlView v;
+    AreaView a;
+    if (!readControl(el, v) || !viewOf(el, v, a)) return 0;
+    if (v.kind == "textarea") {
+      const double rows = std::floor((my - a.contentTop) / a.rowHeight);
+      const size_t row = std::min(a.lines.size() - 1, static_cast<size_t>(std::max(0.0, static_cast<double>(a.first) + rows)));
+      return solar::layout::UnitsBeforeByte(v.value, nearestByte(a, v.value, a.lines[row], mx - a.contentLeft));
+    }
+    double shift = 0;
+    if (document->focusedElement == el) {
+      const double caretX = a.face->Measure(v.value.substr(0, solar::layout::BytesBeforeUnit(v.value, v.end))) * a.size;
+      shift = caretX > a.contentWidth - 1 ? caretX - (a.contentWidth - 1) : 0;
+    }
+    return solar::layout::UnitsBeforeByte(v.value, nearestByte(a, v.value, a.lines[0], mx - a.contentLeft + shift));
+  };
+  const auto setSelection = [&](solar::dom::Element* field, size_t from, size_t to) {
+    solar::html::RunInRealm(*realm, [&] { solar::html::SetCaret(document, field, std::min(from, to), std::max(from, to)); });
+    dirty = true;
+  };
+  // The selection of the page's text a drag of the pointer makes.
+  bool pageSelecting = false;
+  solar::dom::Node* pageAnchor = nullptr;
+  uint32_t pageAnchorOffset = 0;
+  double pressStartX = 0, pressStartY = 0;
+  // Whether a style keeps the text under an element from being selected (user-select: none, which what is below it inherits unless it says otherwise).
+  const auto userSelectNone = [&](solar::dom::Element* element) {
+    for (solar::dom::Node* n = element; n; n = n->parentNode) {
+      if (!n->IsElement()) continue;
+      solar::css::StyleReader reader(realm->GetContext(), static_cast<solar::dom::Element*>(n));
+      const std::string value = reader.Get("user-select");
+      if (value == "none") return true;
+      if (value == "text" || value == "all" || value == "contain") return false;
+    }
+    return false;
+  };
+  const auto pageTextPointAt = [&](double wx, double wy, solar::dom::Node*& node, uint32_t& offset, solar::dom::Element** block) -> bool {
+    solar::layout::Tree* tree = currentTree();
+    if (!tree) return false;
+    const auto& scroll = tree->scroll[document];
+    return solar::paint::TextPointAt(*tree, wx + scroll.first, wy + scroll.second, node, offset, block);
+  };
+  // Where on a range input's track a point of the window is, from 0 to 1.
+  const auto rangeFraction = [&](solar::dom::Element* el, double mx) -> double {
+    solar::html::ControlView v;
+    AreaView a;
+    if (!readControl(el, v) || !viewOf(el, v, a)) return 0;
+    return std::clamp((mx - (a.contentLeft + 7)) / std::max(1.0, a.contentWidth - 14), 0.0, 1.0);
+  };
+  // What the keys do in a text control; true when they were its.
+  const auto textKey = [&](solar::dom::Element* field, const SDL_KeyboardEvent& k, const std::string& pasted) -> bool {
+    solar::html::ControlView v;
+    if (!readControl(field, v)) return false;
+    const bool ctrl = (k.mod & SDL_KMOD_CTRL) != 0, shift = (k.mod & SDL_KMOD_SHIFT) != 0;
+    const bool area = v.kind == "textarea";
+    const std::string& text = v.value;
+    const size_t a = solar::layout::BytesBeforeUnit(text, v.start), b = solar::layout::BytesBeforeUnit(text, v.end);
+    // Which end of the selection is the caret: the one the keys last grew it from is the other.
+    size_t caret = b, anchor = a;
+    if (v.start == v.end) anchor = b;
+    else if (anchorField == field && keyAnchor == v.end) { caret = a; anchor = b; }
+    const auto go = [&](size_t to, bool extend) {
+      const size_t from = extend ? anchor : to;
+      anchorField = field;
+      keyAnchor = solar::layout::UnitsBeforeByte(text, from);
+      setSelection(field, keyAnchor, solar::layout::UnitsBeforeByte(text, to));
+    };
+    const auto typeIn = [&](const std::string& what, const char* kind) {
+      solar::html::RunInRealm(*realm, [&] { solar::html::TypeInto(document, field, what, kind); });
+      dirty = true;
+    };
+    const auto lineMove = [&](int rows) {
+      AreaView view;
+      if (!viewOf(field, v, view)) return;
+      size_t line = 0;
+      for (size_t i = 0; i < view.lines.size(); ++i) {
+        if (caret >= view.lines[i].begin) line = i;
+      }
+      const double x = view.face->Measure(text.substr(view.lines[line].begin, std::min(caret, view.lines[line].end) - view.lines[line].begin)) * view.size;
+      const long target = static_cast<long>(line) + rows;
+      if (target < 0) go(0, shift);
+      else if (target >= static_cast<long>(view.lines.size())) go(text.size(), shift);
+      else go(nearestByte(view, text, view.lines[static_cast<size_t>(target)], x), shift);
+    };
+    switch (k.key) {
+      case SDLK_A:
+        if (!ctrl) return false;
+        anchor = 0;
+        go(text.size(), true);
+        return true;
+      case SDLK_C: case SDLK_X:
+        if (!ctrl) return false;
+        if (a != b && v.type != "password") {
+          UiCommand command;
+          command.kind = UiCommand::Kind::Clipboard;
+          command.text = text.substr(std::min(a, b), std::max(a, b) - std::min(a, b));
+          shared.Post(std::move(command));
+          if (k.key == SDLK_X && !v.readOnly) typeIn("", "backspace");
+        }
+        return true;
+      case SDLK_V: case SDLK_INSERT:
+        if (k.key == SDLK_V ? !ctrl : !shift) return false;
+        if (!pasted.empty() && !v.readOnly) typeIn(pasted, "text");
+        return true;
+      case SDLK_LEFT:
+        if (ctrl) go(WordStartBefore(text, caret), shift);
+        else if (!shift && a != b) go(std::min(a, b), false);
+        else go(CharBefore(text, caret), shift);
+        return true;
+      case SDLK_RIGHT:
+        if (ctrl) go(WordEndAfter(text, caret), shift);
+        else if (!shift && a != b) go(std::max(a, b), false);
+        else go(CharAfter(text, caret), shift);
+        return true;
+      case SDLK_HOME: go(ctrl || !area ? 0 : LineStartAt(text, caret), shift); return true;
+      case SDLK_END: go(ctrl || !area ? text.size() : LineEndAt(text, caret), shift); return true;
+      case SDLK_UP:
+        if (area) lineMove(-1);
+        else go(0, shift);
+        return true;
+      case SDLK_DOWN:
+        if (area) lineMove(1);
+        else go(text.size(), shift);
+        return true;
+      case SDLK_PAGEUP: case SDLK_PAGEDOWN:
+        if (!area) return false;
+        {
+          AreaView view;
+          lineMove(viewOf(field, v, view) ? static_cast<int>(view.visible) * (k.key == SDLK_PAGEUP ? -1 : 1) : 0);
+        }
+        return true;
+      case SDLK_BACKSPACE:
+        if (ctrl && a == b && caret > 0) setSelection(field, solar::layout::UnitsBeforeByte(text, WordStartBefore(text, caret)), v.end);
+        typeIn("", "backspace");
+        return true;
+      case SDLK_DELETE:
+        if (ctrl && a == b && caret < text.size()) setSelection(field, v.end, solar::layout::UnitsBeforeByte(text, WordEndAfter(text, caret)));
+        typeIn("", "delete");
+        return true;
+      case SDLK_RETURN: case SDLK_KP_ENTER: typeIn("", "enter"); return true;
+      default: return false;
+    }
   };
   // What is under the pointer is what is hovered.
   double pointerX = 0, pointerY = 0;
@@ -1306,15 +1788,39 @@ int PageMain(Shared& shared, int argc, char** argv) {
             suppressText = false;
             break;
           }
+          caretReset();
+          solar::dom::Element* focused = document ? document->focusedElement : nullptr;
+          if (popupSelect) {
+            // Typing in the open drop-down goes to the next row that begins with it.
+            solar::html::ControlView v;
+            if (readControl(popupSelect, v)) {
+              const size_t row = typeAhead(v, popupHover, event.text.text);
+              if (row != kNone) {
+                popupHover = row;
+                if (popupHover < popupTop) popupTop = popupHover;
+                if (popupHover >= popupTop + 20) popupTop = popupHover - 19;
+                showPopup();
+              }
+            }
+            break;
+          }
           if (solar::dom::Element* field = focusedTextControl()) {
             solar::html::RunInRealm(*realm, [&] { solar::html::TypeInto(document, field, event.text.text, "text"); });
             dirty = true;
+          } else if (focused && focused->IsHtml("select")) {
+            solar::html::ControlView v;
+            if (readControl(focused, v) && !v.disabled) {
+              const size_t row = typeAhead(v, selectedRow(v), event.text.text);
+              if (row != kNone) solar::html::RunInRealm(*realm, [&] { solar::html::ChooseOption(document, focused, optionOfRow(v, row), 0); });
+              dirty = true;
+            }
           }
           break;
         }
         case SDL_EVENT_KEY_DOWN: {
           const int h = shared.height.load();
           suppressText = false;
+          caretReset();
           if (document && document->DocumentElement()) {
             // The page sees the key first; what the program does with it (scrolling, typing, pressing) is for when no script cancelled it.
             const KeyInfo info = DescribeKey(event.key);
@@ -1336,29 +1842,75 @@ int PageMain(Shared& shared, int argc, char** argv) {
               }
             }
           }
-          if (solar::dom::Element* field = focusedTextControl()) {
-            const char* kind = nullptr;
-            switch (event.key.key) {
-              case SDLK_BACKSPACE: kind = "backspace"; break;
-              case SDLK_DELETE: kind = "delete"; break;
-              case SDLK_LEFT: kind = "left"; break;
-              case SDLK_RIGHT: kind = "right"; break;
-              case SDLK_HOME: kind = "home"; break;
-              case SDLK_END: kind = "end"; break;
-              case SDLK_RETURN: case SDLK_KP_ENTER: kind = "enter"; break;
-              default: break;
+          const SDL_Keycode key = event.key.key;
+          const bool shiftHeld = (event.key.mod & SDL_KMOD_SHIFT) != 0, altHeld = (event.key.mod & SDL_KMOD_ALT) != 0;
+          solar::dom::Element* focused = document ? document->focusedElement : nullptr;
+          if (popupSelect) {
+            popupKey(key);
+            break;
+          }
+          if (key == SDLK_TAB) {
+            document->focusByKeyboard = true;
+            solar::html::RunInRealm(*realm, [&] { solar::html::FocusNext(document, shiftHeld); });
+            dirty = true;
+            break;
+          }
+          // Back and forward (alt and the arrows).
+          if (altHeld && (key == SDLK_LEFT || key == SDLK_RIGHT)) {
+            goInHistory(key == SDLK_LEFT ? -1 : 1);
+            break;
+          }
+          if (!focusedTextControl() && (event.key.mod & SDL_KMOD_CTRL) && (key == SDLK_A || key == SDLK_C)) {
+            // What the keys do to the text of the page: select all of it, or copy what is selected.
+            if (key == SDLK_A) {
+              if (solar::dom::Element* root = document->DocumentElement()) solar::html::RunInRealm(*realm, [&] { solar::html::SelectContents(document, root); });
+            } else {
+              std::string chosen;
+              solar::html::RunInRealm(*realm, [&] { chosen = solar::html::SelectedText(document); });
+              if (!chosen.empty()) {
+                UiCommand command;
+                command.kind = UiCommand::Kind::Clipboard;
+                command.text = std::move(chosen);
+                shared.Post(std::move(command));
+              }
             }
-            if (kind) {
-              solar::html::RunInRealm(*realm, [&] { solar::html::TypeInto(document, field, "", kind); });
+            dirty = true;
+            break;
+          }
+          if (solar::dom::Element* field = focusedTextControl()) {
+            solar::html::ControlView v;
+            if (readControl(field, v) && v.type == "number" && (key == SDLK_UP || key == SDLK_DOWN)) {
+              solar::html::RunInRealm(*realm, [&] { solar::html::StepControl(document, field, key == SDLK_UP ? 1 : -1); });
               dirty = true;
               break;
             }
-            if (event.key.key != SDLK_ESCAPE && event.key.key != SDLK_PAGEDOWN && event.key.key != SDLK_PAGEUP) break;
-          } else if (solar::dom::Element* focused = document ? document->focusedElement : nullptr;
-                     focused && (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER || event.key.key == SDLK_SPACE) &&
-                     (focused->IsHtml("button") || focused->IsHtml("input") || focused->IsHtml("a") || focused->IsHtml("summary") || focused->IsHtml("select"))) {
+            if (textKey(field, event.key, incoming.clipboard)) break;
+            if (key != SDLK_ESCAPE && key != SDLK_PAGEDOWN && key != SDLK_PAGEUP) break;
+          } else if (focused && focused->IsHtml("select")) {
+            if (selectKey(focused, event.key)) break;
+          } else if (focused && focused->IsHtml("input")) {
+            solar::html::ControlView v;
+            if (readControl(focused, v) && v.type == "range") {
+              bool handled = true;
+              if (key == SDLK_LEFT || key == SDLK_DOWN) solar::html::RunInRealm(*realm, [&] { solar::html::StepControl(document, focused, -1); });
+              else if (key == SDLK_RIGHT || key == SDLK_UP) solar::html::RunInRealm(*realm, [&] { solar::html::StepControl(document, focused, 1); });
+              else if (key == SDLK_HOME) solar::html::RunInRealm(*realm, [&] { solar::html::SetRange(document, focused, 0, true); });
+              else if (key == SDLK_END) solar::html::RunInRealm(*realm, [&] { solar::html::SetRange(document, focused, 1, true); });
+              else handled = false;
+              if (handled) {
+                dirty = true;
+                break;
+              }
+            } else if (v.type == "radio" && (key == SDLK_LEFT || key == SDLK_RIGHT || key == SDLK_UP || key == SDLK_DOWN)) {
+              solar::html::RunInRealm(*realm, [&] { solar::html::MoveInRadioGroup(document, focused, key == SDLK_LEFT || key == SDLK_UP ? -1 : 1); });
+              dirty = true;
+              break;
+            }
+          }
+          if (focused && (key == SDLK_RETURN || key == SDLK_KP_ENTER || key == SDLK_SPACE) &&
+              (focused->IsHtml("button") || focused->IsHtml("input") || focused->IsHtml("a") || focused->IsHtml("summary"))) {
             // Enter presses a link, a button or a box; space the last two.
-            if (focused->IsHtml("a") && event.key.key == SDLK_SPACE) {}
+            if (focused->IsHtml("a") && key == SDLK_SPACE) {}
             else {
               bool follow = true;
               solar::html::RunInRealm(*realm, [&] { follow = solar::html::DispatchClick(document, focused, 0, 0, 0); });
@@ -1367,8 +1919,8 @@ int PageMain(Shared& shared, int argc, char** argv) {
               break;
             }
           }
-          switch (event.key.key) {
-            case SDLK_ESCAPE: running = false; break;
+          switch (key) {
+            case SDLK_ESCAPE: if (!focused) running = false; break;
             case SDLK_DOWN: scrollBy(0, 60); break;
             case SDLK_UP: scrollBy(0, -60); break;
             case SDLK_PAGEDOWN: case SDLK_SPACE: scrollBy(0, h * 0.9); break;
@@ -1379,10 +1931,49 @@ int PageMain(Shared& shared, int argc, char** argv) {
           }
           break;
         }
+        case SDL_EVENT_MOUSE_WHEEL: {
+          if (document && pointerKnown && document->hoverElement) {
+            solar::dom::Element* over = document->hoverElement;
+            solar::html::RunInRealm(*realm, [&] { solar::html::DispatchWheel(document, over, pointerX, pointerY, -event.wheel.x * 100.0, -event.wheel.y * 100.0); });
+            dirty = true;
+          }
+          break;
+        }
         case SDL_EVENT_MOUSE_MOTION: {
           pointerX = event.motion.x;
           pointerY = event.motion.y;
           pointerKnown = true;
+          if (popupSelect) {
+            bool inside = false;
+            const size_t row = popupRowAt(pointerX, pointerY, inside);
+            solar::html::ControlView v;
+            if (inside && readControl(popupSelect, v) && pickable(v, row) && row != popupHover) {
+              popupHover = row;
+              showPopup();
+            }
+            break;
+          }
+          if (dragField) {
+            const size_t at = textPositionAt(dragField, pointerX, pointerY);
+            setSelection(dragField, dragAnchor, at);
+            caretReset();
+            break;
+          }
+          if (pageSelecting) {
+            solar::dom::Node* node = nullptr;
+            uint32_t offset = 0;
+            if (pageTextPointAt(pointerX, pointerY, node, offset, nullptr)) {
+              solar::html::RunInRealm(*realm, [&] { solar::html::SelectText(document, pageAnchor, pageAnchorOffset, node, offset); });
+              dirty = true;
+            }
+            break;
+          }
+          if (dragRange) {
+            const double fraction = rangeFraction(dragRange, pointerX);
+            solar::html::RunInRealm(*realm, [&] { solar::html::SetRange(document, dragRange, fraction, false); });
+            dirty = true;
+            break;
+          }
           // (While the page is scrolling, what is under the pointer is looked at when it stops: a change of hover is a change of style, and a frame is not the time for one.)
           if (shared.gliding.load() || Clock::now() - lastScrollInput < std::chrono::milliseconds(150)) hoverStale = true;
           else {
@@ -1400,48 +1991,146 @@ int PageMain(Shared& shared, int argc, char** argv) {
           pointerX = event.button.x;
           pointerY = event.button.y;
           pointerKnown = true;
+          caretReset();
+          if (popupSelect) {
+            // A press with the drop-down open chooses what is under it, or closes it; the page does not hear of it.
+            bool inside = false;
+            const size_t row = popupRowAt(pointerX, pointerY, inside);
+            if (inside) chooseRow(row);
+            else closePopup();
+            swallowRelease = true;
+            break;
+          }
           updateHover();
           pressTarget = document->hoverElement;
           if (timing) std::fprintf(stderr, "press at %.0f,%.0f on %s%s%s\n", event.button.x, event.button.y, pressTarget ? pressTarget->localName.c_str() : "nothing", pressTarget && pressTarget->FindAttribute("", "class") ? "." : "", pressTarget && pressTarget->FindAttribute("", "class") ? pressTarget->FindAttribute("", "class")->value.c_str() : "");
           pressButton = event.button.button == SDL_BUTTON_LEFT ? 0 : event.button.button == SDL_BUTTON_MIDDLE ? 1 : 2;
+          if (event.button.button == SDL_BUTTON_X1 || event.button.button == SDL_BUTTON_X2) {
+            goInHistory(event.button.button == SDL_BUTTON_X1 ? -1 : 1);
+            pressTarget = nullptr;
+            swallowRelease = true;
+            break;
+          }
           if (pressTarget) {
             bool proceed = true;
+            document->focusByKeyboard = false;
             solar::html::RunInRealm(*realm, [&] { proceed = solar::html::DispatchPointer(document, pressTarget, "mousedown", event.button.x, event.button.y, pressButton, 1 << pressButton); });
             // (A script may have taken the element away.)
             if (proceed && event.button.button == SDL_BUTTON_LEFT && document->hoverElement) solar::dom::SetPressedElement(document, document->hoverElement);
-            // A press in a text field puts the caret between the letters nearest to it.
-            if (proceed && event.button.button == SDL_BUTTON_LEFT && pressTarget == focusedTextControl() && pressTarget) {
-              solar::layout::Tree* tree = currentTree();
-              const auto boxes = tree ? tree->boxesOf.find(pressTarget) : decltype(tree->boxesOf.end()){};
-              if (tree && boxes != tree->boxesOf.end() && !boxes->second.empty() && !pressTarget->IsHtml("textarea")) {
-                const solar::layout::Box& box = *boxes->second.front();
-                solar::html::ControlView view;
-                const auto face = solar::layout::FaceOf(realm->GetContext(), *tree, box);
-                bool read = false;
-                solar::html::RunInRealm(*realm, [&] { read = solar::html::ReadControl(pressTarget, view); });
-                if (read && face) {
-                  const solar::layout::Rect where = solar::layout::AbsoluteBorderBox(box);
-                  const double left = where.x - tree->scroll[document].first + box.ContentLeft();
-                  const double want = event.button.x - left;
-                  size_t units = 0, best = 0;
-                  double bestDistance = std::fabs(want), pen = 0;
-                  for (size_t i = 0; i < view.value.size();) {
-                    const unsigned char c = static_cast<unsigned char>(view.value[i]);
-                    const size_t length = c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
-                    i += length;
-                    units += length == 4 ? 2 : 1;
-                    pen = face->Measure(view.value.substr(0, i)) * box.style->fontSize;
-                    if (std::fabs(want - pen) < bestDistance) { bestDistance = std::fabs(want - pen); best = units; }
+            if (proceed && event.button.button == SDL_BUTTON_LEFT && pressTarget) {
+              // Presses close together on one place are a double and a triple click.
+              const auto now = Clock::now();
+              if (now - lastPress < std::chrono::milliseconds(500) && std::fabs(pointerX - lastPressX) < 5 && std::fabs(pointerY - lastPressY) < 5) ++pressCount;
+              else pressCount = 1;
+              lastPress = now;
+              pressStartX = pointerX;
+              pressStartY = pointerY;
+              lastPressX = pointerX;
+              lastPressY = pointerY;
+              if (pressTarget == focusedTextControl()) {
+                // A press in a text field puts the caret between the letters nearest to it; a double click takes the word, a triple one the line (or all); a drag grows it.
+                solar::html::ControlView v;
+                if (readControl(pressTarget, v)) {
+                  const size_t at = textPositionAt(pressTarget, pointerX, pointerY);
+                  const size_t atByte = solar::layout::BytesBeforeUnit(v.value, at);
+                  const bool shiftHeld = (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
+                  if (shiftHeld && pressCount == 1) {
+                    if (anchorField != pressTarget) { anchorField = pressTarget; keyAnchor = v.start == v.end ? v.end : v.start; }
+                    dragAnchor = keyAnchor;
+                  } else if (pressCount == 2) {
+                    size_t from = 0, to = 0;
+                    WordAround(v.value, atByte, from, to);
+                    dragAnchor = solar::layout::UnitsBeforeByte(v.value, from);
+                    setSelection(pressTarget, dragAnchor, solar::layout::UnitsBeforeByte(v.value, to));
+                    anchorField = pressTarget;
+                    keyAnchor = dragAnchor;
+                    dragField = nullptr;
+                    goto pressed;
+                  } else if (pressCount >= 3) {
+                    const bool area = v.kind == "textarea";
+                    dragAnchor = solar::layout::UnitsBeforeByte(v.value, area ? LineStartAt(v.value, atByte) : 0);
+                    setSelection(pressTarget, dragAnchor, solar::layout::UnitsBeforeByte(v.value, area ? LineEndAt(v.value, atByte) : v.value.size()));
+                    anchorField = pressTarget;
+                    keyAnchor = dragAnchor;
+                    dragField = nullptr;
+                    goto pressed;
+                  } else {
+                    dragAnchor = at;
                   }
-                  solar::html::RunInRealm(*realm, [&] { solar::html::SetCaret(document, pressTarget, best, best); });
+                  anchorField = pressTarget;
+                  keyAnchor = dragAnchor;
+                  dragField = pressTarget;
+                  setSelection(pressTarget, dragAnchor, at);
+                }
+              } else if (pressTarget->IsHtml("select")) {
+                solar::html::ControlView v;
+                if (readControl(pressTarget, v) && !v.disabled) {
+                  if (v.rows > 1 || v.multiple) {
+                    // A list: the row under the pointer is chosen (with control it is toggled, with shift the choice grows to it).
+                    AreaView view;
+                    if (viewOf(pressTarget, v, view)) {
+                      const size_t row = v.top + static_cast<size_t>(std::max(0.0, std::floor((pointerY - view.contentTop) / view.rowHeight)));
+                      if (pickable(v, row)) {
+                        const SDL_Keymod mods = SDL_GetModState();
+                        const int mode = !v.multiple ? 0 : (mods & SDL_KMOD_CTRL) ? 1 : (mods & SDL_KMOD_SHIFT) ? 2 : 0;
+                        solar::html::RunInRealm(*realm, [&] { solar::html::ChooseOption(document, pressTarget, optionOfRow(v, row), mode); });
+                      }
+                    }
+                  } else {
+                    openPopup(pressTarget);
+                  }
+                }
+              } else if (pressTarget->IsHtml("input") || pressTarget->IsHtml("textarea") || pressTarget->IsHtml("button")) {
+                solar::html::ControlView v;
+                if (pressTarget->IsHtml("input") && readControl(pressTarget, v) && v.type == "range" && !v.disabled) {
+                  dragRange = pressTarget;
+                  const double fraction = rangeFraction(pressTarget, pointerX);
+                  solar::html::RunInRealm(*realm, [&] { solar::html::SetRange(document, dragRange, fraction, false); });
+                }
+              } else if (!userSelectNone(pressTarget)) {
+                // A press on the text of the page begins a selection (a double click takes the word, a triple one the block).
+                solar::dom::Node* node = nullptr;
+                uint32_t offset = 0;
+                solar::dom::Element* block = nullptr;
+                if (pageTextPointAt(pointerX, pointerY, node, offset, &block)) {
+                  const std::string& data = static_cast<solar::dom::CharacterData*>(node)->Data();
+                  if (pressCount == 2) {
+                    size_t from = 0, to = 0;
+                    WordAround(data, solar::layout::BytesBeforeUnit(data, offset), from, to);
+                    solar::html::RunInRealm(*realm, [&] { solar::html::SelectText(document, node, static_cast<uint32_t>(solar::layout::UnitsBeforeByte(data, from)), node, static_cast<uint32_t>(solar::layout::UnitsBeforeByte(data, to))); });
+                  } else if (pressCount >= 3 && block) {
+                    solar::html::RunInRealm(*realm, [&] { solar::html::SelectContents(document, block); });
+                  } else {
+                    pageSelecting = true;
+                    pageAnchor = node;
+                    pageAnchorOffset = offset;
+                    solar::html::RunInRealm(*realm, [&] { solar::html::SelectText(document, node, offset, node, offset); });
+                  }
+                } else {
+                  solar::html::RunInRealm(*realm, [&] { solar::html::ClearSelection(document); });
                 }
               }
             }
+            pressed:
             dirty = true;
           }
           break;
         }
         case SDL_EVENT_MOUSE_BUTTON_UP: {
+          if (dragField) dragField = nullptr;
+          const bool draggedFar = pageSelecting && (std::fabs(event.button.x - pressStartX) > 4 || std::fabs(event.button.y - pressStartY) > 4);
+          pageSelecting = false;
+          if (dragRange) {
+            const double fraction = rangeFraction(dragRange, event.button.x);
+            solar::dom::Element* range = dragRange;
+            dragRange = nullptr;
+            solar::html::RunInRealm(*realm, [&] { solar::html::SetRange(document, range, fraction, true); });
+            dirty = true;
+          }
+          if (swallowRelease) {
+            swallowRelease = false;
+            break;
+          }
           solar::dom::Element* pressed = document->pressedElement;
           solar::dom::SetPressedElement(document, nullptr);
           // The release goes to what is under the pointer; a click is the press and the release on the same element (or one inside the other).
@@ -1467,7 +2156,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
             });
             dirty = true;
           }
-          if (event.button.button == SDL_BUTTON_LEFT && clicked && follow) followLink(clicked);
+          if (event.button.button == SDL_BUTTON_LEFT && clicked && follow && !draggedFar) followLink(clicked);
           (void)pressed;
           break;
         }
@@ -1475,6 +2164,25 @@ int PageMain(Shared& shared, int argc, char** argv) {
       }
       any = shared.WaitEvent(incoming, std::chrono::milliseconds(0));
       if (any) {}
+    }
+    // The drop-down belongs to the page it was opened in.
+    if (popupSelect && popupDocument != static_cast<const void*>(document)) {
+      popupSelect = nullptr;
+      dragField = nullptr;
+      dragRange = nullptr;
+      solar::paint::SetPopup(solar::paint::Popup{});
+    }
+    // The caret of the field with the focus blinks.
+    if (focusedTextControl()) {
+      if (Clock::now() - caretSince > std::chrono::milliseconds(530)) {
+        caretOn = !caretOn;
+        caretSince = Clock::now();
+        solar::paint::SetCaretVisible(caretOn);
+        dirty = true;
+      }
+    } else if (!caretOn) {
+      caretReset();
+      dirty = true;
     }
     if (!tour.empty() && !current && Clock::now() - tourLast > std::chrono::milliseconds(3500)) {
             std::fprintf(stderr, "memory: %ld kB in use (%zu pages seen; %zu nodes alive, resources %zu kB)\n", anonymousKb(), tourAt, solar::dom::LiveNodes(), browser.CachedBytes() / 1024);
@@ -1527,8 +2235,15 @@ int PageMain(Shared& shared, int argc, char** argv) {
         SDL_PushEvent(&e);
       } else if (step.rfind("k:", 0) == 0) {
         e.type = SDL_EVENT_KEY_DOWN;
-        const std::string name = step.substr(2);
-        e.key.key = name == "backspace" ? SDLK_BACKSPACE : name == "enter" ? SDLK_RETURN : name == "left" ? SDLK_LEFT : name == "right" ? SDLK_RIGHT : name == "delete" ? SDLK_DELETE : name == "home" ? SDLK_HOME : name == "end" ? SDLK_END : name == "space" ? SDLK_SPACE : name == "up" ? SDLK_UP : name == "down" ? SDLK_DOWN : name.size() == 1 ? static_cast<SDL_Keycode>(name[0]) : SDLK_UNKNOWN;
+        std::string name = step.substr(2);
+        // (ctrl+, shift+ and alt+ in front of the key.)
+        for (;;) {
+          if (name.rfind("ctrl+", 0) == 0) { e.key.mod |= SDL_KMOD_CTRL; name = name.substr(5); }
+          else if (name.rfind("shift+", 0) == 0) { e.key.mod |= SDL_KMOD_SHIFT; name = name.substr(6); }
+          else if (name.rfind("alt+", 0) == 0) { e.key.mod |= SDL_KMOD_ALT; name = name.substr(4); }
+          else break;
+        }
+        e.key.key = name == "tab" ? SDLK_TAB : name == "pageup" ? SDLK_PAGEUP : name == "pagedown" ? SDLK_PAGEDOWN : name == "escape" ? SDLK_ESCAPE : name == "backspace" ? SDLK_BACKSPACE : name == "enter" ? SDLK_RETURN : name == "left" ? SDLK_LEFT : name == "right" ? SDLK_RIGHT : name == "delete" ? SDLK_DELETE : name == "home" ? SDLK_HOME : name == "end" ? SDLK_END : name == "space" ? SDLK_SPACE : name == "up" ? SDLK_UP : name == "down" ? SDLK_DOWN : name.size() == 1 ? static_cast<SDL_Keycode>(name[0]) : SDLK_UNKNOWN;
         SDL_PushEvent(&e);
         e.type = SDL_EVENT_KEY_UP;
         SDL_PushEvent(&e);

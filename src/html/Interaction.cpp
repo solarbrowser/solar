@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <cstdlib>
 #include <string>
 
 #include "solar/dom/NodeBindingsInternal.h"
@@ -85,6 +87,12 @@ bool ReadControl(dom::Element* element, ControlView& out) {
   out.readOnly = state->readOnly;
   out.start = state->start;
   out.end = state->end;
+  out.rows = state->rows;
+  out.top = state->top;
+  out.multiple = state->multiple;
+  out.fraction = state->fraction;
+  out.options.clear();
+  for (const dom::ControlState::Option& o : state->options) out.options.push_back({o.label, o.selected, o.disabled, o.group, o.indented});
   return true;
 }
 
@@ -118,9 +126,110 @@ void RefreshControls(dom::Document* document) {
     state->readOnly = flag("readonly");
     state->start = number("start");
     state->end = number("end");
+    state->rows = std::max<size_t>(1, number("rows"));
+    state->top = number("top");
+    state->multiple = flag("multiple");
+    {
+      Value f = qe::Get(ctx, meta, "fraction");
+      state->fraction = qe::IsNumber(f) ? qe::ToNumber(ctx, f) : 0;
+    }
+    {
+      // The options come as one text: a record for each, its flags (1 selected, 2 disabled, 4 a group's heading) and its label, set apart by control characters.
+      const std::string packed = text("options");
+      size_t at = 0;
+      while (at < packed.size()) {
+        size_t end = packed.find('\x1e', at);
+        if (end == std::string::npos) end = packed.size();
+        const std::string record = packed.substr(at, end - at);
+        const size_t split = record.find('\x1f');
+        if (split != std::string::npos) {
+          const int flags = std::atoi(record.substr(0, split).c_str());
+          state->options.push_back({record.substr(split + 1), (flags & 1) != 0, (flags & 2) != 0, (flags & 4) != 0, (flags & 8) != 0});
+        }
+        at = end + 1;
+      }
+    }
     element->control = std::move(state);
     dom::MarkPending(element, dom::kPendingControl);
   }
+}
+
+bool ChooseOption(dom::Document* document, dom::Element* select, size_t index, int mode) {
+  if (!document || !document->context || !select) return false;
+  Value arguments[] = {qe::FromObject(select), qe::FromNumber(static_cast<double>(index)), qe::FromNumber(mode)};
+  const Value result = CallHelper(document, "choose", arguments, 3);
+  return !qe::IsUndefined(result) && qe::ToBoolean(result);
+}
+
+void SetListTop(dom::Document* document, dom::Element* select, size_t top) {
+  if (!document || !document->context || !select) return;
+  Value arguments[] = {qe::FromObject(select), qe::FromNumber(static_cast<double>(top))};
+  CallHelper(document, "listTop", arguments, 2);
+}
+
+bool FocusNext(dom::Document* document, bool backwards) {
+  if (!document || !document->context) return false;
+  Value arguments[] = {qe::FromBool(backwards)};
+  const Value result = CallHelper(document, "tab", arguments, 1);
+  return !qe::IsUndefined(result) && qe::ToBoolean(result);
+}
+
+bool SetRange(dom::Document* document, dom::Element* target, double fraction, bool final) {
+  if (!document || !document->context || !target) return false;
+  Value arguments[] = {qe::FromObject(target), qe::FromNumber(fraction), qe::FromBool(final)};
+  const Value result = CallHelper(document, "range", arguments, 3);
+  return !qe::IsUndefined(result) && qe::ToBoolean(result);
+}
+
+bool StepControl(dom::Document* document, dom::Element* target, int direction) {
+  if (!document || !document->context || !target) return false;
+  Value arguments[] = {qe::FromObject(target), qe::FromNumber(direction)};
+  const Value result = CallHelper(document, "step", arguments, 2);
+  return !qe::IsUndefined(result) && qe::ToBoolean(result);
+}
+
+bool MoveInRadioGroup(dom::Document* document, dom::Element* target, int direction) {
+  if (!document || !document->context || !target) return false;
+  Value arguments[] = {qe::FromObject(target), qe::FromNumber(direction)};
+  const Value result = CallHelper(document, "radio", arguments, 2);
+  return !qe::IsUndefined(result) && qe::ToBoolean(result);
+}
+
+bool HistoryStep(dom::Document* document, int delta) {
+  if (!document || !document->context) return false;
+  Value arguments[] = {qe::FromNumber(delta)};
+  const Value result = CallHelper(document, "historyGo", arguments, 1);
+  return !qe::IsUndefined(result) && qe::ToBoolean(result);
+}
+
+void SelectText(dom::Document* document, dom::Node* anchor, uint32_t anchorOffset, dom::Node* focus, uint32_t focusOffset) {
+  if (!document || !document->context || !anchor || !focus) return;
+  Value arguments[] = {qe::FromObject(anchor), qe::FromNumber(anchorOffset), qe::FromObject(focus), qe::FromNumber(focusOffset)};
+  CallHelper(document, "selectText", arguments, 4);
+}
+
+void SelectContents(dom::Document* document, dom::Element* element) {
+  if (!document || !document->context || !element) return;
+  Value arguments[] = {qe::FromObject(element)};
+  CallHelper(document, "selectBlock", arguments, 1);
+}
+
+void ClearSelection(dom::Document* document) {
+  if (!document || !document->context) return;
+  CallHelper(document, "clearSelection", nullptr, 0);
+}
+
+std::string SelectedText(dom::Document* document) {
+  if (!document || !document->context) return "";
+  const Value result = CallHelper(document, "selectedText", nullptr, 0);
+  return qe::IsString(result) ? qe::ToWtf8(*document->context, result) : std::string();
+}
+
+bool DispatchWheel(dom::Document* document, dom::Element* target, double x, double y, double dx, double dy) {
+  if (!document || !document->context || !target) return true;
+  Value arguments[] = {qe::FromObject(target), qe::FromNumber(x), qe::FromNumber(y), qe::FromNumber(dx), qe::FromNumber(dy)};
+  const Value result = CallHelper(document, "wheel", arguments, 5);
+  return qe::IsUndefined(result) ? true : qe::ToBoolean(result);
 }
 
 void SetCaret(dom::Document* document, dom::Element* target, size_t start, size_t end) {

@@ -159,4 +159,65 @@ bool ControlSize(LayoutContext& lc, dom::Element* element, Box& box) {
   return true;
 }
 
+size_t BytesBeforeUnit(const std::string& text, size_t units) {
+  size_t at = 0, counted = 0;
+  while (at < text.size() && counted < units) {
+    const unsigned char c = static_cast<unsigned char>(text[at]);
+    const size_t length = c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
+    counted += length == 4 ? 2 : 1;
+    at += length;
+  }
+  return std::min(at, text.size());
+}
+
+size_t UnitsBeforeByte(const std::string& text, size_t bytes) {
+  size_t at = 0, counted = 0;
+  bytes = std::min(bytes, text.size());
+  while (at < bytes) {
+    const unsigned char c = static_cast<unsigned char>(text[at]);
+    const size_t length = c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
+    counted += length == 4 ? 2 : 1;
+    at += length;
+  }
+  return counted;
+}
+
+std::vector<TextLine> WrapText(const font::Face& face, double size, const std::string& text, double width) {
+  std::vector<TextLine> lines;
+  const auto measure = [&](size_t from, size_t to) { return face.Measure(text.substr(from, to - from)) * size; };
+  size_t lineStart = 0;
+  for (;;) {
+    size_t newline = text.find('\n', lineStart);
+    const size_t hardEnd = newline == std::string::npos ? text.size() : newline;
+    size_t begin = lineStart;
+    // The paragraph between two newlines, broken into as many lines as it takes.
+    for (;;) {
+      if (begin >= hardEnd || measure(begin, hardEnd) <= width) {
+        lines.push_back({begin, hardEnd});
+        break;
+      }
+      // The furthest place a line can end: the last break after which the text still fits.
+      size_t fit = begin, lastSpace = std::string::npos, at = begin;
+      while (at < hardEnd) {
+        const unsigned char c = static_cast<unsigned char>(text[at]);
+        const size_t length = c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
+        const size_t next = std::min(at + length, hardEnd);
+        if (measure(begin, next) > width && fit > begin) break;
+        fit = next;
+        if (text[at] == ' ') lastSpace = next;
+        at = next;
+      }
+      if (fit == begin) fit = std::min(begin + 1, hardEnd);
+      size_t end = lastSpace != std::string::npos && lastSpace > begin && fit < hardEnd ? lastSpace : fit;
+      lines.push_back({begin, end});
+      begin = end;
+    }
+    if (newline == std::string::npos) break;
+    lineStart = newline + 1;
+    if (lineStart > text.size()) break;
+  }
+  if (lines.empty()) lines.push_back({0, 0});
+  return lines;
+}
+
 }  // namespace solar::layout
