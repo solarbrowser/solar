@@ -20,7 +20,7 @@ jobs:
           submodules: recursive
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y clang lld make pkg-config liburing-dev libssl-dev zlib1g-dev libbrotli-dev libzstd-dev libnghttp2-dev libharfbuzz-dev
+        run: sudo apt-get update && sudo apt-get install -y clang lld llvm make pkg-config liburing-dev libssl-dev zlib1g-dev libbrotli-dev libzstd-dev libnghttp2-dev libharfbuzz-dev
 
       - name: Show whether io_uring is available
         run: |
