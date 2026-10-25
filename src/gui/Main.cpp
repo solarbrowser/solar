@@ -1034,6 +1034,12 @@ int PageMain(Shared& shared, int argc, char** argv) {
   int pressButton = 0;
   const bool timing_log = std::getenv("SOLAR_GUI_TIMES") != nullptr;
   const auto commit = [&](const std::string& where, std::string markup, std::string type, const Clock::time_point& started) {
+    // (SOLAR_DUMP_DOC=dir: the text of each page that comes is written to dir/N.html, for looking at what a site sent.)
+    if (const char* dump = std::getenv("SOLAR_DUMP_DOC")) {
+      static int dumped = 0;
+      std::ofstream out(std::string(dump) + "/" + std::to_string(dumped++) + ".html");
+      out << "<!-- " << where << " -->\n" << markup;
+    }
     qe::Realm* left = realm;
     solar::dom::Document* leftDocument = document;
     pressTarget = nullptr;
