@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include "solar/dom/Node.h"
 #include <algorithm>
+#include <chrono>
 #include <functional>
 #include <map>
 
@@ -552,11 +553,26 @@ class Builder {
     }
     if (pseudo.empty()) css::ComputedValue(lc_.ctx, element, "display");  // (the style is made, with all that goes with it, before its token is looked at)
     std::shared_ptr<void> token = css::SharedStyleToken(lc_.ctx, element, pseudo);
+    static const bool debug = std::getenv("SOLAR_STYLE_DEBUG") != nullptr;
+    static long unshared = 0, sharedHits = 0, read = 0;
+    if (debug && (++unshared + sharedHits + read) % 5000 == 0) std::fprintf(stderr, "box styles: no token %ld, token and found %ld, token and read %ld\n", unshared, sharedHits, read);
     if (!token) return Logicalize(ReadStyle(lc_.ctx, element, pseudo));
+    --unshared;
     const auto key = std::make_pair(static_cast<const void*>(token.get()), LangOf(element));
     const auto found = kept.find(key);
-    if (found != kept.end()) return found->second.style;
+    if (found != kept.end()) {
+      ++sharedHits;
+      return found->second.style;
+    }
+    ++read;
+    const auto readFrom = std::chrono::steady_clock::now();
     std::shared_ptr<const BoxStyle> style = Logicalize(ReadStyle(lc_.ctx, element, pseudo));
+    if (debug) {
+      static double readMs = 0;
+      static long reads = 0;
+      readMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - readFrom).count();
+      if (++reads % 2000 == 0) std::fprintf(stderr, "ReadStyle: %ld reads, %.0f ms\n", reads, readMs);
+    }
     kept[key] = {token, style};
     return style;
   }

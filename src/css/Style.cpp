@@ -823,6 +823,19 @@ struct ElementStyle {
   bool hasLogical = false;  // a logical property is declared for the element
 };
 
+// What the selectors of the document and of the user agent look at of an element (see ShareFromSibling).
+struct ShareFeatures {
+  bool nth = false;
+  bool language = false;
+  std::unordered_set<std::string> attributes;
+  // The elements that a selector asks the place of by number (:nth-child) or the siblings before them (+, ~) of can be styled differently from their siblings that look the
+  // same: the keys (id, class, type) of what such selectors end in. Where a selector like that has none, none is shared.
+  std::unordered_set<uint64_t> positionKeys;
+  std::vector<ComplexSelector> positionSelectors;  // the ones that have no key: what they match is looked at
+  bool positionAny = false;
+};
+ShareFeatures g_shareFeatures;
+
 // The styles of an element: the plain one, and those of its pseudo-elements and of the variants (animations suppressed, the starting style).
 struct StyleEntry {
   ElementStyle plain;
@@ -1147,33 +1160,47 @@ bool SafeToShare(const DeclarationEntry* entry) {
 }
 
 void Share(dom::Element* element, ElementStyle& style, const std::string& pseudo = "") {
-  if (!style.memo->computed.empty() || !style.memo->custom.empty() || !style.storage.empty()) return;
-  if (element->VersionsInView().anim != 0 || !dom::ParentOf(element) || !dom::ParentOf(element)->IsElement()) return;
+  static const bool debug = std::getenv("SOLAR_STYLE_DEBUG") != nullptr;
+  static std::map<std::string, int> why;
+  static int calls = 0;
+  const auto no = [&](const char* reason) {
+    if (debug) {
+      ++why[reason];
+      if (++calls % 4000 == 0) {
+        std::fprintf(stderr, "styles not shared (%d):", calls);
+        for (const auto& [name, count] : why) std::fprintf(stderr, " %s=%d", name.c_str(), count);
+        std::fprintf(stderr, "\n");
+      }
+    }
+  };
+  if (!style.memo->computed.empty() || !style.memo->custom.empty()) return no("already worked out");
+  if (!style.storage.empty()) return no("style attribute or presentation attributes");
+  if (element->VersionsInView().anim != 0 || !dom::ParentOf(element) || !dom::ParentOf(element)->IsElement()) return no("animation or no parent element");
   // (An element of a shadow tree, a shadow host, and one that is assigned to a slot are styled by more than the declarations around them.)
   if (dom::HasShadowTrees()) {
-    if (element->ShadowRootInView() || dom::AssignedSlotOf(element)) return;
+    if (element->ShadowRootInView() || dom::AssignedSlotOf(element)) return no("shadow");
     dom::Node* top = element;
     while (dom::ParentOf(top)) top = dom::ParentOf(top);
-    if (!top->IsDocument()) return;
+    if (!top->IsDocument()) return no("shadow");
   }
-  if (element->FindAttribute("", "style")) return;
+  if (element->FindAttribute("", "style")) return no("style attribute");
   dom::Element* parent = static_cast<dom::Element*>(dom::ParentOf(element));
-  if (parent->VersionsInView().anim != 0) return;
+  if (parent->VersionsInView().anim != 0) return no("parent animation");
   // A pseudo-element inherits from the element it is of; it is shared among those of the same style and the same name.
   ElementStyle& parentStyle = pseudo.empty() ? StyleOf(parent) : StyleOf(element);
-  if (!pseudo.empty() && !parentStyle.built) return;
+  if (!pseudo.empty() && !parentStyle.built) return no("parent style not built");
   uint64_t hash = std::hash<const void*>()(parentStyle.memo.get());
   hash = hash * 1000003 + std::hash<std::string>()(pseudo);
   hash = hash * 1000003 + std::hash<std::string>()(element->localName);
   hash = hash * 1000003 + std::hash<std::string>()(element->namespaceUri);
   for (const auto& [name, winner] : style.cascade) {
-    if (!SafeToShare(winner.entry)) return;
+    if (!SafeToShare(winner.entry)) return no("a declaration that looks at the element");
     hash = hash * 1000003 + std::hash<std::string>()(name);
     hash = hash * 1000003 + std::hash<const void*>()(winner.entry);
     hash = hash * 1000003 + static_cast<uint64_t>(winner.origin * 31 + winner.layer);
     // (The declarations that lost are part of the style too: the same ones lost.)
     for (const Winner& lost : winner.rest) {
-      if (!SafeToShare(lost.entry)) return;
+      if (!SafeToShare(lost.entry)) return no("a declaration that looks at the element");
       hash = hash * 1000003 + std::hash<const void*>()(lost.entry);
       hash = hash * 1000003 + static_cast<uint64_t>(lost.origin * 31 + lost.layer);
     }
@@ -1319,9 +1346,206 @@ const UserAgentIndex& UaIndex() {
   return index;
 }
 
+namespace {
+
+// Where an element is among its siblings, as far as the selectors that ask of the place look (first, last, only, of its type, empty).
+struct Place {
+  bool first = true, last = true, firstOfType = true, lastOfType = true, empty = true;
+  bool operator==(const Place& o) const { return first == o.first && last == o.last && firstOfType == o.firstOfType && lastOfType == o.lastOfType && empty == o.empty; }
+};
+
+Place PlaceOf(const dom::Element* element) {
+  Place place;
+  for (const dom::Node* n = dom::PreviousSiblingOf(element); n; n = dom::PreviousSiblingOf(n)) {
+    if (!n->IsElement()) continue;
+    place.first = false;
+    if (static_cast<const dom::Element*>(n)->localName == element->localName) {
+      place.firstOfType = false;
+      break;
+    }
+  }
+  if (place.firstOfType == false) {
+    // (There is one of the type before it, so it is not first either: what is known is enough.)
+    place.first = false;
+  } else {
+    for (const dom::Node* n = dom::PreviousSiblingOf(element); n && place.first; n = dom::PreviousSiblingOf(n)) {
+      if (n->IsElement()) place.first = false;
+    }
+  }
+  for (const dom::Node* n = dom::NextSiblingOf(element); n; n = dom::NextSiblingOf(n)) {
+    if (!n->IsElement()) continue;
+    place.last = false;
+    if (static_cast<const dom::Element*>(n)->localName == element->localName) {
+      place.lastOfType = false;
+      break;
+    }
+  }
+  if (!place.lastOfType) {
+    place.last = false;
+  } else {
+    for (const dom::Node* n = dom::NextSiblingOf(element); n && place.last; n = dom::NextSiblingOf(n)) {
+      if (n->IsElement()) place.last = false;
+    }
+  }
+  for (const dom::Node* n = dom::FirstChildOf(element); n; n = dom::NextSiblingOf(n)) {
+    if (n->IsElement() || (n->IsText() && !static_cast<const dom::CharacterData*>(n)->Data().empty())) {
+      place.empty = false;
+      break;
+    }
+  }
+  return place;
+}
+
+// What the selectors look at in an attribute of the element, besides its classes and id: as a number.
+uint64_t RelevantAttributes(const dom::Element* element) {
+  uint64_t sum = 0;
+  for (const dom::Attr* attribute : element->AttributesInView()) {
+    if (!attribute->namespaceUri.empty() && attribute->namespaceUri != dom::kXmlNamespace) continue;
+    const std::string& name = attribute->localName;
+    if (g_shareFeatures.attributes.count(name) || (g_shareFeatures.language && (name == "lang" || name == "dir"))) {
+      uint64_t h = std::hash<std::string>()(name) * 1000003 + std::hash<std::string>()(attribute->Value());
+      h ^= h >> 31;
+      h *= 0x9e3779b97f4a7c15ull;
+      sum += h ^ (h >> 29);
+    }
+  }
+  return sum;
+}
+
+// The elements that are not looked at for sharing: those whose style is more than what the rules say of them (form controls and the like have states that no
+// attribute tells of, images and frames have attributes that are declarations, a custom element has its definition).
+bool SharingTag(const dom::Element* element) {
+  if (!element->IsHtml()) return false;
+  static const std::unordered_set<std::string> not_shared = {"input", "select", "textarea", "button", "option", "optgroup", "fieldset", "a", "area", "img", "video", "audio", "iframe", "embed",
+                                                              "object", "svg", "canvas", "details", "summary", "dialog", "label", "progress", "meter", "output", "html", "body", "head",
+                                                              "slot", "template", "script", "style", "link", "meta", "base", "title", "form", "map", "source", "track", "marquee"};
+  return element->localName.find('-') == std::string::npos && !not_shared.count(element->localName);
+}
+
+}  // namespace
+
+// The siblings before an element are looked at for one that is styled the same way: the same tag and classes, the same of what the selectors look at in its attributes, in
+// the same place for what asks of the place (first, last, only, empty), and styled for the same parent. What the rules gave it is what they give the element: the rules are
+// not matched again.
+bool ShareFromSibling(dom::Element* element, ElementStyle& style) {
+  static const bool never = std::getenv("SOLAR_NO_STYLE_SHARING") != nullptr;
+  static const bool debug = std::getenv("SOLAR_STYLE_DEBUG") != nullptr;
+  static std::map<std::string, int> gates;
+  static int asked = 0;
+  const auto no = [&](const char* why) {
+    if (debug) {
+      ++gates[why];
+      if (++asked % 3000 == 0) {
+        std::fprintf(stderr, "sharing refused (%d):", asked);
+        for (const auto& [name, count] : gates) std::fprintf(stderr, " %s=%d", name.c_str(), count);
+        std::fprintf(stderr, "\n");
+      }
+    }
+    return false;
+  };
+  if (never || !element->nodeDocument) return false;
+  if (element->nodeDocument->containerQueriesSeen) return no("container queries");
+  if (!SharingTag(element)) return no("tag");
+  const StyleReuse reuse = StyleReuseFor(element->nodeDocument);
+  if (!reuse.allowed) return no("reuse not allowed");
+  if (g_shareFeatures.positionAny) return no("a rule asks the place of any element");
+  {
+    const ElementKeys ownKeys(element);
+    if (!ownKeys.usable) return no("quirks");
+    for (uint64_t key : ownKeys.keys) {
+      if (g_shareFeatures.positionKeys.count(key)) return no("a rule asks its place");
+    }
+    if (!g_shareFeatures.positionSelectors.empty()) {
+      MatchContext context;
+      for (const ComplexSelector& selector : g_shareFeatures.positionSelectors) {
+        if (MatchesComplex(selector, element, context)) return no("a rule with no key asks its place");
+      }
+    }
+  }
+  if (reuse.shadows || dom::HasShadowTrees()) return no("shadow");
+  if (AnimatedValuesSuppressed() || StartingStyleFor(element, "")) return false;
+  const dom::Element::Versions ev = element->VersionsInView();
+  if (ev.anim != 0 || ev.state != 0 || element->FindAttribute("", "id") || element->FindAttribute("", "style") || element->ShadowRootInView() || dom::AssignedSlotOf(element)) return false;
+  const dom::Node* parentNode = dom::ParentOf(element);
+  if (!parentNode || !parentNode->IsElement()) return false;
+  const auto own = Cache().find(element);
+  if (own == Cache().end()) return false;
+  const dom::Attr* classAttribute = element->FindAttribute("", "class");
+  const std::string noClass;
+  const std::string& classes = classAttribute ? classAttribute->Value() : noClass;
+  Place place;
+  uint64_t relevant = 0;
+  bool known = false;
+  int tried = 0;
+  for (const dom::Node* n = dom::PreviousSiblingOf(element); n && tried < 8; n = dom::PreviousSiblingOf(n)) {
+    if (!n->IsElement()) continue;
+    ++tried;
+    const dom::Element* candidate = static_cast<const dom::Element*>(n);
+    if (candidate->localName != element->localName || candidate->namespaceUri != element->namespaceUri) continue;
+    const dom::Attr* candidateClass = candidate->FindAttribute("", "class");
+    if ((candidateClass ? candidateClass->Value() : noClass) != classes) continue;
+    if (candidate->FindAttribute("", "id") || candidate->FindAttribute("", "style")) continue;
+    const auto found = Cache().find(const_cast<dom::Element*>(candidate));
+    if (found == Cache().end()) continue;
+    const StyleEntry& other = found->second;
+    const dom::Element::Versions cv = candidate->VersionsInView();
+    if (!other.plain.built || other.serial != candidate->serial || other.parent != parentNode || other.parentEpoch != own->second.parentEpoch || other.attr != cv.attr || other.shadowed ||
+        cv.anim != 0 || cv.state != 0 || !other.plain.storage.empty() || other.plain.has.any || other.plain.cascade.empty()) {
+      continue;
+    }
+    if (!known) {
+      place = PlaceOf(element);
+      relevant = RelevantAttributes(element);
+      known = true;
+    }
+    if (!(PlaceOf(candidate) == place) || RelevantAttributes(candidate) != relevant) continue;
+    // (A declaration that is worked out from the element's own attributes, or from the elements around it, is not what the other has.)
+    bool safe = true;
+    for (const auto& [name, winner] : other.plain.cascade) {
+      if (!SafeToShare(winner.entry)) { safe = false; break; }
+      for (const Winner& lost : winner.rest) if (!SafeToShare(lost.entry)) { safe = false; break; }
+      if (!safe) break;
+    }
+    if (!safe) return false;
+    style.cascade = other.plain.cascade;
+    style.memo = other.plain.memo;
+    style.has = other.plain.has;
+    style.hasLogical = other.plain.hasLogical;
+    static const bool debug = std::getenv("SOLAR_STYLE_DEBUG") != nullptr;
+    if (debug) {
+      static int shared = 0;
+      if (++shared % 2000 == 0) std::fprintf(stderr, "styles taken from a sibling: %d\n", shared);
+    }
+    return true;
+  }
+  return false;
+}
+
+void BuildUntimed(dom::Element* element, ElementStyle& style, const std::string& pseudo);
+
 void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo) {
+  static const bool debug = std::getenv("SOLAR_STYLE_DEBUG") != nullptr;
+  if (!debug) {
+    BuildUntimed(element, style, pseudo);
+    return;
+  }
+  static double ms = 0, sharedMs = 0;
+  static long builds = 0, shares = 0;
+  const bool was = style.built;
+  const auto from = std::chrono::steady_clock::now();
+  BuildUntimed(element, style, pseudo);
+  if (was) return;
+  const double took = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - from).count();
+  ms += took;
+  if (++builds % 3000 == 0) std::fprintf(stderr, "Build: %ld builds, %.0f ms (%.0f us each)\n", builds, ms, ms * 1000 / builds);
+  (void)sharedMs;
+  (void)shares;
+}
+
+void BuildUntimed(dom::Element* element, ElementStyle& style, const std::string& pseudo) {
   if (style.built) return;
   style.built = true;
+  if (pseudo.empty() && ShareFromSibling(element, style)) return;
   const HasUse hasOfOuter = TakeHasUse();  // (another style may be under way, which asked for this one)
   const dom::Element* subjectOfOuter = SetHasSubject(element);
   dom::Node* root = dom::ShadowIncludingRoot(element);
@@ -2390,7 +2614,11 @@ struct SelectorFeatures {
   bool stateAncestor = false;  // a state (hover, active, focus) is asked of an element that is not the subject: the elements under it depend on it
   std::vector<const CompoundSelector*> stateCompounds;  // the compounds of the elements whose state those rules ask for (the rest of such a rule is not looked at)
   bool stateUnknown = false;  // where it is asked is not known (a nested rule)
+  bool nth = false;           // :nth-child() and the like: the place among the siblings by number
+  bool language = false;      // :lang() or :dir()
+  std::unordered_set<std::string> attributes;  // the names of the attributes that a selector looks at (in the subject or above it)
 };
+
 
 void ScanComplex(const ComplexSelector& selector, SelectorFeatures& f, bool inAncestor = false, const CompoundSelector* owner = nullptr);
 
@@ -2419,6 +2647,8 @@ void ScanComplex(const ComplexSelector& selector, SelectorFeatures& f, bool inAn
     const CompoundSelector& compound = selector.compounds[compoundIndex];
     const bool ancestor = inAncestor || compoundIndex + 1 < selector.compounds.size();
     for (const SimpleSelector& simple : compound.simples) {
+      if (simple.kind == SimpleSelector::Kind::Attribute) f.attributes.insert(Lower(simple.name));
+      if (simple.kind == SimpleSelector::Kind::Lang || simple.kind == SimpleSelector::Kind::Dir) f.language = true;
       switch (simple.kind) {
         case SimpleSelector::Kind::Pseudo:
           if (ancestor && IsStatePseudo(simple.pseudo)) {
@@ -2436,7 +2666,7 @@ void ScanComplex(const ComplexSelector& selector, SelectorFeatures& f, bool inAn
           }
           break;
         case SimpleSelector::Kind::Has: f.has = true; if (simple.list) { ScanList(*simple.list, f, true, owner ? owner : &compound); if (HasStateIn(*simple.list)) { f.stateAncestor = true; f.stateCompounds.push_back(owner ? owner : &compound); } } break;
-        case SimpleSelector::Kind::Nth: f.structural = true; if (simple.list) { f.sibling = true; ScanList(*simple.list, f); } break;  // ("of S": the siblings' own attributes count)
+        case SimpleSelector::Kind::Nth: f.structural = true; f.nth = true; if (simple.list) { f.sibling = true; ScanList(*simple.list, f); } break;  // ("of S": the siblings' own attributes count)
         case SimpleSelector::Kind::Not: case SimpleSelector::Kind::Is: case SimpleSelector::Kind::Where: case SimpleSelector::Kind::Nesting:
           if (simple.list) ScanList(*simple.list, f, ancestor, owner ? owner : &compound);
           break;
@@ -2464,6 +2694,76 @@ void ScanRules(const std::vector<CssRule*>& rules, SelectorFeatures& f, int dept
   }
 }
 
+// Whether the selectors in a list have a place by number or a sibling before in them anywhere.
+bool ListAsksPlace(const SelectorList& list) {
+  for (const ComplexSelector& selector : list) {
+    for (const Combinator c : selector.combinators) if (c == Combinator::NextSibling || c == Combinator::SubsequentSibling) return true;
+    for (const CompoundSelector& compound : selector.compounds) {
+      for (const SimpleSelector& simple : compound.simples) {
+        if (simple.kind == SimpleSelector::Kind::Nth || simple.kind == SimpleSelector::Kind::Has) return true;
+        if (simple.list && ListAsksPlace(*simple.list)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+// The elements that the selectors of a list that ask the place of the subject by number, or its siblings before it, can be for.
+void NotePositionKeys(const SelectorList& list, ShareFeatures& out) {
+  for (const ComplexSelector& selector : list) {
+    if (selector.compounds.empty()) {
+      if (std::getenv("SOLAR_STYLE_DEBUG") && !out.positionAny) std::fprintf(stderr, "a selector without compounds\n");
+      out.positionAny = true;
+      return;
+    }
+    bool asks = false;
+    if (!selector.combinators.empty() && selector.combinators.size() + 1 == selector.compounds.size()) {
+      const Combinator before = selector.combinators.back();
+      asks = before == Combinator::NextSibling || before == Combinator::SubsequentSibling;
+    }
+    if (selector.leading == Combinator::NextSibling || selector.leading == Combinator::SubsequentSibling) asks = true;
+    const CompoundSelector& subject = selector.compounds.back();
+    for (const SimpleSelector& simple : subject.simples) {
+      if (simple.kind == SimpleSelector::Kind::Nth || simple.kind == SimpleSelector::Kind::Has) asks = true;
+      if (simple.list && ListAsksPlace(*simple.list)) asks = true;
+    }
+    if (!asks) continue;
+    bool found = false;
+    for (const SimpleSelector& simple : subject.simples) {
+      if (simple.kind == SimpleSelector::Kind::Id) { out.positionKeys.insert(KeyHash(1, simple.name, false)); found = true; break; }
+    }
+    if (!found) for (const SimpleSelector& simple : subject.simples) {
+      if (simple.kind == SimpleSelector::Kind::Class) { out.positionKeys.insert(KeyHash(2, simple.name, false)); found = true; break; }
+    }
+    if (!found) for (const SimpleSelector& simple : subject.simples) {
+      if (simple.kind == SimpleSelector::Kind::Type && !simple.name.empty() && simple.name != "*") { out.positionKeys.insert(KeyHash(3, simple.name, true)); found = true; break; }
+    }
+    if (!found) {
+      if (out.positionSelectors.size() > 64) { out.positionAny = true; return; }
+      out.positionSelectors.push_back(selector);
+    }
+  }
+}
+
+void NotePositionKeysOfRules(const std::vector<CssRule*>& rules, ShareFeatures& out, int depth) {
+  if (depth > 12) {
+    if (std::getenv("SOLAR_STYLE_DEBUG") && !out.positionAny) std::fprintf(stderr, "rules nested too deep\n");
+    out.positionAny = true;
+    return;
+  }
+  for (const CssRule* rule : rules) {
+    if (rule->selectors) {
+      NotePositionKeys(*rule->selectors, out);
+    }
+    if (rule->kind == RuleKind::Scope) {
+      if (std::getenv("SOLAR_STYLE_DEBUG") && !out.positionAny) std::fprintf(stderr, "a scope rule\n");
+      out.positionAny = true;
+    }
+    NotePositionKeysOfRules(rule->rules, out, depth + 1);
+    if (rule->kind == RuleKind::Import && rule->importedSheet) NotePositionKeysOfRules(rule->importedSheet->rules, out, depth + 1);
+  }
+}
+
 }  // namespace
 
 uint64_t SheetsVersion() { return g_authorVersion; }
@@ -2479,7 +2779,7 @@ std::shared_ptr<void> SharedStyleToken(Quanta::Context&, dom::Element* element, 
   dom::Node* tree = dom::ShadowIncludingRoot(element);
   if (!tree || !tree->IsDocument()) return nullptr;
   ElementStyle& style = StyleOf(element, pseudo);
-  if (!style.built || style.memo.use_count() <= 1) return nullptr;  // (the style is made by asking for a value, as ever)
+  if (!style.built) return nullptr;  // (the style is made by asking for a value, as ever)
   return style.memo;
 }
 
@@ -2508,6 +2808,18 @@ StyleReuse StyleReuseFor(dom::Document* document) {
   if (entry.document == document && entry.author == g_authorVersion && entry.sheets == sheets && entry.reuse.shadows == dom::HasShadowTrees()) return entry.reuse;
   SelectorFeatures f;
   for (const CssStyleSheet* sheet : sheets) ScanRules(sheet->rules, f, 0);
+  {
+    SelectorFeatures ua;
+    for (const UserAgentRule& rule : UserAgentRules()) ScanList(rule.selectors, ua);
+    ShareFeatures share;
+    share.nth = f.nth || ua.nth;
+    share.language = f.language || ua.language;
+    share.attributes = f.attributes;
+    share.attributes.insert(ua.attributes.begin(), ua.attributes.end());
+    for (const CssStyleSheet* sheet : sheets) NotePositionKeysOfRules(const_cast<CssStyleSheet*>(sheet)->rules, share, 0);
+    for (const UserAgentRule& rule : UserAgentRules()) NotePositionKeys(rule.selectors, share);
+    g_shareFeatures = std::move(share);
+  }
   entry.document = document;
   entry.author = g_authorVersion;
   entry.sheets = sheets;
@@ -2553,6 +2865,113 @@ void NotePseudoNamesOfRules(const std::vector<CssRule*>& rules, std::unordered_s
   }
 }
 
+// The keys (id, class, type) of the elements that the rules for each pseudo-element are for; or that they could be for any element (a selector with no key).
+struct PseudoKeys {
+  std::unordered_set<uint64_t> keys;
+  std::vector<ComplexSelector> matchers;  // the selectors with no key, without their pseudo-element: what they match is what they are for
+  bool any = false;
+};
+
+void NotePseudoKeys(const SelectorList& list, std::unordered_map<std::string, PseudoKeys>& out) {
+  for (const ComplexSelector& selector : list) {
+    if (selector.compounds.empty()) continue;
+    const CompoundSelector& subject = selector.compounds.back();
+    std::vector<const std::string*> names;
+    bool awkward = false;
+    for (const SimpleSelector& simple : subject.simples) {
+      if (simple.kind == SimpleSelector::Kind::PseudoElement) names.push_back(&simple.name);
+      if (simple.kind == SimpleSelector::Kind::Host || simple.kind == SimpleSelector::Kind::Unknown || simple.kind == SimpleSelector::Kind::Nesting) awkward = true;
+    }
+    // (A pseudo-element in a compound that is not the last of a selector, or in an argument, is for no element by itself: the names are noted by the first function.)
+    if (names.empty()) continue;
+    bool found = false;
+    uint64_t key = 0;
+    if (!awkward) {
+      for (const SimpleSelector& simple : subject.simples) {
+        if (simple.kind == SimpleSelector::Kind::Id) { key = KeyHash(1, simple.name, false); found = true; break; }
+      }
+      if (!found) for (const SimpleSelector& simple : subject.simples) {
+        if (simple.kind == SimpleSelector::Kind::Class) { key = KeyHash(2, simple.name, false); found = true; break; }
+      }
+      if (!found) for (const SimpleSelector& simple : subject.simples) {
+        if (simple.kind == SimpleSelector::Kind::Type && !simple.name.empty() && simple.name != "*") { key = KeyHash(3, simple.name, true); found = true; break; }
+      }
+    }
+    for (const std::string* name : names) {
+      PseudoKeys& entry = out[*name];
+      if (found) {
+        entry.keys.insert(key);
+        continue;
+      }
+      // No key: what the selector matches, with the pseudo-element taken off, is what it is for (not what reaches into other trees, or looks at what is below).
+      bool simple = !awkward && entry.matchers.size() < 256;
+      for (const CompoundSelector& compound : selector.compounds) {
+        for (const SimpleSelector& s : compound.simples) {
+          if (s.kind == SimpleSelector::Kind::Has || s.kind == SimpleSelector::Kind::Host || s.kind == SimpleSelector::Kind::Unknown || s.kind == SimpleSelector::Kind::Nesting) simple = false;
+          if (s.kind == SimpleSelector::Kind::Pseudo && s.pseudo == PseudoClass::Scope) simple = false;
+          if (s.kind == SimpleSelector::Kind::PseudoElement && (s.name == "part" || s.name == "slotted")) simple = false;
+        }
+      }
+      if (!simple) {
+        entry.any = true;
+        continue;
+      }
+      ComplexSelector copy = selector;
+      std::vector<SimpleSelector>& simples = copy.compounds.back().simples;
+      for (auto it = simples.begin(); it != simples.end();) {
+        if (it->kind == SimpleSelector::Kind::PseudoElement) it = simples.erase(it);
+        else ++it;
+      }
+      entry.matchers.push_back(std::move(copy));
+    }
+  }
+}
+
+void NotePseudoKeysOfRules(const std::vector<CssRule*>& rules, std::unordered_map<std::string, PseudoKeys>& out, int depth) {
+  if (depth > 40) return;
+  for (const CssRule* rule : rules) {
+    if (rule->selectors) NotePseudoKeys(*rule->selectors, out);
+    NotePseudoKeysOfRules(rule->rules, out, depth + 1);
+    if (rule->importedSheet) NotePseudoKeysOfRules(rule->importedSheet->rules, out, depth + 1);
+  }
+}
+
+// Whether a rule of the document's sheets or of the user agent's could be for a pseudo-element of that name, and for the element (a document with no shadow trees only).
+bool PseudoMayHaveRulesFor(dom::Element* element, const std::string& pseudo, dom::Node* tree) {
+  static const std::unordered_map<std::string, PseudoKeys> ua = [] {
+    std::unordered_map<std::string, PseudoKeys> keys;
+    for (const UserAgentRule& rule : UserAgentRules()) NotePseudoKeys(rule.selectors, keys);
+    return keys;
+  }();
+  static std::unordered_map<const dom::Node*, std::pair<uint64_t, std::unordered_map<std::string, PseudoKeys>>> cache;
+  const uint64_t version = AuthorStyleVersion();
+  auto found = cache.find(tree);
+  if (found == cache.end() || found->second.first != version) {
+    std::unordered_map<std::string, PseudoKeys> keys;
+    for (CssStyleSheet* sheet : SheetsOfTree(tree, element->nodeDocument->context)) NotePseudoKeysOfRules(sheet->rules, keys, 0);
+    if (cache.size() > 64) cache.clear();
+    found = cache.insert_or_assign(tree, std::make_pair(version, std::move(keys))).first;
+  }
+  const ElementKeys own(element);
+  if (!own.usable) return true;
+  const std::unordered_map<std::string, PseudoKeys>* const tables[] = {&ua, &found->second.second};
+  for (const auto* table : tables) {
+    const auto entry = table->find(pseudo);
+    if (entry == table->end()) continue;
+    if (entry->second.any) return true;
+    for (uint64_t key : own.keys) {
+      if (entry->second.keys.count(key)) return true;
+    }
+    if (!entry->second.matchers.empty()) {
+      MatchContext context;
+      for (const ComplexSelector& selector : entry->second.matchers) {
+        if (MatchesComplex(selector, element, context)) return true;
+      }
+    }
+  }
+  return false;
+}
+
 // Whether a rule of the document's sheets or of the user agent's could be for a pseudo-element of that name (a document with no shadow trees only).
 bool PseudoNameMayHaveRules(dom::Element* element, const std::string& pseudo) {
   if (dom::HasShadowTrees() || !element->nodeDocument) return true;
@@ -2585,7 +3004,8 @@ bool PseudoNameMayHaveRules(dom::Element* element, const std::string& pseudo) {
     if (cache.size() > 64) cache.clear();
     found = cache.insert_or_assign(tree, std::make_pair(version, std::move(names))).first;
   }
-  return found->second.second.count(pseudo) != 0;
+  if (found->second.second.count(pseudo) == 0) return false;
+  return PseudoMayHaveRulesFor(element, pseudo, tree);
 }
 
 }  // namespace

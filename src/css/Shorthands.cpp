@@ -928,7 +928,37 @@ bool ExpandValue(const PropertyDefinition& property, const ComponentValues& valu
 
 }  // namespace
 
+bool ExpandDeclaration(const std::string& name, const std::string& text, std::vector<Longhand>& out);
+
+namespace {
+bool ExpandDeclarationOnce(const std::string& name, const std::string& text, std::vector<Longhand>& out);
+}
+
+// What a declaration comes to depends on its name and its text alone (and, for an address, on what it is taken against: not kept): the same one is asked again and again
+// (a shorthand with a var() in it is expanded for each longhand of it, for each element).
 bool ExpandDeclaration(const std::string& name, const std::string& text, std::vector<Longhand>& out) {
+  static std::unordered_map<std::string, std::pair<bool, std::vector<Longhand>>> kept;
+  if (text.find("url(") != std::string::npos || text.find("src(") != std::string::npos || text.size() > 400) return ExpandDeclarationOnce(name, text, out);
+  std::string key;
+  key.reserve(name.size() + text.size() + 1);
+  key += name;
+  key += '\x01';
+  key += text;
+  const auto found = kept.find(key);
+  if (found != kept.end()) {
+    if (found->second.first) out.insert(out.end(), found->second.second.begin(), found->second.second.end());
+    return found->second.first;
+  }
+  std::vector<Longhand> made;
+  const bool ok = ExpandDeclarationOnce(name, text, made);
+  if (kept.size() > 60000) kept.clear();
+  kept.emplace(std::move(key), std::make_pair(ok, made));
+  if (ok) out.insert(out.end(), std::make_move_iterator(made.begin()), std::make_move_iterator(made.end()));
+  return ok;
+}
+
+namespace {
+bool ExpandDeclarationOnce(const std::string& name, const std::string& text, std::vector<Longhand>& out) {
   const PropertyDefinition* property = FindProperty(name);
   const ComponentValues values = Trimmed(ParseComponentValues(text));
   if (!property) {
@@ -941,6 +971,7 @@ bool ExpandDeclaration(const std::string& name, const std::string& text, std::ve
   for (Longhand& l : expanded) out.push_back(std::move(l));
   return true;
 }
+}  // namespace
 
 // ---- Serialization ----
 
