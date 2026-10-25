@@ -356,6 +356,22 @@ const char* const kFormScript = R"JS(
     }
     return proceed;
   });
+  // A key of the keyboard: the event goes to the target (the focused element, or the body).
+  setHelper("key", (target, type, key, code, keyCode, repeat, mods) => {
+    const ev = new KeyboardEvent(type, { bubbles: true, cancelable: true, composed: true, view: globalThis, key, code, keyCode, charCode: type === "keypress" ? keyCode : 0, repeat, ctrlKey: !!(mods & 1), shiftKey: !!(mods & 2), altKey: !!(mods & 4), metaKey: !!(mods & 8) });
+    try { if (ev.which === undefined || ev.which === 0) Object.defineProperty(ev, "which", { value: keyCode }); } catch (e) {}
+    return target.dispatchEvent(ev);
+  });
+  // The pointer moved from one element to another: out and leave for the ones it left, over and enter for the ones it came into.
+  setHelper("hover", (from, to, x, y) => {
+    const chain = (e) => { const list = []; for (let p = e; p; p = p.parentNode instanceof Element ? p.parentNode : (p.parentNode && p.parentNode.host) || null) list.push(p); return list; };
+    const before = chain(from), after = chain(to);
+    const init = (related, bubbles) => ({ bubbles, cancelable: bubbles, composed: true, view: globalThis, clientX: x, clientY: y, relatedTarget: related });
+    if (from) from.dispatchEvent(new MouseEvent("mouseout", init(to, true)));
+    for (const e of before) if (!after.includes(e)) e.dispatchEvent(new MouseEvent("mouseleave", init(to, false)));
+    if (to) to.dispatchEvent(new MouseEvent("mouseover", init(from, true)));
+    for (const e of after.slice().reverse()) if (!before.includes(e)) e.dispatchEvent(new MouseEvent("mouseenter", init(from, false)));
+  });
   // Typing: the control takes the text, as the user's input does.
   setHelper("input", (target, text, kind) => {
     if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) return false;

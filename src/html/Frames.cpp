@@ -638,13 +638,75 @@ void SetFrameEnvironment(FrameEnvironment* environment) {
 
 void RunInRealm(Quanta::Embed::Realm& realm, const std::function<void()>& work) { RunAs(realm, work); }
 
+namespace {
+
+std::string LowerCopy(std::string_view text) {
+  std::string out(text);
+  for (char& c : out) c = c >= 'A' && c <= 'Z' ? static_cast<char>(c + 0x20) : c;
+  return out;
+}
+
+// The charset a page says it is in: the Content-Type's, or a meta in the first bytes.
+std::string DeclaredCharset(std::string_view contentType, std::string_view markup) {
+  const std::string type = LowerCopy(contentType);
+  size_t at = type.find("charset=");
+  std::string source = type;
+  if (at == std::string::npos) {
+    source = LowerCopy(markup.substr(0, 2048));
+    at = source.find("charset=");
+  }
+  if (at == std::string::npos) return "";
+  at += 8;
+  while (at < source.size() && (source[at] == '"' || source[at] == '\'' || source[at] == ' ')) ++at;
+  size_t end = at;
+  while (end < source.size() && (std::isalnum(static_cast<unsigned char>(source[end])) || source[end] == '-' || source[end] == '_')) ++end;
+  return source.substr(at, end - at);
+}
+
+void AppendUtf8Point(std::string& out, char32_t cp) {
+  if (cp < 0x80) out.push_back(static_cast<char>(cp));
+  else if (cp < 0x800) { out.push_back(static_cast<char>(0xC0 | (cp >> 6))); out.push_back(static_cast<char>(0x80 | (cp & 0x3F))); }
+  else { out.push_back(static_cast<char>(0xE0 | (cp >> 12))); out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F))); out.push_back(static_cast<char>(0x80 | (cp & 0x3F))); }
+}
+
+// A page in one of the single-byte Western and Turkish charsets, made UTF-8 (the parser reads UTF-8).
+std::string TranscodeLegacy(const std::string& markup, std::string_view contentType) {
+  const std::string charset = DeclaredCharset(contentType, markup);
+  const bool turkish = charset == "iso-8859-9" || charset == "windows-1254" || charset == "latin5" || charset == "iso8859-9" || charset == "cp1254";
+  const bool western = charset == "iso-8859-1" || charset == "windows-1252" || charset == "latin1" || charset == "cp1252" || charset == "iso-8859-15" || charset == "iso8859-1";
+  if (!turkish && !western) return markup;
+  static const char32_t kHigh1252[32] = {0x20AC, 0x81, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x8D, 0x017D, 0x8F,
+                                         0x90, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x9D, 0x017E, 0x0178};
+  std::string out;
+  out.reserve(markup.size() + markup.size() / 8);
+  for (unsigned char b : markup) {
+    char32_t cp = b;
+    if (b >= 0x80 && b < 0xA0 && charset != "iso-8859-1" && charset != "iso-8859-9" && charset != "latin1" && charset != "iso8859-1") cp = kHigh1252[b - 0x80];
+    if (turkish) {
+      switch (b) {
+        case 0xD0: cp = 0x011E; break;
+        case 0xDD: cp = 0x0130; break;
+        case 0xDE: cp = 0x015E; break;
+        case 0xF0: cp = 0x011F; break;
+        case 0xFD: cp = 0x0131; break;
+        case 0xFE: cp = 0x015F; break;
+        default: break;
+      }
+    }
+    AppendUtf8Point(out, cp);
+  }
+  return out;
+}
+
+}  // namespace
+
 bool LoadPage(Quanta::Embed::Realm& realm, dom::Document* document, std::string_view markup, std::string_view contentType) {
   bool ok = true;
   std::string type(contentType);
   // The parameters of a Content-Type are not the type.
   type = type.substr(0, type.find(';'));
   while (!type.empty() && type.back() == ' ') type.pop_back();
-  const std::string text(markup);
+  const std::string text = TranscodeLegacy(std::string(markup), contentType);
   RunAs(realm, [&] { ok = LoadPageIn(realm, document, text, type); });
   return ok;
 }

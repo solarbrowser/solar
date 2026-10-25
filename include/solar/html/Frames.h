@@ -70,6 +70,10 @@ void RunInRealm(Quanta::Embed::Realm& realm, const std::function<void()>& work);
 // (kind: "text", "backspace", "delete", "left", "right", "home", "end"); it says whether the control was one that took it.
 bool DispatchPointer(dom::Document* document, dom::Element* target, const char* type, double x, double y, int button, int buttons);
 bool DispatchClick(dom::Document* document, dom::Element* target, double x, double y, int button);
+// A key (type: keydown, keypress, keyup; modifiers: 1 ctrl, 2 shift, 4 alt, 8 meta) goes to `target`; false when a script cancelled it.
+bool DispatchKey(dom::Document* document, dom::Element* target, const char* type, const std::string& key, const std::string& code, int keyCode, bool repeat, int modifiers);
+// The pointer went from one element to another (either may be null): mouseout/leave and mouseover/enter.
+void DispatchHover(dom::Document* document, dom::Element* from, dom::Element* to, double x, double y);
 bool TypeInto(dom::Document* document, dom::Element* target, const std::string& text, const char* kind);
 void FireChange(dom::Document* document, dom::Element* target);
 // The caret (or the selection, when the two differ) of a text control, in UTF-16 units of its value.

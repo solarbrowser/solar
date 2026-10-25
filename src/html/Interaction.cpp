@@ -41,6 +41,20 @@ bool DispatchPointer(dom::Document* document, dom::Element* target, const char* 
   return qe::IsUndefined(result) ? true : qe::ToBoolean(result);
 }
 
+bool DispatchKey(dom::Document* document, dom::Element* target, const char* type, const std::string& key, const std::string& code, int keyCode, bool repeat, int modifiers) {
+  if (!document || !document->context || !target) return true;
+  Context& ctx = *document->context;
+  Value arguments[] = {qe::FromObject(target), qe::FromUtf8(ctx, type), qe::FromUtf8(ctx, key), qe::FromUtf8(ctx, code), qe::FromNumber(keyCode), qe::FromBool(repeat), qe::FromNumber(modifiers)};
+  const Value result = CallHelper(document, "key", arguments, 7);
+  return qe::IsUndefined(result) ? true : qe::ToBoolean(result);
+}
+
+void DispatchHover(dom::Document* document, dom::Element* from, dom::Element* to, double x, double y) {
+  if (!document || !document->context) return;
+  Value arguments[] = {from ? qe::FromObject(from) : qe::Null(), to ? qe::FromObject(to) : qe::Null(), qe::FromNumber(x), qe::FromNumber(y)};
+  CallHelper(document, "hover", arguments, 4);
+}
+
 bool DispatchClick(dom::Document* document, dom::Element* target, double x, double y, int button) {
   if (!document || !document->context || !target) return true;
   Value arguments[] = {qe::FromObject(target), qe::FromNumber(x), qe::FromNumber(y), qe::FromNumber(button)};

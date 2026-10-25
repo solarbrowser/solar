@@ -429,6 +429,74 @@ struct UiEvent {
   std::string text;  // a text input's text (the event's own is gone with the next poll)
 };
 
+// What a key of the keyboard is to a page: KeyboardEvent.key, .code and .keyCode.
+struct KeyInfo {
+  std::string key, code;
+  int keyCode = 0;
+  int modifiers = 0;  // 1 ctrl, 2 shift, 4 alt, 8 meta
+};
+
+KeyInfo DescribeKey(const SDL_KeyboardEvent& k) {
+  KeyInfo info;
+  if (k.mod & SDL_KMOD_CTRL) info.modifiers |= 1;
+  if (k.mod & SDL_KMOD_SHIFT) info.modifiers |= 2;
+  if (k.mod & SDL_KMOD_ALT) info.modifiers |= 4;
+  if (k.mod & SDL_KMOD_GUI) info.modifiers |= 8;
+  const auto set = [&](const char* key, const char* code, int keyCode) { info.key = key; info.code = code; info.keyCode = keyCode; };
+  switch (k.key) {
+    case SDLK_RETURN: case SDLK_KP_ENTER: set("Enter", "Enter", 13); return info;
+    case SDLK_ESCAPE: set("Escape", "Escape", 27); return info;
+    case SDLK_BACKSPACE: set("Backspace", "Backspace", 8); return info;
+    case SDLK_TAB: set("Tab", "Tab", 9); return info;
+    case SDLK_DELETE: set("Delete", "Delete", 46); return info;
+    case SDLK_INSERT: set("Insert", "Insert", 45); return info;
+    case SDLK_SPACE: set(" ", "Space", 32); return info;
+    case SDLK_LEFT: set("ArrowLeft", "ArrowLeft", 37); return info;
+    case SDLK_UP: set("ArrowUp", "ArrowUp", 38); return info;
+    case SDLK_RIGHT: set("ArrowRight", "ArrowRight", 39); return info;
+    case SDLK_DOWN: set("ArrowDown", "ArrowDown", 40); return info;
+    case SDLK_HOME: set("Home", "Home", 36); return info;
+    case SDLK_END: set("End", "End", 35); return info;
+    case SDLK_PAGEUP: set("PageUp", "PageUp", 33); return info;
+    case SDLK_PAGEDOWN: set("PageDown", "PageDown", 34); return info;
+    case SDLK_LSHIFT: set("Shift", "ShiftLeft", 16); return info;
+    case SDLK_RSHIFT: set("Shift", "ShiftRight", 16); return info;
+    case SDLK_LCTRL: set("Control", "ControlLeft", 17); return info;
+    case SDLK_RCTRL: set("Control", "ControlRight", 17); return info;
+    case SDLK_LALT: set("Alt", "AltLeft", 18); return info;
+    case SDLK_RALT: set("Alt", "AltRight", 18); return info;
+    case SDLK_LGUI: set("Meta", "MetaLeft", 91); return info;
+    case SDLK_RGUI: set("Meta", "MetaRight", 92); return info;
+    case SDLK_CAPSLOCK: set("CapsLock", "CapsLock", 20); return info;
+    default: break;
+  }
+  if (k.key >= SDLK_F1 && k.key <= SDLK_F12) {
+    const int n = static_cast<int>(k.key - SDLK_F1) + 1;
+    info.key = info.code = "F" + std::to_string(n);
+    info.keyCode = 111 + n;
+    return info;
+  }
+  if (k.key >= 'a' && k.key <= 'z') {
+    const bool upper = (k.mod & SDL_KMOD_SHIFT) != 0 != ((k.mod & SDL_KMOD_CAPS) != 0);
+    const char letter = static_cast<char>(upper ? k.key - 'a' + 'A' : k.key);
+    info.key = std::string(1, letter);
+    info.code = std::string("Key") + static_cast<char>(k.key - 'a' + 'A');
+    info.keyCode = static_cast<int>(k.key - 'a') + 65;
+    return info;
+  }
+  if (k.key >= '0' && k.key <= '9') {
+    info.key = std::string(1, static_cast<char>(k.key));
+    info.code = std::string("Digit") + static_cast<char>(k.key);
+    info.keyCode = static_cast<int>(k.key);
+    return info;
+  }
+  if (k.key >= 0x20 && k.key < 0x7f) {
+    info.key = std::string(1, static_cast<char>(k.key));
+    info.keyCode = static_cast<int>(k.key);
+  }
+  return info;
+}
+
 struct Frame {
   std::shared_ptr<const solar::paint::DisplayList> list;
   double maxX = 0, maxY = 0;  // how far the page can be scrolled
@@ -622,7 +690,8 @@ void RunWindow(Shared& shared, SDL_Window* window, SDL_Renderer* renderer) {
           shared.PushEvent(std::move(forward));
           break;
         }
-        case SDL_EVENT_KEY_DOWN: {
+        case SDL_EVENT_KEY_DOWN:
+        case SDL_EVENT_KEY_UP: {
           UiEvent forward;
           forward.event = event;
           shared.PushEvent(std::move(forward));
@@ -1113,6 +1182,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
   // What is under the pointer is what is hovered.
   double pointerX = 0, pointerY = 0;
   bool pointerKnown = false, hoverStale = false;
+  bool suppressText = false;  // a script cancelled the key that is about to give a character
   Clock::time_point lastScrollInput = Clock::now() - std::chrono::seconds(10);
   const auto updateHover = [&] {
     hoverStale = false;
@@ -1120,7 +1190,13 @@ int PageMain(Shared& shared, int argc, char** argv) {
     solar::layout::Tree* tree = currentTree();
     if (!tree) return;
     const std::vector<solar::dom::Element*> elements = solar::layout::ElementsAtPoint(*tree, pointerX, pointerY);
-    solar::dom::SetHoverElement(document, elements.empty() ? nullptr : elements.front());
+    solar::dom::Element* before = document->hoverElement;
+    solar::dom::Element* now = elements.empty() ? nullptr : elements.front();
+    solar::dom::SetHoverElement(document, now);
+    if (now != before) {
+      solar::html::RunInRealm(*realm, [&] { solar::html::DispatchHover(document, before, now, pointerX, pointerY); });
+      dirty = true;
+    }
   };
   // The scroll is the window's (it glides, it is dragged by the scrollbar): the page asks it to move, and is told where it is.
   const bool scrollTestMode = std::getenv("SOLAR_GUI_SCROLL") != nullptr;
@@ -1216,7 +1292,20 @@ int PageMain(Shared& shared, int argc, char** argv) {
           setViewport();
           dirty = true;
           break;
+        case SDL_EVENT_KEY_UP: {
+          const KeyInfo info = DescribeKey(event.key);
+          if (!info.key.empty() && document && document->DocumentElement()) {
+            solar::dom::Element* target = document->focusedElement ? document->focusedElement : document->DocumentElement();
+            solar::html::RunInRealm(*realm, [&] { solar::html::DispatchKey(document, target, "keyup", info.key, info.code, info.keyCode, false, info.modifiers); });
+            dirty = true;
+          }
+          break;
+        }
         case SDL_EVENT_TEXT_INPUT: {
+          if (suppressText) {
+            suppressText = false;
+            break;
+          }
           if (solar::dom::Element* field = focusedTextControl()) {
             solar::html::RunInRealm(*realm, [&] { solar::html::TypeInto(document, field, event.text.text, "text"); });
             dirty = true;
@@ -1225,6 +1314,28 @@ int PageMain(Shared& shared, int argc, char** argv) {
         }
         case SDL_EVENT_KEY_DOWN: {
           const int h = shared.height.load();
+          suppressText = false;
+          if (document && document->DocumentElement()) {
+            // The page sees the key first; what the program does with it (scrolling, typing, pressing) is for when no script cancelled it.
+            const KeyInfo info = DescribeKey(event.key);
+            if (!info.key.empty()) {
+              solar::dom::Element* target = document->focusedElement ? document->focusedElement : document->DocumentElement();
+              bool proceed = true;
+              solar::html::RunInRealm(*realm, [&] {
+                proceed = solar::html::DispatchKey(document, target, "keydown", info.key, info.code, info.keyCode, event.key.repeat, info.modifiers);
+                // (A key that makes a character, or Enter, also fires keypress.)
+                if (proceed && !(info.modifiers & (1 | 4 | 8)) && (info.key == "Enter" || (info.key.size() == 1 && info.key[0] >= 0x20))) {
+                  if (document->focusedElement) target = document->focusedElement;
+                  proceed = solar::html::DispatchKey(document, target, "keypress", info.key, info.code, info.key == "Enter" ? 13 : static_cast<unsigned char>(info.key[0]), event.key.repeat, info.modifiers);
+                }
+              });
+              dirty = true;
+              if (!proceed) {
+                suppressText = info.key.size() == 1;
+                break;
+              }
+            }
+          }
           if (solar::dom::Element* field = focusedTextControl()) {
             const char* kind = nullptr;
             switch (event.key.key) {
@@ -1274,7 +1385,14 @@ int PageMain(Shared& shared, int argc, char** argv) {
           pointerKnown = true;
           // (While the page is scrolling, what is under the pointer is looked at when it stops: a change of hover is a change of style, and a frame is not the time for one.)
           if (shared.gliding.load() || Clock::now() - lastScrollInput < std::chrono::milliseconds(150)) hoverStale = true;
-          else updateHover();
+          else {
+            updateHover();
+            if (document->hoverElement) {
+              solar::dom::Element* over = document->hoverElement;
+              solar::html::RunInRealm(*realm, [&] { solar::html::DispatchPointer(document, over, "mousemove", event.motion.x, event.motion.y, 0, pressTarget ? 1 : 0); });
+              dirty = true;
+            }
+          }
           break;
         }
         case SDL_EVENT_MOUSE_BUTTON_DOWN: {
@@ -1410,7 +1528,9 @@ int PageMain(Shared& shared, int argc, char** argv) {
       } else if (step.rfind("k:", 0) == 0) {
         e.type = SDL_EVENT_KEY_DOWN;
         const std::string name = step.substr(2);
-        e.key.key = name == "backspace" ? SDLK_BACKSPACE : name == "enter" ? SDLK_RETURN : name == "left" ? SDLK_LEFT : name == "right" ? SDLK_RIGHT : name == "delete" ? SDLK_DELETE : name == "home" ? SDLK_HOME : name == "end" ? SDLK_END : name == "space" ? SDLK_SPACE : SDLK_UNKNOWN;
+        e.key.key = name == "backspace" ? SDLK_BACKSPACE : name == "enter" ? SDLK_RETURN : name == "left" ? SDLK_LEFT : name == "right" ? SDLK_RIGHT : name == "delete" ? SDLK_DELETE : name == "home" ? SDLK_HOME : name == "end" ? SDLK_END : name == "space" ? SDLK_SPACE : name == "up" ? SDLK_UP : name == "down" ? SDLK_DOWN : name.size() == 1 ? static_cast<SDL_Keycode>(name[0]) : SDLK_UNKNOWN;
+        SDL_PushEvent(&e);
+        e.type = SDL_EVENT_KEY_UP;
         SDL_PushEvent(&e);
       }
       dirty = true;
