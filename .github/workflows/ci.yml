@@ -39,6 +39,11 @@ jobs:
 
       - run: make -j"$(nproc)" test
 
+      # Quanta's makefile keeps the compiler's messages in a file, not in the log.
+      - name: What Quanta's compiler said
+        if: failure()
+        run: cat third_party/quanta/build/errors.log || true
+
   # The tests that need no Quanta, under AddressSanitizer, UndefinedBehaviorSanitizer and leak detection.
   sanitizers:
     runs-on: ubuntu-24.04

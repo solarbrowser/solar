@@ -156,8 +156,12 @@ PSL_FILE = $(BUILD_DIR)/psl/public_suffix_list.dat
 
 all: solar solar-cli
 
+# Quanta's checked-in profile for profile-guided builds is written by a recent LLVM, and an older clang (a CI image's) refuses it with an error rather than
+# ignoring it: it is used only where a clang reads it (the probe Quanta's own build.sh makes).
+QUANTA_PGO := $(shell echo 'int main(){}' | $(CXX) -x c++ -fprofile-use=$(QUANTA_DIR)/tools/pgo/quanta.profdata -c -o /dev/null - >/dev/null 2>&1 && echo 1 || echo 0)
+
 quanta:
-	@$(MAKE) --no-print-directory -C $(QUANTA_DIR) lib ICU4X=$(ICU4X)
+	@$(MAKE) --no-print-directory -C $(QUANTA_DIR) lib ICU4X=$(ICU4X) PGO=$(QUANTA_PGO)
 	@if [ "$(ICU4X)" = 1 ]; then $(MAKE) --no-print-directory -C $(QUANTA_DIR) third_party/quanta_icu/target/release/libquanta_icu.a ICU4X=1; fi
 
 $(QUANTA_LIBS): | quanta
