@@ -208,6 +208,8 @@ class Browser : public solar::html::FrameEnvironment {
   }
 
   void WaitFor(Resource* resource) {
+    // The page's own tasks run while a resource is waited for, even when layout is what asked for it: they see the tree as the page left it.
+    solar::dom::CommittedViewSuspend suspend;
     waiting_ = resource;
     const auto waitStart = Clock::now();
     while (!resource->done) {
