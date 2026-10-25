@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <pthread.h>
 #include <cmath>
 #include <condition_variable>
 #include <deque>
@@ -956,12 +957,30 @@ int main(int argc, char** argv) {
     shared.density = SDL_GetWindowPixelDensity(window);
   }
   int result = 0;
-  std::thread page([&] {
-    result = PageMain(shared, argc, argv);
-    shared.pageDone = true;
-    shared.quit = true;
-    shared.WakeWindow();
-  });
+  // The page's thread has a large stack of its own (only what is used is ever given memory): scripts of a few hundred kilobytes nest deeper than the
+  // 8 MB a thread gets by default, and the parser keeps to half of the stack it finds.
+  pthread_t page;
+  {
+    pthread_attr_t attributes;
+    pthread_attr_init(&attributes);
+    pthread_attr_setstacksize(&attributes, static_cast<size_t>(256) << 20);
+    auto* start = new std::function<void()>([&] {
+      result = PageMain(shared, argc, argv);
+      shared.pageDone = true;
+      shared.quit = true;
+      shared.WakeWindow();
+    });
+    if (pthread_create(&page, &attributes, [](void* arg) -> void* {
+          auto* body = static_cast<std::function<void()>*>(arg);
+          (*body)();
+          delete body;
+          return nullptr;
+        }, start) != 0) {
+      std::fprintf(stderr, "cannot start the page thread\n");
+      return 1;
+    }
+    pthread_attr_destroy(&attributes);
+  }
   RunWindow(shared, window, renderer);
   // The page is asked to stop; one that is in the middle of a long script is not waited for for long.
   for (int i = 0; i < 100 && !shared.pageDone.load(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -971,7 +990,7 @@ int main(int argc, char** argv) {
     SDL_Quit();
     std::_Exit(0);
   }
-  page.join();
+  pthread_join(page, nullptr);
   SDL_DestroyRenderer(renderer);
   SDL_DestroyWindow(window);
   SDL_Quit();

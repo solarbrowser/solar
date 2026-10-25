@@ -1097,6 +1097,156 @@ const char* const kWindowScript = R"JS(
 })();
 )JS";
 
+// Interfaces and members a page tests for or calls and that this program has no behaviour behind: they exist so that
+// the check passes the way it does in a browser that lacks the feature (a canvas that has no context, a media element
+// that cannot play, a permission that is denied), and a page that feature-detects takes its other path.
+const char* const kStubScript = R"JS(
+(function () {
+  const define = (target, name, value) => Object.defineProperty(target, name, { value, writable: true, enumerable: false, configurable: true });
+  const defineGlobal = (name, value) => { if (typeof globalThis[name] === "undefined") define(globalThis, name, value); };
+  const ensure = (target, name, value) => { if (target && !(name in target)) define(target, name, value); };
+  const illegal = () => { throw new TypeError("Illegal constructor"); };
+  const rect = () => (typeof DOMRect === "function" ? new DOMRect(0, 0, 0, 0) : { x: 0, y: 0, width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0 });
+
+  if (typeof MouseEvent === "function" && typeof PointerEvent === "undefined") {
+    const defaults = { pointerId: 0, width: 1, height: 1, pressure: 0, tangentialPressure: 0, tiltX: 0, tiltY: 0, twist: 0, pointerType: "", isPrimary: false };
+    class PointerEvent extends MouseEvent {
+      constructor(type, init = {}) {
+        super(type, init);
+        for (const key of Object.keys(defaults)) Object.defineProperty(this, key, { value: init[key] === undefined ? defaults[key] : init[key], enumerable: true, configurable: true });
+      }
+      getCoalescedEvents() { return []; }
+      getPredictedEvents() { return []; }
+    }
+    define(globalThis, "PointerEvent", PointerEvent);
+  }
+  if (typeof ClipboardEvent === "undefined") {
+    class ClipboardEvent extends Event {
+      constructor(type, init = {}) { super(type, init); Object.defineProperty(this, "clipboardData", { value: init.clipboardData === undefined ? null : init.clipboardData, enumerable: true, configurable: true }); }
+    }
+    define(globalThis, "ClipboardEvent", ClipboardEvent);
+  }
+
+  if (typeof PerformanceEntry === "function") {
+    for (const name of ["PerformanceResourceTiming", "PerformanceNavigationTiming"]) {
+      defineGlobal(name, class extends PerformanceEntry { constructor() { super(); illegal(); } });
+      Object.defineProperty(globalThis[name], "name", { value: name, configurable: true });
+    }
+    // The second extends the first, as the specification has it.
+    if (!(PerformanceNavigationTiming.prototype instanceof PerformanceResourceTiming)) Object.setPrototypeOf(PerformanceNavigationTiming.prototype, PerformanceResourceTiming.prototype);
+  }
+  defineGlobal("PerformanceTiming", class PerformanceTiming { constructor() { illegal(); } });
+
+  defineGlobal("SVGAnimatedString", class SVGAnimatedString { constructor() { illegal(); } get baseVal() { return ""; } set baseVal(v) {} get animVal() { return ""; } });
+  if (typeof SVGElement === "function") {
+    ensure(SVGElement.prototype, "getBBox", function getBBox() { return rect(); });
+    ensure(SVGElement.prototype, "getComputedTextLength", function getComputedTextLength() { return 0; });
+  }
+
+  // Canvas: no context is made (getContext returns null, as for a type the browser does not support).
+  defineGlobal("ImageData", class ImageData {
+    constructor(a, b, c) {
+      const data = a instanceof Uint8ClampedArray ? a : null;
+      const width = data ? b : a, height = data ? (c === undefined ? data.length / 4 / width : c) : b;
+      if (!(width > 0) || !(height > 0)) throw new DOMException("The source width is zero or not a number.", "IndexSizeError");
+      define(this, "width", width); define(this, "height", height); define(this, "data", data || new Uint8ClampedArray(width * height * 4)); define(this, "colorSpace", "srgb");
+    }
+  });
+  defineGlobal("Path2D", class Path2D {
+    addPath() {} closePath() {} moveTo() {} lineTo() {} bezierCurveTo() {} quadraticCurveTo() {} arc() {} arcTo() {} ellipse() {} rect() {} roundRect() {}
+  });
+  defineGlobal("CanvasRenderingContext2D", class CanvasRenderingContext2D { constructor() { illegal(); } });
+  if (typeof HTMLCanvasElement === "function") {
+    ensure(HTMLCanvasElement.prototype, "getContext", function getContext() { return null; });
+    ensure(HTMLCanvasElement.prototype, "toDataURL", function toDataURL() { return "data:,"; });
+    ensure(HTMLCanvasElement.prototype, "toBlob", function toBlob(callback) { setTimeout(() => callback(null), 0); });
+  }
+
+  // Media: a player that cannot play anything. The elements sit under HTMLMediaElement, which they lacked.
+  if (typeof HTMLMediaElement === "undefined" && typeof HTMLElement === "function") {
+    class HTMLMediaElement extends HTMLElement {
+      constructor() { super(); }
+      load() {}
+      pause() {}
+      play() { return Promise.reject(new DOMException("The element has no supported sources.", "NotSupportedError")); }
+      canPlayType() { return ""; }
+      addTextTrack() { return null; }
+      get paused() { return true; }
+      get ended() { return false; }
+      get seeking() { return false; }
+      get readyState() { return 0; }
+      get networkState() { return 0; }
+      get duration() { return NaN; }
+      get error() { return null; }
+      get buffered() { return { length: 0, start() { throw new DOMException("Index out of range.", "IndexSizeError"); }, end() { throw new DOMException("Index out of range.", "IndexSizeError"); } }; }
+      get currentTime() { return 0; }
+      set currentTime(v) {}
+      get volume() { return 1; }
+      set volume(v) {}
+      get muted() { return false; }
+      set muted(v) {}
+      get playbackRate() { return 1; }
+      set playbackRate(v) {}
+    }
+    for (const [name, value] of Object.entries({ NETWORK_EMPTY: 0, NETWORK_IDLE: 1, NETWORK_LOADING: 2, NETWORK_NO_SOURCE: 3, HAVE_NOTHING: 0, HAVE_METADATA: 1, HAVE_CURRENT_DATA: 2, HAVE_FUTURE_DATA: 3, HAVE_ENOUGH_DATA: 4 })) {
+      Object.defineProperty(HTMLMediaElement, name, { value, enumerable: true });
+      Object.defineProperty(HTMLMediaElement.prototype, name, { value, enumerable: true });
+    }
+    define(globalThis, "HTMLMediaElement", HTMLMediaElement);
+    for (const name of ["HTMLVideoElement", "HTMLAudioElement"]) {
+      if (typeof globalThis[name] === "function") { Object.setPrototypeOf(globalThis[name].prototype, HTMLMediaElement.prototype); Object.setPrototypeOf(globalThis[name], HTMLMediaElement); }
+    }
+  }
+
+  defineGlobal("Notification", class Notification extends EventTarget {
+    constructor(title, options = {}) { super(); define(this, "title", String(title)); define(this, "body", options.body === undefined ? "" : String(options.body)); }
+    close() {}
+    static get permission() { return "denied"; }
+    static requestPermission(callback) { if (typeof callback === "function") callback("denied"); return Promise.resolve("denied"); }
+  });
+
+  if (typeof navigator !== "undefined") {
+    ensure(navigator, "javaEnabled", function javaEnabled() { return false; });
+    ensure(navigator, "vibrate", function vibrate() { return false; });
+    ensure(navigator, "share", function share() { return Promise.reject(new DOMException("Share canceled", "AbortError")); });
+    ensure(navigator, "canShare", function canShare() { return false; });
+    if (!("plugins" in navigator)) Object.defineProperty(navigator, "plugins", { value: Object.assign([], { item: () => null, namedItem: () => null, refresh() {} }), enumerable: true, configurable: true });
+    if (!("mimeTypes" in navigator)) Object.defineProperty(navigator, "mimeTypes", { value: Object.assign([], { item: () => null, namedItem: () => null }), enumerable: true, configurable: true });
+    if (!("permissions" in navigator)) Object.defineProperty(navigator, "permissions", { value: { query: (descriptor) => Promise.resolve(Object.assign(new EventTarget(), { name: descriptor && descriptor.name, state: "prompt", onchange: null })) }, enumerable: true, configurable: true });
+    if (!("storage" in navigator)) Object.defineProperty(navigator, "storage", { value: { estimate: () => Promise.resolve({ usage: 0, quota: 0 }), persist: () => Promise.resolve(false), persisted: () => Promise.resolve(false) }, enumerable: true, configurable: true });
+    if (!("geolocation" in navigator)) {
+      const denied = () => ({ code: 1, message: "User denied Geolocation", PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
+      Object.defineProperty(navigator, "geolocation", { value: {
+        getCurrentPosition(success, failure) { if (typeof failure === "function") setTimeout(() => failure(denied()), 0); },
+        watchPosition(success, failure) { if (typeof failure === "function") setTimeout(() => failure(denied()), 0); return 1; },
+        clearWatch() {},
+      }, enumerable: true, configurable: true });
+    }
+    if (!("getBattery" in navigator)) define(navigator, "getBattery", function getBattery() { return Promise.reject(new DOMException("Battery status is not available.", "NotSupportedError")); });
+  }
+
+  if (typeof Document === "function" && !Object.getOwnPropertyDescriptor(Document.prototype, "domain")) {
+    Object.defineProperty(Document.prototype, "domain", { get() { return location.hostname; }, set(value) {}, enumerable: true, configurable: true });
+  }
+  // A window that opens nothing: a pop-up is blocked.
+  ensure(globalThis, "open", function open() { return null; });
+  ensure(globalThis, "close", function close() {});
+
+  if (typeof HTMLElement === "function") {
+    ensure(HTMLElement.prototype, "setPointerCapture", function setPointerCapture() {});
+    ensure(HTMLElement.prototype, "releasePointerCapture", function releasePointerCapture() {});
+    ensure(HTMLElement.prototype, "hasPointerCapture", function hasPointerCapture() { return false; });
+    ensure(HTMLElement.prototype, "requestFullscreen", function requestFullscreen() { return Promise.reject(new TypeError("Fullscreen is not supported.")); });
+  }
+  if (typeof HTMLInputElement === "function") ensure(HTMLInputElement.prototype, "showPicker", function showPicker() {});
+  if (typeof HTMLDialogElement === "function") {
+    ensure(HTMLDialogElement.prototype, "showModal", function showModal() { this.setAttribute("open", ""); });
+    ensure(HTMLDialogElement.prototype, "show", function show() { this.setAttribute("open", ""); });
+    ensure(HTMLDialogElement.prototype, "close", function close(value) { if (value !== undefined) this.returnValue = String(value); if (this.hasAttribute("open")) { this.removeAttribute("open"); setTimeout(() => this.dispatchEvent(new Event("close")), 0); } });
+  }
+})();
+)JS";
+
 // The on<event> properties of elements and documents (GlobalEventHandlers): the handler is a listener that was added
 // when the property was first set, and returning false from it cancels the event.
 const char* const kEventHandlerScript = R"JS(
@@ -1266,6 +1416,7 @@ void InstallWindowOn(Host& host, dom::Document* document, Quanta::Embed::Realm* 
   host.Evaluate(kWindowScript, "window.js");
   host.Evaluate(kEventHandlerScript, "handlers.js");
   { const auto platform = host.Evaluate(kPlatformScript, "platform.js"); if (!platform.ok) std::fprintf(stderr, "platform.js: %s\n", platform.error.c_str()); }
+  { const auto stubs = host.Evaluate(kStubScript, "stubs.js"); if (!stubs.ok) std::fprintf(stderr, "stubs.js: %s\n", stubs.error.c_str()); }
   { const auto forms = host.Evaluate(FormScript(), "forms.js"); if (!forms.ok) std::fprintf(stderr, "forms.js: %s\n", forms.error.c_str()); }
   std::string xhr;
   for (const char* const* piece = web::kScriptXhr; *piece; ++piece) xhr += *piece;
