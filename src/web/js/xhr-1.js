@@ -76,6 +76,12 @@
     fire(self, "loadend");
   }
 
+  // (a request to another origin goes through fetch, which asks the server for its leave)
+  function crossOrigin(url) {
+    if (!/^https?:/i.test(url)) return false;
+    try { return new URL(url).origin !== location.origin; } catch (e) { return false; }
+  }
+
   function run(self, id) {
     const s = internal.get(self);
     if (s.id !== id || !s.sendFlag) return;
@@ -102,7 +108,7 @@
         fire(self, "loadend", { lengthComputable: true, loaded: bytes.length, total: bytes.length });
       }
     };
-    const local = s.method === "GET" || s.method === "HEAD" ? load(s.url) : undefined;
+    const local = (s.method === "GET" || s.method === "HEAD") && (!s.async || !crossOrigin(s.url)) ? load(s.url) : undefined;
     if (local !== undefined) {
       const headers = new Headers({ "content-type": contentTypeOf(s.url) });
       finish(200, "OK", headers, s.method === "HEAD" ? new Uint8Array(0) : encoder.encode(local), s.method === "HEAD" ? "" : local);
