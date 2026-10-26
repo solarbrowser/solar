@@ -1146,6 +1146,12 @@ const char* const kStubScript = R"JS(
   defineGlobal("PerformanceTiming", class PerformanceTiming { constructor() { illegal(); } });
 
   defineGlobal("SVGAnimatedString", class SVGAnimatedString { constructor() { illegal(); } get baseVal() { return ""; } set baseVal(v) {} get animVal() { return ""; } });
+  // ElementCSSInlineStyle is on SVG elements too (and MathML's): the accessor of HTMLElement serves any element.
+  for (const name of ["SVGElement", "MathMLElement"]) {
+    const target = typeof globalThis[name] === "function" ? globalThis[name].prototype : null;
+    const style = typeof HTMLElement === "function" ? Object.getOwnPropertyDescriptor(HTMLElement.prototype, "style") : null;
+    if (target && style && !Object.getOwnPropertyDescriptor(target, "style")) Object.defineProperty(target, "style", style);
+  }
   if (typeof SVGElement === "function") {
     ensure(SVGElement.prototype, "getBBox", function getBBox() { return rect(); });
     ensure(SVGElement.prototype, "getComputedTextLength", function getComputedTextLength() { return 0; });

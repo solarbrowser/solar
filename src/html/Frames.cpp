@@ -241,6 +241,15 @@ bool RunScript(Quanta::Embed::Realm& realm, dom::Document* document, dom::Elemen
     if (!ScriptAllowed(realm.GetContext(), document, script, nullptr)) return true;
     code = script->DescendantText();
   }
+  // SOLAR_REPLACE="old|||new" replaces the first `old` in each script before it runs, for trying a change in what a site sent.
+  if (const char* replace = std::getenv("SOLAR_REPLACE")) {
+    const std::string spec = replace;
+    const size_t bar = spec.find("|||");
+    if (bar != std::string::npos) {
+      const size_t at = code.find(spec.substr(0, bar));
+      if (at != std::string::npos) code.replace(at, bar, spec.substr(bar + 3));
+    }
+  }
   // SOLAR_DUMP_SCRIPTS=dir writes each classic script that runs to dir/N.js, for looking at what a site ran.
   if (const char* dumpDir = std::getenv("SOLAR_DUMP_SCRIPTS")) {
     static int dumped = 0;

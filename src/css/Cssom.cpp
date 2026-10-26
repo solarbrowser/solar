@@ -327,6 +327,8 @@ std::string CssDeclarations::Serialize() const {
     bool written = false;
     if (!entry.pendingShorthand.empty() || FindProperty(entry.name)) {
       for (const PropertyDefinition* shorthand : ShorthandsOf(entry.name)) {
+        // `size` is a draft's shorthand that no browser writes out: width and height set apart stay two declarations.
+        if (std::string_view(shorthand->name) == "size" && entry.pendingShorthand != "size") continue;
         const std::vector<std::string> leaves = LeavesOf(*shorthand);
         bool all = true;
         for (const std::string& leaf : leaves) all = all && Find(leaf) && !done.count(leaf);
