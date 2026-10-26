@@ -8,6 +8,7 @@
 #include "solar/html/Modules.h"
 
 #include <algorithm>
+#include <fstream>
 #include <map>
 #include <memory>
 #include <vector>
@@ -212,6 +213,14 @@ void Fetch(qe::Realm*, const std::string& address, const std::string& type, std:
     if (auto data = DecodeDataUrl(address)) text = std::move(data->first);
   } else {
     text = LoadResource(address);
+  }
+  // SOLAR_DUMP_SCRIPTS=dir also writes the modules that are fetched, as dir/mN.js.
+  if (text) {
+    if (const char* dumpDir = std::getenv("SOLAR_DUMP_SCRIPTS")) {
+      static int dumped = 0;
+      std::ofstream out(std::string(dumpDir) + "/m" + std::to_string(++dumped) + ".js", std::ios::binary);
+      out << "// " << address << "\n" << *text;
+    }
   }
   if (!text) {
     done(qe::ModuleSource::Failure("Failed to fetch module " + VisibleModuleUrl(address)));
