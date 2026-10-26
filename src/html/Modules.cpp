@@ -8,6 +8,7 @@
 #include "solar/html/Modules.h"
 
 #include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <map>
 #include <memory>
@@ -207,12 +208,48 @@ std::optional<std::pair<std::string, std::string>> DecodeDataUrl(const std::stri
   return std::make_pair(decoded, header.empty() ? "text/plain" : header);
 }
 
-void Fetch(qe::Realm*, const std::string& address, const std::string& type, std::function<void(qe::ModuleSource)> done) {
+// The names a module's source asks for with `from "x"`, `import "x"` and `import("x")`, found by looking for those words
+// and the string after them: some that are not imports (the words in a string) come out too, which only costs a fetch.
+std::vector<std::string> ImportedNames(const std::string& text) {
+  std::vector<std::string> names;
+  const auto isNameChar = [](char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '$'; };
+  const auto skipSpace = [&](size_t at) { while (at < text.size() && (text[at] == ' ' || text[at] == '\n' || text[at] == '\t' || text[at] == '\r')) ++at; return at; };
+  const auto readString = [&](size_t at) {
+    if (at >= text.size() || (text[at] != '"' && text[at] != '\'')) return;
+    const char quote = text[at];
+    const size_t end = text.find(quote, at + 1);
+    if (end == std::string::npos || end - at > 2048) return;
+    const std::string name = text.substr(at + 1, end - at - 1);
+    if (!name.empty() && name.find('\n') == std::string::npos) names.push_back(name);
+  };
+  for (const std::string_view word : {std::string_view("from"), std::string_view("import")}) {
+    size_t at = 0;
+    while ((at = text.find(word, at)) != std::string::npos && names.size() < 400) {
+      const size_t after = at + word.size();
+      const bool bounded = (at == 0 || !isNameChar(text[at - 1])) && (after >= text.size() || !isNameChar(text[after]));
+      at = after;
+      if (!bounded) continue;
+      size_t next = skipSpace(after);
+      if (word == "import" && next < text.size() && text[next] == '(') next = skipSpace(next + 1);
+      readString(next);
+    }
+  }
+  return names;
+}
+
+void Fetch(qe::Realm* realm, const std::string& address, const std::string& type, std::function<void(qe::ModuleSource)> done) {
   std::optional<std::string> text;
   if (address.starts_with("data:")) {
     if (auto data = DecodeDataUrl(address)) text = std::move(data->first);
   } else {
     text = LoadResource(address);
+  }
+  // The modules this one imports are on their way before anything waits for them, one after another otherwise.
+  if (text && !address.starts_with("data:")) {
+    for (const std::string& name : ImportedNames(*text)) {
+      std::string resolved, error;
+      if (Resolve(realm, name, address, resolved, error) && !resolved.empty()) PrefetchResource(resolved);
+    }
   }
   // SOLAR_DUMP_SCRIPTS=dir also writes the modules that are fetched, as dir/mN.js.
   if (text) {

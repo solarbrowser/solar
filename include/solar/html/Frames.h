@@ -45,6 +45,9 @@ class FrameEnvironment {
   // Whether the script at this URL is one the page is to go without (the test harness, which is already in place).
   virtual bool SkipScript(const std::string&) { return false; }
 
+  // The resource at `url` will be asked for soon (the modules a module imports): start getting it, without waiting.
+  virtual void Prefetch(const std::string&) {}
+
   // The script at `address` compiled, if the environment keeps compiled scripts (one parse for every realm that runs it).
   // Null: the page compiles it itself.
   virtual std::shared_ptr<Quanta::Embed::Script> CompileScript(const std::string&, const std::string&) { return nullptr; }
@@ -133,6 +136,8 @@ bool LoadPage(Quanta::Embed::Realm& realm, dom::Document* document, std::string_
 // URL's bytes included).
 std::string DocumentBaseUrl(const dom::Document* document);
 std::optional<std::string> LoadResource(const std::string& url);
+// Starts getting a resource that is wanted later, without waiting for it.
+void PrefetchResource(const std::string& url);
 // Whether what is being loaded is a style sheet (the page is not to be drawn while it is waited for).
 bool LoadingStyleSheet();
 // What a data: URL holds.

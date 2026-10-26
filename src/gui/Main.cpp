@@ -230,6 +230,8 @@ class Browser : public solar::html::FrameEnvironment {
     waiting_ = nullptr;
   }
 
+  void Prefetch(const std::string& url) override { Start(url); }
+
   std::optional<std::string> Load(const std::string& url) override {
     if (url.starts_with("file://")) {
       std::string contents;

@@ -103,6 +103,10 @@ std::optional<std::string> LoadResource(const std::string& url) {
   return g_environment ? g_environment->Load(url) : std::nullopt;
 }
 
+void PrefetchResource(const std::string& url) {
+  if (g_environment && (url.starts_with("http://") || url.starts_with("https://"))) g_environment->Prefetch(url);
+}
+
 namespace {
 thread_local int g_sheetLoads = 0;
 }  // namespace
