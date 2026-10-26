@@ -108,13 +108,13 @@
       finish(200, "OK", headers, s.method === "HEAD" ? new Uint8Array(0) : encoder.encode(local), s.method === "HEAD" ? "" : local);
       return;
     }
-    if (!s.async) { self.__fail("error"); return; }
+    if (!s.async) { fail(self, "error"); return; }
     const init = { method: s.method, headers: s.headers, credentials: s.withCredentials ? "include" : "same-origin" };
     if (s.body !== null) init.body = s.body;
     fetch(s.url, init).then(async (response) => {
       const bytes = new Uint8Array(await response.arrayBuffer());
       finish(response.status, response.statusText, response.headers, bytes, new TextDecoder().decode(bytes));
-    }, () => { if (s.id === id && s.sendFlag) self.__fail("error"); });
+    }, () => { if (s.id === id && s.sendFlag) fail(self, "error"); });
   }
 
 

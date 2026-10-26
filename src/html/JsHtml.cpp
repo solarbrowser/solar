@@ -1247,6 +1247,114 @@ const char* const kStubScript = R"JS(
   }
   if (!("crossOriginIsolated" in globalThis)) Object.defineProperty(globalThis, "crossOriginIsolated", { value: false, enumerable: true, configurable: true });
   defineGlobal("CryptoKey", class CryptoKey { constructor() { illegal(); } });
+  // The window's dialogs and window management, as a browser that shows none of them answers: nothing is shown, a confirm is declined.
+  ensure(globalThis, "alert", function alert() {});
+  ensure(globalThis, "confirm", function confirm() { return false; });
+  ensure(globalThis, "prompt", function prompt() { return null; });
+  ensure(globalThis, "print", function print() {});
+  ensure(globalThis, "stop", function stop() {});
+  for (const name of ["moveTo", "moveBy", "resizeTo", "resizeBy"]) ensure(globalThis, name, function () {});
+  if (!("closed" in globalThis)) Object.defineProperty(globalThis, "closed", { get() { return false; }, enumerable: true, configurable: true });
+  if (!("name" in globalThis)) { let windowName = ""; Object.defineProperty(globalThis, "name", { get() { return windowName; }, set(v) { windowName = String(v); }, enumerable: true, configurable: true }); }
+  if (!("status" in globalThis)) { let windowStatus = ""; Object.defineProperty(globalThis, "status", { get() { return windowStatus; }, set(v) { windowStatus = String(v); }, enumerable: true, configurable: true }); }
+  ensure(globalThis, "reportError", function reportError(error) {
+    if (arguments.length === 0) throw new TypeError("Failed to execute 'reportError' on 'Window': 1 argument required, but only 0 present.");
+    setTimeout(() => { throw error; }, 0);
+  });
+  if (typeof navigator !== "undefined" && typeof Navigator === "undefined") {
+    class Navigator { constructor() { illegal(); } }
+    define(globalThis, "Navigator", Navigator);
+    Object.setPrototypeOf(navigator, Navigator.prototype);
+  }
+  if (typeof MediaError === "undefined") {
+    class MediaError { constructor() { illegal(); } }
+    for (const [name, value] of Object.entries({ MEDIA_ERR_ABORTED: 1, MEDIA_ERR_NETWORK: 2, MEDIA_ERR_DECODE: 3, MEDIA_ERR_SRC_NOT_SUPPORTED: 4 })) {
+      Object.defineProperty(MediaError, name, { value, enumerable: true }); Object.defineProperty(MediaError.prototype, name, { value, enumerable: true });
+    }
+    define(globalThis, "MediaError", MediaError);
+  }
+  if (typeof PerformanceEntry === "function") {
+    for (const name of ["PerformancePaintTiming", "PerformanceLongTaskTiming", "PerformanceElementTiming", "LargestContentfulPaint", "LayoutShift"]) {
+      defineGlobal(name, class extends PerformanceEntry { constructor() { super(); illegal(); } });
+      Object.defineProperty(globalThis[name], "name", { value: name, configurable: true });
+    }
+  }
+  if (typeof FileReader === "undefined" && typeof Blob === "function") {
+    const handlers = ["onloadstart", "onprogress", "onload", "onabort", "onerror", "onloadend"];
+    class FileReader extends EventTarget {
+      constructor() {
+        super();
+        define(this, "__state", { readyState: 0, result: null, error: null, token: 0 });
+        for (const name of handlers) this[name] = null;
+      }
+      get readyState() { return this.__state.readyState; }
+      get result() { return this.__state.result; }
+      get error() { return this.__state.error; }
+      __fire(type, loaded, total) {
+        const event = new ProgressEvent(type, { lengthComputable: true, loaded, total });
+        const handler = this["on" + type];
+        if (typeof handler === "function") { try { handler.call(this, event); } catch (e) { setTimeout(() => { throw e; }, 0); } }
+        this.dispatchEvent(event);
+      }
+      __read(blob, convert) {
+        if (!(blob instanceof Blob)) throw new TypeError("Failed to execute 'read' on 'FileReader': parameter 1 is not of type 'Blob'.");
+        const state = this.__state;
+        if (state.readyState === 1) throw new DOMException("The object is in an invalid state.", "InvalidStateError");
+        const token = ++state.token;
+        state.readyState = 1; state.result = null; state.error = null;
+        setTimeout(() => {
+          if (state.token !== token) return;
+          this.__fire("loadstart", 0, blob.size);
+          blob.arrayBuffer().then((buffer) => {
+            if (state.token !== token) return;
+            state.result = convert(new Uint8Array(buffer));
+            state.readyState = 2;
+            this.__fire("progress", blob.size, blob.size);
+            this.__fire("load", blob.size, blob.size);
+            this.__fire("loadend", blob.size, blob.size);
+          }, (error) => {
+            if (state.token !== token) return;
+            state.error = error; state.readyState = 2;
+            this.__fire("error", 0, blob.size);
+            this.__fire("loadend", 0, blob.size);
+          });
+        }, 0);
+      }
+      readAsArrayBuffer(blob) { this.__read(blob, (bytes) => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)); }
+      readAsText(blob, encoding) { this.__read(blob, (bytes) => new TextDecoder(encoding || "utf-8").decode(bytes)); }
+      readAsBinaryString(blob) { this.__read(blob, (bytes) => { let out = ""; for (let i = 0; i < bytes.length; i++) out += String.fromCharCode(bytes[i]); return out; }); }
+      readAsDataURL(blob) {
+        this.__read(blob, (bytes) => {
+          let binary = "";
+          for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+          return "data:" + (blob.type || "application/octet-stream") + ";base64," + btoa(binary);
+        });
+      }
+      abort() {
+        const state = this.__state;
+        if (state.readyState !== 1) return;
+        state.token++; state.readyState = 2; state.result = null;
+        this.__fire("abort", 0, 0); this.__fire("loadend", 0, 0);
+      }
+    }
+    for (const [name, value] of Object.entries({ EMPTY: 0, LOADING: 1, DONE: 2 })) {
+      Object.defineProperty(FileReader, name, { value, enumerable: true }); Object.defineProperty(FileReader.prototype, name, { value, enumerable: true });
+    }
+    define(globalThis, "FileReader", FileReader);
+  }
+  if (typeof DataTransfer === "undefined") {
+    class DataTransferItemList extends Array { add() {} remove() {} clear() { this.length = 0; } }
+    class DataTransfer {
+      constructor() { define(this, "__data", new Map()); define(this, "items", new DataTransferItemList()); define(this, "files", []); this.dropEffect = "none"; this.effectAllowed = "uninitialized"; }
+      get types() { return [...this.__data.keys()]; }
+      getData(type) { const v = this.__data.get(String(type).toLowerCase()); return v === undefined ? "" : v; }
+      setData(type, value) { this.__data.set(String(type).toLowerCase(), String(value)); }
+      clearData(type) { if (type === undefined) this.__data.clear(); else this.__data.delete(String(type).toLowerCase()); }
+      setDragImage() {}
+    }
+    define(globalThis, "DataTransfer", DataTransfer);
+    define(globalThis, "DataTransferItemList", DataTransferItemList);
+  }
   // A window that opens nothing: a pop-up is blocked.
   ensure(globalThis, "open", function open() { return null; });
   ensure(globalThis, "close", function close() {});
