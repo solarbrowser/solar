@@ -766,7 +766,9 @@ bool LoadPageIn(Quanta::Embed::Realm& realm, dom::Document* document, const std:
     script->scriptStarted = true;
     // A module waits for the end of parsing unless it is async; so does a classic script from a file that says defer.
     const bool module = LowerType(script) == "module";
-    const bool deferredClassic = !module && script->FindAttribute("", "src") && script->FindAttribute("", "defer") && !script->FindAttribute("", "async");
+    // (an async script from a file runs when it has arrived, which for a parser that does not pause is after the page is
+    // made: before the body is there, it would find none)
+    const bool deferredClassic = !module && script->FindAttribute("", "src") && (script->FindAttribute("", "defer") || script->FindAttribute("", "async"));
     if ((module && !script->FindAttribute("", "async")) || deferredClassic) {
       deferred.push_back(script);
       keep.Append(qe::FromObject(script));
