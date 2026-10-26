@@ -177,9 +177,12 @@ class Browser : public solar::html::FrameEnvironment {
     std::string url;
     int status = 0;
     bool done = false, failed = false;
-    std::string body;
+    std::string body, contentType;
     Clock::time_point started = Clock::now();
-    void OnResponseHead(const solar::net::HttpResponseHead& head, const solar::url::Url&) override { status = head.status; }
+    void OnResponseHead(const solar::net::HttpResponseHead& head, const solar::url::Url&) override {
+      status = head.status;
+      if (auto type = head.Header("content-type")) contentType = std::string(*type);
+    }
     void OnBody(std::span<const uint8_t> data) override { body.append(reinterpret_cast<const char*>(data.data()), data.size()); }
     void OnEnd() override { Finish(); }
     void OnError(std::string_view) override {
@@ -364,7 +367,10 @@ class Browser : public solar::html::FrameEnvironment {
 
   std::string ContentType(const std::string& url) override {
     const auto found = types_.find(url);
-    return found != types_.end() ? found->second : solar::html::FrameEnvironment::ContentType(url);
+    if (found != types_.end()) return found->second;
+    const auto resource = resources_.find(url);
+    if (resource != resources_.end() && resource->second && !resource->second->contentType.empty()) return resource->second->contentType;
+    return solar::html::FrameEnvironment::ContentType(url);
   }
 
   std::shared_ptr<qe::Script> CompileScript(const std::string& address, const std::string& code) override {
