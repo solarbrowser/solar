@@ -993,17 +993,20 @@ int main(int argc, char** argv) {
   SDL_Renderer* renderer = nullptr;
   std::unique_ptr<solar::gui::GpuSurface> gpu;
   if (!std::getenv("SOLAR_GUI_CPU")) {
-    solar::gui::GpuSurface::PrepareWindowAttributes();
-    window = SDL_CreateWindow("Solar", windowW, windowH, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_OPENGL);
-    gpu = solar::gui::GpuSurface::Create(window);
-    if (!gpu && window) {
-      if (std::getenv("SOLAR_GUI_TIMES")) std::fprintf(stderr, "gpu: not used (%s)\n", SDL_GetError());
-      SDL_DestroyWindow(window);
-      window = nullptr;
+    for (const solar::gui::GpuBackend backend : solar::gui::GpuSurface::Backends()) {
+      solar::gui::GpuSurface::Prepare(backend);
+      window = SDL_CreateWindow("Solar", windowW, windowH, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | solar::gui::GpuSurface::WindowFlags(backend));
+      gpu = solar::gui::GpuSurface::Create(backend, window);
+      if (gpu) break;
+      if (std::getenv("SOLAR_GUI_TIMES")) std::fprintf(stderr, "gpu: %s not used (%s)\n", backend == solar::gui::GpuBackend::Vulkan ? "Vulkan" : "OpenGL", SDL_GetError());
+      if (window) {
+        SDL_DestroyWindow(window);
+        window = nullptr;
+      }
     }
   }
   if (gpu) {
-    if (std::getenv("SOLAR_GUI_TIMES")) std::fprintf(stderr, "gpu: %s\n", gpu->Renderer());
+    if (std::getenv("SOLAR_GUI_TIMES")) std::fprintf(stderr, "gpu: %s through %s\n", gpu->Renderer(), gpu->Interface());
   } else {
     window = SDL_CreateWindow("Solar", windowW, windowH, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     renderer = window ? SDL_CreateRenderer(window, nullptr) : nullptr;

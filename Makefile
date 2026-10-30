@@ -33,8 +33,10 @@ DOM_OBJECTS = $(DOM_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
 PAINT_SOURCES = src/paint/Color.cpp src/paint/Paint.cpp
 PAINT_OBJECTS = $(PAINT_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
 SKIA_DIR = third_party/skia
-SKIA_OUT = $(SKIA_DIR)/out/Static
-SKIA_CFLAGS = -I$(SKIA_DIR) -DSK_RELEASE
+# (Skia is built with OpenGL and Vulkan: gn gen out/StaticVk with the args of out/Static and skia_use_vulkan = true. GPU_TEST_UTILS is defined by that build and changes
+# the layout of what the headers declare, so it is defined here too.)
+SKIA_OUT = $(SKIA_DIR)/out/StaticVk
+SKIA_CFLAGS = -I$(SKIA_DIR) -DSK_RELEASE -DSK_VULKAN -DGPU_TEST_UTILS=1 -I$(SKIA_DIR)/third_party/externals/vulkan-headers/include
 # (Skia's own static libraries, in one group: they refer to each other)
 SKIA_LIBS = -Wl,--start-group $(SKIA_OUT)/libskia.a $(SKIA_OUT)/libsvg.a $(SKIA_OUT)/libskresources.a $(SKIA_OUT)/libskshaper.a $(SKIA_OUT)/libraw_ptr.a $(SKIA_OUT)/liballocator_core.a $(SKIA_OUT)/liballocator_base.a \
             $(SKIA_OUT)/libfreetype2.a $(SKIA_OUT)/libpng.a $(SKIA_OUT)/libjpeg.a $(SKIA_OUT)/libwebp.a $(SKIA_OUT)/libwebp_sse41.a \
@@ -171,9 +173,9 @@ quanta:
 $(QUANTA_LIBS): | quanta
 
 # The browser: a page in a window (src/gui), and solar-cli, the command line for what is under it (addresses, fetches), which the tests and tools use.
-$(OBJ_DIR)/src/paint/SkiaPainter.o $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/gui/GpuSurface.o: CXXFLAGS += $(SKIA_CFLAGS) $(SDL_CFLAGS)
+$(OBJ_DIR)/src/paint/SkiaPainter.o $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/gui/GpuSurface.o $(OBJ_DIR)/src/gui/VulkanSurface.o: CXXFLAGS += $(SKIA_CFLAGS) $(SDL_CFLAGS)
 
-solar: $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/gui/GpuSurface.o $(OBJ_DIR)/src/paint/SkiaPainter.o $(PAINT_OBJECTS) $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
+solar: $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/gui/GpuSurface.o $(OBJ_DIR)/src/gui/VulkanSurface.o $(OBJ_DIR)/src/paint/SkiaPainter.o $(PAINT_OBJECTS) $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS) $(SKIA_LIBS) $(SDL_LIBS)
 
