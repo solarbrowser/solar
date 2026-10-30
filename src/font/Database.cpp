@@ -4,6 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+#include <iomanip>
 #include "solar/font/Database.h"
 
 #include <algorithm>
@@ -56,6 +57,7 @@ struct Record {
   std::string family, legacyFamily, fullName, postScriptName;
   double weightMin = 400, weightMax = 400, widthMin = 100, widthMax = 100, obliqueMin = 14, obliqueMax = 14;
   int style = 0;
+  std::vector<uint64_t> blocks;  // Face::CoveredBlocks
 };
 
 std::string CachePath() {
@@ -69,7 +71,7 @@ std::string CachePath() {
   else if (const char* home = std::getenv("HOME")) base = std::filesystem::path(home) / ".cache";
 #endif
   if (base.empty()) return "";
-  return (base / "solar" / "fonts-v1.cache").string();
+  return (base / "solar" / "fonts-v2.cache").string();
 }
 
 std::map<std::string, std::vector<Record>> ReadCache() {
@@ -87,7 +89,7 @@ std::map<std::string, std::vector<Record>> ReadCache() {
       if (tab == std::string::npos) break;
       start = tab + 1;
     }
-    if (f.size() != 16) continue;
+    if (f.size() != 17) continue;
     Record r;
     r.size = std::atoll(f[1].c_str());
     r.modified = std::atoll(f[2].c_str());
@@ -103,6 +105,9 @@ std::map<std::string, std::vector<Record>> ReadCache() {
     r.style = std::atoi(f[12].c_str());
     r.obliqueMin = std::atof(f[13].c_str());
     r.obliqueMax = std::atof(f[14].c_str());
+    if (f[15] != "-") {
+      for (size_t at = 0; at + 16 <= f[15].size(); at += 16) r.blocks.push_back(std::strtoull(f[15].substr(at, 16).c_str(), nullptr, 16));
+    }
     cache[f[0]].push_back(std::move(r));
   }
   return cache;
@@ -125,7 +130,10 @@ void WriteCache(const std::map<std::string, std::vector<Record>>& cache) {
       for (const Record& r : records) {
         out << clean(path) << '\t' << r.size << '\t' << r.modified << '\t' << r.index << '\t' << clean(r.family) << '\t' << clean(r.legacyFamily) << '\t'
             << clean(r.fullName) << '\t' << clean(r.postScriptName) << '\t' << r.weightMin << '\t' << r.weightMax << '\t' << r.widthMin << '\t' << r.widthMax
-            << '\t' << r.style << '\t' << r.obliqueMin << '\t' << r.obliqueMax << '\t' << "end\n";
+            << '\t' << r.style << '\t' << r.obliqueMin << '\t' << r.obliqueMax << '\t';
+        if (r.blocks.empty()) out << '-';
+        else for (uint64_t word : r.blocks) out << std::hex << std::setw(16) << std::setfill('0') << word << std::dec << std::setfill(' ');
+        out << "\tend\n";
       }
     }
   }
@@ -161,12 +169,14 @@ void Database::Add(Source source) {
   Entry* raw = entry.get();
   byFamily_.emplace(Lower(raw->source.family), raw);
   entries_.push_back(std::move(entry));
+  fallbackAny_.clear();
 }
 
 void Database::AddDirectory(const std::string& directory) {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
   directories_.push_back(directory);
   scanned_ = false;
+  fallbackAny_.clear();
 }
 
 void Database::EnsureScanned() {
@@ -233,6 +243,7 @@ void Database::EnsureScanned() {
           r.style = d.italic ? 1 : d.slant != 0 ? 2 : 0;
           r.obliqueMin = d.slantMin;
           r.obliqueMax = d.slantMax;
+          r.blocks = face->CoveredBlocks();
           records.push_back(std::move(r));
         }
       }
@@ -254,6 +265,7 @@ void Database::EnsureScanned() {
           entry->source.load = [path, index] { return Face::OpenFile(path, index); };
           entry->fullName = r.fullName;
           entry->postScriptName = r.postScriptName;
+          entry->blocks = r.blocks;
           Entry* raw = entry.get();
           byFamily_.emplace(Lower(family), raw);
           entries_.push_back(std::move(entry));
@@ -446,10 +458,26 @@ std::shared_ptr<Face> Database::Fallback(char32_t codePoint, const Request& requ
       if (face && face->HasGlyph(codePoint)) return face;
     }
   }
+  // The rest is asked once for a character, whichever it comes to: every font that might have it has to be opened to be sure.
+  const auto remembered = fallbackAny_.find(codePoint);
+  if (remembered != fallbackAny_.end()) return remembered->second;
+  const size_t block = codePoint / Face::kCoverageBlockSize;
   for (const auto& entry : entries_) {
+    // A font that is known not to have a character in the block of this one is not opened.
+    if (!entry->blocks.empty() && block < Face::kCoverageBlocks && !((entry->blocks[block / 64] >> (block % 64)) & 1)) continue;
+    const bool wasLoaded = entry->loaded;
     std::shared_ptr<Face> face = FaceOf(*entry);
-    if (face && face->HasGlyph(codePoint)) return face;
+    if (face && face->HasGlyph(codePoint)) {
+      fallbackAny_[codePoint] = face;
+      return face;
+    }
+    // (Opened for this and no use: it is not kept, a font is a good deal of memory.)
+    if (!wasLoaded) {
+      entry->face.reset();
+      entry->loaded = false;
+    }
   }
+  fallbackAny_[codePoint] = nullptr;
   return nullptr;
 }
 

@@ -81,6 +81,7 @@ class Database {
     std::shared_ptr<Face> face;
     bool loaded = false;
     bool loading = false;
+    std::vector<uint64_t> blocks;  // Face::CoveredBlocks of the font, when known (a system font); none is not known
   };
   void EnsureScanned();
   std::shared_ptr<Face> FaceOf(Entry& entry);
@@ -94,6 +95,7 @@ class Database {
   bool scanned_ = false;
   bool scanning_ = false;
   bool systemDirectories_ = false;
+  std::map<char32_t, std::shared_ptr<Face>> fallbackAny_;  // what Fallback found in all the fonts for a character (none too), until the fonts change
 };
 
 }  // namespace solar::font

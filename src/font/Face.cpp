@@ -232,6 +232,19 @@ bool Face::HasGlyph(char32_t codePoint) const {
   return hb_font_get_nominal_glyph(impl_->font, codePoint, &glyph);
 }
 
+std::vector<uint64_t> Face::CoveredBlocks() const {
+  std::vector<uint64_t> words(kCoverageBlocks / 64, 0);
+  hb_set_t* set = hb_set_create();
+  hb_face_collect_unicodes(impl_->face, set);
+  for (hb_codepoint_t c = HB_SET_VALUE_INVALID; hb_set_next(set, &c);) {
+    const size_t block = c / kCoverageBlockSize;
+    if (block >= kCoverageBlocks) break;
+    words[block / 64] |= uint64_t{1} << (block % 64);
+  }
+  hb_set_destroy(set);
+  return words;
+}
+
 uint32_t Face::GlyphFor(char32_t codePoint) const {
   hb_codepoint_t glyph = 0;
   hb_font_get_nominal_glyph(impl_->font, codePoint, &glyph);

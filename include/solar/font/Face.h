@@ -84,6 +84,11 @@ class Face : public std::enable_shared_from_this<Face> {
   static unsigned CountIn(const std::string& data);
 
   bool HasGlyph(char32_t codePoint) const;
+  // Which blocks of code points the font has a character in, for telling the fonts that cannot have one from those that might without opening
+  // them: bit n of the words (little end first) is the block of kCoverageBlockSize code points from n * kCoverageBlockSize, for the first
+  // kCoverageBlocks blocks (planes 0 to 3; what is above is not told).
+  static constexpr size_t kCoverageBlockSize = 256, kCoverageBlocks = 1024;
+  std::vector<uint64_t> CoveredBlocks() const;
   uint32_t GlyphFor(char32_t codePoint) const;
   // The advance of the glyph a character is, in em.
   double Advance(char32_t codePoint) const;
