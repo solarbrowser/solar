@@ -41,6 +41,10 @@ SKIA_LIBS = -Wl,--start-group $(SKIA_OUT)/libskia.a $(SKIA_OUT)/libsvg.a $(SKIA_
             $(SKIA_OUT)/libzlib.a $(SKIA_OUT)/libexpat.a $(SKIA_OUT)/libskcms.a $(SKIA_OUT)/libwuffs.a -Wl,--end-group
 SDL_CFLAGS = $(shell pkg-config --cflags sdl3 2>/dev/null)
 SDL_LIBS = $(shell pkg-config --libs sdl3 2>/dev/null)
+# (Skia's OpenGL support reaches the platform's: GLX on Linux.)
+ifeq ($(shell uname -s),Linux)
+SDL_LIBS += -lGL
+endif
 
 UNAME := $(shell uname -s)
 ifeq ($(UNAME),Linux)
@@ -167,9 +171,9 @@ quanta:
 $(QUANTA_LIBS): | quanta
 
 # The browser: a page in a window (src/gui), and solar-cli, the command line for what is under it (addresses, fetches), which the tests and tools use.
-$(OBJ_DIR)/src/paint/SkiaPainter.o $(OBJ_DIR)/src/gui/Main.o: CXXFLAGS += $(SKIA_CFLAGS) $(SDL_CFLAGS)
+$(OBJ_DIR)/src/paint/SkiaPainter.o $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/gui/GpuSurface.o: CXXFLAGS += $(SKIA_CFLAGS) $(SDL_CFLAGS)
 
-solar: $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/paint/SkiaPainter.o $(PAINT_OBJECTS) $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
+solar: $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/gui/GpuSurface.o $(OBJ_DIR)/src/paint/SkiaPainter.o $(PAINT_OBJECTS) $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS) $(SKIA_LIBS) $(SDL_LIBS)
 

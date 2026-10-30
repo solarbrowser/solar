@@ -34,6 +34,7 @@
 #include "include/core/SkPaint.h"
 #include "include/core/SkRRect.h"
 #include "include/core/SkImageInfo.h"
+#include "include/core/SkBitmap.h"
 #include "include/core/SkSurface.h"
 #include "include/core/SkStream.h"
 #include "include/encode/SkPngEncoder.h"
@@ -54,6 +55,7 @@
 #include "solar/layout/Layout.h"
 #include "solar/net/HttpClient.h"
 #include "solar/paint/Paint.h"
+#include "solar/gui/GpuSurface.h"
 #include "solar/paint/SkiaPainter.h"
 #include "solar/url/Normalizer.h"
 #include "solar/url/Parser.h"
@@ -659,7 +661,7 @@ class Shared {
 int64_t NowNs() { return std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count(); }
 
 // The window: events in, pixels out. Returns when the program is to end.
-void RunWindow(Shared& shared, SDL_Window* window, SDL_Renderer* renderer) {
+void RunWindow(Shared& shared, SDL_Window* window, SDL_Renderer* renderer, solar::gui::GpuSurface* gpu) {
   solar::paint::SkiaPainter painter;
   sk_sp<SkSurface> surface;
   SDL_Texture* texture = nullptr;
@@ -738,7 +740,7 @@ void RunWindow(Shared& shared, SDL_Window* window, SDL_Renderer* renderer) {
     shared.pixelHeight = ph;
     shared.density = SDL_GetWindowPixelDensity(window);
     // (SOLAR_GUI_DENSITY=2: as on a high-density screen, for timing what that costs without one.)
-    if (const char* forced = std::getenv("SOLAR_GUI_DENSITY")) {
+    if (const char* forced = gpu ? nullptr : std::getenv("SOLAR_GUI_DENSITY")) {
       const float d = static_cast<float>(std::atof(forced));
       if (d >= 1) {
         shared.density = d;
@@ -890,7 +892,7 @@ void RunWindow(Shared& shared, SDL_Window* window, SDL_Renderer* renderer) {
 
     const int pixelW = shared.pixelWidth.load(), pixelH = shared.pixelHeight.load();
     if (pixelW <= 0 || pixelH <= 0) continue;
-    if (!surface || surfaceW != pixelW || surfaceH != pixelH) {
+    if (!gpu && (!surface || surfaceW != pixelW || surfaceH != pixelH)) {
       surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(pixelW, pixelH));
       if (texture) SDL_DestroyTexture(texture);
       texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, pixelW, pixelH);
@@ -898,7 +900,8 @@ void RunWindow(Shared& shared, SDL_Window* window, SDL_Renderer* renderer) {
       surfaceH = pixelH;
     }
     const auto d0 = Clock::now();
-    SkCanvas* canvas = surface->getCanvas();
+    SkCanvas* canvas = gpu ? gpu->BeginFrame(pixelW, pixelH) : surface->getCanvas();
+    if (!canvas) continue;
     canvas->resetMatrix();
     canvas->clear(SK_ColorWHITE);
     const float density = shared.density.load();
@@ -926,12 +929,21 @@ void RunWindow(Shared& shared, SDL_Window* window, SDL_Renderer* renderer) {
     }
     const auto uploadStart = Clock::now();
     SkPixmap pixmap;
-    surface->peekPixels(&pixmap);
-    SDL_UpdateTexture(texture, nullptr, pixmap.addr(), static_cast<int>(pixmap.rowBytes()));
+    SkBitmap shot;  // (the picture of the GPU's frame, for SOLAR_GUI_SHOT)
+    if (gpu) {
+      if (!shotPath.empty() && gpu->ReadPixels(shot)) shot.peekPixels(&pixmap);
+    } else {
+      surface->peekPixels(&pixmap);
+      SDL_UpdateTexture(texture, nullptr, pixmap.addr(), static_cast<int>(pixmap.rowBytes()));
+    }
     const auto uploadEnd = Clock::now();
-    SDL_RenderClear(renderer);
-    SDL_RenderTexture(renderer, texture, nullptr, nullptr);
-    SDL_RenderPresent(renderer);
+    if (gpu) {
+      gpu->Present();
+    } else {
+      SDL_RenderClear(renderer);
+      SDL_RenderTexture(renderer, texture, nullptr, nullptr);
+      SDL_RenderPresent(renderer);
+    }
     if (std::getenv("SOLAR_GUI_TIMES")) {
       // (Where a frame goes, in ms: the page painted onto the surface by the CPU, the surface sent to the texture, and the present, which waits for vsync.)
       const auto ms = [](Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
@@ -951,7 +963,7 @@ void RunWindow(Shared& shared, SDL_Window* window, SDL_Renderer* renderer) {
     // SOLAR_GUI_SHOT=file.png: the frame is written to a file, and the program ends (for looking at what it paints without a screen).
     if (!shotPath.empty()) {
       SkDynamicMemoryWStream out;
-      if (SkPngEncoder::Encode(&out, pixmap, SkPngEncoder::Options())) {
+      if (pixmap.addr() && SkPngEncoder::Encode(&out, pixmap, SkPngEncoder::Options())) {
         sk_sp<SkData> png = out.detachAsData();
         std::ofstream file(shotPath, std::ios::binary);
         file.write(static_cast<const char*>(png->data()), static_cast<std::streamsize>(png->size()));
@@ -973,17 +985,38 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
     return 1;
   }
-  SDL_Window* window = SDL_CreateWindow("Solar", 1280, 800, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
-  SDL_Renderer* renderer = window ? SDL_CreateRenderer(window, nullptr) : nullptr;
-  if (renderer) {
-    const bool ok = SDL_SetRenderVSync(renderer, 1);
-    int on = 0;
-    SDL_GetRenderVSync(renderer, &on);
-    if (std::getenv("SOLAR_GUI_TIMES")) std::fprintf(stderr, "vsync: asked %s, renderer says %d, driver %s\n", ok ? "ok" : "failed", on, SDL_GetRendererName(renderer));
+  // (SOLAR_GUI_SIZE=2560x1600: the window made this size, for timing what a big one costs.)
+  int windowW = 1280, windowH = 800;
+  if (const char* given = std::getenv("SOLAR_GUI_SIZE")) std::sscanf(given, "%dx%d", &windowW, &windowH);
+  // The window is drawn on by the GPU where there is one to be had (SOLAR_GUI_CPU=1: not); where there is none, by the CPU, into a texture SDL shows.
+  SDL_Window* window = nullptr;
+  SDL_Renderer* renderer = nullptr;
+  std::unique_ptr<solar::gui::GpuSurface> gpu;
+  if (!std::getenv("SOLAR_GUI_CPU")) {
+    solar::gui::GpuSurface::PrepareWindowAttributes();
+    window = SDL_CreateWindow("Solar", windowW, windowH, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_OPENGL);
+    gpu = solar::gui::GpuSurface::Create(window);
+    if (!gpu && window) {
+      if (std::getenv("SOLAR_GUI_TIMES")) std::fprintf(stderr, "gpu: not used (%s)\n", SDL_GetError());
+      SDL_DestroyWindow(window);
+      window = nullptr;
+    }
   }
-  if (!renderer) {
-    std::fprintf(stderr, "window: %s\n", SDL_GetError());
-    return 1;
+  if (gpu) {
+    if (std::getenv("SOLAR_GUI_TIMES")) std::fprintf(stderr, "gpu: %s\n", gpu->Renderer());
+  } else {
+    window = SDL_CreateWindow("Solar", windowW, windowH, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    renderer = window ? SDL_CreateRenderer(window, nullptr) : nullptr;
+    if (renderer) {
+      const bool ok = SDL_SetRenderVSync(renderer, 1);
+      int on = 0;
+      SDL_GetRenderVSync(renderer, &on);
+      if (std::getenv("SOLAR_GUI_TIMES")) std::fprintf(stderr, "vsync: asked %s, renderer says %d, driver %s\n", ok ? "ok" : "failed", on, SDL_GetRendererName(renderer));
+    }
+    if (!renderer) {
+      std::fprintf(stderr, "window: %s\n", SDL_GetError());
+      return 1;
+    }
   }
   SDL_StartTextInput(window);
   Shared shared;
@@ -997,7 +1030,7 @@ int main(int argc, char** argv) {
     shared.pixelHeight = ph;
     shared.density = SDL_GetWindowPixelDensity(window);
     // (SOLAR_GUI_DENSITY=2: as on a high-density screen, for timing what that costs without one.)
-    if (const char* forced = std::getenv("SOLAR_GUI_DENSITY")) {
+    if (const char* forced = gpu ? nullptr : std::getenv("SOLAR_GUI_DENSITY")) {
       const float d = static_cast<float>(std::atof(forced));
       if (d >= 1) {
         shared.density = d;
@@ -1031,17 +1064,15 @@ int main(int argc, char** argv) {
     }
     pthread_attr_destroy(&attributes);
   }
-  RunWindow(shared, window, renderer);
+  RunWindow(shared, window, renderer, gpu.get());
   // The page is asked to stop; one that is in the middle of a long script is not waited for for long.
   for (int i = 0; i < 100 && !shared.pageDone.load(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(10));
   if (!shared.pageDone.load()) {
-    SDL_DestroyRenderer(renderer);
-    SDL_DestroyWindow(window);
-    SDL_Quit();
     std::_Exit(0);
   }
   pthread_join(page, nullptr);
-  SDL_DestroyRenderer(renderer);
+  gpu.reset();
+  if (renderer) SDL_DestroyRenderer(renderer);
   SDL_DestroyWindow(window);
   SDL_Quit();
   return result;
