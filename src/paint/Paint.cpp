@@ -1567,6 +1567,7 @@ class Painter {
 DisplayList BuildDisplayList(Quanta::Context& ctx, layout::Tree& tree, double overscan) {
   // What is painted is the tree as it was committed (see dom::CommittedViewScope).
   dom::CommittedViewScope view;
+  layout::LayoutFreeze freeze;
   Painter painter(ctx, tree, overscan);
   return painter.Run();
 }

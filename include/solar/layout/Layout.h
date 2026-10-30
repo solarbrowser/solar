@@ -25,6 +25,16 @@ bool StickyInfoOf(const Tree& tree, const Box& box, paint::StickyInfo& info);
 
 Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document);
 
+// While one of these is alive, UpdateLayout answers with the tree the document has: what is being painted asks the
+// page's script for styles, and the script's own questions must not lay the page out again under the painter.
+class LayoutFreeze {
+ public:
+  LayoutFreeze();
+  ~LayoutFreeze();
+  LayoutFreeze(const LayoutFreeze&) = delete;
+  LayoutFreeze& operator=(const LayoutFreeze&) = delete;
+};
+
 // The boxes an element made (more than one when an inline box was split around a block), in tree order; none for display: none.
 const std::vector<Box*>& BoxesOf(Tree& tree, const dom::Node* node);
 

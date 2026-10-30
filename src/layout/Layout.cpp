@@ -172,7 +172,15 @@ void VerifyAgainstFresh(Quanta::Context& ctx, dom::Document* document, const css
 double g_layoutMs = 0;
 double LayoutMillis() { return g_layoutMs; }
 
+namespace {
+int g_layoutFrozen = 0;
+}
+
+LayoutFreeze::LayoutFreeze() { ++g_layoutFrozen; }
+LayoutFreeze::~LayoutFreeze() { --g_layoutFrozen; }
+
 Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
+  if (g_layoutFrozen > 0 && document->layoutTree && document->layoutTree->root) return document->layoutTree.get();
   struct Timing {
     std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
     int& depth;
