@@ -66,6 +66,7 @@
 #include "solar/web/FetchHost.h"
 #include "solar/web/JsEventLoop.h"
 #include "solar/web/Messaging.h"
+#include "solar/web-api/Worker.h"
 #include "solar/web/TimerHost.h"
 #include "solar/web/UrlBindings.h"
 
@@ -131,10 +132,49 @@ struct RealmBundle {
 };
 
 // What the pages get from the program: realms of one isolate, and the resources of the network and of the disk.
-class Browser : public solar::html::FrameEnvironment {
+class Browser : public solar::html::FrameEnvironment, public solar::webapi::WorkerHost {
  public:
   Browser(qe::Isolate& isolate, solar::net::Loop& loop, solar::net::HttpClient& client, solar::web::JsEventLoop& events)
-      : isolate_(isolate), loop_(loop), client_(client), events_(events) {}
+      : isolate_(isolate), loop_(loop), client_(client), events_(events) {
+    solar::webapi::SetWorkerHost(this);
+  }
+  ~Browser() override { solar::webapi::SetWorkerHost(nullptr); }
+
+  // The workers of the pages: a realm each, with the APIs a worker has, of the same isolate.
+  qe::Realm* CreateWorkerRealm(const std::string& scriptUrl) override {
+    auto bundle = std::make_unique<RealmBundle>();
+    qe::Isolate::RealmOptions options;
+    options.installConsole = false;
+    bundle->realm = isolate_.CreateRealm(options);
+    qe::Realm& realm = *bundle->realm;
+    solar::html::RunInRealm(realm, [&] {
+      solar::web::InstallUrlApis(realm);
+      solar::web::InstallConsoleApi(realm, solar::web::DefaultConsoleSink());
+      solar::web::InstallDomApis(realm);
+      solar::web::InstallFetchApis(realm);
+      solar::web::FetchHost::Config config;
+      config.loop = &loop_;
+      config.client = &client_;
+      config.pageUrl = *solar::url::Parse(scriptUrl.rfind("blob:", 0) == 0 || scriptUrl.rfind("data:", 0) == 0 || scriptUrl.empty() ? (pageUrl_.empty() ? "about:blank" : pageUrl_) : scriptUrl);
+      config.afterScript = [this] { events_.AfterScript(); };
+      bundle->host = std::make_unique<solar::web::FetchHost>(realm.GetContext(), config);
+      solar::webapi::InstallWorkerScope(realm);
+    });
+    qe::Realm* raw = bundle->realm.get();
+    bundles_.push_back(std::move(bundle));
+    return raw;
+  }
+  void ReleaseWorkerRealm(qe::Realm* realm) override {
+    if (dropTimers_) dropTimers_(realm);
+    for (auto it = bundles_.begin(); it != bundles_.end(); ++it) {
+      if ((*it)->realm.get() == realm) {
+        bundles_.erase(it);
+        break;
+      }
+    }
+  }
+  std::optional<std::string> LoadScript(const std::string& url) override { return Load(url); }
+  std::function<void(qe::Realm*)> dropTimers_;  // (set where the timers are: the tasks of a worker that is let go are not to run)
 
   // A page that is left: its realm goes, and with it what only it kept.
   void ReleaseRealm(qe::Realm* realm) {
@@ -162,6 +202,7 @@ class Browser : public solar::html::FrameEnvironment {
       solar::html::InstallHtmlApis(realm);
       solar::css::InstallSelectorApis(realm);
       solar::web::InstallFetchApis(realm);
+      solar::webapi::InstallWorkerApis(realm);
       solar::web::FetchHost::Config config;
       config.loop = &loop_;
       config.client = &client_;
@@ -1111,6 +1152,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
   solar::web::JsEventLoop events(*loop, {[&] { isolate->PerformMicrotaskCheckpoint(); }, [&] { timers.RunDue(); }, [&] { return timers.NextDelayMs(); }});
   Browser browser(*isolate, *loop, client, events);
   browser.timing_ = std::getenv("SOLAR_GUI_TIMES") != nullptr;
+  browser.dropTimers_ = [&](qe::Realm* realm) { timers.DropRealm(realm); };
   solar::layout::SetImageRequestHandler([&](const std::string& absolute) { return browser.RequestImage(absolute); });
   solar::html::SetFrameEnvironment(&browser);
 

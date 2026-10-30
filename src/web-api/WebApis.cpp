@@ -16,4 +16,10 @@ std::string Script() {
   return all;
 }
 
+std::string WorkerScopeScript() {
+  std::string all;
+  for (const char* const* piece = web::kScriptWebApiWorker; *piece; ++piece) all += *piece;
+  return all;
+}
+
 }  // namespace solar::webapi

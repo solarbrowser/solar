@@ -14,5 +14,7 @@ namespace solar::webapi {
 
 // The script that defines the APIs that are written in script, to be run in a window's realm after the DOM and the HTML APIs are there.
 std::string Script();
+// The script that makes the global scope of a worker (src/web-api/worker-js), run in the realm of each.
+std::string WorkerScopeScript();
 
 }  // namespace solar::webapi

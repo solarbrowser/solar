@@ -1,0 +1,124 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Worker</title>
+<script>
+const out = [];
+const ok = (name, condition, detail) => { out.push((condition ? "ok   " : "FAIL ") + name + (condition ? "" : "  " + detail)); };
+const blobWorker = (source, options) => new Worker(URL.createObjectURL(new Blob([source], { type: "text/javascript" })), options);
+const next = (target, type = "message") => new Promise((resolve) => target.addEventListener(type, resolve, { once: true }));
+async function run() {
+  ok("Worker exists", typeof Worker === "function", typeof Worker);
+
+  // an echo, and what a worker has
+  const w = blobWorker(`
+    onmessage = (e) => {
+      if (e.data === "env") {
+        postMessage({ self: self === globalThis, doc: typeof document, win: typeof window, scope: self instanceof WorkerGlobalScope, dedicated: self instanceof DedicatedWorkerGlobalScope,
+          name: self.name, loc: location.protocol, nav: typeof navigator.userAgent, ua: navigator.userAgent === ${JSON.stringify("PLACEHOLDER")} ? 1 : 0,
+          atob: typeof atob, btoa: btoa("hi"), un: atob("aGk="), te: typeof TextEncoder, url: typeof URL, blob: typeof Blob, fetch: typeof fetch, perf: typeof performance.now(),
+          crypto: crypto.getRandomValues(new Uint8Array(4)).length, uuid: crypto.randomUUID().length, st: typeof structuredClone, ch: typeof MessageChannel, eventTarget: typeof EventTarget,
+          origin: typeof origin, importScripts: typeof importScripts, close: typeof close, queueMicrotask: typeof queueMicrotask, setTimeout: typeof setTimeout });
+      } else postMessage(e.data);
+    };
+  `, { name: "w1" });
+  const hello = new Promise((r) => { w.onmessage = (e) => r(e.data); });
+  w.postMessage("env");
+  const env = await hello;
+  ok("self is the global, no window or document", env.self === true && env.doc === "undefined" && env.win === "undefined", JSON.stringify(env));
+  ok("scope classes", env.scope === true && env.dedicated === true, JSON.stringify(env));
+  ok("name and location", env.name === "w1" && env.loc === "blob:", JSON.stringify(env));
+  ok("navigator", env.nav === "string", JSON.stringify(env));
+  ok("atob btoa", env.btoa === "aGk=" && env.un === "hi" && env.atob === "function", JSON.stringify(env));
+  ok("web apis a worker has", env.te === "function" && env.url === "function" && env.blob === "function" && env.fetch === "function" && env.perf === "number" && env.st === "function" && env.ch === "function" && env.eventTarget === "function", JSON.stringify(env));
+  ok("crypto", env.crypto === 4 && env.uuid === 36, JSON.stringify(env));
+  ok("importScripts, close, timers", env.importScripts === "function" && env.close === "function" && env.setTimeout === "function" && env.queueMicrotask === "function", JSON.stringify(env));
+
+  // messages are cloned, in order
+  const received = [];
+  w.onmessage = (e) => received.push(e.data);
+  w.postMessage({ a: [1, 2, { b: 3 }], d: new Date(5), m: new Map([[1, "x"]]), s: new Set([1]), u: new Uint8Array([1, 2, 3]), n: null, r: /x/g });
+  w.postMessage("second");
+  w.postMessage(3);
+  await new Promise((r) => setTimeout(r, 100));
+  ok("three messages came, in order", received.length === 3 && received[1] === "second" && received[2] === 3, JSON.stringify(received));
+  const m = received[0];
+  ok("structured clone", m && m.a[2].b === 3 && m.d instanceof Date && m.d.getTime() === 5 && m.m instanceof Map && m.m.get(1) === "x" && m.s.has(1) && m.u instanceof Uint8Array && m.u[2] === 3 && m.n === null && m.r instanceof RegExp, JSON.stringify(m));
+
+  // a buffer is transferred
+  const buffer = new ArrayBuffer(8);
+  const back = new Promise((r) => { w.onmessage = (e) => r(e.data); });
+  w.postMessage(buffer, [buffer]);
+  const got = await back;
+  ok("transfer detaches the buffer", buffer.byteLength === 0 && got.byteLength === 8, buffer.byteLength + "/" + got.byteLength);
+
+  // events: addEventListener on the worker and in it
+  const w2 = blobWorker(`
+    self.addEventListener("message", (e) => { self.postMessage("listener:" + e.data); });
+    setTimeout(() => postMessage("timer"), 10);
+    Promise.resolve().then(() => postMessage("microtask"));
+    postMessage("started");
+  `);
+  const seen = [];
+  w2.addEventListener("message", (e) => seen.push(e.data));
+  w2.postMessage("x");
+  await new Promise((r) => setTimeout(r, 150));
+  ok("worker script runs, microtask, timer, listener", seen.includes("started") && seen.includes("microtask") && seen.includes("timer") && seen.includes("listener:x") && seen.indexOf("started") < seen.indexOf("microtask"), seen.join());
+
+  // importScripts
+  const lib = URL.createObjectURL(new Blob(["self.libLoaded = (self.libLoaded || 0) + 1; function fromLib(){ return 'lib'; }"], { type: "text/javascript" }));
+  const w3 = blobWorker(`importScripts(${JSON.stringify(lib)}); postMessage([self.libLoaded, typeof fromLib]);
+    try { importScripts("blob:https://example.com/none"); postMessage("no error"); } catch (e) { postMessage(e.name); }`);
+  const r3 = [];
+  w3.onmessage = (e) => r3.push(e.data);
+  await new Promise((r) => setTimeout(r, 150));
+  ok("importScripts runs a script in the scope", JSON.stringify(r3[0]) === '[1,"function"]', JSON.stringify(r3));
+  ok("importScripts of what is not there is a NetworkError", r3[1] === "NetworkError", JSON.stringify(r3));
+
+  // an error in the script is an error event on the Worker
+  const w4 = blobWorker("throw new Error('boom'); ");
+  const errorEvent = await new Promise((r) => { w4.onerror = (e) => { e.preventDefault(); r(e); }; });
+  ok("a script that throws is an error event", errorEvent instanceof Event && /boom/.test(errorEvent.message), errorEvent.message);
+  const w5 = blobWorker("var x = ;");
+  const syntaxEvent = await new Promise((r) => { w5.onerror = (e) => { e.preventDefault(); r(e); }; });
+  ok("a syntax error is an error event", syntaxEvent instanceof Event, syntaxEvent && syntaxEvent.message);
+
+  // terminate
+  const w6 = blobWorker("setInterval(() => postMessage('tick'), 5);");
+  let ticks = 0;
+  w6.onmessage = () => ticks++;
+  await new Promise((r) => setTimeout(r, 60));
+  w6.terminate();
+  const atStop = ticks;
+  await new Promise((r) => setTimeout(r, 80));
+  ok("ticks came, and stopped at terminate()", atStop > 0 && ticks === atStop, atStop + "/" + ticks);
+
+  // close()
+  const w7 = blobWorker("postMessage('one'); close(); postMessage('after close'); setTimeout(() => postMessage('timer after close'), 5);");
+  const r7 = [];
+  w7.onmessage = (e) => r7.push(e.data);
+  await new Promise((r) => setTimeout(r, 100));
+  ok("close() ends the worker", r7.includes("one") && !r7.includes("timer after close"), JSON.stringify(r7));
+
+  // a MessageChannel port to a worker
+  const w8 = blobWorker("onmessage = (e) => { const p = e.ports[0]; p.onmessage = (m) => p.postMessage('port:' + m.data); p.postMessage('ready'); };");
+  const channel = new MessageChannel();
+  const r8 = [];
+  channel.port1.onmessage = (e) => { r8.push(e.data); if (e.data === "ready") channel.port1.postMessage("hello"); };
+  w8.postMessage("go", [channel.port2]);
+  await new Promise((r) => setTimeout(r, 150));
+  ok("a port goes to the worker", r8.join() === "ready,port:hello", r8.join());
+
+  // an invalid use
+  let thrown = null;
+  try { new Worker(); } catch (e) { thrown = e; }
+  ok("new Worker() throws a TypeError", thrown instanceof TypeError, String(thrown));
+  thrown = null;
+  try { new Worker("https://other.example/x.js"); } catch (e) { thrown = e; }
+  ok("another origin is a SecurityError", thrown && thrown.name === "SecurityError", String(thrown && thrown.name));
+  ok("a Worker is an EventTarget", w instanceof EventTarget && Object.prototype.toString.call(w) === "[object Worker]", Object.prototype.toString.call(w));
+  w.terminate();
+}
+run().then(() => out.push("done"), (e) => { out.push("FAIL exception " + (e && e.stack || e)); out.push("done"); }).then(() => {
+  for (const line of out) console.log(line);
+});
+</script>

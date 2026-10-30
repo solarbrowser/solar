@@ -79,7 +79,7 @@ endif
 CXXFLAGS += $(OPENSSL_CFLAGS) $(COMPRESSION_CFLAGS) $(HTTP2_CFLAGS)
 
 WEB_SOURCES = $(wildcard src/web/*.cpp) $(wildcard src/web-api/*.cpp)
-WEB_OBJECTS = $(WEB_SOURCES:%.cpp=$(OBJ_DIR)/%.o) $(OBJ_DIR)/$(GEN_DIR)/WebApiScript.o $(OBJ_DIR)/$(GEN_DIR)/StreamsScript.o $(OBJ_DIR)/$(GEN_DIR)/UiEventsScript.o $(OBJ_DIR)/$(GEN_DIR)/XhrScript.o $(OBJ_DIR)/$(GEN_DIR)/TypedOmScript.o $(OBJ_DIR)/$(GEN_DIR)/FontLoadingScript.o $(OBJ_DIR)/$(GEN_DIR)/LayoutScript.o $(OBJ_DIR)/$(GEN_DIR)/AnimationsScript.o
+WEB_OBJECTS = $(WEB_SOURCES:%.cpp=$(OBJ_DIR)/%.o) $(OBJ_DIR)/$(GEN_DIR)/WebApiScript.o $(OBJ_DIR)/$(GEN_DIR)/WebApiWorkerScript.o $(OBJ_DIR)/$(GEN_DIR)/StreamsScript.o $(OBJ_DIR)/$(GEN_DIR)/UiEventsScript.o $(OBJ_DIR)/$(GEN_DIR)/XhrScript.o $(OBJ_DIR)/$(GEN_DIR)/TypedOmScript.o $(OBJ_DIR)/$(GEN_DIR)/FontLoadingScript.o $(OBJ_DIR)/$(GEN_DIR)/LayoutScript.o $(OBJ_DIR)/$(GEN_DIR)/AnimationsScript.o
 
 # The scripts in src/web/js are compiled into the program as C++ sources made from them.
 GEN_DIR = build/gen
@@ -101,6 +101,13 @@ $(GEN_DIR)/WebApiScript.cpp: $(WEB_API_JS) $(BUILD_DIR)/EmbedScripts
 	@mkdir -p $(GEN_DIR)
 	@echo "[EMBED] $@"
 	@$(BUILD_DIR)/EmbedScripts WebApi $(WEB_API_JS) > $@
+
+# (And the global scope of a worker, in src/web-api/worker-js.)
+WEB_API_WORKER_JS = $(sort $(wildcard src/web-api/worker-js/*.js))
+$(GEN_DIR)/WebApiWorkerScript.cpp: $(WEB_API_WORKER_JS) $(BUILD_DIR)/EmbedScripts
+	@mkdir -p $(GEN_DIR)
+	@echo "[EMBED] $@"
+	@$(BUILD_DIR)/EmbedScripts WebApiWorker $(WEB_API_WORKER_JS) > $@
 
 XHR_JS = $(sort $(wildcard src/web/js/xhr-*.js))
 $(GEN_DIR)/XhrScript.cpp: $(XHR_JS) $(BUILD_DIR)/EmbedScripts
