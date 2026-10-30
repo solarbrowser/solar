@@ -737,6 +737,15 @@ void RunWindow(Shared& shared, SDL_Window* window, SDL_Renderer* renderer) {
     shared.pixelWidth = pw;
     shared.pixelHeight = ph;
     shared.density = SDL_GetWindowPixelDensity(window);
+    // (SOLAR_GUI_DENSITY=2: as on a high-density screen, for timing what that costs without one.)
+    if (const char* forced = std::getenv("SOLAR_GUI_DENSITY")) {
+      const float d = static_cast<float>(std::atof(forced));
+      if (d >= 1) {
+        shared.density = d;
+        shared.pixelWidth = static_cast<int>(w * d);
+        shared.pixelHeight = static_cast<int>(h * d);
+      }
+    }
   };
   geometry();
   while (running && !shared.quit.load()) {
@@ -894,7 +903,9 @@ void RunWindow(Shared& shared, SDL_Window* window, SDL_Renderer* renderer) {
     canvas->clear(SK_ColorWHITE);
     const float density = shared.density.load();
     canvas->scale(density, density);
+    const auto rasterStart = Clock::now();
     if (frame.list) painter.Draw(*frame.list, *canvas, x, y);
+    const auto rasterEnd = Clock::now();
     {
       Bar bar;
       const double idle = std::chrono::duration<double>(Clock::now() - scrollActive).count();
@@ -913,15 +924,29 @@ void RunWindow(Shared& shared, SDL_Window* window, SDL_Renderer* renderer) {
         if (alpha < 1.0 || idle < 1.4) dirty = true;
       }
     }
+    const auto uploadStart = Clock::now();
     SkPixmap pixmap;
     surface->peekPixels(&pixmap);
     SDL_UpdateTexture(texture, nullptr, pixmap.addr(), static_cast<int>(pixmap.rowBytes()));
+    const auto uploadEnd = Clock::now();
     SDL_RenderClear(renderer);
     SDL_RenderTexture(renderer, texture, nullptr, nullptr);
     SDL_RenderPresent(renderer);
     if (std::getenv("SOLAR_GUI_TIMES")) {
+      // (Where a frame goes, in ms: the page painted onto the surface by the CPU, the surface sent to the texture, and the present, which waits for vsync.)
+      const auto ms = [](Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
       static int count = 0;
-      if (++count % 30 == 0 || !shotPath.empty()) std::fprintf(stderr, "window: draw %.1f ms (scroll %.0f)\n", std::chrono::duration<double, std::milli>(Clock::now() - d0).count(), y);
+      static double rasterSum = 0, rasterMax = 0, uploadSum = 0, presentSum = 0;
+      const double raster = ms(rasterStart, rasterEnd);
+      rasterSum += raster;
+      rasterMax = std::max(rasterMax, raster);
+      uploadSum += ms(uploadStart, uploadEnd);
+      presentSum += ms(uploadEnd, Clock::now());
+      if (++count % 30 == 0 || !shotPath.empty()) {
+        const int n = count % 30 == 0 ? 30 : count % 30;
+        std::fprintf(stderr, "window: draw %.1f ms (scroll %.0f); over %d frames, per frame: raster %.2f ms (worst %.2f), upload %.2f ms, present %.2f ms; %dx%d px\n", ms(d0, Clock::now()), y, n, rasterSum / n, rasterMax, uploadSum / n, presentSum / n, pixelW, pixelH);
+        rasterSum = rasterMax = uploadSum = presentSum = 0;
+      }
     }
     // SOLAR_GUI_SHOT=file.png: the frame is written to a file, and the program ends (for looking at what it paints without a screen).
     if (!shotPath.empty()) {
@@ -971,6 +996,15 @@ int main(int argc, char** argv) {
     shared.pixelWidth = pw;
     shared.pixelHeight = ph;
     shared.density = SDL_GetWindowPixelDensity(window);
+    // (SOLAR_GUI_DENSITY=2: as on a high-density screen, for timing what that costs without one.)
+    if (const char* forced = std::getenv("SOLAR_GUI_DENSITY")) {
+      const float d = static_cast<float>(std::atof(forced));
+      if (d >= 1) {
+        shared.density = d;
+        shared.pixelWidth = static_cast<int>(w * d);
+        shared.pixelHeight = static_cast<int>(h * d);
+      }
+    }
   }
   int result = 0;
   // The page's thread has a large stack of its own (only what is used is ever given memory): scripts of a few hundred kilobytes nest deeper than the
