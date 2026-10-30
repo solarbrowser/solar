@@ -1,0 +1,133 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>WebSocket</title>
+<script>
+// Needs tests/web-api/wsserver.py (which serves this page too).
+const out = [];
+const ok = (name, condition, detail) => { out.push((condition ? "ok   " : "FAIL ") + name + (condition ? "" : "  " + detail)); console.log(out[out.length - 1]); };
+const wait = (target, type) => new Promise((resolve) => target.addEventListener(type, resolve, { once: true }));
+const base = "ws://" + location.host;
+async function run() {
+  ok("WebSocket exists", typeof WebSocket === "function" && WebSocket.OPEN === 1 && WebSocket.CLOSED === 3, typeof WebSocket);
+
+  let t = null;
+  try { new WebSocket(); } catch (e) { t = e; }
+  ok("no argument is a TypeError", t instanceof TypeError, String(t));
+  t = null; try { new WebSocket("http://x.example/#a"); } catch (e) { t = e; }
+  ok("a fragment is a SyntaxError", t && t.name === "SyntaxError", String(t));
+  t = null; try { new WebSocket("ftp://x.example/"); } catch (e) { t = e; }
+  ok("another scheme is a SyntaxError", t && t.name === "SyntaxError", String(t));
+  t = null; try { new WebSocket(base, ["a b"]); } catch (e) { t = e; }
+  ok("a bad sub-protocol is a SyntaxError", t && t.name === "SyntaxError", String(t));
+  t = null; try { new WebSocket(base, ["a", "a"]); } catch (e) { t = e; }
+  ok("a repeated sub-protocol is a SyntaxError", t && t.name === "SyntaxError", String(t));
+
+  // open, the first message, an echo
+  const ws = new WebSocket(base + "/echo", ["chat", "superchat"]);
+  ok("CONNECTING at first", ws.readyState === 0 && ws.url === base + "/echo", ws.readyState + " " + ws.url);
+  ok("an EventTarget", ws instanceof EventTarget && Object.prototype.toString.call(ws) === "[object WebSocket]", Object.prototype.toString.call(ws));
+  const first = wait(ws, "message");
+  await wait(ws, "open");
+  ok("open: readyState, protocol", ws.readyState === 1 && ws.protocol === "superchat" && ws.extensions === "", ws.readyState + " " + ws.protocol);
+  const hello = await first;
+  ok("Origin and Sec-WebSocket-Protocol reach the server", hello.data === "origin=" + location.origin + " protocols=chat, superchat", hello.data);
+  ok("message event: origin, type", hello.origin === base && hello instanceof MessageEvent, hello.origin);
+  ws.send("hello");
+  ok("echo of text", (await wait(ws, "message")).data === "hello", "");
+  ws.send("é☃😀");
+  ok("echo of non-ASCII", (await wait(ws, "message")).data === "é☃😀", "");
+  ws.binaryType = "arraybuffer";
+  ws.send(new Uint8Array([1, 2, 3, 250]));
+  let m = await wait(ws, "message");
+  ok("binary comes back as an ArrayBuffer", m.data instanceof ArrayBuffer && [...new Uint8Array(m.data)].join() === "1,2,3,250", String(m.data));
+  ws.send(new Uint8Array(70000).fill(7).buffer);
+  m = await wait(ws, "message");
+  ok("a 70000-byte message (64-bit length path)", m.data.byteLength === 70000 && new Uint8Array(m.data)[69999] === 7, m.data.byteLength);
+  ws.binaryType = "blob";
+  ws.send(new Blob(["blobby"]));
+  m = await wait(ws, "message");
+  ok("a Blob is sent and comes back as a Blob", m.data instanceof Blob && m.data.size === 6, String(m.data));
+  ok("blob text", (await m.data.text()) === "blobby", "");
+  ws.send("fragment");
+  ok("fragments (and a ping among them) come together", (await wait(ws, "message")).data === "fragmented", "");
+  ws.send("big");
+  ws.binaryType = "arraybuffer";
+  m = await wait(ws, "message");
+  ok("a big server message", m.data instanceof Blob ? m.data.size === 102400 : m.data.byteLength === 102400, "");
+  ws.send("ping");
+  ok("a ping is answered and the next message arrives", (await wait(ws, "message")).data === "pinged", "");
+
+  // onmessage handler, sent in order
+  const got = [];
+  ws.onmessage = (e) => got.push(e.data);
+  for (let i = 0; i < 50; i++) ws.send("n" + i);
+  while (got.length < 50) await new Promise((r) => setTimeout(r, 10));
+  ok("50 messages in order", got.every((v, i) => v === "n" + i), got.join());
+  ws.onmessage = null;
+
+  // the server closes
+  const closed = wait(ws, "close");
+  ws.send("close-me");
+  const ce = await closed;
+  ok("server close: code, reason, wasClean", ce.code === 4000 && ce.reason === "server done" && ce.wasClean === true && ws.readyState === 3, `${ce.code} ${ce.reason} ${ce.wasClean} ${ws.readyState}`);
+  ok("CloseEvent", ce instanceof CloseEvent, "");
+  ws.send("after");  // (nothing happens)
+
+  // the page closes
+  const w2 = new WebSocket(base + "/echo");
+  await wait(w2, "open");
+  t = null; try { w2.close(1001); } catch (e) { t = e; }
+  ok("close(1001) is an InvalidAccessError", t && t.name === "InvalidAccessError", String(t));
+  t = null; try { w2.close(1000, "x".repeat(124)); } catch (e) { t = e; }
+  ok("a reason of 124 bytes is a SyntaxError", t && t.name === "SyntaxError", String(t));
+  const c2 = wait(w2, "close");
+  w2.close(3001, "done");
+  ok("CLOSING after close()", w2.readyState === 2, w2.readyState);
+  const ce2 = await c2;
+  ok("page close: the server echoes the code", ce2.code === 3001 && ce2.wasClean === true && w2.readyState === 3, `${ce2.code} ${ce2.wasClean}`);
+
+  // refused, dropped, unreachable, closed while connecting
+  const w3 = new WebSocket(base + "/reject");
+  let errors = 0; w3.onerror = () => errors++;
+  const ce3 = await wait(w3, "close");
+  ok("a refused upgrade: error, then close 1006", errors === 1 && ce3.code === 1006 && ce3.wasClean === false && w3.readyState === 3, `${errors} ${ce3.code}`);
+  const w4 = new WebSocket("ws://127.0.0.1:1/");
+  const ce4 = await wait(w4, "close");
+  ok("an unreachable server is 1006", ce4.code === 1006 && !ce4.wasClean, ce4.code);
+  const w5 = new WebSocket(base + "/echo");
+  let e5 = 0; w5.onerror = () => e5++;
+  let opened5 = false; w5.onopen = () => { opened5 = true; };
+  w5.close();
+  const ce5 = await wait(w5, "close");
+  ok("closed while connecting: error, close 1006, never open", e5 === 1 && ce5.code === 1006 && !opened5, `${e5} ${ce5.code} ${opened5}`);
+  const w6 = new WebSocket(base + "/drop");
+  const first6 = await wait(w6, "message");
+  const ce6 = await wait(w6, "close");
+  ok("a server that drops the connection: 1006", first6.data === "before" && ce6.code === 1006 && !ce6.wasClean, `${ce6.code}`);
+  const w7 = new WebSocket(base + "/echo");
+  await wait(w7, "open");
+  await wait(w7, "message");
+  w7.send("badutf8");
+  const ce7 = await wait(w7, "close");
+  ok("text that is not UTF-8 fails the connection", !ce7.wasClean && ce7.code === 1006, `${ce7.code}`);
+
+  // send while connecting
+  const w8 = new WebSocket(base + "/echo");
+  t = null; try { w8.send("x"); } catch (e) { t = e; }
+  ok("send while CONNECTING is an InvalidStateError", t && t.name === "InvalidStateError", String(t));
+  w8.close();
+
+  // a worker has it too
+  const worker = new Worker(URL.createObjectURL(new Blob([`
+    const ws = new WebSocket(${JSON.stringify(base + "/echo")});
+    const seen = [];
+    ws.onmessage = (e) => { seen.push(e.data); if (seen.length === 1) ws.send("from worker"); else { postMessage({ seen, type: typeof WebSocket, scheme: ws.url.slice(0, 3) }); ws.close(); } };
+  `], { type: "text/javascript" })));
+  const fromWorker = await wait(worker, "message");
+  ok("a worker's WebSocket", fromWorker.data.type === "function" && fromWorker.data.seen[1] === "from worker", JSON.stringify(fromWorker.data));
+  worker.terminate();
+}
+run().then(() => out.push("done"), (e) => { out.push("FAIL exception " + (e && e.stack || e)); out.push("done"); }).then(() => {
+  console.log("done");
+});
+</script>

@@ -999,6 +999,12 @@ FetchHandle HttpClient::Fetch(const url::Url& url, FetchHandler& handler, FetchO
   return FetchHandle(this, id);
 }
 
+Loop& HttpClient::loop() const { return impl_->loop; }
+std::shared_ptr<Resolver> HttpClient::resolver() const { return impl_->resolver; }
+std::shared_ptr<CookieJar> HttpClient::cookies() const { return impl_->cookies; }
+std::shared_ptr<HstsStore> HttpClient::hsts() const { return impl_->hsts; }
+const std::string& HttpClient::userAgent() const { return impl_->options.userAgent; }
+
 void HttpClient::CloseIdleConnections() {
   for (auto& [key, connections] : impl_->idle) {
     for (internal::HttpConnection* connection : std::vector<internal::HttpConnection*>(connections)) connection->Close();

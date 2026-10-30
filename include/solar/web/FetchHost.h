@@ -61,6 +61,10 @@ class FetchHost {
   // Whether `operation` is still one of the host's, which one that waits for script must ask.
   bool Owns(const FetchOperation* operation) const;
 
+  // State another API keeps for the realm (WebSocket's connections), found by a key of its own and let go with the host, before the operations are cancelled.
+  std::shared_ptr<void> Extension(const void* key) const;
+  void SetExtension(const void* key, std::shared_ptr<void> state);
+
  private:
   Config config_;
   Quanta::Context* ctx_;
@@ -68,6 +72,7 @@ class FetchHost {
   net::PreflightCache preflights_;
   Quanta::Embed::Persistent jsonStringify_;
   std::vector<std::unique_ptr<FetchOperation>> operations_;
+  std::vector<std::pair<const void*, std::shared_ptr<void>>> extensions_;
   // What a deferred task checks before it touches the host, which may be gone by then.
   std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
 };

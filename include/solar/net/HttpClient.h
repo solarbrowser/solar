@@ -153,6 +153,14 @@ class HttpClient {
   // Closes the connections waiting in the pool.
   void CloseIdleConnections();
 
+  // What the client shares with whatever else makes connections for the same browser (WebSocket): the loop, the lookups, the cookies, the sites that
+  // are https only, and the User-Agent it sends.
+  Loop& loop() const;
+  std::shared_ptr<Resolver> resolver() const;
+  std::shared_ptr<CookieJar> cookies() const;
+  std::shared_ptr<HstsStore> hsts() const;
+  const std::string& userAgent() const;
+
   struct Impl;
 
  private:

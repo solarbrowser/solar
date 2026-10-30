@@ -67,6 +67,7 @@
 #include "solar/web/JsEventLoop.h"
 #include "solar/web/Messaging.h"
 #include "solar/web-api/IndexedDb.h"
+#include "solar/web-api/WebSocket.h"
 #include "solar/web-api/Worker.h"
 #include "solar/web/TimerHost.h"
 #include "solar/web/UrlBindings.h"
@@ -159,6 +160,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
       config.pageUrl = *solar::url::Parse(scriptUrl.rfind("blob:", 0) == 0 || scriptUrl.rfind("data:", 0) == 0 || scriptUrl.empty() ? (pageUrl_.empty() ? "about:blank" : pageUrl_) : scriptUrl);
       config.afterScript = [this] { events_.AfterScript(); };
       bundle->host = std::make_unique<solar::web::FetchHost>(realm.GetContext(), config);
+      solar::webapi::InstallWebSocketNatives(realm);
       solar::webapi::InstallWorkerScope(realm);
     });
     qe::Realm* raw = bundle->realm.get();
@@ -205,6 +207,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
       solar::web::InstallFetchApis(realm);
       solar::webapi::InstallWorkerApis(realm);
       solar::webapi::InstallIndexedDbNatives(realm);
+      solar::webapi::InstallWebSocketNatives(realm);
       solar::web::FetchHost::Config config;
       config.loop = &loop_;
       config.client = &client_;

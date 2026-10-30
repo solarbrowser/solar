@@ -29,6 +29,7 @@ FetchHost::FetchHost(Quanta::Context& ctx, Config config) : config_(std::move(co
 FetchHost::~FetchHost() {
   *alive_ = false;
   qe::SetRealmData(*ctx_, &g_hostKey, nullptr);
+  extensions_.clear();
   // Cancelling calls back into the operations, which must find the host as it was.
   std::vector<std::unique_ptr<FetchOperation>> operations = std::move(operations_);
   for (auto& operation : operations) CancelOperation(*operation);
@@ -37,6 +38,15 @@ FetchHost::~FetchHost() {
 FetchHost* HostOf(Quanta::Context& ctx) { return static_cast<FetchHost*>(qe::GetRealmData(ctx, &g_hostKey)); }
 
 void FetchHost::Adopt(std::unique_ptr<FetchOperation> operation) { operations_.push_back(std::move(operation)); }
+
+std::shared_ptr<void> FetchHost::Extension(const void* key) const {
+  for (const auto& [k, state] : extensions_) {
+    if (k == key) return state;
+  }
+  return nullptr;
+}
+
+void FetchHost::SetExtension(const void* key, std::shared_ptr<void> state) { extensions_.emplace_back(key, std::move(state)); }
 
 bool FetchHost::Owns(const FetchOperation* operation) const {
   return std::any_of(operations_.begin(), operations_.end(), [operation](const std::unique_ptr<FetchOperation>& o) { return o.get() == operation; });
