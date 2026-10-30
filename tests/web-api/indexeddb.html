@@ -1,0 +1,185 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>indexedDB</title>
+<script>
+// Each check says what it saw; the lines that do not begin with ok are what is wrong.
+const out = [];
+const ok = (name, condition, detail) => { out.push((condition ? "ok   " : "FAIL ") + name + (condition ? "" : "  " + detail)); };
+const wait = (request) => new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+const done = (tx) => new Promise((resolve, reject) => { tx.oncomplete = () => resolve(); tx.onabort = () => reject(tx.error || new Error("abort")); });
+const upgradeOpen = (name, version, upgrade) => new Promise((resolve, reject) => {
+  const r = indexedDB.open(name, version);
+  r.onupgradeneeded = (e) => upgrade(r.result, e, r.transaction);
+  r.onsuccess = () => resolve(r.result);
+  r.onerror = () => reject(r.error);
+});
+async function run() {
+  ok("indexedDB exists", typeof indexedDB === "object" && indexedDB instanceof IDBFactory, typeof indexedDB);
+  ok("cmp", indexedDB.cmp(1, 2) === -1 && indexedDB.cmp("a", 1) === 1 && indexedDB.cmp([1, 2], [1, 3]) === -1 && indexedDB.cmp(new Date(5), 3) === 1, "cmp");
+  let thrown = null;
+  try { indexedDB.cmp(NaN, 1); } catch (e) { thrown = e; }
+  ok("cmp(NaN) is a DataError", thrown && thrown.name === "DataError", thrown && thrown.name);
+
+  let upgrades = [];
+  const db = await upgradeOpen("test1", 3, (db, e, tx) => {
+    upgrades.push([e.oldVersion, e.newVersion]);
+    const people = db.createObjectStore("people", { keyPath: "id", autoIncrement: true });
+    people.createIndex("byName", "name");
+    people.createIndex("byAge", "age", { unique: false });
+    people.createIndex("tags", "tags", { multiEntry: true });
+    db.createObjectStore("plain");
+    ok("upgrade tx mode", tx.mode === "versionchange", tx.mode);
+  });
+  ok("upgrade event versions", JSON.stringify(upgrades) === "[[0,3]]", JSON.stringify(upgrades));
+  ok("db name/version", db.name === "test1" && db.version === 3, db.name + db.version);
+  ok("store names sorted", [...db.objectStoreNames].join() === "people,plain", [...db.objectStoreNames].join());
+
+  let tx = db.transaction(["people", "plain"], "readwrite");
+  const people = tx.objectStore("people");
+  const k1 = await wait(people.add({ name: "Ada", age: 36, tags: ["math", "code"] }));
+  const k2 = await wait(people.add({ name: "Linus", age: 55, tags: ["code"] }));
+  const k3 = await wait(people.put({ name: "Grace", age: 85, tags: ["navy", "code"] }));
+  ok("autoIncrement keys", k1 === 1 && k2 === 2 && k3 === 3, [k1, k2, k3].join());
+  await wait(tx.objectStore("plain").put({ x: 1 }, "k"));
+  await wait(tx.objectStore("plain").put("v", "a"));
+  await done(tx);
+
+  tx = db.transaction("people");
+  const p = tx.objectStore("people");
+  const got = await wait(p.get(2));
+  ok("get", got && got.name === "Linus" && got.id === 2, JSON.stringify(got));
+  ok("getAll count", (await wait(p.getAll())).length === 3, "");
+  ok("getAll(range,limit)", (await wait(p.getAll(IDBKeyRange.lowerBound(2), 1))).length === 1, "");
+  ok("getAllKeys", (await wait(p.getAllKeys())).join() === "1,2,3", "");
+  ok("count", (await wait(p.count())) === 3 && (await wait(p.count(IDBKeyRange.bound(1, 2)))) === 2, "");
+  ok("index get", (await wait(p.index("byName").get("Grace"))).age === 85, "");
+  ok("index getAll multiEntry", (await wait(p.index("tags").getAll("code"))).length === 3, "");
+  ok("index getAllKeys", (await wait(p.index("byAge").getAllKeys())).join() === "1,2,3", "");
+  ok("index count range", (await wait(p.index("byAge").count(IDBKeyRange.bound(30, 60)))) === 2, "");
+  await done(tx);
+
+  // cursors
+  tx = db.transaction("people");
+  const seen = [];
+  await new Promise((resolve) => {
+    const r = tx.objectStore("people").index("byAge").openCursor(null, "prev");
+    r.onsuccess = () => { const c = r.result; if (c) { seen.push(c.value.name + ":" + c.key + ":" + c.primaryKey); c.continue(); } else resolve(); };
+  });
+  ok("index cursor prev", seen.join() === "Grace:85:3,Linus:55:2,Ada:36:1", seen.join());
+  const seen2 = [];
+  await new Promise((resolve) => {
+    const r = tx.objectStore("people").openKeyCursor(IDBKeyRange.lowerBound(2, true));
+    r.onsuccess = () => { const c = r.result; if (c) { seen2.push(c.key); c.continue(); } else resolve(); };
+  });
+  ok("key cursor open range", seen2.join() === "3", seen2.join());
+  const seen3 = [];
+  await new Promise((resolve) => {
+    const r = tx.objectStore("people").openCursor();
+    r.onsuccess = () => { const c = r.result; if (c) { seen3.push(c.key); c.advance(2); } else resolve(); };
+  });
+  ok("cursor advance", seen3.join() === "1,3", seen3.join());
+  await done(tx);
+
+  // update and delete through a cursor
+  tx = db.transaction("people", "readwrite");
+  await new Promise((resolve) => {
+    const r = tx.objectStore("people").openCursor();
+    r.onsuccess = () => {
+      const c = r.result;
+      if (!c) return resolve();
+      if (c.value.name === "Linus") c.update({ ...c.value, age: 56 });
+      if (c.value.name === "Grace") c.delete();
+      c.continue();
+    };
+  });
+  await done(tx);
+  tx = db.transaction("people");
+  ok("cursor update", (await wait(tx.objectStore("people").get(2))).age === 56, "");
+  ok("cursor delete", (await wait(tx.objectStore("people").count())) === 2, "");
+  ok("index follows delete", (await wait(tx.objectStore("people").index("tags").getAll("navy"))).length === 0, "");
+
+  // constraint errors and abort
+  tx = db.transaction("people", "readwrite");
+  let error = null;
+  try { await wait(tx.objectStore("people").add({ id: 1, name: "dup" })); } catch (e) { error = e; }
+  ok("add duplicate key is a ConstraintError", error && error.name === "ConstraintError", error && error.name);
+  let aborted = false;
+  try { await done(tx); } catch (e) { aborted = true; }
+  ok("an unhandled error aborts the transaction", aborted, "");
+
+  tx = db.transaction("people", "readwrite");
+  await wait(tx.objectStore("people").put({ name: "Temp" }));
+  tx.abort();
+  try { await done(tx); } catch (e) {}
+  tx = db.transaction("people");
+  ok("abort rolls back", (await wait(tx.objectStore("people").count())) === 2, "");
+
+  thrown = null;
+  try { db.transaction("nothing"); } catch (e) { thrown = e; }
+  ok("transaction on a missing store is a NotFoundError", thrown && thrown.name === "NotFoundError", thrown && thrown.name);
+  thrown = null;
+  try { db.transaction("people").objectStore("people").add({}); } catch (e) { thrown = e; }
+  ok("add in a readonly transaction is a ReadOnlyError", thrown && thrown.name === "ReadOnlyError", thrown && thrown.name);
+
+  // an out of line key and key types
+  tx = db.transaction("plain", "readwrite");
+  const plain = tx.objectStore("plain");
+  await wait(plain.put(1, new Date(100)));
+  await wait(plain.put(2, [1, "a"]));
+  await wait(plain.put(3, 7.5));
+  await wait(plain.put(4, new Uint8Array([1, 2]).buffer));
+  const keys = await wait(plain.getAllKeys());
+  ok("key order number < date < string < binary < array", keys.length === 6 && typeof keys[0] === "number" && keys[1] instanceof Date && typeof keys[2] === "string" && keys[4] instanceof ArrayBuffer && Array.isArray(keys[5]), keys.map((k) => Object.prototype.toString.call(k)).join());
+  await done(tx);
+
+  // a new version: the data is kept, and what is open is told
+  let versionChange = null;
+  db.onversionchange = (e) => { versionChange = [e.oldVersion, e.newVersion]; db.close(); };
+  const db2 = await upgradeOpen("test1", 4, (db, e, tx) => {
+    ok("old data there in the upgrade", tx.objectStore("people").count() instanceof IDBRequest, "");
+    db.createObjectStore("later", { keyPath: ["a", "b"] });
+    tx.objectStore("people").deleteIndex("byAge");
+  });
+  ok("versionchange reached the old connection", JSON.stringify(versionChange) === "[3,4]", JSON.stringify(versionChange));
+  ok("new version", db2.version === 4 && [...db2.objectStoreNames].includes("later"), db2.version);
+  tx = db2.transaction("later", "readwrite");
+  await wait(tx.objectStore("later").put({ a: 1, b: 2, c: 3 }));
+  ok("array keyPath", (await wait(tx.objectStore("later").get([1, 2]))).c === 3, "");
+  await done(tx);
+  thrown = null;
+  try { await new Promise((res, rej) => { const r = indexedDB.open("test1", 2); r.onsuccess = () => res(); r.onerror = () => rej(r.error); }); } catch (e) { thrown = e; }
+  ok("an older version is a VersionError", thrown && thrown.name === "VersionError", thrown && thrown.name);
+  ok("databases()", JSON.stringify(await indexedDB.databases()) === '[{"name":"test1","version":4}]', JSON.stringify(await indexedDB.databases()));
+  db2.close();
+  const deleted = await new Promise((res) => { const r = indexedDB.deleteDatabase("test1"); r.onsuccess = (e) => res(e); });
+  ok("deleteDatabase", deleted.oldVersion === 4 && deleted.newVersion === null, deleted.oldVersion);
+  ok("databases() after", (await indexedDB.databases()).length === 0, "");
+
+  // an upgrade that aborts
+  let abortError = null;
+  try {
+    await upgradeOpen("test2", 1, (db, e, tx) => { db.createObjectStore("s"); tx.abort(); });
+  } catch (e) { abortError = e; }
+  ok("aborted upgrade is an AbortError", abortError && abortError.name === "AbortError", abortError && abortError.name);
+  ok("aborted upgrade leaves no database", (await indexedDB.databases()).length === 0, "");
+
+  // IDBKeyRange
+  const r = IDBKeyRange.bound(1, 5, false, true);
+  ok("IDBKeyRange includes", r.includes(1) && !r.includes(5) && r.lowerOpen === false && r.upperOpen === true, "");
+  thrown = null;
+  try { IDBKeyRange.bound(5, 1); } catch (e) { thrown = e; }
+  ok("IDBKeyRange.bound(5,1) is a DataError", thrown && thrown.name === "DataError", thrown && thrown.name);
+
+  // a promise that waits on a request keeps the transaction going
+  const db3 = await upgradeOpen("test3", 1, (db) => { db.createObjectStore("s", { autoIncrement: true }); });
+  tx = db3.transaction("s", "readwrite");
+  const s = tx.objectStore("s");
+  let chain = 0;
+  for (let i = 0; i < 20; i++) { await wait(s.add(i)); chain++; }
+  await done(tx);
+  ok("20 requests in a chain by promises", chain === 20, chain);
+}
+run().then(() => { out.push("done"); }, (e) => { out.push("FAIL exception " + (e && e.stack || e)); out.push("done"); }).then(() => {
+  for (const line of out) console.log(line);
+});
+</script>

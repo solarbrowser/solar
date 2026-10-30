@@ -20,6 +20,7 @@
 #include "solar/html/Parser.h"
 #include "solar/html/Serializer.h"
 #include "solar/html/Xml.h"
+#include "solar/web-api/WebApis.h"
 #include "solar/web/Scripts.h"
 
 namespace solar::layout {
@@ -1581,6 +1582,9 @@ void InstallWindowOn(Host& host, dom::Document* document, Quanta::Embed::Realm* 
   for (const char* const* piece = web::kScriptAnimations; *piece; ++piece) animations += *piece;
   const auto animationsResult = host.Evaluate(animations, "animations.js");
   if (!animationsResult.ok) std::fprintf(stderr, "animations.js: %s\n", animationsResult.error.c_str());
+  // And the Web APIs of src/web-api that are written in script.
+  const auto webApiResult = host.Evaluate(webapi::Script(), "web-api.js");
+  if (!webApiResult.ok) std::fprintf(stderr, "web-api.js: %s\n", webApiResult.error.c_str());
 }
 
 void InstallWindow(Quanta::Embed::Runtime& runtime, dom::Document* document) { InstallWindowOn(runtime, document, nullptr, nullptr); }
