@@ -419,6 +419,8 @@ struct PaintProps {
   Color outlineColor;
 };
 
+using PropsMap = std::unordered_map<const Box*, PaintProps>;
+
 struct Decoration {
   bool underline = false, overline = false, lineThrough = false;
   Color color;
@@ -439,7 +441,13 @@ ImageRef KeptImage(const std::string& key, const std::shared_ptr<const std::stri
 
 class Painter {
  public:
-  Painter(Quanta::Context& ctx, Tree& tree, double overscan) : ctx_(ctx), tree_(tree), overscan_(overscan) {}
+  Painter(Quanta::Context& ctx, Tree& tree, double overscan) : ctx_(ctx), tree_(tree), overscan_(overscan) {
+    if (!tree.paintCache || tree.paintCacheFor != tree.builtFor) {
+      tree.paintCache = std::make_shared<PropsMap>();
+      tree.paintCacheFor = tree.builtFor;
+    }
+    props_ = static_cast<PropsMap*>(tree.paintCache.get());
+  }
 
   DisplayList Run() {
     DisplayList out;
@@ -529,8 +537,8 @@ class Painter {
   }
 
   const PaintProps& PropsOf(const Box& box, const RectF& borderBox) {
-    auto found = props_.find(&box);
-    if (found != props_.end()) return found->second;
+    auto found = props_->find(&box);
+    if (found != props_->end()) return found->second;
     PaintProps props;
     std::string pseudo;
     dom::Element* element = ElementOf(box, pseudo);
@@ -570,7 +578,7 @@ class Painter {
         }
       }
     }
-    return props_.emplace(&box, props).first->second;
+    return props_->emplace(&box, props).first->second;
   }
 
   Color BackgroundOf(const Box& box) {
@@ -1555,7 +1563,7 @@ class Painter {
   std::vector<DrawOutline> outlines_;
   std::unordered_map<const Box*, std::vector<Shadow>> textShadows_;
   std::unordered_map<std::string, ImageRef> images_;
-  std::unordered_map<const Box*, PaintProps> props_;
+  PropsMap* props_ = nullptr;
   std::unordered_map<const Box*, Decoration> decorations_;
   std::unordered_map<const Box*, std::vector<const Box*>> clipChains_;
   std::set<const Box*> scrollPushed_;

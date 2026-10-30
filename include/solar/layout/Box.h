@@ -209,6 +209,10 @@ struct Tree {
   Overflow viewportOverflowX = Overflow::Auto, viewportOverflowY = Overflow::Auto;  // the overflow of the viewport, the root element's or the body's
   bool damaged = false;  // boxes were taken out of it for the tree that replaces it
   uint64_t builtFor = 0;  // the versions of the tree and of style it was made from
+  // What the painter worked out of the boxes (how they look beyond what the layout has), kept for as long as the tree is what it was: the
+  // list of what is painted is made again as the page is scrolled, from the same boxes. It is the painter's: it is of its own type.
+  std::shared_ptr<void> paintCache;
+  uint64_t paintCacheFor = 0;
   // How far elements (and the viewport, under the document) are scrolled; carried over when the tree is made again.
   std::unordered_map<const dom::Node*, std::pair<double, double>> scroll;
   std::vector<std::unique_ptr<Box>> detached;  // boxes the tree no longer holds, kept so that pointers stay good
