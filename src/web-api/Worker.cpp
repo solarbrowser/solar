@@ -6,6 +6,7 @@
 
 #include "solar/web-api/Worker.h"
 
+#include <cstdio>
 #include <map>
 #include <memory>
 
@@ -28,6 +29,7 @@ struct Entry {
   qe::Realm* realm = nullptr;
   qe::Realm* owner = nullptr;
   bool closing = false;
+  std::shared_ptr<qe::Persistent> onError;  // the page's: told of what the worker threw (its message, where, and whether the page took it)
 };
 std::map<uint32_t, Entry>& Workers() {
   static std::map<uint32_t, Entry> workers;
@@ -68,9 +70,9 @@ Value Create(Context& ctx, Value, qe::Args args, Value) {
   return qe::FromNumber(id);
 }
 
-// __solarWorkerStart(id, port, source, url, info, onError): the port is given to the worker, and its script is run (a failure is told to onError).
+// __solarWorkerStart(id, port, source, url, info, onError, isModule): the port is given to the worker, and its script is run (a failure is told to onError).
 Value Start(Context& ctx, Value, qe::Args args, Value) {
-  if (args.size() < 6) return qe::Undefined();
+  if (args.size() < 7) return qe::Undefined();
   const uint32_t id = qe::ToUint32(ctx, args[0]);
   const auto found = Workers().find(id);
   if (found == Workers().end() || found->second.closing) return qe::Undefined();
@@ -79,6 +81,8 @@ Value Start(Context& ctx, Value, qe::Args args, Value) {
   const std::string url = qe::ToWtf8(ctx, args[3]);
   const std::string info = qe::ToWtf8(ctx, args[4]);
   const Value onError = args[5];
+  const bool isModule = qe::ToBoolean(args[6]);
+  if (qe::IsCallable(onError)) found->second.onError = std::make_shared<qe::Persistent>(ctx, onError);
   // The port goes over to the realm of the worker: the one end of the channel the page keeps is the other.
   qe::SerializeOptions options;
   options.transfer.push_back(args[1]);
@@ -101,8 +105,27 @@ Value Start(Context& ctx, Value, qe::Args args, Value) {
       failure = "the global scope of the worker could not be made: " + scope.error;
       return;
     }
-    const qe::EvaluateResult ran = realm->Evaluate(source, url);
-    if (!ran.ok) failure = ran.error;
+    if (isModule) {
+      // A module is evaluated asynchronously: what is wrong with it (an import that is not there, a throw) is a rejection, told as any error of the worker.
+      Value promise = realm->EvaluateModule(source, url);
+      if (qe::HasException(wctx)) {
+        failure = qe::InspectError(wctx, wctx.get_exception()).message;
+        wctx.clear_exception();
+      } else if (qe::IsObject(promise)) {
+        Value rejected = qe::NewFunction(wctx, "onrejected", 1, [](Context& c, Value, qe::Args reason, Value) {
+          const Value what = reason.empty() ? qe::Undefined() : reason[0];
+          ReportWorkerError(c, what, qe::InspectError(c, what));
+          return qe::Undefined();
+        });
+        Value then = qe::Get(wctx, promise, "then");
+        Value arguments[] = {qe::Undefined(), rejected};
+        qe::Call(wctx, then, promise, qe::Args(arguments, 2));
+        if (qe::HasException(wctx)) wctx.clear_exception();
+      }
+    } else {
+      const qe::EvaluateResult ran = realm->Evaluate(source, url);
+      if (!ran.ok) failure = ran.error;
+    }
   });
   if (!failure.empty() && qe::IsCallable(onError)) {
     Value message = qe::FromUtf8(ctx, failure);
@@ -142,10 +165,39 @@ Value Load(Context& ctx, Value, qe::Args args, Value) {
 
 void SetWorkerHost(WorkerHost* host) { g_host = host; }
 
+bool ReportWorkerError(Context& ctx, const Value& exception, const qe::ErrorInfo& info) {
+  (void)exception;
+  void* number = qe::GetRealmData(ctx, &g_workerKey);
+  if (!number) return false;
+  const uint32_t id = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(number));
+  const auto found = Workers().find(id);
+  if (found == Workers().end() || found->second.closing) return true;  // (it is gone: what it threw is not told)
+  std::string message = "Uncaught ";
+  message += info.is_error ? (info.name.empty() ? "" : info.name + ": ") + info.message : info.message;
+  bool handled = false;
+  qe::Realm* owner = found->second.owner;
+  const std::shared_ptr<qe::Persistent> onError = found->second.onError;
+  if (owner && onError) {
+    html::RunInRealm(*owner, [&] {
+      Context& pageCtx = owner->GetContext();
+      Value arguments[] = {qe::FromWtf8(pageCtx, message), qe::FromWtf8(pageCtx, info.filename), qe::FromUint32(info.line), qe::FromUint32(info.column)};
+      Value result = qe::Call(pageCtx, onError->Get(), qe::Undefined(), qe::Args(arguments, 4));
+      if (qe::HasException(pageCtx)) pageCtx.clear_exception();
+      else handled = result.to_boolean();
+    });
+  }
+  if (!handled) {
+    std::fprintf(stderr, "%s", message.c_str());
+    if (!info.filename.empty()) std::fprintf(stderr, " (%s:%u:%u)", info.filename.c_str(), info.line, info.column);
+    std::fprintf(stderr, "\n");
+  }
+  return true;
+}
+
 void InstallWorkerApis(qe::Realm& realm) {
   Context& ctx = realm.GetContext();
   qe::DefineGlobalFunction(ctx, "__solarWorkerCreate", Create, 1);
-  qe::DefineGlobalFunction(ctx, "__solarWorkerStart", Start, 6);
+  qe::DefineGlobalFunction(ctx, "__solarWorkerStart", Start, 7);
   qe::DefineGlobalFunction(ctx, "__solarWorkerTerminate", Terminate, 1);
   qe::DefineGlobalFunction(ctx, "__solarWorkerSource", Load, 1);
 }

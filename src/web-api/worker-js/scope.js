@@ -110,6 +110,7 @@
 
   // ---- importScripts ----
   define("importScripts", function importScripts(...urls) {
+    if (info.type === "module") throw new TypeError("Module scripts don't support importScripts().");
     for (const given of urls) {
       let href;
       try { href = new URL(String(given), info.url).href; } catch (e) { throw new DOMException(`Failed to execute 'importScripts' on 'WorkerGlobalScope': The URL '${given}' is invalid.`, "SyntaxError"); }

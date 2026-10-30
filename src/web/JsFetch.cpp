@@ -11,6 +11,7 @@
 #include "solar/net/FetchHeaders.h"
 #include "solar/url/Origin.h"
 #include "solar/url/Serializer.h"
+#include "solar/web/BlobUrls.h"
 #include "solar/web/FetchBindingsInternal.h"
 #include "solar/web/FetchHost.h"
 #include "solar/web/FetchOperation.h"
@@ -232,6 +233,82 @@ void CancelOperation(FetchOperation& operation) {
 
 namespace {
 
+int HexDigit(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+std::string PercentDecode(std::string_view text) {
+  std::string out;
+  for (size_t i = 0; i < text.size(); ++i) {
+    if (text[i] == '%' && i + 2 < text.size() + 0 && HexDigit(text[i + 1]) >= 0 && HexDigit(text[i + 2]) >= 0) {
+      out += static_cast<char>(HexDigit(text[i + 1]) * 16 + HexDigit(text[i + 2]));
+      i += 2;
+    } else {
+      out += text[i];
+    }
+  }
+  return out;
+}
+
+// Forgiving base64 (https://infra.spec.whatwg.org/#forgiving-base64-decode); false where it cannot be decoded.
+bool DecodeBase64(std::string_view text, std::string& out) {
+  std::string clean;
+  for (char c : text) if (c != ' ' && c != '\t' && c != '\n' && c != '\f' && c != '\r') clean += c;
+  if (clean.size() % 4 == 0) {
+    if (clean.size() >= 2 && clean.compare(clean.size() - 2, 2, "==") == 0) clean.resize(clean.size() - 2);
+    else if (!clean.empty() && clean.back() == '=') clean.pop_back();
+  }
+  if (clean.size() % 4 == 1) return false;
+  uint32_t bits = 0;
+  int count = 0;
+  for (char c : clean) {
+    int v;
+    if (c >= 'A' && c <= 'Z') v = c - 'A';
+    else if (c >= 'a' && c <= 'z') v = c - 'a' + 26;
+    else if (c >= '0' && c <= '9') v = c - '0' + 52;
+    else if (c == '+') v = 62;
+    else if (c == '/') v = 63;
+    else return false;
+    bits = (bits << 6) | static_cast<uint32_t>(v);
+    count += 6;
+    if (count >= 8) {
+      count -= 8;
+      out += static_cast<char>((bits >> count) & 0xFF);
+    }
+  }
+  return true;
+}
+
+// The bytes of a data: address, and its type (https://fetch.spec.whatwg.org/#data-url-processor); false where it is not one that can be read.
+bool DecodeDataUrl(const std::string& address, std::string& bytes, std::string& type) {
+  if (address.rfind("data:", 0) != 0) return false;
+  std::string rest = address.substr(5);
+  if (const size_t hash = rest.find('#'); hash != std::string::npos) rest.resize(hash);
+  const size_t comma = rest.find(',');
+  if (comma == std::string::npos) return false;
+  std::string mime = rest.substr(0, comma);
+  const std::string payload = PercentDecode(std::string_view(rest).substr(comma + 1));
+  // (spaces at the ends of the type go; a trailing ;base64 is the encoding)
+  while (!mime.empty() && mime.back() == ' ') mime.pop_back();
+  bool base64 = false;
+  std::string lower = mime;
+  for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  if (lower.size() >= 7 && lower.compare(lower.size() - 7, 7, ";base64") == 0) {
+    base64 = true;
+    mime.resize(mime.size() - 7);
+    while (!mime.empty() && mime.back() == ' ') mime.pop_back();
+  }
+  if (mime.empty() || mime[0] == ';') mime = "text/plain" + std::string(mime.empty() ? ";charset=US-ASCII" : mime);
+  type = mime;
+  bytes.clear();
+  if (base64) return DecodeBase64(payload, bytes);
+  bytes = payload;
+  return true;
+}
+
 Value Fetch(Context& ctx, Value, qe::Args args, Value newTarget) {
   if (!qe::IsUndefined(newTarget)) {
     qe::ThrowTypeError(ctx, "fetch is not a constructor");
@@ -255,6 +332,42 @@ Value Fetch(Context& ctx, Value, qe::Args args, Value newTarget) {
   JsRequest* request = MakeRequest(ctx, args[0], args.size() > 1 ? args[1] : qe::Undefined());
   if (!request) return rejectWithPending();
   if (request->signal->aborted) return reject(request->signal->reason);
+  // A blob and a data address are not the network's: what they name is here already.
+  if (request->url.scheme == "blob" || request->url.scheme == "data") {
+    if (request->method != "GET") return reject(MakeTypeError(ctx, "Failed to fetch: a " + request->url.scheme + " address answers GET only"));
+    url::Url withoutFragment = request->url;
+    withoutFragment.fragment.reset();
+    const std::string address = url::Serialize(withoutFragment);
+    std::string bytes, type;
+    bool found = false;
+    if (request->url.scheme == "blob") {
+      if (const auto entry = web::LookupBlobUrl(address)) {
+        bytes = *entry->data;
+        type = entry->type;
+        found = true;
+      }
+    } else {
+      found = DecodeDataUrl(url::Serialize(request->url), bytes, type);
+    }
+    if (!found) return reject(MakeTypeError(ctx, "Failed to fetch: the " + request->url.scheme + " address cannot be read"));
+    JsResponse* r = NewResponse(ctx);
+    r->type = ResponseType::Basic;
+    r->status = 200;
+    r->statusText = "OK";
+    r->url = address;
+    std::vector<std::pair<std::string, std::string>> list;
+    if (!type.empty()) list.emplace_back("Content-Type", type);
+    list.emplace_back("Content-Length", std::to_string(bytes.size()));
+    r->headers = NewResponseHeaders(ctx, list);
+    auto buffer = std::make_shared<BodyBuffer>();
+    buffer->complete = true;
+    buffer->bytes = std::move(bytes);
+    r->body = buffer;
+    r->NoteWrite(qe::FromObject(r->headers));
+    Value value = qe::FromObject(r);
+    qe::Call(ctx, capability.resolve, qe::Undefined(), qe::Args(&value, 1));
+    return capability.promise;
+  }
   if (request->url.scheme != "http" && request->url.scheme != "https") return reject(MakeTypeError(ctx, "Failed to fetch: unsupported scheme " + request->url.scheme));
   if (!request->integrity.empty()) return reject(MakeTypeError(ctx, "Failed to fetch: integrity metadata is not supported yet"));
 

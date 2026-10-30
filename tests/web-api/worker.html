@@ -108,6 +108,33 @@ async function run() {
   await new Promise((r) => setTimeout(r, 150));
   ok("a port goes to the worker", r8.join() === "ready,port:hello", r8.join());
 
+  // what the worker throws later is an error event at the Worker too
+  const w9 = blobWorker("onmessage = () => { throw new Error('in handler'); }; setTimeout(() => { throw new RangeError('in timer'); }, 5);");
+  const errors = [];
+  w9.onerror = (e) => { e.preventDefault(); errors.push(e.message); };
+  w9.postMessage(1);
+  await new Promise((r) => setTimeout(r, 120));
+  ok("errors thrown later are error events", errors.some((m) => /in handler/.test(m)) && errors.some((m) => /RangeError: in timer/.test(m)), JSON.stringify(errors));
+
+  // a module worker
+  const dep = URL.createObjectURL(new Blob(["export const answer = 42; export function twice(x) { return x * 2; }"], { type: "text/javascript" }));
+  const w10 = blobWorker(`import { answer, twice } from ${JSON.stringify(dep)};
+    const late = await Promise.resolve("awaited");
+    postMessage([answer, twice(4), late, typeof import.meta.url, typeof importScripts]);
+    try { importScripts("x"); } catch (e) { postMessage(e.name); }
+    onmessage = (e) => postMessage("module:" + e.data);`, { type: "module" });
+  const r10 = [];
+  w10.onmessage = (e) => r10.push(e.data);
+  w10.onerror = (e) => { r10.push("error:" + e.message); };
+  await new Promise((r) => setTimeout(r, 200));
+  w10.postMessage("hi");
+  await new Promise((r) => setTimeout(r, 100));
+  ok("a module worker imports, awaits and has import.meta", JSON.stringify(r10[0]) === '[42,8,"awaited","string","function"]', JSON.stringify(r10));
+  ok("importScripts in a module worker is a TypeError", r10[1] === "TypeError" && r10.includes("module:hi"), JSON.stringify(r10));
+  const w11 = blobWorker("import { nothing } from 'blob:null/none'; postMessage('no error');", { type: "module" });
+  const e11 = await new Promise((r) => { w11.onerror = (e) => { e.preventDefault(); r(e); }; setTimeout(() => r(null), 800); });
+  ok("a module that cannot be imported is an error event", e11 && e11 instanceof Event, String(e11));
+
   // an invalid use
   let thrown = null;
   try { new Worker(); } catch (e) { thrown = e; }

@@ -35,6 +35,10 @@ void SetWorkerHost(WorkerHost* host);
 // Defines in a window's realm the natives that its Worker class is made on (the class itself is in script: src/web-api/js/worker.js).
 void InstallWorkerApis(Quanta::Embed::Realm& realm);
 
+// What an exception that no script of a worker caught comes to: an error event at its Worker (and what the page does of that), told by the program
+// where it reports exceptions. False where the realm is not a worker's.
+bool ReportWorkerError(Quanta::Context& ctx, const Quanta::Value& exception, const Quanta::Embed::ErrorInfo& info);
+
 // What a worker realm is given besides what the host installs: its natives, and the script that makes its global scope. The program calls this
 // in the realm made by CreateWorkerRealm, last.
 void InstallWorkerScope(Quanta::Embed::Realm& realm);

@@ -189,6 +189,137 @@
 
   // ---- The data ----
   const databases = new Map();  // name -> definition
+
+  // ---- Persistence: a database is a file of the origin's, written (after a short wait for what comes next) when a transaction that wrote is done ----
+  const idbRead = globalThis.__solarIdbRead, idbWrite = globalThis.__solarIdbWrite, idbDelete = globalThis.__solarIdbDelete, idbList = globalThis.__solarIdbList;
+  delete globalThis.__solarIdbRead; delete globalThis.__solarIdbWrite; delete globalThis.__solarIdbDelete; delete globalThis.__solarIdbList;
+  const originOf = () => { try { return String(location.origin); } catch (e) { return "null"; } };
+  // (An origin that is none, a file's, has nothing kept: its databases are the page's.)
+  const persistent = () => typeof idbWrite === "function" && originOf() !== "null";
+  const toBase64 = (bytes) => {
+    let text = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(text);
+  };
+  const fromBase64 = (text) => {
+    const raw = atob(text);
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+    return bytes;
+  };
+  // A value as what JSON can hold, with what it is told by `$` (a repeat of an object, and a cycle, by the number it was given).
+  function encode(value) {
+    const ids = new Map();
+    const enc = (v) => {
+      switch (typeof v) {
+        case "undefined": return { $: "u" };
+        case "number": return Number.isFinite(v) && !Object.is(v, -0) ? v : { $: "n", v: Object.is(v, -0) ? "-0" : String(v) };
+        case "bigint": return { $: "b", v: v.toString() };
+        case "string": case "boolean": return v;
+        case "symbol": case "function": throw new Error("not storable");
+        default:
+      }
+      if (v === null) return null;
+      if (ids.has(v)) return { $: "R", i: ids.get(v) };
+      const i = ids.size;
+      ids.set(v, i);
+      if (v instanceof Date) return { $: "d", i, v: Number.isNaN(v.getTime()) ? "NaN" : v.getTime() };
+      if (v instanceof RegExp) return { $: "r", i, s: v.source, f: v.flags };
+      if (Array.isArray(v)) {
+        const e = [];
+        for (let k = 0; k < v.length; k++) e.push(k in v ? enc(v[k]) : { $: "h" });
+        return { $: "a", i, e };
+      }
+      if (v instanceof Map) return { $: "m", i, e: [...v].map(([k, x]) => [enc(k), enc(x)]) };
+      if (v instanceof Set) return { $: "s", i, e: [...v].map(enc) };
+      if (v instanceof ArrayBuffer) return { $: "t", i, c: "ArrayBuffer", b: toBase64(new Uint8Array(v)) };
+      if (ArrayBuffer.isView(v)) return { $: "t", i, c: v.constructor.name, b: toBase64(new Uint8Array(v.buffer, v.byteOffset, v.byteLength)) };
+      if (v instanceof Error) return { $: "x", i, n: v.name, m: v.message };
+      if (typeof Blob === "function" && v instanceof Blob) throw new Error("not storable");
+      if (v instanceof Boolean || v instanceof Number || v instanceof String) return { $: "w", i, v: enc(v.valueOf()) };
+      const e = [];
+      for (const k of Object.keys(v)) e.push([k, enc(v[k])]);
+      return { $: "o", i, e };
+    };
+    return enc(value);
+  }
+  function decode(node) {
+    const refs = new Map();
+    const dec = (n) => {
+      if (n === null || typeof n !== "object") return n;
+      switch (n.$) {
+        case "u": return undefined;
+        case "n": return Number(n.v);
+        case "b": return BigInt(n.v);
+        case "R": return refs.get(n.i);
+        case "d": { const d = new Date(n.v === "NaN" ? NaN : n.v); refs.set(n.i, d); return d; }
+        case "r": { const r = new RegExp(n.s, n.f); refs.set(n.i, r); return r; }
+        case "a": { const a = []; refs.set(n.i, a); for (const x of n.e) { if (x !== null && typeof x === "object" && x.$ === "h") a.length++; else a.push(dec(x)); } return a; }
+        case "m": { const m = new Map(); refs.set(n.i, m); for (const [k, x] of n.e) m.set(dec(k), dec(x)); return m; }
+        case "s": { const set = new Set(); refs.set(n.i, set); for (const x of n.e) set.add(dec(x)); return set; }
+        case "t": {
+          const bytes = fromBase64(n.b);
+          const view = n.c === "ArrayBuffer" ? bytes.buffer : new globalThis[n.c](bytes.buffer);
+          refs.set(n.i, view);
+          return view;
+        }
+        case "x": { const E = globalThis[n.n] && globalThis[n.n].prototype instanceof Error ? globalThis[n.n] : Error; const e = new E(n.m); refs.set(n.i, e); return e; }
+        case "w": { const w = Object(dec(n.v)); refs.set(n.i, w); return w; }
+        case "o": { const o = {}; refs.set(n.i, o); for (const [k, x] of n.e) o[k] = dec(x); return o; }
+        default: return undefined;
+      }
+    };
+    return dec(node);
+  }
+  function save(def) {
+    def.saveTimer = null;
+    if (!persistent() || def.deleted) return;
+    try {
+      const stores = [];
+      for (const store of def.stores.values()) {
+        stores.push({
+          name: store.name, keyPath: store.keyPath, autoIncrement: store.autoIncrement, nextKey: store.nextKey,
+          indexes: [...store.indexes.values()].map((i) => ({ name: i.name, keyPath: i.keyPath, unique: i.unique, multiEntry: i.multiEntry })),
+          records: store.records.map((r) => [encode(r.key), encode(r.value)]),
+        });
+      }
+      idbWrite(originOf(), def.name, JSON.stringify({ name: def.name, version: def.version }) + "\n" + JSON.stringify({ stores }));
+    } catch (e) { /* (what is not storable, a Blob, is kept for the page only) */ }
+  }
+  function persist(def) {
+    if (!persistent() || def.saveTimer) return;
+    def.saveTimer = setTimeout(() => save(def), 100);
+  }
+  function loadDef(name) {
+    if (!persistent()) return null;
+    let text;
+    try { text = idbRead(originOf(), name); } catch (e) { return null; }
+    if (typeof text !== "string") return null;
+    try {
+      const at = text.indexOf("\n");
+      const header = JSON.parse(text.slice(0, at));
+      const body = JSON.parse(text.slice(at + 1));
+      const def = { name: header.name, version: header.version, stores: new Map(), connections: new Set(), saveTimer: null };
+      for (const saved of body.stores) {
+        const store = newStore(saved.name, saved.keyPath, saved.autoIncrement);
+        store.nextKey = saved.nextKey;
+        for (const i of saved.indexes) store.indexes.set(i.name, newIndex(i.name, i.keyPath, i.unique, i.multiEntry));
+        for (const [k, v] of saved.records) {
+          const key = decode(k);
+          const value = decode(v);
+          store.records.push({ key, value });
+          for (const index of store.indexes.values()) for (const ik of indexKeys(index, value)) addEntry(index, ik, key);
+        }
+        def.stores.set(store.name, store);
+      }
+      return def;
+    } catch (e) { return null; }
+  }
+  const flushAll = () => { for (const def of databases.values()) if (def.saveTimer) { clearTimeout(def.saveTimer); save(def); } };
+  if (typeof addEventListener === "function") {
+    addEventListener("pagehide", flushAll);
+    addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushAll(); });
+  }
   const newStore = (name, keyPath, autoIncrement) => ({ name, keyPath, autoIncrement, records: [], nextKey: 1, indexes: new Map() });
   const newIndex = (name, keyPath, unique, multiEntry) => ({ name, keyPath, unique, multiEntry, entries: [] });
   // Where a key goes in a sorted list (the first place that is not before it), and whether it is there.
@@ -405,6 +536,7 @@
       this.#finished = true;
       this.#state = "finished";
       this.#snapshots.clear();
+      if (this.#mode !== "readonly") persist(this.#db._def);
       this.dispatchEvent(new Event("complete"));
       this.#db._transactionDone(this);
       if (this.#open) this.#open(true);
@@ -1069,10 +1201,13 @@
       name = String(name);
       const request = new IDBOpenDBRequest(internal);
       task(() => {
-        const def = databases.get(name);
+        let def = databases.get(name);
+        if (!def || (def.connections.size === 0 && !def.saveTimer)) { const loaded = loadDef(name); if (loaded) { databases.set(name, loaded); def = loaded; } }
         const finish = () => {
           const old = def ? def.version : 0;
+          if (def) { def.deleted = true; if (def.saveTimer) clearTimeout(def.saveTimer); }
           databases.delete(name);
+          if (persistent()) { try { idbDelete(originOf(), name); } catch (e) { /* (kept) */ } }
           IDBRequest._set(request, { done: true, result: undefined, error: null });
           fireOn(request, "success", null, false, false, { oldVersion: old, newVersion: null });
         };
@@ -1089,7 +1224,13 @@
     }
     databases() {
       return new Promise((resolve) => {
-        resolve([...databases.values()].filter((d) => d.version > 0).map((d) => ({ name: d.name, version: d.version })));
+        const found = new Map();
+        for (const line of persistent() ? String(idbList(originOf()) || "").split("\n") : []) {
+          if (!line) continue;
+          try { const h = JSON.parse(line); found.set(h.name, h.version); } catch (e) { /* (not a header) */ }
+        }
+        for (const d of databases.values()) if (d.version > 0) found.set(d.name, d.version);
+        resolve([...found].map(([name, version]) => ({ name, version })));
       });
     }
     cmp(a, b) { return compare(toKey(a), toKey(b)); }
@@ -1097,8 +1238,13 @@
 
   function openDatabase(request, name, requested) {
     let def = databases.get(name);
+    // What is on disk is what the origin's other pages left, unless this page has it open (or has not written what it changed).
+    if (!def || (def.connections.size === 0 && !def.saveTimer)) {
+      const loaded = loadDef(name);
+      if (loaded) { databases.set(name, loaded); def = loaded; }
+    }
     if (!def) {
-      def = { name, version: 0, stores: new Map(), connections: new Set(), created: true };
+      def = { name, version: 0, stores: new Map(), connections: new Set(), created: true, saveTimer: null };
       databases.set(name, def);
     }
     const version = requested === undefined ? (def.version === 0 ? 1 : def.version) : requested;

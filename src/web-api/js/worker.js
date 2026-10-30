@@ -50,10 +50,12 @@
         this.dispatchEvent(new MessageEvent("message", { data: e.data, ports: [...e.ports], origin: "", lastEventId: "" }));
       };
       channel.port1.onmessageerror = () => { if (!this.#done) this.dispatchEvent(new MessageEvent("messageerror", {})); };
-      const fail = (message) => {
-        if (this.#done) return;
-        const init = { message: String(message), filename: url.href, lineno: 0, colno: 0, cancelable: true };
-        this.dispatchEvent(typeof ErrorEvent === "function" ? new ErrorEvent("error", init) : Object.assign(new Event("error", { cancelable: true }), init));
+      // An error of the worker, or of its start: an error event; whether the page took it (a handler that cancelled it) is answered.
+      const fail = (message, filename, lineno, colno) => {
+        if (this.#done) return true;
+        const init = { message: String(message), filename: filename || url.href, lineno: lineno >>> 0, colno: colno >>> 0, cancelable: true };
+        const event = typeof ErrorEvent === "function" ? new ErrorEvent("error", init) : Object.assign(new Event("error", { cancelable: true }), init);
+        return !this.dispatchEvent(event);
       };
       this.#id = create(url.href);
       if (this.#id < 0) {
@@ -78,7 +80,7 @@
           if (loaded === undefined) reject(new Error(`Failed to load the worker script at '${url.href}'.`)); else resolve(loaded);
         });
       text
-        .then((text) => { if (!this.#done) start(id, channel.port2, text, url.href, info, fail); })
+        .then((text) => { if (!this.#done) start(id, channel.port2, text, url.href, info, fail, type === "module"); })
         .catch((e) => fail(e && e.message ? e.message : String(e)));
     }
     postMessage(message, transfer) {

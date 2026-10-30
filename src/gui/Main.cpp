@@ -66,6 +66,7 @@
 #include "solar/web/FetchHost.h"
 #include "solar/web/JsEventLoop.h"
 #include "solar/web/Messaging.h"
+#include "solar/web-api/IndexedDb.h"
 #include "solar/web-api/Worker.h"
 #include "solar/web/TimerHost.h"
 #include "solar/web/UrlBindings.h"
@@ -203,6 +204,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
       solar::css::InstallSelectorApis(realm);
       solar::web::InstallFetchApis(realm);
       solar::webapi::InstallWorkerApis(realm);
+      solar::webapi::InstallIndexedDbNatives(realm);
       solar::web::FetchHost::Config config;
       config.loop = &loop_;
       config.client = &client_;

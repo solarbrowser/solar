@@ -14,6 +14,7 @@
 #include "solar/html/Frames.h"
 #include "solar/html/Modules.h"
 #include "solar/web/Console.h"
+#include "solar/web-api/Worker.h"
 #include "solar/web/ErrorReporting.h"
 
 namespace solar::html {
@@ -41,6 +42,8 @@ Value HolderFunction(Context& ctx, const char* name) {
 }  // namespace
 
 bool ReportError(Context& ctx, const Value& exception, const qe::ErrorInfo& info) {
+  // (A worker's own: it is told to the Worker, in the page.)
+  if (webapi::ReportWorkerError(ctx, exception, info)) return true;
   Value report = HolderFunction(ctx, "reportError");
   if (!qe::IsCallable(report)) {
     Print("Uncaught ", info);
