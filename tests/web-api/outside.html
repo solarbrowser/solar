@@ -1,0 +1,8 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Outside</title>
+<script>
+// Out of the scope of the worker: nothing is asked of it. After a while it goes into the scope again.
+console.log("outside page");
+setTimeout(() => { location.href = "/sw-scope/virtual-late.html"; }, 1500);
+</script>

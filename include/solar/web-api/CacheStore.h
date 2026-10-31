@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <optional>
 #include <string>
 
 #include "quanta/Embed.h"
@@ -18,6 +19,9 @@ namespace solar::webapi {
 // Defines in a realm __solarCacheNames, __solarCacheOpen, __solarCacheHas, __solarCacheDelete, __solarCacheMetas, __solarCacheBody, __solarCachePut, __solarCacheRemove,
 // __solarCacheFlush, __solarKvRead and __solarKvWrite.
 void InstallCacheStoreNatives(Quanta::Embed::Realm& realm);
+
+// The text kept under a key for the origin (__solarKvRead's), or nothing.
+std::optional<std::string> ReadKv(const std::string& origin, const std::string& key);
 
 // Whether the origin has a service worker registered whose scope begins the address (the program does not start fetching what the page will ask for before the page's
 // worker is there to be asked).

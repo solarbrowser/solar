@@ -14,6 +14,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <string>
@@ -320,6 +321,15 @@ Value KvWrite(Context& ctx, Value, qe::Args args, Value) {
 }
 
 }  // namespace
+
+std::optional<std::string> ReadKv(const std::string& origin, const std::string& key) {
+  if (!Persistent(origin)) return std::nullopt;
+  std::ifstream in(KvFile(origin, key), std::ios::binary);
+  if (!in) return std::nullopt;
+  std::stringstream buffer;
+  buffer << in.rdbuf();
+  return buffer.str();
+}
 
 bool HasServiceWorkerFor(const std::string& origin, const std::string& url) {
   if (!Persistent(origin)) return false;

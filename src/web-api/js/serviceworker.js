@@ -8,7 +8,10 @@
   const create = globalThis.__solarWorkerCreate, start = globalThis.__solarWorkerStart, terminate = globalThis.__solarWorkerTerminate;
   const kvRead = globalThis.__solarKvRead, kvWrite = globalThis.__solarKvWrite;
   const tellControlled = globalThis.__solarSwControlled, resourceDone = globalThis.__solarSwResourceDone;
+  const mark = globalThis.__solarSwMark, adopt = globalThis.__solarSwAdopt, attach = globalThis.__solarWorkerAttach;
+  const pushManager = globalThis.__solarPushManager;
   delete globalThis.__solarKvRead; delete globalThis.__solarKvWrite; delete globalThis.__solarSwControlled; delete globalThis.__solarSwResourceDone;
+  delete globalThis.__solarSwMark; delete globalThis.__solarSwAdopt; delete globalThis.__solarWorkerAttach; delete globalThis.__solarPushManager;
   if (typeof create !== "function" || typeof MessageChannel !== "function" || typeof document === "undefined" || typeof fetch !== "function") return;
   const nativeFetch = globalThis.fetch;
   const secure = typeof isSecureContext === "boolean" ? isSecureContext : true;
@@ -63,22 +66,35 @@
   // ---- Workers: made, told their state, asked ----
   const setState = (w, state) => {
     w.state = state;
-    try { w.port.postMessage({ t: "state", state }); } catch (e) { /* (gone) */ }
+    try { if (w.port) w.port.postMessage({ t: "state", state }); } catch (e) { /* (gone) */ }
     w.object.dispatchEvent(new Event("statechange"));
   };
-  const spawn = (reg, scriptURL, source, state) => {
-    const id = create(scriptURL);
-    if (id < 0) throw new TypeError("Failed to register a ServiceWorker: workers are not available.");
-    const channel = new MessageChannel();
-    const w = { id, port: channel.port1, state, url: scriptURL, object: null, waiters: new Map(), fetches: new Map(), skip: false, reg, failed: "" };
+  // A worker for the registration: made from its source, or (`existing`) one that is already running, which has kept running since an earlier page. Either way this page
+  // gives it a port of its own, and says who it is.
+  const spawn = (reg, scriptURL, source, state, existing) => {
+    let id = existing;
+    const w = { id: -1, port: null, state, url: scriptURL, object: null, waiters: new Map(), fetches: new Map(), rpcs: new Map(), skip: false, reg, failed: "" };
     w.object = new ServiceWorker(token, w);
+    if (id === undefined) {
+      id = create(scriptURL);
+      if (id < 0) throw new TypeError("Failed to register a ServiceWorker: workers are not available.");
+      mark(id, origin, reg.scope);
+      const info = JSON.stringify({
+        url: scriptURL, name: "", type: "classic", serviceWorker: true, scope: reg.scope, state, updateViaCache: reg.updateViaCache, origin,
+        userAgent: navigator.userAgent, language: navigator.language, languages: Array.from(navigator.languages || [navigator.language]), platform: navigator.platform,
+        hardwareConcurrency: navigator.hardwareConcurrency, onLine: navigator.onLine, appVersion: navigator.appVersion,
+      });
+      w.id = id;
+      const unused = new MessageChannel();  // (a worker is started with a port; a service worker is given its ports one for each page, below)
+      start(id, unused.port2, source, scriptURL, info, (message) => { if (!w.failed) w.failed = String(message); return false; }, false);
+      if (w.failed) return w;
+    }
+    w.id = id;
+    const channel = new MessageChannel();
+    w.port = channel.port1;
     w.port.onmessage = (e) => fromWorker(w, e);
-    const info = JSON.stringify({
-      url: scriptURL, name: "", type: "classic", serviceWorker: true, scope: reg.scope, state, updateViaCache: reg.updateViaCache, origin,
-      userAgent: navigator.userAgent, language: navigator.language, languages: Array.from(navigator.languages || [navigator.language]), platform: navigator.platform,
-      hardwareConcurrency: navigator.hardwareConcurrency, onLine: navigator.onLine, appVersion: navigator.appVersion,
-    });
-    start(id, channel.port2, source, scriptURL, info, (message) => { if (!w.failed) w.failed = String(message); return false; }, false);
+    if (!attach(id, channel.port2)) { w.failed = "the worker could not be reached"; return w; }
+    w.port.postMessage({ t: "hello", client: clientDescriptor() });
     return w;
   };
   const retire = (w) => {
@@ -88,7 +104,9 @@
     w.fetches.clear();
     if (w.state !== "redundant") setState(w, "redundant");
     try { terminate(w.id); } catch (e) { /* (already) */ }
-    try { w.port.close(); } catch (e) { /* (already) */ }
+    try { if (w.port) w.port.close(); } catch (e) { /* (already) */ }
+    for (const f of w.rpcs.values()) f.reject(new DOMException("The service worker is gone.", "InvalidStateError"));
+    w.rpcs.clear();
     if (controller === w) { controller = null; if (tellControlled) tellControlled(false); }
   };
   const step = (w, name) => new Promise((resolve) => {
@@ -178,6 +196,8 @@
         w.skip = true;
         if (reg.waiting === w) activate(reg, w);
         break;
+      case "rpc-result": { const f = w.rpcs.get(m.id); if (f) { w.rpcs.delete(m.id); if (m.error) f.reject(new DOMException(m.error, "InvalidStateError")); else f.resolve(m.value); } break; }
+      case "claimed": if (reg.active === w && location.href.startsWith(reg.scope)) setController(w); break;
       case "clients": reply(m.id, [clientDescriptor()]); break;
       case "claim":
         if (reg.active === w && location.href.startsWith(reg.scope)) { setController(w); reply(m.id, undefined); } else reply(m.id, undefined, "The service worker is not active.");
@@ -188,6 +208,22 @@
       case "open-window": reply(m.id, null); break;
     }
   };
+
+  // A question for the registration's worker (the one that is active, or else the one that is coming): its managers (sync, preload) and notifications are its own.
+  let nextRpc = 1;
+  const rpc = (reg, call, args) => new Promise((resolve, reject) => {
+    let w = reg.active || reg.waiting || reg.installing;
+    if (!w && reg.stored) {
+      // (A registration of the origin that this page does not have a worker for: its kept worker is started for it.)
+      w = spawn(reg, reg.stored.scriptURL, reg.stored.source, "activated");
+      if (w.failed) { retire(w); reject(new DOMException("The service worker could not be started.", "InvalidStateError")); return; }
+      reg.active = w;
+    }
+    if (!w || !w.port) { reject(new DOMException("There is no service worker.", "InvalidStateError")); return; }
+    const id = nextRpc++;
+    w.rpcs.set(id, { resolve, reject });
+    w.port.postMessage({ t: "rpc", id, call, args });
+  });
 
   // ---- ServiceWorkerRegistration ----
   const stub = (name, methods) => { const o = {}; for (const [k, v] of Object.entries(methods)) o[k] = v; return Object.freeze(Object.setPrototypeOf(o, { [Symbol.toStringTag]: name })); };
@@ -200,21 +236,21 @@
     get waiting() { return this.#r.waiting ? this.#r.waiting.object : null; }
     get active() { return this.#r.active && this.#r.active.state !== "installing" ? this.#r.active.object : null; }
     get navigationPreload() {
-      return stub("NavigationPreloadManager", { enable: () => Promise.resolve(), disable: () => Promise.resolve(), setHeaderValue: () => Promise.resolve(), getState: () => Promise.resolve({ enabled: false, headerValue: "Service-Worker-Navigation-Preload" }) });
+      const call = (name, ...args) => rpc(this.#r, "preload." + name, args);
+      return stub("NavigationPreloadManager", { enable: () => call("enable"), disable: () => call("disable"), setHeaderValue: (v) => call("setHeaderValue", v), getState: () => call("getState") });
     }
-    get pushManager() {
-      return stub("PushManager", {
-        getSubscription: () => Promise.resolve(null), permissionState: () => Promise.resolve("prompt"),
-        subscribe: () => Promise.reject(new DOMException("Registration failed - push service not available", "NotSupportedError")),
+    get sync() { return stub("SyncManager", { register: (tag) => rpc(this.#r, "sync.register", [String(tag)]), getTags: () => rpc(this.#r, "sync.getTags", []) }); }
+    get periodicSync() {
+      return stub("PeriodicSyncManager", {
+        register: (tag, options) => rpc(this.#r, "periodicSync.register", [String(tag), { minInterval: Number(options && options.minInterval) || 0 }]),
+        unregister: (tag) => rpc(this.#r, "periodicSync.unregister", [String(tag)]), getTags: () => rpc(this.#r, "periodicSync.getTags", []),
       });
     }
+    get pushManager() { return this.#r.push || (this.#r.push = pushManager ? pushManager(this.#r.scope, () => !!this.#r.active) : undefined); }
     update() { return updateRecord(this.#r).then(() => this); }
     unregister() { return Promise.resolve(unregisterRecord(this.#r)); }
-    showNotification(title, options) {
-      if (typeof Notification === "function") { try { new Notification(title, options); } catch (e) { /* (no notifications here) */ } }
-      return Promise.resolve();
-    }
-    getNotifications() { return Promise.resolve([]); }
+    showNotification(title, options) { return rpc(this.#r, "notifications.show", [String(title), options ? JSON.parse(JSON.stringify(options)) : {}]).then(() => undefined); }
+    getNotifications(filter) { return rpc(this.#r, "notifications.get", [filter ? { tag: filter.tag } : undefined]).then((list) => list.map((n) => Object.assign(Object.create(null), n, { close() {} }))); }
   }
   tag(ServiceWorkerRegistration, "ServiceWorkerRegistration");
   handler(ServiceWorkerRegistration.prototype, ["updatefound"]);
@@ -386,7 +422,9 @@
       const reg = matching(location.href);
       if (reg) {
         const k = kept.find((x) => x.scope === reg.scope);
-        const w = spawn(reg, k.scriptURL, k.source, "activated");
+        // The worker may be there already (kept since an earlier page, or started for the navigation that made this page): then it is that one this page is served by.
+        const running = adopt(origin, location.href);
+        const w = spawn(reg, k.scriptURL, k.source, "activated", running >= 0 ? running : undefined);
         if (w.failed) { retire(w); } else { reg.active = w; controller = w; if (tellControlled) tellControlled(true); }
       }
     }

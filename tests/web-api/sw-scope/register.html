@@ -1,0 +1,58 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Service worker features</title>
+<script>
+// Needs tests/web-api/wsserver.py, SOLAR_IDB_DIR set to a scratch directory, and (for push) the permission for notifications granted in it: tests/web-api/run-sw.sh does all of it.
+const ok = (name, condition, detail) => console.log((condition ? "ok   " : "FAIL ") + name + (condition ? "" : "  " + detail));
+const wait = (target, type) => new Promise((resolve) => target.addEventListener(type, resolve, { once: true }));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function run() {
+  const sw = navigator.serviceWorker;
+  const reg = await sw.register("/sw-scope/sw.js", { scope: "/sw-scope/" });
+  while (!reg.active || reg.active.state !== "activated") await sleep(20);
+  await sleep(100);
+  ok("registered, active and (claim) controlling", sw.controller !== null && reg.scope === location.origin + "/sw-scope/", String(sw.controller));
+
+  // navigation preload
+  ok("navigationPreload state", (await reg.navigationPreload.getState()).enabled === true, "");
+  await reg.navigationPreload.setHeaderValue("custom-value");
+  ok("setHeaderValue", (await reg.navigationPreload.getState()).headerValue === "custom-value", "");
+
+  // background sync
+  await reg.sync.register("one-shot");
+  ok("sync.getTags has the tag at first or it has already fired", Array.isArray(await reg.sync.getTags()), "");
+  await sleep(300);
+  ok("the sync event fired and the tag is gone", (await reg.sync.getTags()).length === 0 && (await (await caches.match("/one-shot-false"))?.text()) === "fired", JSON.stringify(await reg.sync.getTags()));
+  await reg.periodicSync.register("every-so-often", { minInterval: 3600000 });
+  ok("periodicSync tags", (await reg.periodicSync.getTags()).join() === "every-so-often", "");
+  await reg.periodicSync.unregister("every-so-often");
+  ok("periodicSync unregister", (await reg.periodicSync.getTags()).length === 0, "");
+
+  // push
+  const pm = reg.pushManager;
+  ok("pushManager exists", pm && typeof pm.subscribe === "function" && (await pm.getSubscription()) === null, String(pm));
+  ok("permission was granted", (await pm.permissionState({ userVisibleOnly: true })) === "granted", await pm.permissionState());
+  let e = null; try { await pm.subscribe({}); } catch (x) { e = x; }
+  ok("subscribe without userVisibleOnly is NotSupportedError", e && e.name === "NotSupportedError", String(e));
+  const sub = await pm.subscribe({ userVisibleOnly: true });
+  ok("subscription: endpoint, keys, toJSON", sub.endpoint.startsWith("https://") && sub.getKey("p256dh").byteLength === 65 && sub.getKey("auth").byteLength === 16 && sub.toJSON().keys.p256dh.length > 40, JSON.stringify(sub));
+  ok("getSubscription returns it", (await pm.getSubscription()).endpoint === sub.endpoint, "");
+  ok("subscribe again is the same", (await pm.subscribe({ userVisibleOnly: true })).endpoint === sub.endpoint, "");
+  const message = (data) => { const p = wait(sw, "message"); reg.active.postMessage(data); return p.then((m) => m.data); };
+  const boot = (await message("boot")).boot;
+  ok("the worker has a boot id", typeof boot === "string" && boot.length === 6, boot);
+  reg.active.postMessage("push");
+  await sleep(200);
+  const shown = await reg.getNotifications({ tag: "pushed" });
+  ok("a push event showed a notification", shown.length === 1 && shown[0].title === "Push: hello push" && shown[0].body === "got hello push", JSON.stringify(shown));
+  ok("the notification click event reached the worker", (await message("click")).clicked === true, "");
+  await sleep(100);
+  ok("and the worker saw it with its data and action", (await (await caches.match("/clicked-pushed-open")).text()) === '{"n":1}', "");
+  ok("unsubscribe", (await sub.unsubscribe()) === true && (await pm.getSubscription()) === null, "");
+
+  // navigations are the worker's: go to one of its pages (the program asks the worker, not the network)
+  console.log("boot of the page's worker: " + boot);
+  location.href = "/sw-scope/virtual-first.html?next=" + encodeURIComponent("/sw-scope/virtual-second.html") + "&wait=100";
+}
+run().catch((e) => console.log("FAIL exception " + (e && e.stack || e)));
+</script>

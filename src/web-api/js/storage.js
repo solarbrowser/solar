@@ -43,7 +43,8 @@
         const name = String(descriptor.name);
         if (!(name in names)) throw new TypeError(`Failed to execute 'query' on 'Permissions': Failed to read the 'name' property from 'PermissionDescriptor': The provided value '${name}' is not a valid enum value of type PermissionName.`);
         let state = names[name];
-        if (name === "notifications" && typeof Notification === "function") state = Notification.permission === "default" ? "prompt" : Notification.permission;
+        if (globalThis.__solarPermissions && globalThis.__solarPermissions.get(name) !== "prompt") state = globalThis.__solarPermissions.get(name);
+        else if (name === "notifications" || name === "push") state = "prompt";
         resolve(new PermissionStatus(PermissionStatus, name, state));
       });
     }

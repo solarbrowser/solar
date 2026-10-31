@@ -18,6 +18,7 @@
 #include <mutex>
 #include <thread>
 #include <cstdio>
+#include <cstring>
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
@@ -169,6 +170,15 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
       solar::webapi::InstallCacheStoreNatives(realm);
       solar::webapi::InstallCompressionNatives(realm);
       solar::webapi::InstallWorkerScope(realm);
+      // A service worker answers a navigation through this.
+      Quanta::Context& wctx = realm.GetContext();
+      qe::Set(wctx, qe::FromObject(wctx.get_global_object()), "__solarSwNavigateDone", qe::NewFunction(wctx, "__solarSwNavigateDone", 6, [this](Quanta::Context& c, Quanta::Value, qe::Args args, Quanta::Value) {
+        if (args.size() < 6) return qe::Undefined();
+        std::string body;
+        if (auto bytes = qe::BytesOf(args[4])) body.assign(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+        NavigationAnswered(qe::ToUint32(c, args[0]), static_cast<int>(qe::ToNumber(c, args[1])), static_cast<int>(qe::ToNumber(c, args[2])), qe::ToWtf8(c, args[3]), std::move(body), qe::ToWtf8(c, args[5]));
+        return qe::Undefined();
+      }));
     });
     qe::Realm* raw = bundle->realm.get();
     bundles_.push_back(std::move(bundle));
@@ -183,6 +193,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
       }
     }
   }
+  void RunLater(std::function<void()> task) override { loop_.Post(std::move(task)); }
   std::optional<std::string> LoadScript(const std::string& url) override {
     // (importScripts and the like are not the worker's to answer: it is the one asking.)
     const bool was = bypassWorker_;
@@ -198,6 +209,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     // (What the realm's own data holds is not let go with the realm: the document it points at is let go first.)
     solar::html::RunInRealm(*realm, [&] { solar::dom::SetAssociatedDocument(realm->GetContext(), nullptr); });
     if (pageRealm_ == realm) pageRealm_ = nullptr;
+    solar::webapi::ReleaseOwnedWorkers(realm);
     for (auto it = bundles_.begin(); it != bundles_.end(); ++it) {
       if ((*it)->realm.get() == realm) {
         bundles_.erase(it);
@@ -298,6 +310,75 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     if (swControlled_ && !bypassWorker_ && pageRealm_ && AskWorker(raw)) return raw;
     client_.Fetch(*parsed, *raw, solar::net::FetchOptions());
     return raw;
+  }
+
+
+  // A navigation to an address a service worker is registered for is asked of the worker first (its fetch event, with mode "navigate"), whether or not any page is open: the
+  // worker that is running is used, or the one that was kept is started. False where there is none (the network gets the request).
+  struct PendingNavigation {
+    Collector* collector;
+    solar::url::Url url;
+    solar::net::FetchOptions options;
+  };
+  bool TryWorkerNavigation(const solar::url::Url& url, const std::string& address, const solar::net::FetchOptions& options, Collector& collector) {
+    if (url.scheme != "http" && url.scheme != "https") return false;
+    const std::string origin = solar::url::SerializeOrigin(url);
+    uint32_t id = 0;
+    if (!solar::webapi::FindServiceWorker(origin, address, id)) {
+      if (!solar::webapi::HasServiceWorkerFor(origin, address)) return false;
+      id = solar::webapi::StartStoredServiceWorker(origin, address);
+      if (id == 0) return false;
+    }
+    qe::Realm* realm = solar::webapi::WorkerRealmOf(id);
+    if (!realm) return false;
+    const uint32_t navigation = nextNavigation_++;
+    // (The worker may answer before the call returns: the navigation is there to be answered by then.)
+    pendingNavigations_[navigation] = PendingNavigation{&collector, url, options};
+    bool taken = false;
+    solar::html::RunInRealm(*realm, [&] {
+      Quanta::Context& ctx = realm->GetContext();
+      Quanta::Value function = qe::Get(ctx, qe::FromObject(ctx.get_global_object()), "__solarSwNavigate");
+      if (qe::IsCallable(function)) {
+        Quanta::Value body = qe::Undefined();
+        if (options.body && !options.body->empty()) {
+          body = qe::NewArrayBuffer(ctx, options.body->size());
+          if (auto bytes = qe::MutableBytesOf(body)) std::memcpy(bytes->data(), options.body->data(), options.body->size());
+        }
+        std::string bodyType;
+        for (const auto& header : options.headers) if (header.first == "Content-Type") bodyType = header.second;
+        Quanta::Value arguments[] = {qe::FromNumber(navigation), qe::FromWtf8(ctx, address), qe::FromWtf8(ctx, options.method.empty() ? "GET" : options.method), body, qe::FromWtf8(ctx, bodyType)};
+        qe::Call(ctx, function, qe::Undefined(), qe::Args(arguments, 5));
+        taken = !qe::HasException(ctx);
+      }
+      if (qe::HasException(ctx)) ctx.clear_exception();
+    });
+    if (!taken) {
+      pendingNavigations_.erase(navigation);
+      return false;
+    }
+    return true;
+  }
+  void NavigationAnswered(uint32_t id, int mode, int status, const std::string& contentType, std::string body, const std::string& address) {
+    const auto found = pendingNavigations_.find(id);
+    if (found == pendingNavigations_.end()) return;
+    PendingNavigation pending = std::move(found->second);
+    pendingNavigations_.erase(found);
+    Collector& collector = *pending.collector;
+    if (mode == 1) {  // left to the network
+      client_.Fetch(pending.url, collector, pending.options);
+      return;
+    }
+    if (mode == 2) {
+      collector.failed = true;
+      collector.done = true;
+      collector.error = "the service worker's answer was a network error";
+      return;
+    }
+    collector.status = status;
+    collector.contentType = contentType;
+    collector.address = address;
+    collector.body = std::move(body);
+    collector.done = true;
   }
 
   // A page that a service worker controls asks it for each resource first (its fetch event); the worker's answer, or its leaving the request to the network, comes
@@ -535,7 +616,8 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
   std::map<std::string, std::unique_ptr<Resource>> resources_;
   qe::Realm* pageRealm_ = nullptr;
   bool swControlled_ = false, bypassWorker_ = false;
-  uint32_t nextSw_ = 1;
+  uint32_t nextSw_ = 1, nextNavigation_ = 1;
+  std::map<uint32_t, PendingNavigation> pendingNavigations_;
   std::map<uint32_t, std::string> swPending_;
   Resource* waiting_ = nullptr;
   bool arrived_ = false, sizesArrived_ = false;
@@ -1392,7 +1474,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
       options.body = std::make_shared<const std::string>(body);
       if (!bodyType.empty()) options.headers.emplace_back("Content-Type", bodyType);
     }
-    client.Fetch(*parsed, navigation->collector, options);
+    if (!browser.TryWorkerNavigation(*parsed, where, options, navigation->collector)) client.Fetch(*parsed, navigation->collector, options);
     current = navigation.get();
     navigations.push_back(std::move(navigation));
     {
