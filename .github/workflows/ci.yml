@@ -21,7 +21,7 @@ jobs:
         run: git submodule update --init --depth 1 third_party/quanta third_party/skia tests/wpt
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y clang lld llvm make pkg-config liburing-dev libssl-dev zlib1g-dev libbrotli-dev libzstd-dev libnghttp2-dev libharfbuzz-dev
+        run: sudo apt-get update && sudo apt-get install -y clang lld llvm make pkg-config liburing-dev libssl-dev zlib1g-dev libbrotli-dev libzstd-dev libnghttp2-dev libharfbuzz-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev
 
       - name: Show whether io_uring is available
         run: |
