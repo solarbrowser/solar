@@ -213,7 +213,7 @@
   };
   // The user of the tests: what testdriver asks for is done here with events made by the script, as the program does for the real user (clicks, keys, the actions of the
   // WebDriver sequences, a recent action of the user that the Pointer Lock API asks for). What needs more than that is refused.
-  const activate = () => { try { document[Symbol.for('solar.activation')] = performance.now(); } catch (e) {} };
+  const activate = () => { try { const key = Symbol.for('solar.activation'), prev = document[key]; let now = performance.now(); if (typeof prev === 'number' && now <= prev) now = prev + 0.001; document[key] = now; } catch (e) {} };
   const KEYS = {
     '\uE003': ['Backspace', 'Backspace', 8], '\uE004': ['Tab', 'Tab', 9], '\uE006': ['Enter', 'Enter', 13], '\uE007': ['Enter', 'Enter', 13], '\uE00C': ['Escape', 'Escape', 27],
     '\uE00D': [' ', 'Space', 32], '\uE00E': ['PageUp', 'PageUp', 33], '\uE00F': ['PageDown', 'PageDown', 34], '\uE010': ['End', 'End', 35], '\uE011': ['Home', 'Home', 36],

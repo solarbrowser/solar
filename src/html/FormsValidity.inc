@@ -191,7 +191,6 @@ const char* const kValidityScript = R"JS(
     const f = { valueMissing: false, typeMismatch: false, patternMismatch: false, tooLong: false, tooShort: false, rangeUnderflow: false, rangeOverflow: false, stepMismatch: false, badInput: false, customError: false };
     const custom = customMessages.get(e);
     if (custom) f.customError = true;
-    if (!willValidate(e)) return f;
     if (e instanceof HTMLInputElement) {
       const t = typeOf(e), v = e.value;
       if (e.hasAttribute("required")) {
@@ -204,7 +203,7 @@ const char* const kValidityScript = R"JS(
       if (t === "url" && v !== "") { try { new URL(v); } catch (err) { f.typeMismatch = true; } }
       if (["text", "search", "url", "tel", "email", "password"].includes(t) && e.hasAttribute("pattern") && v !== "") {
         let re = null;
-        try { re = new RegExp("^(?:" + e.getAttribute("pattern") + ")$", "v"); } catch (err) { re = null; }
+        try { new RegExp(e.getAttribute("pattern"), "v"); re = new RegExp("^(?:" + e.getAttribute("pattern") + ")$", "v"); } catch (err) { re = null; }
         if (re) f.patternMismatch = e.hasAttribute("multiple") && t === "email" ? v.split(",").some((x) => !re.test(x)) : !re.test(v);
       }
       if (rangeApplies(t) && v !== "") {
@@ -287,4 +286,111 @@ const char* const kValidityScript = R"JS(
     return originalRequestSubmit.call(this, submitter);
   });
   Object.defineProperty(F.requestSubmit, "length", { value: 0, configurable: true });
+
+  // ---- Selection in a text control (https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#textFieldSelection) ----
+  const selects = (e) => e instanceof HTMLTextAreaElement || ["text", "search", "tel", "url", "password"].includes(typeOf(e));
+  const mustApply = (e, what) => { if (!selects(e)) throw new DOMException("The input element's type ('" + typeOf(e) + "') does not support selection.", "InvalidStateError"); };
+  const selectionOf = (e) => { const s = stateOf(e), n = e.value.length; s.start = Math.min(s.start, n); s.end = Math.min(Math.max(s.end, s.start), n); if (!s.direction) s.direction = "none"; return s; };
+  const queueSelect = (e) => { setTimeout(() => e.dispatchEvent(trusted(new Event("select", { bubbles: true }))), 0); };
+  const setRange = (e, start, end, direction) => {
+    const s = selectionOf(e), n = e.value.length;
+    end = Math.min(end, n);
+    start = Math.min(start, end);
+    direction = direction === "forward" || direction === "backward" ? direction : "none";
+    const changed = s.start !== start || s.end !== end || s.direction !== direction;
+    s.start = start; s.end = end; s.direction = direction;
+    if (changed) { formChanged(e); queueSelect(e); }
+  };
+  const unsignedLong = (v) => { v = Number(v); if (!Number.isFinite(v)) return 0; v = Math.trunc(v) % 4294967296; return v < 0 ? v + 4294967296 : v; };
+  for (const proto of [I, T]) {
+    define(proto, "selectionStart", function () { return selects(this) ? selectionOf(this).start : null; }, function (v) {
+      mustApply(this); const s = selectionOf(this); v = v === null ? 0 : unsignedLong(v); setRange(this, v, Math.max(v, s.end), s.direction);
+    });
+    define(proto, "selectionEnd", function () { return selects(this) ? selectionOf(this).end : null; }, function (v) {
+      mustApply(this); const s = selectionOf(this); setRange(this, s.start, v === null ? 0 : unsignedLong(v), s.direction);
+    });
+    define(proto, "selectionDirection", function () { return selects(this) ? selectionOf(this).direction : null; }, function (v) {
+      mustApply(this); const s = selectionOf(this); setRange(this, s.start, s.end, v === null ? "none" : String(v));
+    });
+    method(proto, "select", function () { if (!selects(this)) return; setRange(this, 0, this.value.length, "none"); });
+    method(proto, "setSelectionRange", function (start, end, direction) {
+      if (arguments.length < 2) throw new TypeError("Failed to execute 'setSelectionRange': 2 arguments required, but only " + arguments.length + " present.");
+      mustApply(this);
+      setRange(this, unsignedLong(start), unsignedLong(end), direction === undefined ? "none" : String(direction));
+    });
+    method(proto, "setRangeText", function (replacement, start, end, mode) {
+      if (arguments.length < 1) throw new TypeError("Failed to execute 'setRangeText': 1 argument required, but only 0 present.");
+      mustApply(this);
+      const s = selectionOf(this);
+      replacement = String(replacement);
+      if (arguments.length < 3) { start = s.start; end = s.end; } else { start = unsignedLong(start); end = unsignedLong(end); }
+      mode = mode === undefined ? "preserve" : String(mode);
+      if (!["select", "start", "end", "preserve"].includes(mode)) throw new TypeError("Failed to execute 'setRangeText': The provided value '" + mode + "' is not a valid enum value of type SelectionMode.");
+      const value = this.value;
+      if (start > end) throw new DOMException("The start index is greater than the end index.", "IndexSizeError");
+      start = Math.min(start, value.length); end = Math.min(end, value.length);
+      const oldStart = s.start, oldEnd = s.end, oldDirection = s.direction;
+      // The value changes without moving the cursor to its end.
+      const st = stateOf(this);
+      const next = value.slice(0, start) + replacement + value.slice(end);
+      const sanitized = this instanceof HTMLInputElement ? sanitize(this, next) : next;
+      st.value = sanitized; st.dirty = true;
+      const newEnd = start + replacement.length;
+      let ns = oldStart, ne = oldEnd, nd = oldDirection;
+      if (mode === "select") { ns = start; ne = newEnd; nd = "none"; }
+      else if (mode === "start") { ns = ne = start; nd = "none"; }
+      else if (mode === "end") { ns = ne = newEnd; nd = "none"; }
+      else {
+        const delta = newEnd - end;
+        if (oldStart > end) ns = oldStart + delta; else if (oldStart > start) ns = start;
+        if (oldEnd > end) ne = oldEnd + delta; else if (oldEnd > start) ne = newEnd;
+      }
+      const length = sanitized.length;
+      ne = Math.min(ne, length); ns = Math.min(ns, ne);
+      st.start = ns; st.end = ne; st.direction = nd;
+      formChanged(this);
+      if (ns !== oldStart || ne !== oldEnd || nd !== oldDirection) queueSelect(this);
+    });
+  }
+  Object.defineProperty(T.setRangeText, "length", { value: 1, configurable: true });
+  Object.defineProperty(I.setRangeText, "length", { value: 1, configurable: true });
+
+  // ---- Cloning: a copy has the value and the checkedness of what it was made from ----
+  const originalClone = Node.prototype.cloneNode;
+  const copyState = (from, to) => {
+    if (from instanceof HTMLInputElement && to instanceof HTMLInputElement) { const a = stateOf(from), b = stateOf(to); b.value = a.value; b.dirty = a.dirty; b.checked = a.checked; b.checkedDirty = a.checkedDirty; b.indeterminate = a.indeterminate; b.start = 0; b.end = 0; b.direction = "none"; }
+    else if (from instanceof HTMLTextAreaElement && to instanceof HTMLTextAreaElement) { const a = stateOf(from), b = stateOf(to); b.value = a.value; b.dirty = a.dirty; b.start = 0; b.end = 0; b.direction = "none"; }
+    else if (from instanceof HTMLOptionElement && to instanceof HTMLOptionElement) { const a = stateOf(from), b = stateOf(to); b.checked = a.checked; b.checkedDirty = a.checkedDirty; }
+  };
+  const copyTree = (from, to) => { copyState(from, to); let a = from.firstChild, b = to.firstChild; while (a && b) { copyTree(a, b); a = a.nextSibling; b = b.nextSibling; } };
+  method(Node.prototype, "cloneNode", function cloneNode(deep) {
+    const copy = Reflect.apply(originalClone, this, arguments.length ? [deep] : []);
+    if (this.nodeType === 1 || this.nodeType === 11) { if (deep) copyTree(this, copy); else copyState(this, copy); }
+    return copy;
+  });
+  Object.defineProperty(Node.prototype.cloneNode, "length", { value: 0, configurable: true });
+
+  // ---- autocomplete of a control: the tokens of the autofill detail, in lower case, or nothing if they are not valid ----
+  const FIELD_NAMES = new Set(["name", "honorific-prefix", "given-name", "additional-name", "family-name", "honorific-suffix", "nickname", "username", "new-password", "current-password", "one-time-code", "organization-title", "organization", "street-address", "address-line1", "address-line2", "address-line3", "address-level4", "address-level3", "address-level2", "address-level1", "country", "country-name", "postal-code", "cc-name", "cc-given-name", "cc-additional-name", "cc-family-name", "cc-number", "cc-exp", "cc-exp-month", "cc-exp-year", "cc-csc", "cc-type", "transaction-currency", "transaction-amount", "language", "bday", "bday-day", "bday-month", "bday-year", "sex", "url", "photo"]);
+  const CONTACT_NAMES = new Set(["tel", "tel-country-code", "tel-national", "tel-area-code", "tel-local", "tel-local-prefix", "tel-local-suffix", "tel-extension", "email", "impp"]);
+  const autofillOf = (value) => {
+    const tokens = value.toLowerCase().split(/[ \t\n\f\r]+/).filter((t) => t !== "");
+    if (tokens.length === 0) return "";
+    if (tokens.length === 1 && (tokens[0] === "on" || tokens[0] === "off")) return tokens[0];
+    let i = 0, last = tokens.length;
+    if (tokens[last - 1] === "webauthn") last--;
+    const sections = [];
+    while (i < last && tokens[i].startsWith("section-")) { sections.push(tokens[i]); i++; }
+    if (sections.length > 1) return "";
+    if (i < last && (tokens[i] === "shipping" || tokens[i] === "billing")) i++;
+    let contact = false;
+    if (i < last && ["home", "work", "mobile", "fax", "pager"].includes(tokens[i])) { contact = true; i++; }
+    if (i !== last - 1) return "";
+    const name = tokens[i];
+    if (!(contact ? CONTACT_NAMES.has(name) : FIELD_NAMES.has(name) || CONTACT_NAMES.has(name))) return "";
+    return tokens.join(" ");
+  };
+  for (const proto of [I, T, S]) {
+    define(proto, "autocomplete", function () { const v = this.getAttribute("autocomplete"); return v === null ? "" : autofillOf(v); }, function (v) { this.setAttribute("autocomplete", String(v)); });
+  }
 )JS";

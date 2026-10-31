@@ -21,6 +21,8 @@ const char* const kFormScript = R"JS(
 (function () {
   const setHelper = globalThis.__solarSetHelper;
   const nativeChanged = globalThis.__solarFormChanged;
+  const markTrusted = globalThis.__solarMarkTrusted;
+  const trusted = (event) => { if (markTrusted) markTrusted(event); return event; };
   const formChanged = (e) => { if (e && nativeChanged) nativeChanged(e); };
   const define = (proto, name, get, set) => Object.defineProperty(proto, name, { get, set, enumerable: true, configurable: true });
   const method = (proto, name, fn) => Object.defineProperty(proto, name, { value: fn, writable: true, enumerable: true, configurable: true });
@@ -115,7 +117,9 @@ const char* const kFormScript = R"JS(
     if (t === "checkbox" || t === "radio" || t === "hidden" || t === "submit" || t === "reset" || t === "button" || t === "image") { this.setAttribute("value", String(v)); return; }
     if (t === "file") { if (v === "") stateOf(this).value = ""; else throw new DOMException("Failed to set the 'value' property on 'HTMLInputElement': This input element accepts a filename, which may only be programmatically set to the empty string.", "InvalidStateError"); return; }
     const s = stateOf(this);
-    s.value = sanitize(this, String(v)); s.dirty = true; s.start = s.end = s.value.length;
+    const old = this.value;
+    s.value = sanitize(this, String(v)); s.dirty = true;
+    if (s.value !== old) { s.start = s.end = s.value.length; s.direction = "none"; }
     formChanged(this);
   });
   define(I, "checked", function () { const s = stateOf(this); return s.checkedDirty ? s.checked : this.hasAttribute("checked"); }, function (v) { setChecked(this, !!v); });
@@ -157,7 +161,7 @@ const char* const kFormScript = R"JS(
   // ---- textarea ----
   const textOf = (e) => { let t = ""; for (const c of e.childNodes) if (c.nodeType === 3) t += c.data; return t.replace(/^\n/, ""); };
   define(T, "defaultValue", function () { return textOf(this); }, function (v) { this.textContent = String(v); });
-  define(T, "value", function () { const s = stateOf(this); return (s.dirty ? s.value : textOf(this)).replace(/\r\n?/g, "\n"); }, function (v) { const s = stateOf(this); s.value = String(v); s.dirty = true; s.start = s.end = s.value.length; formChanged(this); });
+  define(T, "value", function () { const s = stateOf(this); return (s.dirty ? s.value : textOf(this)).replace(/\r\n?/g, "\n"); }, function (v) { const s = stateOf(this), old = this.value; s.value = String(v); s.dirty = true; if (this.value !== old) { s.start = s.end = this.value.length; s.direction = "none"; } formChanged(this); });
   define(T, "type", function () { return "textarea"; });
   define(T, "textLength", function () { return this.value.length; });
   int(T, "rows", "rows", 2); int(T, "cols", "cols", 20); str(T, "wrap", "wrap", "soft");
@@ -225,6 +229,7 @@ const char* const kFormScript = R"JS(
   enumerated(F, "enctype", "enctype", ["application/x-www-form-urlencoded", "multipart/form-data", "text/plain"], "application/x-www-form-urlencoded");
   define(F, "encoding", function () { return this.enctype; }, function (v) { this.enctype = v; });
   bool(F, "noValidate", "novalidate");
+  enumerated(F, "autocomplete", "autocomplete", ["on", "off"], "on");
   define(F, "elements", function () { const list = controlsOf(this); list.item = (i) => list[i] || null; list.namedItem = (n) => list.find((e) => e.id === n || e.getAttribute("name") === n) || null; return list; });
   define(F, "length", function () { return controlsOf(this).length; });
   method(F, "checkValidity", function () { return true; });
@@ -324,7 +329,7 @@ const char* const kFormScript = R"JS(
   // The click of the program: the event, and then what the target does when no script stopped it. The pointer is where it was.
   const clickEvent = (x, y, button, detail = 1) => new (typeof PointerEvent === "function" ? PointerEvent : MouseEvent)("click", { bubbles: true, cancelable: true, composed: true, view: globalThis, clientX: x, clientY: y, button, detail, pointerId: -1 });
   // What the user does is an activation (the Pointer Lock API asks for one): its time is kept for a while.
-  const activate = () => { try { document[Symbol.for("solar.activation")] = performance.now(); } catch (e) {} };
+  const activate = () => { try { const key = Symbol.for("solar.activation"), prev = document[key]; let now = performance.now(); if (typeof prev === "number" && now <= prev) now = prev + 0.001; document[key] = now; } catch (e) {} };
   // A click event that a script dispatches on a check box or a radio button does what a click does (the legacy-pre-activation behaviour): the one the program or click() makes does it itself.
   let ownClick = null;
   const nativeDispatch = EventTarget.prototype.dispatchEvent;
@@ -340,7 +345,7 @@ const char* const kFormScript = R"JS(
     if (disabledNow(target) && target instanceof HTMLInputElement) return false;
     const t = activationTarget(target);
     const before = t ? preActivate(t) : null;
-    const ev = clickEvent(x, y, button);
+    const ev = trusted(clickEvent(x, y, button));
     const outer = ownClick;
     ownClick = ev;
     let proceed;
@@ -371,7 +376,7 @@ const char* const kFormScript = R"JS(
   });
   setHelper("pointer", (target, type, x, y, button, buttons) => {
     if (type !== "mousemove") activate();
-    const proceed = target.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, composed: true, view: globalThis, clientX: x, clientY: y, button, buttons, detail: type === "mousemove" ? 0 : 1 }));
+    const proceed = target.dispatchEvent(trusted(new MouseEvent(type, { bubbles: true, cancelable: true, composed: true, view: globalThis, clientX: x, clientY: y, button, buttons, detail: type === "mousemove" ? 0 : 1 })));
     // A press gives the focus to the nearest thing that can take it, or takes it from what has it.
     if (type === "mousedown" && proceed && button === 0) {
       const before = document.activeElement;
@@ -387,7 +392,7 @@ const char* const kFormScript = R"JS(
   // A key of the keyboard: the event goes to the target (the focused element, or the body).
   setHelper("key", (target, type, key, code, keyCode, repeat, mods) => {
     if (type === "keydown") activate();
-    const ev = new KeyboardEvent(type, { bubbles: true, cancelable: true, composed: true, view: globalThis, key, code, keyCode, charCode: type === "keypress" ? keyCode : 0, repeat, ctrlKey: !!(mods & 1), shiftKey: !!(mods & 2), altKey: !!(mods & 4), metaKey: !!(mods & 8) });
+    const ev = trusted(new KeyboardEvent(type, { bubbles: true, cancelable: true, composed: true, view: globalThis, key, code, keyCode, charCode: type === "keypress" ? keyCode : 0, repeat, ctrlKey: !!(mods & 1), shiftKey: !!(mods & 2), altKey: !!(mods & 4), metaKey: !!(mods & 8) }));
     try { if (ev.which === undefined || ev.which === 0) Object.defineProperty(ev, "which", { value: keyCode }); } catch (e) {}
     return target.dispatchEvent(ev);
   });
@@ -580,6 +585,7 @@ const char* const kFormScript = R"JS(
     return null;
   });
   delete globalThis.__solarSetHelper;
+  delete globalThis.__solarMarkTrusted;
   delete globalThis.__solarFormChanged;
   delete globalThis.__solarSubmitPost;
 })();

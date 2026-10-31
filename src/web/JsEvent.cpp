@@ -682,7 +682,14 @@ Value GetEventHandler(JsEventTarget* target, const std::string& type) {
 
 Object* EventTargetPrototype(Context& ctx) { return TargetPrototype(ctx); }
 
+// __solarMarkTrusted(event): the event is the browser's own (isTrusted). It is for the scripts of the program's, which take it and delete it.
+Value MarkTrusted(Context&, Value, qe::Args args, Value) {
+  if (JsEvent* event = args.empty() ? nullptr : DOMObject::Cast<JsEvent>(args[0])) event->isTrusted = true;
+  return qe::Undefined();
+}
+
 void DefineEventClasses(Context& ctx) {
+  qe::DefineGlobalFunction(ctx, "__solarMarkTrusted", MarkTrusted, 1);
   qe::ClassRef event = qe::DefineClass(ctx, "Event", ConstructEvent, 1);
   qe::SetRealmData(ctx, &g_eventPrototypeKey, event.prototype);
   qe::DefineAccessor(event.prototype, "type", GetType, nullptr);
