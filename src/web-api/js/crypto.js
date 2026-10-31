@@ -1,10 +1,12 @@
 // Web Crypto (https://w3c.github.io/webcrypto/): crypto.getRandomValues, randomUUID and crypto.subtle. The algorithms are OpenSSL's, reached by the natives of
 // src/web-api/Crypto.cpp; what is here is the interface: names and usages checked, keys held, promises settled, JWK read and written.
-// Done: SHA-1/256/384/512, HMAC, AES-CBC/CTR/GCM/KW, PBKDF2, HKDF, key import/export (raw, jwk), generateKey, deriveBits/deriveKey, wrapKey/unwrapKey.
+// Done: SHA digests, HMAC, AES-CBC/CTR/GCM/KW, PBKDF2, HKDF, RSASSA-PKCS1-v1_5, RSA-PSS, RSA-OAEP, ECDSA, ECDH (P-256/384/521), Ed25519, X25519; key import/export (raw, spki, pkcs8, jwk), generateKey, deriveKey, wrapKey/unwrapKey.
 (() => {
   "use strict";
   const digestN = globalThis.__solarCryptoDigest, hmacN = globalThis.__solarCryptoHmac, aesN = globalThis.__solarCryptoAes;
   const pbkdf2N = globalThis.__solarCryptoPbkdf2, hkdfN = globalThis.__solarCryptoHkdf, randomN = globalThis.__solarCryptoRandom;
+  const N = {};
+  for (const n of ["Generate", "Info", "PublicOf", "Parts", "FromParts", "EcRaw", "EcFromRaw", "Sign", "Verify", "Oaep", "Ecdh"]) { N[n] = globalThis["__solarCrypto" + n]; delete globalThis["__solarCrypto" + n]; }
   for (const n of ["Digest", "Hmac", "Aes", "Pbkdf2", "Hkdf", "Random"]) delete globalThis["__solarCrypto" + n];
   if (typeof randomN !== "function") return;
 
@@ -51,10 +53,12 @@
   const NAMES = {
     "SHA-1": "digest", "SHA-256": "digest", "SHA-384": "digest", "SHA-512": "digest",
     "HMAC": "hmac", "AES-CBC": "aes", "AES-CTR": "aes", "AES-GCM": "aes", "AES-KW": "aes", "PBKDF2": "kdf", "HKDF": "kdf",
+    "RSASSA-PKCS1-v1_5": "rsa", "RSA-PSS": "rsa", "RSA-OAEP": "rsa", "ECDSA": "ec", "ECDH": "ec", "Ed25519": "okp", "X25519": "okp",
   };
+  const asymmetric = (kind) => kind === "rsa" || kind === "ec" || kind === "okp";
   const canonical = (name) => {
     const upper = String(name).toUpperCase();
-    for (const known of Object.keys(NAMES)) if (known === upper) return known;
+    for (const known of Object.keys(NAMES)) if (known.toUpperCase() === upper) return known;
     return null;
   };
   const normalize = (algorithm, operation) => {
@@ -164,6 +168,7 @@
 
   const importKeyData = (format, keyData, alg, extractable, usages) => {
     const kind = NAMES[alg.name];
+    if (asymmetric(kind)) return importAsym(format, keyData, alg, extractable, usages);
     if (kind === "digest") throw fail("NotSupportedError", "Unsupported algorithm.");
     let bytes;
     if (format === "raw") {
@@ -207,6 +212,7 @@
   };
 
   const exportKeyData = (format, key) => {
+    if (asymmetric(NAMES[key.algorithm.name])) return exportAsym(format, key);
     if (!key.extractable) throw fail("InvalidAccessError", "key is not extractable");
     const bytes = secret.get(key);
     const raw = bytes.slice().buffer;
@@ -220,6 +226,175 @@
     throw fail("NotSupportedError", `Unsupported export key format '${format}'.`);
   };
 
+
+  // ---- Public-key algorithms (the keys are held as DER: PKCS#8 for a private one, SPKI for a public one) ----
+  const USAGES = {
+    "RSASSA-PKCS1-v1_5": [["verify"], ["sign"]], "RSA-PSS": [["verify"], ["sign"]], "RSA-OAEP": [["encrypt", "wrapKey"], ["decrypt", "unwrapKey"]],
+    "ECDSA": [["verify"], ["sign"]], "Ed25519": [["verify"], ["sign"]], "ECDH": [[], ["deriveKey", "deriveBits"]], "X25519": [[], ["deriveKey", "deriveBits"]],
+  };
+  const CURVES = ["P-256", "P-384", "P-521"];
+  const jwkHash = { "SHA-1": "", "SHA-256": "256", "SHA-384": "384", "SHA-512": "512" };
+  const asymList = (name, usages, isPrivate) => {
+    const list = Array.from(new Set(Array.from(usages || [], String)));
+    for (const u of list) {
+      if (!ALL_USAGES.includes(u)) throw new TypeError(`The provided value '${u}' is not a valid enum value of type KeyUsage.`);
+      if (!USAGES[name][isPrivate ? 1 : 0].includes(u)) throw fail("SyntaxError", "Unsupported key usage for " + name + " key.");
+    }
+    return list;
+  };
+  const describe = (alg, info) => {
+    if (info.kind === "RSA") return { name: alg.name, modulusLength: info.bits, publicExponent: unb64url(info.e), hash: { name: alg.hash.name } };
+    if (info.kind === "EC") return { name: alg.name, namedCurve: info.curve };
+    return { name: alg.name };
+  };
+  const wantKind = (kind) => (kind === "rsa" ? "RSA" : kind === "ec" ? "EC" : null);
+  const checkRsaHash = (alg) => { if (!alg.hash) throw new TypeError(`${alg.name} needs a hash.`); };
+  const infoOf = (der, isPrivate) => { const t = N.Info(der, isPrivate ? 1 : 0); if (t === undefined) throw fail("DataError", "The key data is not a key this supports."); return JSON.parse(t); };
+  const matches = (alg, info) => {
+    const kind = NAMES[alg.name];
+    if (kind === "rsa") return info.kind === "RSA";
+    if (kind === "ec") return info.kind === "EC" && info.curve === alg.namedCurve;
+    return info.kind === alg.name;
+  };
+
+  const importAsym = (format, keyData, alg, extractable, usages) => {
+    const kind = NAMES[alg.name];
+    if (kind === "rsa") checkRsaHash(alg);
+    if (kind === "ec" && !CURVES.includes(alg.namedCurve)) throw fail("NotSupportedError", "Unsupported named curve.");
+    let der, isPrivate, info;
+    if (format === "spki" || format === "pkcs8") {
+      isPrivate = format === "pkcs8";
+      der = copy(keyData, "keyData");
+      info = infoOf(der, isPrivate);
+    } else if (format === "raw") {
+      if (kind === "rsa") throw fail("NotSupportedError", "Unsupported import key format 'raw'.");
+      isPrivate = false;
+      const point = copy(keyData, "keyData");
+      der = N.EcFromRaw(kind === "ec" ? "EC" : alg.name, alg.namedCurve, point);
+      if (der === undefined) throw fail("DataError", "The raw key is not valid.");
+      der = new Uint8Array(der);
+      info = infoOf(der, false);
+    } else if (format === "jwk") {
+      if (keyData === null || typeof keyData !== "object") throw new TypeError("The JWK is not an object.");
+      isPrivate = keyData.d !== undefined;
+      const ktyWanted = kind === "rsa" ? "RSA" : kind === "ec" ? "EC" : "OKP";
+      if (keyData.kty !== ktyWanted) throw fail("DataError", `The JWK's kty must be '${ktyWanted}'.`);
+      if (keyData.ext === false && extractable) throw fail("DataError", "The JWK is not extractable.");
+      if (keyData.key_ops !== undefined && usages.some((u) => !keyData.key_ops.includes(u))) throw fail("DataError", "The JWK's key_ops do not allow the usages.");
+      if (kind === "ec" && keyData.crv !== alg.namedCurve) throw fail("DataError", "The JWK's crv does not fit.");
+      if (kind === "okp" && keyData.crv !== alg.name) throw fail("DataError", "The JWK's crv does not fit.");
+      for (const part of kind === "rsa" ? ["n", "e"] : kind === "ec" ? ["x", "y"] : ["x"]) if (typeof keyData[part] !== "string") throw fail("DataError", `The JWK has no ${part}.`);
+      if (kind === "rsa" && isPrivate) for (const part of ["d", "p", "q", "dp", "dq", "qi"]) if (typeof keyData[part] !== "string") throw fail("DataError", `The JWK has no ${part}.`);
+      der = N.FromParts(wantKind(kind) || alg.name, alg.namedCurve, keyData, isPrivate ? 1 : 0);
+      if (der === undefined) throw fail("DataError", "The JWK is not a valid key.");
+      der = new Uint8Array(der);
+      info = infoOf(der, isPrivate);
+    } else {
+      throw fail("NotSupportedError", `Unsupported import key format '${format}'.`);
+    }
+    if (!matches(alg, info)) throw fail("DataError", "The key does not fit the algorithm.");
+    const list = asymList(alg.name, usages, isPrivate);
+    if (isPrivate && list.length === 0) throw new SyntaxError("Usages cannot be empty when importing a private key.");
+    return makeKey(isPrivate ? "private" : "public", extractable, describe(alg, info), list, der);
+  };
+
+  const exportAsym = (format, key) => {
+    if (!key.extractable) throw fail("InvalidAccessError", "key is not extractable");
+    const der = secret.get(key);
+    const isPrivate = key.type === "private";
+    if (format === "spki") { if (isPrivate) throw fail("InvalidAccessError", "Cannot export a private key as spki."); return der.slice().buffer; }
+    if (format === "pkcs8") { if (!isPrivate) throw fail("InvalidAccessError", "Cannot export a public key as pkcs8."); return der.slice().buffer; }
+    if (format === "raw") {
+      if (isPrivate || NAMES[key.algorithm.name] === "rsa") throw fail("InvalidAccessError", "Cannot export this key as raw.");
+      return need(N.EcRaw(der));
+    }
+    if (format === "jwk") {
+      const parts = JSON.parse(need(N.Parts(der, isPrivate ? 1 : 0)));
+      const a = key.algorithm, kind = NAMES[a.name];
+      const jwk = { kty: kind === "rsa" ? "RSA" : kind === "ec" ? "EC" : "OKP" };
+      if (kind === "rsa") {
+        const n = jwkHash[a.hash.name];
+        jwk.alg = a.name === "RSASSA-PKCS1-v1_5" ? "RS" + (n || "1") : a.name === "RSA-PSS" ? "PS" + (n || "1") : "RSA-OAEP" + (n ? "-" + n : "");
+      } else {
+        jwk.crv = kind === "ec" ? a.namedCurve : a.name;
+      }
+      Object.assign(jwk, parts);
+      jwk.ext = true;
+      jwk.key_ops = key.usages;
+      return jwk;
+    }
+    throw fail("NotSupportedError", `Unsupported export key format '${format}'.`);
+  };
+
+  const generateAsym = (alg, extractable, keyUsages) => {
+    const kind = NAMES[alg.name];
+    let made, info;
+    if (kind === "rsa") {
+      checkRsaHash(alg);
+      if (!(alg.modulusLength >= 256 && alg.modulusLength <= 16384)) throw fail("OperationError", "The modulus length is out of range.");
+      const exponent = alg.publicExponent === undefined ? new Uint8Array([1, 0, 1]) : copy(alg.publicExponent, "publicExponent");
+      made = N.Generate("RSA", alg.modulusLength, exponent);
+    } else if (kind === "ec") {
+      if (!CURVES.includes(alg.namedCurve)) throw fail("NotSupportedError", "Unsupported named curve.");
+      made = N.Generate("EC", alg.namedCurve);
+    } else {
+      made = N.Generate(alg.name, "");
+    }
+    if (made === undefined) throw fail("OperationError", "Key generation failed.");
+    const priv = new Uint8Array(made[0]), pub = new Uint8Array(made[1]);
+    info = infoOf(pub, false);
+    const usages = Array.from(new Set(Array.from(keyUsages || [], String)));
+    for (const u of usages) {
+      if (!ALL_USAGES.includes(u)) throw new TypeError(`The provided value '${u}' is not a valid enum value of type KeyUsage.`);
+      if (!USAGES[alg.name][0].includes(u) && !USAGES[alg.name][1].includes(u)) throw fail("SyntaxError", "Unsupported key usage for " + alg.name + " key.");
+    }
+    const privateUsages = usages.filter((u) => USAGES[alg.name][1].includes(u));
+    if (privateUsages.length === 0) throw new SyntaxError("Usages cannot be empty when creating a key.");
+    const description = describe(alg, info);
+    return {
+      publicKey: makeKey("public", true, description, usages.filter((u) => USAGES[alg.name][0].includes(u)), pub),
+      privateKey: makeKey("private", !!extractable, description, privateUsages, priv),
+    };
+  };
+
+  const signAsym = (alg, key, data) => {
+    const kind = NAMES[alg.name];
+    keyOf(key, "sign", alg.name);
+    if (key.type !== "private") throw fail("InvalidAccessError", "The key is not a private key.");
+    let hash = "";
+    if (kind === "rsa") hash = key.algorithm.hash.name;
+    else if (alg.name === "ECDSA") { if (!alg.hash) throw new TypeError("ECDSA needs a hash."); hash = alg.hash.name; }
+    return need(N.Sign(alg.name, hash, secret.get(key), data, alg.saltLength === undefined ? 32 : alg.saltLength));
+  };
+  const verifyAsym = (alg, key, signature, data) => {
+    const kind = NAMES[alg.name];
+    keyOf(key, "verify", alg.name);
+    if (key.type !== "public") throw fail("InvalidAccessError", "The key is not a public key.");
+    let hash = "";
+    if (kind === "rsa") hash = key.algorithm.hash.name;
+    else if (alg.name === "ECDSA") { if (!alg.hash) throw new TypeError("ECDSA needs a hash."); hash = alg.hash.name; }
+    const result = N.Verify(alg.name, hash, secret.get(key), signature, data, alg.saltLength === undefined ? 32 : alg.saltLength);
+    if (result === undefined) throw fail("OperationError", "The operation failed for an operation-specific reason");
+    return result;
+  };
+  const oaep = (alg, key, data, encrypt) => {
+    keyOf(key, null, "RSA-OAEP");
+    if (key.type !== (encrypt ? "public" : "private")) throw fail("InvalidAccessError", `The key is not a ${encrypt ? "public" : "private"} key.`);
+    return need(N.Oaep(encrypt ? 1 : 0, key.algorithm.hash.name, secret.get(key), data, alg.label === undefined ? new Uint8Array(0) : copy(alg.label, "label")));
+  };
+  const ecdhBits = (alg, key, length) => {
+    keyOf(key, "deriveBits", alg.name);
+    if (key.type !== "private") throw fail("InvalidAccessError", "The key is not a private key.");
+    const peer = alg.public;
+    if (!(peer instanceof CryptoKey) || peer.type !== "public" || peer.algorithm.name !== alg.name) throw fail("InvalidAccessError", "The public key is not a public " + alg.name + " key.");
+    if (alg.name === "ECDH" && peer.algorithm.namedCurve !== key.algorithm.namedCurve) throw fail("InvalidAccessError", "The curves differ.");
+    const shared = new Uint8Array(need(N.Ecdh(secret.get(key), secret.get(peer))));
+    if (length === null || length === undefined) return shared.buffer;
+    if (length > shared.length * 8) throw fail("OperationError", "The length is more than the secret has.");
+    return shared.slice(0, Math.ceil(length / 8)).buffer;
+  };
+
+  const oaepUnwrap = (alg, key, data) => { keyOf(key, "unwrapKey", alg.name); return need(N.Oaep(0, key.algorithm.hash.name, secret.get(key), data, alg.label === undefined ? new Uint8Array(0) : copy(alg.label, "label"))); };
   const promised = (f) => new Promise((resolve) => resolve(f()));
   const need1 = (args, n, what) => { if (args.length < n) throw new TypeError(`Failed to execute '${what}' on 'SubtleCrypto': ${n} arguments required, but only ${args.length} present.`); };
 
@@ -246,6 +421,7 @@
       return promised(() => {
         const alg = normalize(algorithm);
         const kind = NAMES[alg.name];
+        if (asymmetric(kind)) return generateAsym(alg, extractable, keyUsages);
         if (kind !== "aes" && kind !== "hmac") throw fail("NotSupportedError", "Unsupported algorithm.");
         if (kind === "hmac" && !alg.hash) throw new TypeError("HMAC needs a hash.");
         const usages = checkUsages(kind, alg.name, keyUsages);
@@ -261,6 +437,7 @@
     #cipher(algorithm, key, data, encrypt) {
       return promised(() => {
         const alg = normalize(algorithm);
+        if (alg.name === "RSA-OAEP") { keyOf(key, encrypt ? "encrypt" : "decrypt", "RSA-OAEP"); return oaep(alg, key, copy(data), encrypt); }
         if (NAMES[alg.name] !== "aes" || alg.name === "AES-KW") throw fail("NotSupportedError", "Unsupported algorithm.");
         keyOf(key, encrypt ? "encrypt" : "decrypt", alg.name);
         return aesRun(alg, key, copy(data), encrypt);
@@ -270,6 +447,7 @@
       need1(arguments, 3, "sign");
       return promised(() => {
         const alg = normalize(algorithm);
+        if (asymmetric(NAMES[alg.name]) && alg.name !== "RSA-OAEP" && alg.name !== "ECDH" && alg.name !== "X25519") return signAsym(alg, key, copy(data));
         if (alg.name !== "HMAC") throw fail("NotSupportedError", "Unsupported algorithm.");
         keyOf(key, "sign", "HMAC");
         return need(hmacN(key.algorithm.hash.name, secret.get(key), copy(data)));
@@ -279,6 +457,7 @@
       need1(arguments, 4, "verify");
       return promised(() => {
         const alg = normalize(algorithm);
+        if (asymmetric(NAMES[alg.name]) && alg.name !== "RSA-OAEP" && alg.name !== "ECDH" && alg.name !== "X25519") return verifyAsym(alg, key, copy(signature, "signature"), copy(data));
         if (alg.name !== "HMAC") throw fail("NotSupportedError", "Unsupported algorithm.");
         keyOf(key, "verify", "HMAC");
         const expected = new Uint8Array(need(hmacN(key.algorithm.hash.name, secret.get(key), copy(data))));
@@ -293,6 +472,7 @@
       need1(arguments, 3, "deriveBits");
       return promised(() => {
         const alg = normalize(algorithm);
+        if (alg.name === "ECDH" || alg.name === "X25519") return ecdhBits(alg, baseKey, length);
         if (NAMES[alg.name] !== "kdf") throw fail("NotSupportedError", "Unsupported algorithm.");
         keyOf(baseKey, "deriveBits", alg.name);
         return kdfBits(alg, baseKey, length);
@@ -302,13 +482,14 @@
       need1(arguments, 5, "deriveKey");
       return promised(() => {
         const alg = normalize(algorithm);
-        if (NAMES[alg.name] !== "kdf") throw fail("NotSupportedError", "Unsupported algorithm.");
-        keyOf(baseKey, "deriveKey", alg.name);
+        const agreement = alg.name === "ECDH" || alg.name === "X25519";
+        if (!agreement && NAMES[alg.name] !== "kdf") throw fail("NotSupportedError", "Unsupported algorithm.");
+        if (!agreement) keyOf(baseKey, "deriveKey", alg.name);
         const target = normalize(derivedKeyType);
         const kind = NAMES[target.name];
         if (kind !== "aes" && kind !== "hmac") throw fail("NotSupportedError", "Unsupported derived key algorithm.");
         const bits = kind === "aes" ? keyLength(target) : target.length !== undefined ? target.length : keyLength({ ...target, length: undefined });
-        const derived = new Uint8Array(kdfBits(alg, baseKey, Math.ceil(bits / 8) * 8));
+        const derived = new Uint8Array(agreement ? ecdhBits(alg, baseKey, Math.ceil(bits / 8) * 8) : kdfBits(alg, baseKey, Math.ceil(bits / 8) * 8));
         return importKeyData("raw", derived.slice(0, Math.ceil(bits / 8)), target, !!extractable, Array.from(keyUsages || [], String));
       });
     }
@@ -316,11 +497,12 @@
       need1(arguments, 4, "wrapKey");
       return promised(() => {
         const alg = normalize(wrapAlgorithm);
-        if (NAMES[alg.name] !== "aes") throw fail("NotSupportedError", "Unsupported algorithm.");
+        if (NAMES[alg.name] !== "aes" && alg.name !== "RSA-OAEP") throw fail("NotSupportedError", "Unsupported algorithm.");
         keyOf(wrappingKey, "wrapKey", alg.name);
         let exported = exportKeyData(String(format), keyOf(key));
         if (String(format) === "jwk") exported = new TextEncoder().encode(JSON.stringify(exported));
         else exported = new Uint8Array(exported);
+        if (alg.name === "RSA-OAEP") { keyOf(wrappingKey, "wrapKey", alg.name); return oaep(alg, wrappingKey, exported, true); }
         return aesRun(alg, wrappingKey, exported, true);
       });
     }
@@ -328,9 +510,9 @@
       need1(arguments, 7, "unwrapKey");
       return promised(() => {
         const alg = normalize(unwrapAlgorithm);
-        if (NAMES[alg.name] !== "aes") throw fail("NotSupportedError", "Unsupported algorithm.");
+        if (NAMES[alg.name] !== "aes" && alg.name !== "RSA-OAEP") throw fail("NotSupportedError", "Unsupported algorithm.");
         keyOf(unwrappingKey, "unwrapKey", alg.name);
-        const plain = new Uint8Array(aesRun(alg, unwrappingKey, copy(wrappedKey, "wrappedKey"), false));
+        const plain = new Uint8Array(alg.name === "RSA-OAEP" ? oaepUnwrap(alg, unwrappingKey, copy(wrappedKey, "wrappedKey")) : aesRun(alg, unwrappingKey, copy(wrappedKey, "wrappedKey"), false));
         let data = plain;
         if (String(format) === "jwk") {
           try { data = JSON.parse(new TextDecoder().decode(plain)); } catch (e) { throw fail("DataError", "The unwrapped key is not JSON."); }

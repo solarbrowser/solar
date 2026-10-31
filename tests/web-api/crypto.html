@@ -85,6 +85,69 @@ async function run() {
   e = await rejects(s.generateKey({ name: "AES-GCM", length: 128 }, true, ["sign"]));
   ok("a usage the algorithm lacks is a SyntaxError", e && e.name === "SyntaxError", String(e));
 
+  // ---- Public keys ----
+  const msg = enc("message to sign");
+  const ec = await s.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  ok("ECDSA key pair", ec.publicKey.type === "public" && ec.privateKey.type === "private" && ec.publicKey.algorithm.namedCurve === "P-256" && ec.publicKey.usages.join() === "verify" && ec.privateKey.usages.join() === "sign", JSON.stringify(ec.publicKey.algorithm));
+  const esig = await s.sign({ name: "ECDSA", hash: "SHA-256" }, ec.privateKey, msg);
+  ok("ECDSA signature is 64 bytes (r|s)", esig.byteLength === 64, esig.byteLength);
+  ok("ECDSA verifies, and fails on other data", (await s.verify({ name: "ECDSA", hash: "SHA-256" }, ec.publicKey, esig, msg)) === true && (await s.verify({ name: "ECDSA", hash: "SHA-256" }, ec.publicKey, esig, enc("other"))) === false, "");
+  const rawPub = await s.exportKey("raw", ec.publicKey);
+  ok("EC raw public is 65 bytes starting 04", rawPub.byteLength === 65 && new Uint8Array(rawPub)[0] === 4, rawPub.byteLength);
+  const reimported = await s.importKey("raw", rawPub, { name: "ECDSA", namedCurve: "P-256" }, true, ["verify"]);
+  ok("a raw EC key verifies the signature", await s.verify({ name: "ECDSA", hash: "SHA-256" }, reimported, esig, msg), "");
+  const ejwk = await s.exportKey("jwk", ec.privateKey);
+  ok("EC private JWK", ejwk.kty === "EC" && ejwk.crv === "P-256" && ejwk.x.length === 43 && ejwk.y.length === 43 && ejwk.d.length === 43, JSON.stringify(ejwk));
+  const eback = await s.importKey("jwk", ejwk, { name: "ECDSA", namedCurve: "P-256" }, true, ["sign"]);
+  ok("the JWK private key signs what the public key verifies", await s.verify({ name: "ECDSA", hash: "SHA-256" }, ec.publicKey, await s.sign({ name: "ECDSA", hash: "SHA-256" }, eback, msg), msg), "");
+  const spki = await s.exportKey("spki", ec.publicKey), pkcs8 = await s.exportKey("pkcs8", ec.privateKey);
+  ok("spki and pkcs8 import", (await s.importKey("spki", spki, { name: "ECDSA", namedCurve: "P-256" }, true, ["verify"])).type === "public" && (await s.importKey("pkcs8", pkcs8, { name: "ECDSA", namedCurve: "P-256" }, true, ["sign"])).type === "private", "");
+  e = await rejects(s.importKey("spki", spki, { name: "ECDSA", namedCurve: "P-384" }, true, ["verify"]));
+  ok("the wrong curve is a DataError", e && e.name === "DataError", String(e));
+  e = await rejects(s.exportKey("pkcs8", ec.publicKey));
+  ok("a public key does not export as pkcs8", e && e.name === "InvalidAccessError", String(e));
+
+  const rsa = await s.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
+  ok("RSA key pair", rsa.publicKey.algorithm.modulusLength === 2048 && rsa.publicKey.algorithm.hash.name === "SHA-256" && hex(rsa.publicKey.algorithm.publicExponent) === "010001", JSON.stringify(rsa.publicKey.algorithm));
+  const rsig = await s.sign("RSASSA-PKCS1-v1_5", rsa.privateKey, msg);
+  ok("RSASSA signature is 256 bytes and verifies", rsig.byteLength === 256 && (await s.verify("RSASSA-PKCS1-v1_5", rsa.publicKey, rsig, msg)) === true && (await s.verify("RSASSA-PKCS1-v1_5", rsa.publicKey, rsig, enc("x"))) === false, "");
+  const rjwk = await s.exportKey("jwk", rsa.privateKey);
+  ok("RSA private JWK", rjwk.kty === "RSA" && rjwk.alg === "RS256" && ["n", "e", "d", "p", "q", "dp", "dq", "qi"].every((k) => typeof rjwk[k] === "string"), Object.keys(rjwk).join());
+  const rback = await s.importKey("jwk", rjwk, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, true, ["sign"]);
+  ok("an RSA JWK private key signs", await s.verify("RSASSA-PKCS1-v1_5", rsa.publicKey, await s.sign("RSASSA-PKCS1-v1_5", rback, msg), msg), "");
+
+  const pss = await s.generateKey({ name: "RSA-PSS", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-384" }, false, ["sign", "verify"]);
+  const psig = await s.sign({ name: "RSA-PSS", saltLength: 48 }, pss.privateKey, msg);
+  ok("RSA-PSS", (await s.verify({ name: "RSA-PSS", saltLength: 48 }, pss.publicKey, psig, msg)) === true && (await s.verify({ name: "RSA-PSS", saltLength: 48 }, pss.publicKey, psig, enc("z"))) === false, "");
+
+  const oaep = await s.generateKey({ name: "RSA-OAEP", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["encrypt", "decrypt", "wrapKey", "unwrapKey"]);
+  ok("OAEP usages are split", oaep.publicKey.usages.join() === "encrypt,wrapKey" && oaep.privateKey.usages.join() === "decrypt,unwrapKey", oaep.publicKey.usages.join());
+  const oct = await s.encrypt({ name: "RSA-OAEP", label: enc("lbl") }, oaep.publicKey, enc("hello rsa"));
+  ok("OAEP round trip", oct.byteLength === 256 && new TextDecoder().decode(await s.decrypt({ name: "RSA-OAEP", label: enc("lbl") }, oaep.privateKey, oct)) === "hello rsa", "");
+  e = await rejects(s.decrypt({ name: "RSA-OAEP", label: enc("other") }, oaep.privateKey, oct));
+  ok("OAEP with another label is OperationError", e && e.name === "OperationError", String(e));
+  const owrapped = await s.wrapKey("raw", ak, oaep.publicKey, { name: "RSA-OAEP" });
+  const ounwrapped = await s.unwrapKey("raw", owrapped, oaep.privateKey, { name: "RSA-OAEP" }, "AES-GCM", true, ["encrypt"]);
+  ok("wrapKey with RSA-OAEP", hex(await s.exportKey("raw", ounwrapped)) === hex(await s.exportKey("raw", ak)), "");
+
+  const a = await s.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits", "deriveKey"]);
+  const b = await s.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits", "deriveKey"]);
+  const ab = await s.deriveBits({ name: "ECDH", public: b.publicKey }, a.privateKey, 256);
+  const ba = await s.deriveBits({ name: "ECDH", public: a.publicKey }, b.privateKey, 256);
+  ok("ECDH agrees", hex(ab) === hex(ba) && ab.byteLength === 32 && a.publicKey.usages.length === 0, hex(ab));
+  const dkey = await s.deriveKey({ name: "ECDH", public: b.publicKey }, a.privateKey, { name: "AES-GCM", length: 256 }, true, ["encrypt"]);
+  ok("ECDH deriveKey", hex(await s.exportKey("raw", dkey)) === hex(ab), "");
+
+  const ed = await s.generateKey("Ed25519", true, ["sign", "verify"]);
+  const edsig = await s.sign("Ed25519", ed.privateKey, msg);
+  ok("Ed25519", edsig.byteLength === 64 && (await s.verify("Ed25519", ed.publicKey, edsig, msg)) === true && (await s.verify("Ed25519", ed.publicKey, edsig, enc("n"))) === false, "");
+  const edjwk = await s.exportKey("jwk", ed.publicKey);
+  ok("Ed25519 JWK", edjwk.kty === "OKP" && edjwk.crv === "Ed25519" && edjwk.x.length === 43, JSON.stringify(edjwk));
+  const x1 = await s.generateKey("X25519", true, ["deriveBits"]), x2 = await s.generateKey("X25519", true, ["deriveBits"]);
+  ok("X25519 agrees", hex(await s.deriveBits({ name: "X25519", public: x2.publicKey }, x1.privateKey, 256)) === hex(await s.deriveBits({ name: "X25519", public: x1.publicKey }, x2.privateKey, 256)), "");
+  e = await rejects(s.sign({ name: "ECDSA", hash: "SHA-256" }, ec.publicKey, msg));
+  ok("signing with a public key is InvalidAccessError", e && e.name === "InvalidAccessError", String(e));
+
   // in a worker
   const worker = new Worker(URL.createObjectURL(new Blob([`
     crypto.subtle.digest("SHA-256", new TextEncoder().encode("abc")).then((d) => postMessage({ n: d.byteLength, uuid: crypto.randomUUID().length, key: typeof CryptoKey }));

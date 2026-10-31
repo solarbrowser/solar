@@ -18,6 +18,8 @@
 
 namespace solar::webapi {
 
+void InstallCryptoKeyNatives(Quanta::Embed::Realm& realm);  // (CryptoKeys.cpp)
+
 namespace qe = Quanta::Embed;
 using Quanta::Context;
 using Quanta::Value;
@@ -202,6 +204,7 @@ void InstallCryptoNatives(qe::Realm& realm) {
   qe::DefineGlobalFunction(ctx, "__solarCryptoPbkdf2", Pbkdf2, 5);
   qe::DefineGlobalFunction(ctx, "__solarCryptoHkdf", Hkdf, 5);
   qe::DefineGlobalFunction(ctx, "__solarCryptoRandom", Random, 1);
+  InstallCryptoKeyNatives(realm);
 }
 
 }  // namespace solar::webapi
