@@ -1,0 +1,73 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>WPT report</title>
+<style>
+  :root { --bg: #fff; --fg: #1d2330; --muted: #6b7385; --line: #e3e6ee; --ok: #2e9e5b; --bad: #d8453f; --mid: #e0a526; --track: #f0d2d0; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #14171f; --fg: #e6e9f0; --muted: #8e97ab; --line: #2a2f3c; --track: #4a2a2a; } }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; }
+  header { padding: 20px 24px 8px; } h1 { margin: 0 0 4px; font-size: 22px; }
+  #summary { color: var(--muted); } #search { margin: 12px 24px; width: min(480px, calc(100% - 48px)); padding: 7px 10px; font: inherit; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+  #tree { padding: 0 24px 40px; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 4px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .row .name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .bar { flex: 0 0 160px; height: 8px; background: var(--track); border-radius: 4px; overflow: hidden; }
+  .row .bar i { display: block; height: 100%; background: var(--ok); }
+  .row .num { flex: 0 0 210px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .row .pct { flex: 0 0 52px; text-align: right; font-variant-numeric: tabular-nums; }
+  .kids { margin-left: 18px; } .file { cursor: default; } .file .name { white-space: normal; }
+  .file .note { color: var(--muted); font-size: 12px; } .pass { color: var(--ok); } .fail { color: var(--bad); } .some { color: var(--mid); }
+  .tri { display: inline-block; width: 14px; color: var(--muted); }
+  @media (max-width: 640px) { .row .bar { flex-basis: 60px; } .row .num { flex-basis: 110px; } }
+</style>
+<header><h1>WPT report</h1><div id="summary"></div></header>
+<input id="search" type="search" placeholder="Find a page (part of the path)">
+<div id="tree"></div>
+<script>
+const DATA = /*DATA*/null;
+const [N, P, W, S, T, C, F] = [0, 1, 2, 3, 4, 5, 6];
+const pct = (a, b) => (b ? (100 * a / b) : 0);
+const fmt = (n) => n.toLocaleString("en");
+document.getElementById("summary").textContent = `${fmt(DATA[P])} pages, ${fmt(DATA[W])} pass whole; ${fmt(DATA[S])} of ${fmt(DATA[T])} subtests pass (${pct(DATA[S], DATA[T]).toFixed(1)}%). Pages with no subtests (reference tests and the like) count as pages only.`;
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
+function dirRow(n, path) {
+  const wrap = el("div"), row = el("div", "row"), tri = el("span", "tri", "▸");
+  const name = el("span", "name"); name.append(tri, n[N] + "/");
+  const bar = el("span", "bar"), fill = el("i"); fill.style.width = pct(n[S], n[T]) + "%"; bar.append(fill);
+  const num = el("span", "num", `${fmt(n[W])}/${fmt(n[P])} pages · ${fmt(n[S])}/${fmt(n[T])}`);
+  const p = el("span", "pct", n[T] ? pct(n[S], n[T]).toFixed(1) + "%" : "–");
+  row.append(name, bar, num, p); wrap.append(row);
+  let kids = null;
+  row.addEventListener("click", () => {
+    if (kids) { kids.hidden = !kids.hidden; tri.textContent = kids.hidden ? "▸" : "▾"; return; }
+    kids = el("div", "kids");
+    for (const c of n[C]) kids.append(dirRow(c, path + c[N] + "/"));
+    for (const f of n[F]) kids.append(fileRow(f, path));
+    wrap.append(kids); tri.textContent = "▾";
+  });
+  return wrap;
+}
+function fileRow(f, path) {
+  const [name, rc, passed, total, note] = f, row = el("div", "row file");
+  const whole = rc === 0 && total > 0 && passed === total;
+  const label = el("span", "name"); label.append(el("span", whole ? "pass" : total && passed ? "some" : "fail", whole ? "● " : total && passed ? "◐ " : "○ "), path + name);
+  if (note && !whole) label.append(el("div", "note", note));
+  const num = el("span", "num", total ? `${passed}/${total}` : "no subtests");
+  row.append(label, num);
+  return row;
+}
+const tree = document.getElementById("tree");
+for (const c of DATA[C]) tree.append(dirRow(c, c[N] + "/"));
+// A search lists the pages whose path has the text (the first 300).
+const search = document.getElementById("search");
+let all = null;
+function flatten(n, path, out) { for (const f of n[F]) out.push([path + f[0], f]); for (const c of n[C]) flatten(c, path + c[N] + "/", out); return out; }
+search.addEventListener("input", () => {
+  const q = search.value.trim().toLowerCase();
+  tree.textContent = "";
+  if (!q) { for (const c of DATA[C]) tree.append(dirRow(c, c[N] + "/")); return; }
+  if (!all) all = flatten(DATA, "", []);
+  let shown = 0;
+  for (const [path, f] of all) { if (path.toLowerCase().includes(q)) { tree.append(fileRow([path, f[1], f[2], f[3], f[4]], "")); if (++shown >= 300) break; } }
+  if (!shown) tree.append(el("div", "note", "Nothing."));
+});
+</script>
