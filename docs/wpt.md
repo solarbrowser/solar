@@ -1,7 +1,7 @@
 # Web Platform Tests
 
 `tests/wpt` is the official [web-platform-tests](https://github.com/web-platform-tests/wpt) repository as a submodule, pinned to the commit the pages we pass were checked against.
-Nothing of ours lives in it. Run `tools/setupwpt.sh` once after cloning (it checks out only the directories the tests use).
+Nothing of ours lives in it. After cloning, `git submodule update --init tests/wpt` checks out all of it (several GB).
 
 What is ours is in `tests/wpt-solar`:
 
