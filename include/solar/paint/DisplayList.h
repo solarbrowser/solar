@@ -192,6 +192,7 @@ struct DrawVideo {
   ObjectFit fit = ObjectFit::Contain;
   Length x{0, 50, false}, y{0, 50, false};
   ImageRef poster;  // shown until there is a picture
+  bool controls = false;  // the element has the controls attribute: they are drawn over the picture
 };
 
 // What is drawn between PushMask and PopMask is drawn on its own, then cut to the image of the mask (its alpha), and put in the page.

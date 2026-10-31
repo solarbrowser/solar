@@ -133,6 +133,7 @@ struct Item {
   std::shared_ptr<Fetcher> fetcher;
   qe::Persistent callback;
   std::vector<dom::Element*> elements;
+  bool controlsOn = false;            // the element has controls: what they show changes with the player's state
   int lastWidth = 0, lastHeight = 0;  // the size the elements were laid out with
 };
 
@@ -213,6 +214,13 @@ std::function<void()> Notifier(State* state, uint32_t id, Kind kind) {
             }
           }
         }
+        // (A paused video with controls: they show the time, which does not draw itself as a playing one's does.)
+        if (item.controlsOn && item.player && !item.player->playing()) {
+          for (dom::Element* element : item.elements) {
+            dom::NoteDamage(element, dom::kDamageAttributes);
+            dom::NoteTreeChangeAt(element);
+          }
+        }
         callback = &item.callback;
       }
       qe::Call(c, callback->Get(), qe::Undefined());
@@ -283,7 +291,13 @@ Value Control(Context& ctx, Value, qe::Args args, Value) {
   else if (what == "muted") item->player->SetMuted(qe::ToBoolean(value));
   else if (what == "rate") item->player->SetRate(qe::ToNumber(ctx, value));
   else if (what == "loop") item->player->SetLoop(qe::ToBoolean(value));
-  else if (what == "ahead") item->player->SetBufferAhead(static_cast<uint64_t>(qe::ToNumber(ctx, value)));
+  else if (what == "controls") {
+    // The controls (shown on a video that has the attribute) are on or off: the list is made again, since what it draws changes.
+    const bool visible = qe::ToBoolean(value);
+    item->controlsOn = true;
+    item->player->SetControlsVisible(visible);
+    for (dom::Element* element : item->elements) { dom::NoteDamage(element, dom::kDamageAttributes); dom::NoteTreeChangeAt(element); }
+  } else if (what == "ahead") item->player->SetBufferAhead(static_cast<uint64_t>(qe::ToNumber(ctx, value)));
   else if (what == "close") {
     const uint32_t id = qe::ToUint32(ctx, args[0]);
     state->Release(*item);

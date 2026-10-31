@@ -216,6 +216,7 @@
   const ensure = (el) => {
     const s = stateOf(el);
     if (keyOf(el) !== s.key) load(el, s);
+    if (typeof bindControls === "function") bindControls(el);
   };
 
   // ---- The element's interface ----
@@ -372,6 +373,56 @@
     Object.defineProperty(globalThis, "Audio", { value: AudioConstructor, writable: true, configurable: true, enumerable: false });
   }
 
+  // ---- The controls of a video that has the attribute: drawn by the program (SkiaPainter DrawControls, which has the same measures), operated here ----
+  const BAR = 36;
+  const bar = (el) => {
+    const r = el.getBoundingClientRect();
+    return { r, w: r.width, h: r.height, from: BAR + (r.width >= 360 ? 140 : 8), to: r.width - BAR - 8 };
+  };
+  const showControls = (el, s, keepFor) => {
+    if (s.id < 0) return;
+    controlN(s.id, "controls", true);
+    if (s.hideTimer) clearTimeout(s.hideTimer);
+    s.hideTimer = 0;
+    if (keepFor && !s.paused) s.hideTimer = setTimeout(() => { if (!s.dragging && s.id >= 0 && !s.over) controlN(s.id, "controls", false); }, keepFor);
+  };
+  const seekTo = (el, x, g) => {
+    const d = el.duration;
+    if (!(d > 0) || !Number.isFinite(d)) return;
+    el.currentTime = Math.min(1, Math.max(0, (x - g.from) / (g.to - g.from))) * d;
+  };
+  const bindControls = (el) => {
+    const s = stateOf(el);
+    if (s.bound || !el.hasAttribute("controls") || !(el instanceof HTMLVideoElement)) return;
+    s.bound = true;
+    el.addEventListener("mouseenter", () => { s.over = true; showControls(el, s, 0); });
+    el.addEventListener("mousemove", () => { s.over = true; showControls(el, s, 2500); });
+    el.addEventListener("mouseleave", () => { s.over = false; showControls(el, s, 600); });
+    el.addEventListener("mousedown", (e) => {
+      if (!el.hasAttribute("controls") || e.button !== 0) return;
+      const g = bar(el);
+      const x = e.clientX - g.r.left, y = e.clientY - g.r.top;
+      if (y < g.h - BAR || x < g.from - 4 || x > g.to + 4 || g.w < 120) return;
+      // On the position: a click or a drag seeks.
+      s.dragging = true;
+      seekTo(el, x, g);
+      const move = (m) => seekTo(el, m.clientX - el.getBoundingClientRect().left, bar(el));
+      const up = () => { s.dragging = false; document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up); };
+      document.addEventListener("mousemove", move);
+      document.addEventListener("mouseup", up);
+    });
+    el.addEventListener("click", (e) => {
+      if (!el.hasAttribute("controls")) return;
+      const g = bar(el);
+      const x = e.clientX - g.r.left, y = e.clientY - g.r.top;
+      const inBar = y >= g.h - BAR && g.w >= 120 && g.h >= 64;
+      if (inBar && x >= g.w - BAR) { el.muted = !el.muted; showControls(el, s, 2500); return; }
+      if (inBar && x >= BAR) return;  // (the time and the position: nothing on a click, the position was handled at the press)
+      if (el.paused) el.play().catch(() => {}); else el.pause();
+      showControls(el, s, 2500);
+    });
+  };
+
   // ---- Finding the elements (the parser makes them without script) ----
   const scan = (root) => {
     if (root.nodeType !== 1) return;
@@ -383,7 +434,7 @@
   if (typeof MutationObserver === "function" && typeof document !== "undefined") {
     const observer = new MutationObserver((records) => {
       for (const r of records) {
-        if (r.type === "attributes") { if (r.target instanceof HTMLMediaElement) ensure(r.target); continue; }
+        if (r.type === "attributes") { if (r.target instanceof HTMLMediaElement) { ensure(r.target); if (r.attributeName === "controls" && r.target.hasAttribute("controls") && stateOf(r.target).id >= 0) controlN(stateOf(r.target).id, "controls", false); } continue; }
         for (const node of r.addedNodes) {
           if (node.nodeType !== 1) continue;
           if (node.localName === "source" && node.parentNode instanceof HTMLMediaElement) ensure(node.parentNode);
@@ -391,7 +442,7 @@
         }
       }
     });
-    observer.observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ["src"] });
+    observer.observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ["src", "controls"] });
     const begin = () => { if (document.documentElement) scan(document.documentElement); };
     begin();
     document.addEventListener("DOMContentLoaded", begin, { once: true });

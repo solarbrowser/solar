@@ -1,0 +1,68 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Media controls</title>
+<style>body { margin: 8px; background: #eee; } video { display: block; width: 320px; }</style>
+<video id="v" src="media/test.mp4" controls></video>
+<script>
+// Needs tests/web-api/wsserver.py. The clicks are made as events with positions, as the window makes them.
+const ok = (name, condition, detail) => console.log((condition ? "ok   " : "FAIL ") + name + (condition ? "" : "  " + detail));
+const wait = (target, type, ms = 8000) => new Promise((resolve, reject) => { const t = setTimeout(() => reject(new Error("timeout waiting for " + type)), ms); target.addEventListener(type, (e) => { clearTimeout(t); resolve(e); }, { once: true }); });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function run() {
+  const v = document.getElementById("v");
+  await wait(v, "canplay");
+  await sleep(200);
+  const r = v.getBoundingClientRect();
+  ok("the video has its size", Math.round(r.width) === 320 && Math.round(r.height) === 180 && v.controls === true, r.width + "x" + r.height);
+  const at = (type, x, y) => v.dispatchEvent(new MouseEvent(type, { clientX: r.left + x, clientY: r.top + y, bubbles: true, cancelable: true, button: 0 }));
+  const click = (x, y) => { at("mousedown", x, y); at("mouseup", x, y); at("click", x, y); };
+
+  click(160, 60);
+  await sleep(100);
+  ok("a click on the picture plays", !v.paused, v.paused);
+  click(160, 60);
+  await sleep(100);
+  ok("and again pauses", v.paused, v.paused);
+
+  click(18, 162);
+  await sleep(100);
+  ok("the play button plays", !v.paused, v.paused);
+  click(18, 162);
+  await sleep(100);
+  ok("and pauses", v.paused, v.paused);
+
+  v.muted = false;
+  click(320 - 18, 162);
+  ok("the sound button mutes", v.muted === true, v.muted);
+  click(320 - 18, 162);
+  ok("and unmutes", v.muted === false, v.muted);
+
+  // the position: from 140 px (the width is 320: no time, so from 44) to 320 - 44 = 276
+  const seeked = wait(v, "seeked");
+  at("mousedown", 160, 162);
+  at("mouseup", 160, 162);
+  await seeked;
+  const fraction = (160 - 44) / (276 - 44);
+  ok("a press on the position seeks to it", Math.abs(v.currentTime - fraction * v.duration) < 0.2, `${v.currentTime} vs ${fraction * v.duration}`);
+  ok("the position does not play or pause", v.paused, v.paused);
+
+  // a drag
+  at("mousedown", 100, 162);
+  document.dispatchEvent(new MouseEvent("mousemove", { clientX: r.left + 250, clientY: r.top + 160, bubbles: true }));
+  await sleep(200);
+  at("mouseup", 250, 162);
+  document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  ok("a drag follows the pointer", Math.abs(v.currentTime - ((250 - 44) / (276 - 44)) * v.duration) < 0.3, v.currentTime);
+
+  // without the attribute a click does nothing
+  v.removeAttribute("controls");
+  click(160, 60);
+  await sleep(100);
+  ok("no controls attribute: no clicks taken", v.paused, v.paused);
+  v.setAttribute("controls", "");
+  v.currentTime = 2;
+  await wait(v, "seeked");
+  await sleep(100);
+}
+run().then(() => console.log("done"), (e) => { console.log("FAIL exception " + (e && e.stack || e)); console.log("done"); });
+</script>

@@ -392,6 +392,11 @@ void Player::SetRate(double rate) {
   if (impl_->stream) impl_->stream->Poke();
 }
 
+void Player::SetControlsVisible(bool visible) {
+  std::lock_guard lock(impl_->m);
+  impl_->controlsVisible = visible;
+}
+
 void Player::SetLoop(bool loop) {
   std::lock_guard lock(impl_->m);
   impl_->loop = loop;
@@ -400,6 +405,10 @@ void Player::SetLoop(bool loop) {
 PlayerState Player::State() {
   std::lock_guard lock(impl_->m);
   PlayerState state = impl_->st;
+  state.playing = impl_->wantPlay;
+  state.volume = impl_->volume;
+  state.muted = impl_->muted;
+  state.controlsVisible = impl_->controlsVisible;
   state.currentTime = impl_->st.seeking && impl_->seekTo ? impl_->seekTo->time : impl_->ClockLocked();
   if (!std::isnan(state.duration)) state.currentTime = std::min(state.currentTime, state.duration);
   return state;

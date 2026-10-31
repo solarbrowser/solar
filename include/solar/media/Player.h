@@ -130,6 +130,11 @@ struct PlayerState {
   int error = 0;  // MEDIA_ERR_*: 0 none, 2 network, 3 decode, 4 not supported
   std::string errorMessage;
   std::vector<TimeRange> buffered;
+  // What the controls (the ones the program draws on a video that has `controls`) show.
+  bool playing = false;  // play() was asked and not pause()
+  double volume = 1;
+  bool muted = false;
+  bool controlsVisible = false;
 };
 
 class Player {
@@ -151,6 +156,7 @@ class Player {
   void SetMuted(bool muted);
   void SetRate(double rate);
   void SetLoop(bool loop);
+  void SetControlsVisible(bool visible);
 
   PlayerState State();
   // The events there have been since the last call, by the names of the media events ("loadedmetadata", "canplay", "seeked", "ended", ...), in order.

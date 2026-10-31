@@ -354,6 +354,117 @@ struct SkiaPainter::Impl {
   };
   std::unordered_map<const media::Player*, VideoPicture> videoPictures;
 
+
+  // The controls of a video that has the attribute (https://html.spec.whatwg.org/multipage/media.html#user-interface): a bar over the bottom of the picture, with play or pause, the
+  // time, the position (and what is buffered) and the sound. They are drawn here with no font (the time is in a small pixel font), and the clicks on them are taken by
+  // src/web-api/js/media.js, which has the same measures: the bar is 36 px; the time is 140 px from the button when the video is 360 px wide or more; the sound button is the
+  // last 36 px.
+  static constexpr float kBar = 36;
+
+  static void PixelText(SkCanvas& canvas, const std::string& text, float x, float y, float scale, const SkPaint& paint) {
+    static const char* const glyphs[][7] = {
+        {"01110", "10001", "10011", "10101", "11001", "10001", "01110"}, {"00100", "01100", "00100", "00100", "00100", "00100", "01110"},
+        {"01110", "10001", "00001", "00010", "00100", "01000", "11111"}, {"11110", "00001", "00001", "01110", "00001", "00001", "11110"},
+        {"00010", "00110", "01010", "10010", "11111", "00010", "00010"}, {"11111", "10000", "11110", "00001", "00001", "10001", "01110"},
+        {"00110", "01000", "10000", "11110", "10001", "10001", "01110"}, {"11111", "00001", "00010", "00100", "01000", "01000", "01000"},
+        {"01110", "10001", "10001", "01110", "10001", "10001", "01110"}, {"01110", "10001", "10001", "01111", "00001", "00010", "01100"},
+        {"00000", "00100", "00100", "00000", "00100", "00100", "00000"},  // :
+        {"00001", "00010", "00010", "00100", "01000", "01000", "10000"},  // /
+        {"00000", "00000", "00000", "11111", "00000", "00000", "00000"},  // -
+    };
+    for (char c : text) {
+      int index = -1;
+      if (c >= '0' && c <= '9') index = c - '0';
+      else if (c == ':') index = 10;
+      else if (c == '/') index = 11;
+      else if (c == '-') index = 12;
+      if (index >= 0) {
+        for (int row = 0; row < 7; ++row) {
+          for (int col = 0; col < 5; ++col) {
+            if (glyphs[index][row][col] == '1') canvas.drawRect(SkRect::MakeXYWH(x + col * scale, y + row * scale, scale, scale), paint);
+          }
+        }
+      }
+      x += 6 * scale;
+    }
+  }
+
+  static std::string ClockText(double seconds) {
+    if (std::isnan(seconds) || seconds < 0) return "-:--";
+    if (std::isinf(seconds)) return "-:--";
+    const long total = static_cast<long>(seconds);
+    char buffer[32];
+    if (total >= 3600) std::snprintf(buffer, sizeof buffer, "%ld:%02ld:%02ld", total / 3600, (total / 60) % 60, total % 60);
+    else std::snprintf(buffer, sizeof buffer, "%ld:%02ld", total / 60, total % 60);
+    return buffer;
+  }
+
+  void DrawControls(SkCanvas& canvas, const SkRect& box, const media::PlayerState& state) {
+    if (box.width() < 120 || box.height() < 64) return;
+    if (state.playing && !state.controlsVisible) return;
+    const float top = box.bottom() - kBar, left = box.left(), right = box.right();
+    SkPaint back;
+    back.setColor(SkColorSetARGB(150, 0, 0, 0));
+    canvas.drawRect(SkRect::MakeLTRB(left, top, right, box.bottom()), back);
+    SkPaint white;
+    white.setAntiAlias(true);
+    white.setColor(SK_ColorWHITE);
+    const float cy = top + kBar / 2;
+    // Play, or pause.
+    if (state.playing) {
+      canvas.drawRect(SkRect::MakeXYWH(left + 12, cy - 7, 4, 14), white);
+      canvas.drawRect(SkRect::MakeXYWH(left + 20, cy - 7, 4, 14), white);
+    } else {
+      SkPathBuilder triangle;
+      triangle.moveTo(left + 13, cy - 8).lineTo(left + 13, cy + 8).lineTo(left + 25, cy).close();
+      canvas.drawPath(triangle.detach(), white);
+    }
+    // The time.
+    float progressFrom = left + kBar + 8;
+    if (box.width() >= 360) {
+      const std::string text = ClockText(state.currentTime) + " / " + ClockText(state.duration);
+      PixelText(canvas, text, left + kBar + 4, cy - 7, 2, white);
+      progressFrom = left + kBar + 140;
+    }
+    // The position: the track, what is buffered on it, what is played, and the thumb.
+    const float progressTo = right - kBar - 8;
+    if (progressTo > progressFrom + 20) {
+      const float width = progressTo - progressFrom;
+      SkPaint track;
+      track.setAntiAlias(true);
+      track.setColor(SkColorSetARGB(90, 255, 255, 255));
+      canvas.drawRRect(SkRRect::MakeRectXY(SkRect::MakeXYWH(progressFrom, cy - 2, width, 4), 2, 2), track);
+      const double duration = state.duration;
+      if (!std::isnan(duration) && duration > 0 && !std::isinf(duration)) {
+        SkPaint buffered;
+        buffered.setAntiAlias(true);
+        buffered.setColor(SkColorSetARGB(150, 255, 255, 255));
+        for (const media::TimeRange& range : state.buffered) {
+          const float a = progressFrom + width * static_cast<float>(std::clamp(range.start / duration, 0.0, 1.0)), b = progressFrom + width * static_cast<float>(std::clamp(range.end / duration, 0.0, 1.0));
+          if (b > a) canvas.drawRRect(SkRRect::MakeRectXY(SkRect::MakeLTRB(a, cy - 2, b, cy + 2), 2, 2), buffered);
+        }
+        const float played = progressFrom + width * static_cast<float>(std::clamp(state.currentTime / duration, 0.0, 1.0));
+        canvas.drawRRect(SkRRect::MakeRectXY(SkRect::MakeLTRB(progressFrom, cy - 2, played, cy + 2), 2, 2), white);
+        canvas.drawCircle(played, cy, 6, white);
+      }
+    }
+    // The sound: a speaker, with waves, or crossed out when it is off.
+    const float sx = right - kBar + 8;
+    SkPathBuilder speaker;
+    speaker.moveTo(sx, cy - 3).lineTo(sx + 4, cy - 3).lineTo(sx + 9, cy - 8).lineTo(sx + 9, cy + 8).lineTo(sx + 4, cy + 3).lineTo(sx, cy + 3).close();
+    canvas.drawPath(speaker.detach(), white);
+    SkPaint stroke = white;
+    stroke.setStyle(SkPaint::kStroke_Style);
+    stroke.setStrokeWidth(2);
+    if (state.muted || state.volume <= 0) {
+      canvas.drawLine(sx + 12, cy - 4, sx + 18, cy + 4, stroke);
+      canvas.drawLine(sx + 18, cy - 4, sx + 12, cy + 4, stroke);
+    } else {
+      canvas.drawArc(SkRect::MakeLTRB(sx + 6, cy - 5, sx + 16, cy + 5), -50, 100, false, stroke);
+      if (state.volume > 0.5) canvas.drawArc(SkRect::MakeLTRB(sx + 5, cy - 9, sx + 20, cy + 9), -50, 100, false, stroke);
+    }
+  }
+
   void DrawVideoItem(SkCanvas& canvas, const DrawVideo& item) {
     const SkRRect clip = ToSk(item.clip);
     const SkRect box = clip.getBounds();
@@ -369,6 +480,7 @@ struct SkiaPainter::Impl {
         poster.y = item.y;
         DrawElementImage(canvas, poster);
       }
+      if (item.controls && item.player) DrawControls(canvas, box, item.player->State());
       return;
     }
     VideoPicture& picture = videoPictures[item.player.get()];
@@ -406,6 +518,7 @@ struct SkiaPainter::Impl {
     canvas.drawRect(box, black);
     canvas.drawImageRect(picture.image, SkRect::MakeXYWH(x, y, w, h), SkSamplingOptions(SkFilterMode::kLinear), nullptr);
     canvas.restore();
+    if (item.controls) DrawControls(canvas, box, state);
   }
 
   void DrawElementImage(SkCanvas& canvas, const DrawImage& item) {

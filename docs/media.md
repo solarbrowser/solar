@@ -19,3 +19,18 @@ is played, by the sonames of the **major versions the program was built against*
 Build the headers' version and the shipped libraries from the same FFmpeg release. The codecs that matter for the web are the open ones (VP8, VP9, AV1, Opus, Vorbis, FLAC); H.264,
 AAC and HEVC are patented formats: a build that includes them is the distributor's licence question (the operating system's own decoders — AVFoundation, Media Foundation —
 are the later way round it, behind the same `Player`).
+
+## Download
+
+A network resource is fetched in ranges (`ByteStream` in `include/solar/media/Player.h`, with `Fetcher` in `src/web-api/Media.cpp` doing the HTTP): 4 MB at a time, with a
+`Range` header, as far ahead of what is decoded as 16 MB (2 MB for a video that is paused and only wanted its metadata: `preload` and `play()` change it), from where a seek
+goes, and what is far from the reader is let go of past 96 MB. A file with its index at the end (an MP4 not made for the web) is read from its end first, as FFmpeg asks. A
+server that does not do ranges (a 200 for the range request) is read whole, in one fetch, and all of it is kept. `buffered` is the byte ranges kept, taken as proportional to
+time. Not done: the HTTP cache is not used for the pieces, and nothing is kept on disk.
+
+## Controls
+
+A video with `controls` has a bar drawn by the program over the bottom of the picture (`DrawControls` in `src/paint/SkiaPainter.cpp`: play or pause, the time in a small
+pixel font, the position with what is buffered, the sound), shown while it is paused or the pointer has moved lately. The clicks are taken in `src/web-api/js/media.js`,
+which has the same measures (a 36 px bar; the time takes 140 px when the video is 360 px wide or more; the sound button is the last 36 px). Not done: keyboard, full screen,
+speed and captions menus, the volume as a slider.

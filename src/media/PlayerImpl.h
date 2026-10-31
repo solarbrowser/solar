@@ -47,6 +47,7 @@ struct Player::Impl {
   bool muted = false;
   double rate = 1;
   bool loop = false;
+  bool controlsVisible = false;
 
   PlayerState st;
   std::vector<std::string> events;
