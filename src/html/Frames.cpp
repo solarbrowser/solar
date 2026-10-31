@@ -154,10 +154,37 @@ void QueueTask(dom::Document* document, const char* label, dom::Element* element
 bool LoadPageIn(Quanta::Embed::Realm& realm, dom::Document* document, const std::string& markup, const std::string& contentType);
 void CompleteLoad(Quanta::Embed::Realm& realm, dom::Document* document, bool notifyFrame);
 
+// What kind of script an element is, as the standard works it out from type and language: "module", "importmap", "text/javascript" for a classic script (any of the types that are JavaScript's), or
+// the type it has, which is not a script to run.
 std::string LowerType(const dom::Element* script) {
-  const dom::Attr* type = script->FindAttribute("", "type");
-  std::string value = type ? type->value : "";
-  for (char& c : value) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  const auto isSpace = [](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r'; };
+  const auto lower = [](std::string v) { for (char& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); return v; };
+  std::string value;
+  bool fromType = false;
+  if (const dom::Attr* type = script->FindAttribute("", "type")) {
+    value = type->value;
+    if (value.empty()) return "text/javascript";
+    fromType = true;
+  } else if (const dom::Attr* language = script->FindAttribute("", "language")) {
+    if (language->value.empty()) return "text/javascript";
+    value = "text/" + language->value;
+  } else {
+    return "text/javascript";
+  }
+  value = lower(value);
+  if (value == "module" || value == "importmap") return value;
+  // (module is exact; a JavaScript type is looked at without the white space round it.)
+  std::string essence = value.substr(0, value.find(';'));
+  if (fromType) {
+    size_t from = 0;
+    while (from < essence.size() && isSpace(essence[from])) ++from;
+    essence = essence.substr(from);
+    while (!essence.empty() && isSpace(essence.back())) essence.pop_back();
+  }
+  static const char* const javascript[] = {"application/ecmascript", "application/javascript", "application/x-ecmascript", "application/x-javascript", "text/ecmascript", "text/javascript",
+                                           "text/javascript1.0", "text/javascript1.1", "text/javascript1.2", "text/javascript1.3", "text/javascript1.4", "text/javascript1.5", "text/jscript", "text/livescript",
+                                           "text/x-ecmascript", "text/x-javascript"};
+  for (const char* type : javascript) if (essence == type) return "text/javascript";
   return value;
 }
 
@@ -226,8 +253,7 @@ bool RunScript(Quanta::Embed::Realm& realm, dom::Document* document, dom::Elemen
   // A script for browsers without modules is not for this one.
   if (script->FindAttribute("", "nomodule")) return true;
   // Anything else that has a type is data, which the page reads itself.
-  const dom::Attr* type = script->FindAttribute("", "type");
-  if (type && !type->value.empty() && kind != "text/javascript" && kind != "application/javascript") return true;
+  if (kind != "text/javascript") return true;
   std::string code, filename = document->url;
   if (const dom::Attr* source = script->FindAttribute("", "src")) {
     const std::string address = Resolve(source->value, BaseOf(document));
