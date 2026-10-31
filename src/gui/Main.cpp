@@ -1639,7 +1639,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
     for (solar::dom::Node* n = from; n; n = n->parentNode) {
       if (!n->IsElement()) continue;
       solar::dom::Element* element = static_cast<solar::dom::Element*>(n);
-      if (!element->IsHtml("a")) continue;
+      if (!element->IsHtml("a") && !element->IsHtml("area")) continue;
       if (const solar::dom::Attr* href = element->FindAttribute("", "href")) {
         std::optional<solar::url::Url> base = solar::url::Parse(address);
         std::optional<solar::url::Url> target = base ? solar::url::Parse(href->value, &*base) : solar::url::Parse(href->value);

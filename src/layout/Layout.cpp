@@ -733,6 +733,95 @@ bool Clipped(Tree& tree, const Box& box, double x, double y) {
   return false;
 }
 
+
+// ---- Image maps: the area of the map of an image that holds a point (https://html.spec.whatwg.org/multipage/image-maps.html) ----
+
+// The rules for parsing a list of floating-point numbers: a number for each run of what is not a delimiter (a bad one is 0).
+std::vector<double> AreaNumbers(const std::string& text) {
+  std::vector<double> out;
+  size_t i = 0;
+  const auto delimiter = [](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r' || c == ',' || c == ';'; };
+  while (i < text.size()) {
+    while (i < text.size() && delimiter(text[i])) ++i;
+    if (i >= text.size()) break;
+    size_t end = i;
+    while (end < text.size() && !delimiter(text[end])) ++end;
+    const std::string token = text.substr(i, end - i);
+    i = end;
+    char* stop = nullptr;
+    double value = 0;
+    const bool startsLikeNumber = !token.empty() && (std::isdigit(static_cast<unsigned char>(token[0])) || token[0] == '.' || token[0] == '-');
+    if (startsLikeNumber) {
+      value = std::strtod(token.c_str(), &stop);
+      if (stop == token.c_str() || !std::isfinite(value)) value = 0;
+    }
+    out.push_back(value);
+  }
+  return out;
+}
+
+bool AreaHolds(const dom::Element* area, double x, double y) {
+  std::string shape;
+  if (const dom::Attr* a = area->FindAttribute("shape")) for (char c : a->Value()) shape += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  std::string coords;
+  if (const dom::Attr* a = area->FindAttribute("coords")) coords = a->Value();
+  if (shape == "default") return true;
+  const std::vector<double> n = AreaNumbers(coords);
+  if (shape == "circle" || shape == "circ") return n.size() >= 3 && n[2] >= 0 && (x - n[0]) * (x - n[0]) + (y - n[1]) * (y - n[1]) <= n[2] * n[2];
+  if (shape == "poly" || shape == "polygon") {
+    if (n.size() < 6) return false;
+    int winding = 0;
+    const size_t points = n.size() / 2;
+    for (size_t i = 0; i < points; ++i) {
+      const double ax = n[2 * i], ay = n[2 * i + 1], bx = n[2 * ((i + 1) % points)], by = n[2 * ((i + 1) % points) + 1];
+      const double side = (bx - ax) * (y - ay) - (x - ax) * (by - ay);
+      if (ay <= y) { if (by > y && side > 0) ++winding; }
+      else if (by <= y && side < 0) --winding;
+    }
+    return winding != 0;
+  }
+  if (n.size() < 4) return false;
+  const double x1 = std::min(n[0], n[2]), x2 = std::max(n[0], n[2]), y1 = std::min(n[1], n[3]), y2 = std::max(n[1], n[3]);
+  return x >= x1 && x <= x2 && y >= y1 && y <= y2;
+}
+
+const dom::Element* FindMap(const dom::Node* node, const std::string& name) {
+  for (const dom::Node* n = node; n; n = dom::NextSiblingOf(n)) {
+    if (n->IsElement()) {
+      const dom::Element* e = static_cast<const dom::Element*>(n);
+      if (e->IsHtml("map")) {
+        const dom::Attr* named = e->FindAttribute("name");
+        const dom::Attr* id = e->FindAttribute("id");
+        if ((named && named->Value() == name) || (!named && id && id->Value() == name)) return e;
+      }
+    }
+    if (const dom::Element* found = FindMap(dom::FirstChildOf(n), name)) return found;
+  }
+  return nullptr;
+}
+
+const dom::Element* FirstAreaHolding(const dom::Node* node, double x, double y) {
+  for (const dom::Node* n = node; n; n = dom::NextSiblingOf(n)) {
+    if (n->IsElement() && static_cast<const dom::Element*>(n)->IsHtml("area") && AreaHolds(static_cast<const dom::Element*>(n), x, y)) return static_cast<const dom::Element*>(n);
+    if (const dom::Element* found = FirstAreaHolding(dom::FirstChildOf(n), x, y)) return found;
+  }
+  return nullptr;
+}
+
+// The area an image with a usemap has at a point of the window, or none.
+dom::Element* AreaOfImageAt(const Box& box, double x, double y, double scrollX, double scrollY) {
+  if (!box.node || !box.node->IsElement()) return nullptr;
+  const dom::Element* image = static_cast<const dom::Element*>(box.node);
+  if (!image->IsHtml("img")) return nullptr;
+  const dom::Attr* usemap = image->FindAttribute("usemap");
+  if (!usemap || usemap->Value().size() < 2 || usemap->Value()[0] != '#') return nullptr;
+  const dom::Element* map = FindMap(dom::FirstChildOf(image->nodeDocument), usemap->Value().substr(1));
+  if (!map) return nullptr;
+  const Rect r = AbsoluteBorderBox(box);
+  const double localX = x - (r.x - scrollX + box.border.left + box.padding.left), localY = y - (r.y - scrollY + box.border.top + box.padding.top);
+  return const_cast<dom::Element*>(FirstAreaHolding(dom::FirstChildOf(map), localX, localY));
+}
+
 }  // namespace
 
 std::vector<dom::Element*> ElementsAtPoint(Tree& tree, double x, double y) {
@@ -789,6 +878,16 @@ std::vector<dom::Element*> ElementsAtPoint(Tree& tree, double x, double y) {
     const Box* owner = &b;
     while (owner && !owner->node) owner = owner->parent;
     if (owner && owner->node && owner->node->IsDocument()) continue;
+    if (owner && b.kind == Box::Kind::Block) {
+      double dx = 0, dy = 0;
+      for (const Box* q = b.parent; q; q = q->parent) {
+        if (!q->node) continue;
+        const auto found = tree.scroll.find(q->node);
+        if (found != tree.scroll.end()) { dx += found->second.first; dy += found->second.second; }
+      }
+      // (A point on an image with a map is on the area of the map that holds it.)
+      if (dom::Element* area = AreaOfImageAt(*owner, x, y, dx, dy)) add(area);
+    }
     if (owner) add(owner->node);
   }
   // Over the canvas, the root element is what is there.

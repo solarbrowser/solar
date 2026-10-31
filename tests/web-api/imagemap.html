@@ -1,0 +1,10 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Image map</title>
+<style>body { margin: 0 }</style>
+<img src="media/tiny.png" width="160" height="80" usemap="#m" id="i">
+<map name="m"><area id="r" shape="rect" coords="0,0,80,80" href="media/mapped.html"><area id="c" shape="circle" coords="120,40,20" href="#c"></map>
+<script>
+const hit = (x, y) => { const e = document.elementFromPoint(x, y); return e ? (e.id || e.localName) : null; };
+console.log("rect", hit(10, 10), "circle", hit(120, 40), "outside", hit(100, 5) === "i" ? "i" : hit(100, 5));
+</script>

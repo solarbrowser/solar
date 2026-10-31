@@ -290,7 +290,7 @@ const char* const kFormScript = R"JS(
   const activationTarget = (e) => {
     for (let p = e; p; p = p.parentNode) {
       if (!(p instanceof Element)) continue;
-      if (p instanceof HTMLAnchorElement && p.hasAttribute("href")) return p;
+      if ((p instanceof HTMLAnchorElement || p instanceof HTMLAreaElement) && p.hasAttribute("href")) return p;
       if (p instanceof HTMLButtonElement || p instanceof HTMLInputElement || p instanceof HTMLLabelElement || p instanceof HTMLSelectElement || p instanceof HTMLTextAreaElement || p.localName === "summary") return p;
     }
     return null;
