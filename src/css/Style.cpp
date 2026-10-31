@@ -64,7 +64,7 @@ const char* const kUserAgentSheet = R"CSS(
 html, address, blockquote, body, center, dialog, div, figure, figcaption, footer, form, header, hr, legend, listing, main, p, plaintext, pre, search, xmp,
 article, aside, h1, h2, h3, h4, h5, h6, hgroup, nav, section, dir, dd, dl, dt, menu, ol, ul, details, summary, fieldset, optgroup, option { display: block; }
 [hidden], area, base, basefont, datalist, head, link, meta, noembed, noframes, noscript, param, rp, script, style, template, title { display: none; }
-li { display: list-item; }
+li { display: list-item; text-align: match-parent; }
 table { display: table; } caption { display: table-caption; } colgroup, colgroup[hidden] { display: table-column-group; } col, col[hidden] { display: table-column; }
 thead, thead[hidden] { display: table-header-group; } tbody, tbody[hidden] { display: table-row-group; } tfoot, tfoot[hidden] { display: table-footer-group; }
 tr, tr[hidden] { display: table-row; } td, th, td[hidden], th[hidden] { display: table-cell; }
@@ -84,6 +84,10 @@ h6 { font-size: 0.67em; margin-block: 2.33em; font-weight: bold; }
 dd { margin-inline-start: 40px; }
 ol, ul, menu, dir { margin-block: 1em; padding-inline-start: 40px; }
 ul, menu, dir { list-style-type: disc; } ol { list-style-type: decimal; }
+ol, ul, menu, dir { counter-reset: list-item; }
+:is(dir, dl, menu, ol, ul) :is(dir, menu, ol, ul) { margin-block: 0; }
+:is(dir, menu, ol, ul) :is(dir, menu, ul) { list-style-type: circle; }
+:is(dir, menu, ol, ul) :is(dir, menu, ol, ul) :is(dir, menu, ul) { list-style-type: square; }
 u, ins { text-decoration: underline; } s, strike, del { text-decoration: line-through; }
 pre, listing, plaintext, xmp, code, kbd, samp, tt, textarea { font-family: monospace; }
 pre, listing, plaintext, xmp { white-space: pre; }
@@ -110,9 +114,9 @@ select { border: 1px solid; box-sizing: border-box; }
 progress, meter { box-sizing: border-box; vertical-align: -0.2em; }
 [dir]:dir(ltr), bdi:dir(ltr), input[type=tel i]:dir(ltr) { direction: ltr; }
 [dir]:dir(rtl), bdi:dir(rtl) { direction: rtl; }
-address, blockquote, center, dialog, div, figure, figcaption, footer, form, header, hr, legend, listing, main, p, plaintext, pre, search, xmp, bdi, output { unicode-bidi: isolate; }
+address, blockquote, center, div, figure, figcaption, footer, form, header, hr, legend, listing, main, p, plaintext, pre, search, xmp, summary, article, aside, h1, h2, h3, h4, h5, h6, hgroup, nav, section, table, caption, colgroup, col, thead, tbody, tfoot, tr, td, th, dir, dd, dl, dt, menu, ol, ul, li, bdi, output, [dir=ltr i], [dir=rtl i], [dir=auto i] { unicode-bidi: isolate; }
 bdo, bdo[dir] { unicode-bidi: isolate-override; }
-textarea[dir=auto i], pre[dir=auto i] { unicode-bidi: plaintext; }
+textarea[dir=auto i], pre[dir=auto i], input[dir=auto i]:is([type=search i], [type=tel i], [type=url i], [type=email i]) { unicode-bidi: plaintext; }
 [popover]:not(:popover-open):not(dialog[open]) { display: none; }
 [popover] { position: fixed; inset: 0; width: fit-content; height: fit-content; margin: auto; border: solid; padding: 0.25em; overflow: auto; color: CanvasText; background-color: Canvas; }
 dialog:not([open]):not(:popover-open) { display: none; }
