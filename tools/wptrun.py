@@ -30,7 +30,7 @@ TIMING = {}
 
 def run_page(path):
     try:
-        out = subprocess.run(["bash", "-c", f"ulimit -v 4000000; timeout 60 ./build/WptTest {path}"], capture_output=True, text=True, errors="replace", timeout=90)
+        out = subprocess.run(["bash", "-c", f"ulimit -v 4000000; timeout 60 ./build/{os.environ.get('WPT_BIN', 'WptTest')} {path}"], capture_output=True, text=True, errors="replace", timeout=90)
         text = out.stdout + out.stderr
         code = out.returncode
     except subprocess.TimeoutExpired:

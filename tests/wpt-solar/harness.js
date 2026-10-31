@@ -57,6 +57,8 @@
   globalThis.assert_object_equals = (actual, expected, description) => {
     if (!sameShape(actual, expected)) fail('expected ' + describe(JSON.stringify(expected)) + ' but got ' + describe(JSON.stringify(actual)), description);
   };
+  // on_event(object, event, callback): addEventListener, as testharness has it.
+  globalThis.on_event = (object, event, callback) => object.addEventListener(event, callback, false);
   globalThis.step_timeout = (f, ms, ...args) => setTimeout(() => f(...args), ms);
   globalThis.assert_regexp_match = (actual, expected, description) => {
     if (!expected.test(actual)) fail('expected a match for ' + String(expected) + ' but got ' + describe(actual), description);
@@ -442,10 +444,11 @@
     const t = {
       add_cleanup: (f) => cleanups.push(f),
       runCleanups: () => { for (const f of cleanups.splice(0).reverse()) f(); },
-      step: (f, ...args) => {
-        try { return f.apply(t, args); } catch (e) { fail(e); }
+      // step(func, this_obj, ...args): func is called with this_obj as `this` (the test when there is none) and the rest as its arguments.
+      step: (f, thisObj, ...args) => {
+        try { return f.apply(thisObj === undefined || thisObj === null ? t : thisObj, args); } catch (e) { fail(e); }
       },
-      step_func: (f) => function (...args) { try { return f.apply(t, args); } catch (e) { fail(e); } },
+      step_func: (f, thisObj) => function (...args) { try { return f.apply(thisObj === undefined || thisObj === null ? t : thisObj, args); } catch (e) { fail(e); } },
       unreached_func: (message) => () => fail(new Error('unreachable test function was called: ' + message)),
       step_timeout: (f, ms) => setTimeout(t.step_func(f), ms),
       // An AbortSignal that aborts when the test is over (its cleanup).
@@ -465,8 +468,8 @@
         };
         check();
       }),
-      step_wait_func: (cond, func, description, timeout, interval) => t.step_wait(cond, description, timeout, interval).then((v) => { if (func) t.step(func, v); return v; }),
-      step_wait_func_done: (cond, func, description, timeout, interval) => t.step_wait(cond, description, timeout, interval).then((v) => { if (func) t.step(func, v); if (typeof t.done === 'function') t.done(); return v; }),
+      step_wait_func: (cond, func, description, timeout, interval) => t.step_wait(cond, description, timeout, interval).then((v) => { if (func) t.step(func, undefined, v); return v; }),
+      step_wait_func_done: (cond, func, description, timeout, interval) => t.step_wait(cond, description, timeout, interval).then((v) => { if (func) t.step(func, undefined, v); if (typeof t.done === 'function') t.done(); return v; }),
     };
     return t;
   };

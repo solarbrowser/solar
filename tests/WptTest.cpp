@@ -36,6 +36,10 @@
 #include "solar/web/JsEventLoop.h"
 #include "solar/web/TimerHost.h"
 #include "solar/web/UrlBindings.h"
+#ifdef SOLAR_WPT_CANVAS
+#include "solar/paint/Canvas.h"
+#include "solar/web-api/ImageLoad.h"
+#endif
 
 namespace {
 
@@ -157,6 +161,12 @@ class TestEnvironment : public solar::html::FrameEnvironment {
       solar::html::InstallHtmlApis(realm);
       solar::css::InstallSelectorApis(realm);
       solar::web::InstallFetchApis(realm);
+#ifdef SOLAR_WPT_CANVAS
+      // (The canvas and WebGL are Skia's and the machine's: this build of the runner has them, as the window has.)
+      solar::webapi::InstallCanvasNatives(realm);
+      solar::webapi::InstallWebGlNatives(realm);
+      solar::webapi::InstallImageLoadNatives(realm);
+#endif
       solar::web::FetchHost::Config config;
       config.loop = &loop_;
       config.client = &client_;

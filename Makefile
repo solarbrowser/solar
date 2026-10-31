@@ -327,6 +327,16 @@ $(BUILD_DIR)/WptTest: $(OBJ_DIR)/tests/WptTest.o $(URL_OBJECTS) $(DOM_OBJECTS) $
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS)
 
+# WptTest with the canvas and WebGL (Skia and the machine's GL), for the pages that draw: tools/wptrun.py runs it for html/canvas.
+$(OBJ_DIR)/tests/WptCanvasTest.o: tests/WptTest.cpp
+	@mkdir -p $(dir $@)
+	@echo "[BUILD] $<"
+	@$(CXX) $(CXXFLAGS) $(SKIA_CFLAGS) -DSOLAR_WPT_CANVAS -c -o $@ $<
+
+$(BUILD_DIR)/WptCanvasTest: $(OBJ_DIR)/tests/WptCanvasTest.o $(OBJ_DIR)/src/paint/Canvas.o $(OBJ_DIR)/src/paint/CanvasNatives.o $(OBJ_DIR)/src/paint/WebGl.o $(PAINT_OBJECTS) $(URL_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
+	@echo "[LINK] $@"
+	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS) $(SKIA_LIBS)
+
 $(BUILD_DIR)/FetchBindingsTest: $(OBJ_DIR)/tests/FetchBindingsTest.o $(OBJ_DIR)/tests/support/TestServer.o $(URL_OBJECTS) $(PAGE_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS)
