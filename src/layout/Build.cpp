@@ -337,7 +337,7 @@ bool ReplacedSize(dom::Element* element, const std::string& base, Box& box) {
     }
     // The ratio is that of the attributes when there are both; the view box is for when there is not.
     if (box.attrWidth > 0 && box.attrHeight > 0) box.naturalRatio = box.attrWidth / box.attrHeight;
-    if (box.naturalWidth < 0 && box.naturalHeight < 0 && box.naturalRatio == 0) { box.naturalWidth = 300; box.naturalHeight = 150; }
+    if (box.naturalWidth < 0 && box.naturalHeight < 0 && box.naturalRatio == 0) { box.naturalWidth = 300; box.naturalHeight = 150; box.defaultSize = true; }
     return true;
   }
   if (name == "img" || (name == "input" && element->FindAttribute("type") && element->FindAttribute("type")->Value() == "image")) {

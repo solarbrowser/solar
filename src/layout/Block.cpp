@@ -213,7 +213,7 @@ void ReplacedContentSize(const Box& box, double cbWidth, double cbHeight, double
   if (s.height.kind == Length::Kind::Stretch && Known(cbHeight)) cssH = std::max(0.0, cbHeight - MarginOf(s, 0, cbWidth) - MarginOf(s, 2, cbWidth) - extrasV);
   double ratio = nr;
   if (!contained) {
-    if (ratio <= 0 && nw > 0 && nh > 0) ratio = nw / nh;
+    if (ratio <= 0 && nw > 0 && nh > 0 && !box.defaultSize) ratio = nw / nh;
     if (ratio <= 0 && aw > 0 && ah > 0) ratio = aw / ah;
   }
   if (s.aspectRatio > 0 && !s.aspectRatioAuto) ratio = s.aspectRatio;

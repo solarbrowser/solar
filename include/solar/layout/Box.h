@@ -127,6 +127,7 @@ struct Box {
 
   // Replaced boxes: the natural size, negative where there is none.
   double naturalWidth = -1, naturalHeight = -1;
+  bool defaultSize = false;  // 300 by 150 because the picture says no size and no ratio: the ratio of those is not its ratio
   double emptyWidth = -1, emptyHeight = -1;  // a form control: its size with nothing in it, which size containment gives it
   bool formControl = false;   // a form control: a box with a size of its own when its width and height are auto
   double controlAscent = -1;  // a form control with text: where its baseline is, from the top of its content box
