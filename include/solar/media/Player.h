@@ -135,6 +135,7 @@ struct PlayerState {
   double volume = 1;
   bool muted = false;
   bool controlsVisible = false;
+  bool fullscreen = false;
 };
 
 class Player {
@@ -157,6 +158,7 @@ class Player {
   void SetRate(double rate);
   void SetLoop(bool loop);
   void SetControlsVisible(bool visible);
+  void SetFullscreen(bool fullscreen);
 
   PlayerState State();
   // The events there have been since the last call, by the names of the media events ("loadedmetadata", "canplay", "seeked", "ended", ...), in order.

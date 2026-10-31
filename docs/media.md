@@ -28,9 +28,14 @@ goes, and what is far from the reader is let go of past 96 MB. A file with its i
 server that does not do ranges (a 200 for the range request) is read whole, in one fetch, and all of it is kept. `buffered` is the byte ranges kept, taken as proportional to
 time. Not done: the HTTP cache is not used for the pieces, and nothing is kept on disk.
 
-## Controls
+## Controls and full screen
 
-A video with `controls` has a bar drawn by the program over the bottom of the picture (`DrawControls` in `src/paint/SkiaPainter.cpp`: play or pause, the time in a small
-pixel font, the position with what is buffered, the sound), shown while it is paused or the pointer has moved lately. The clicks are taken in `src/web-api/js/media.js`,
-which has the same measures (a 36 px bar; the time takes 140 px when the video is 360 px wide or more; the sound button is the last 36 px). Not done: keyboard, full screen,
-speed and captions menus, the volume as a slider.
+A video with `controls` has a bar drawn by the program over the bottom of the picture (`DrawControls` in `src/paint/SkiaPainter.cpp`): play or pause, the position with what
+is buffered and a thumb, the time (in the system's UI font), the sound with a volume slider, and full screen, on a shade that rises from the picture; shown while it is paused or
+the pointer has moved lately. Where each part is comes from one place, `include/solar/media/Controls.h` (a part that there is no room for is left out: from 480 px wide the
+slider, from 320 the time, from 200 full screen); the painter draws there and `src/web-api/js/media.js` takes the clicks there (the position and the slider can be
+dragged), and the keys (space and k, the arrows, j and l, m, f, 0-9, Home and End) while the pointer is over the video or it is full screen. Double-click is full screen.
+
+Full screen (`src/web-api/js/fullscreen.js`): `requestFullscreen` on any element makes it fill the window and the window full screen (`SDL_SetWindowFullscreen`); the element has
+the attribute `data-solar-fullscreen`, which `:fullscreen` matches and the user agent style sheet lays it out by (fixed, over everything: not a true top layer, so an ancestor
+with a transform keeps it inside). Escape leaves it. Not done: captions, speed and quality menus, picture-in-picture, a controls bar that adapts to touch.

@@ -392,6 +392,11 @@ void Player::SetRate(double rate) {
   if (impl_->stream) impl_->stream->Poke();
 }
 
+void Player::SetFullscreen(bool fullscreen) {
+  std::lock_guard lock(impl_->m);
+  impl_->fullscreenOn = fullscreen;
+}
+
 void Player::SetControlsVisible(bool visible) {
   std::lock_guard lock(impl_->m);
   impl_->controlsVisible = visible;
@@ -409,6 +414,7 @@ PlayerState Player::State() {
   state.volume = impl_->volume;
   state.muted = impl_->muted;
   state.controlsVisible = impl_->controlsVisible;
+  state.fullscreen = impl_->fullscreenOn;
   state.currentTime = impl_->st.seeking && impl_->seekTo ? impl_->seekTo->time : impl_->ClockLocked();
   if (!std::isnan(state.duration)) state.currentTime = std::min(state.currentTime, state.duration);
   return state;

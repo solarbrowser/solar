@@ -69,6 +69,7 @@ const PseudoName kPseudoClasses[] = {
     {"out-of-range", PseudoClass::OutOfRange},
     {"defined", PseudoClass::Defined},
     {"fullscreen", PseudoClass::Fullscreen},
+    {"-webkit-full-screen", PseudoClass::Fullscreen},
     {"modal", PseudoClass::Modal},
     {"popover-open", PseudoClass::PopoverOpen},
     {"user-invalid", PseudoClass::UserInvalid},

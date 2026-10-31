@@ -26,6 +26,8 @@
 #include "include/core/SkSurface.h"
 #include "include/effects/SkDashPathEffect.h"
 #include "include/effects/SkGradient.h"
+#include "solar/font/Database.h"
+#include "solar/media/Controls.h"
 #include "include/core/SkM44.h"
 #include "include/core/SkPaint.h"
 #include "include/core/SkPath.h"
@@ -355,43 +357,25 @@ struct SkiaPainter::Impl {
   std::unordered_map<const media::Player*, VideoPicture> videoPictures;
 
 
-  // The controls of a video that has the attribute (https://html.spec.whatwg.org/multipage/media.html#user-interface): a bar over the bottom of the picture, with play or pause, the
-  // time, the position (and what is buffered) and the sound. They are drawn here with no font (the time is in a small pixel font), and the clicks on them are taken by
-  // src/web-api/js/media.js, which has the same measures: the bar is 36 px; the time is 140 px from the button when the video is 360 px wide or more; the sound button is the
-  // last 36 px.
-  static constexpr float kBar = 36;
+  // The controls of a video that has the attribute (https://html.spec.whatwg.org/multipage/media.html#user-interface): a bar over the bottom of the picture, with play or pause,
+  // the position (and what is buffered), the time, the sound with its slider, and full screen. Where each part is, is media/Controls.h's, which the script that takes the
+  // clicks (src/web-api/js/media.js) asks for as well.
+  sk_sp<SkTypeface> controlsTypeface;
+  bool controlsTypefaceTried = false;
 
-  static void PixelText(SkCanvas& canvas, const std::string& text, float x, float y, float scale, const SkPaint& paint) {
-    static const char* const glyphs[][7] = {
-        {"01110", "10001", "10011", "10101", "11001", "10001", "01110"}, {"00100", "01100", "00100", "00100", "00100", "00100", "01110"},
-        {"01110", "10001", "00001", "00010", "00100", "01000", "11111"}, {"11110", "00001", "00001", "01110", "00001", "00001", "11110"},
-        {"00010", "00110", "01010", "10010", "11111", "00010", "00010"}, {"11111", "10000", "11110", "00001", "00001", "10001", "01110"},
-        {"00110", "01000", "10000", "11110", "10001", "10001", "01110"}, {"11111", "00001", "00010", "00100", "01000", "01000", "01000"},
-        {"01110", "10001", "10001", "01110", "10001", "10001", "01110"}, {"01110", "10001", "10001", "01111", "00001", "00010", "01100"},
-        {"00000", "00100", "00100", "00000", "00100", "00100", "00000"},  // :
-        {"00001", "00010", "00010", "00100", "01000", "01000", "10000"},  // /
-        {"00000", "00000", "00000", "11111", "00000", "00000", "00000"},  // -
-    };
-    for (char c : text) {
-      int index = -1;
-      if (c >= '0' && c <= '9') index = c - '0';
-      else if (c == ':') index = 10;
-      else if (c == '/') index = 11;
-      else if (c == '-') index = 12;
-      if (index >= 0) {
-        for (int row = 0; row < 7; ++row) {
-          for (int col = 0; col < 5; ++col) {
-            if (glyphs[index][row][col] == '1') canvas.drawRect(SkRect::MakeXYWH(x + col * scale, y + row * scale, scale, scale), paint);
-          }
-        }
-      }
-      x += 6 * scale;
+  sk_sp<SkTypeface> ControlsTypeface() {
+    if (!controlsTypefaceTried) {
+      controlsTypefaceTried = true;
+      font::Request request;
+      request.families = {"system-ui", "sans-serif"};
+      request.weight = 400;
+      if (std::shared_ptr<font::Face> face = font::Database::System().Match(request)) controlsTypeface = TypefaceOf(face);
     }
+    return controlsTypeface;
   }
 
   static std::string ClockText(double seconds) {
-    if (std::isnan(seconds) || seconds < 0) return "-:--";
-    if (std::isinf(seconds)) return "-:--";
+    if (std::isnan(seconds) || std::isinf(seconds) || seconds < 0) return "0:00";
     const long total = static_cast<long>(seconds);
     char buffer[32];
     if (total >= 3600) std::snprintf(buffer, sizeof buffer, "%ld:%02ld:%02ld", total / 3600, (total / 60) % 60, total % 60);
@@ -400,68 +384,128 @@ struct SkiaPainter::Impl {
   }
 
   void DrawControls(SkCanvas& canvas, const SkRect& box, const media::PlayerState& state) {
-    if (box.width() < 120 || box.height() < 64) return;
+    const media::ControlsLayout layout = media::LayoutControls(box.width(), box.height());
+    if (!layout.any) return;
     if (state.playing && !state.controlsVisible) return;
-    const float top = box.bottom() - kBar, left = box.left(), right = box.right();
-    SkPaint back;
-    back.setColor(SkColorSetARGB(150, 0, 0, 0));
-    canvas.drawRect(SkRect::MakeLTRB(left, top, right, box.bottom()), back);
+    const float left = box.left(), bottom = box.bottom(), top = bottom - layout.bar, cy = top + layout.bar / 2;
+    // A shade that rises from the picture: the bar is on it.
+    {
+      const float shade = std::min(box.height(), layout.bar + 36);
+      SkPaint paint;
+      const SkColor4f colors[] = {{0, 0, 0, 0}, {0, 0, 0, 0.72f}};
+      const float positions[] = {0, 1};
+      const SkPoint points[] = {{0, bottom - shade}, {0, bottom}};
+      const SkGradient gradient(SkGradient::Colors(SkSpan<const SkColor4f>(colors), SkSpan<const float>(positions), SkTileMode::kClamp), SkGradient::Interpolation());
+      paint.setShader(SkShaders::LinearGradient(points, gradient));
+      canvas.drawRect(SkRect::MakeLTRB(left, bottom - shade, box.right(), bottom), paint);
+    }
     SkPaint white;
     white.setAntiAlias(true);
     white.setColor(SK_ColorWHITE);
-    const float cy = top + kBar / 2;
-    // Play, or pause.
-    if (state.playing) {
-      canvas.drawRect(SkRect::MakeXYWH(left + 12, cy - 7, 4, 14), white);
-      canvas.drawRect(SkRect::MakeXYWH(left + 20, cy - 7, 4, 14), white);
-    } else {
-      SkPathBuilder triangle;
-      triangle.moveTo(left + 13, cy - 8).lineTo(left + 13, cy + 8).lineTo(left + 25, cy).close();
-      canvas.drawPath(triangle.detach(), white);
-    }
-    // The time.
-    float progressFrom = left + kBar + 8;
-    if (box.width() >= 360) {
-      const std::string text = ClockText(state.currentTime) + " / " + ClockText(state.duration);
-      PixelText(canvas, text, left + kBar + 4, cy - 7, 2, white);
-      progressFrom = left + kBar + 140;
-    }
-    // The position: the track, what is buffered on it, what is played, and the thumb.
-    const float progressTo = right - kBar - 8;
-    if (progressTo > progressFrom + 20) {
-      const float width = progressTo - progressFrom;
-      SkPaint track;
-      track.setAntiAlias(true);
-      track.setColor(SkColorSetARGB(90, 255, 255, 255));
-      canvas.drawRRect(SkRRect::MakeRectXY(SkRect::MakeXYWH(progressFrom, cy - 2, width, 4), 2, 2), track);
-      const double duration = state.duration;
-      if (!std::isnan(duration) && duration > 0 && !std::isinf(duration)) {
-        SkPaint buffered;
-        buffered.setAntiAlias(true);
-        buffered.setColor(SkColorSetARGB(150, 255, 255, 255));
-        for (const media::TimeRange& range : state.buffered) {
-          const float a = progressFrom + width * static_cast<float>(std::clamp(range.start / duration, 0.0, 1.0)), b = progressFrom + width * static_cast<float>(std::clamp(range.end / duration, 0.0, 1.0));
-          if (b > a) canvas.drawRRect(SkRRect::MakeRectXY(SkRect::MakeLTRB(a, cy - 2, b, cy + 2), 2, 2), buffered);
-        }
-        const float played = progressFrom + width * static_cast<float>(std::clamp(state.currentTime / duration, 0.0, 1.0));
-        canvas.drawRRect(SkRRect::MakeRectXY(SkRect::MakeLTRB(progressFrom, cy - 2, played, cy + 2), 2, 2), white);
-        canvas.drawCircle(played, cy, 6, white);
-      }
-    }
-    // The sound: a speaker, with waves, or crossed out when it is off.
-    const float sx = right - kBar + 8;
-    SkPathBuilder speaker;
-    speaker.moveTo(sx, cy - 3).lineTo(sx + 4, cy - 3).lineTo(sx + 9, cy - 8).lineTo(sx + 9, cy + 8).lineTo(sx + 4, cy + 3).lineTo(sx, cy + 3).close();
-    canvas.drawPath(speaker.detach(), white);
     SkPaint stroke = white;
     stroke.setStyle(SkPaint::kStroke_Style);
     stroke.setStrokeWidth(2);
-    if (state.muted || state.volume <= 0) {
-      canvas.drawLine(sx + 12, cy - 4, sx + 18, cy + 4, stroke);
-      canvas.drawLine(sx + 18, cy - 4, sx + 12, cy + 4, stroke);
-    } else {
-      canvas.drawArc(SkRect::MakeLTRB(sx + 6, cy - 5, sx + 16, cy + 5), -50, 100, false, stroke);
-      if (state.volume > 0.5) canvas.drawArc(SkRect::MakeLTRB(sx + 5, cy - 9, sx + 20, cy + 9), -50, 100, false, stroke);
+    stroke.setStrokeCap(SkPaint::kRound_Cap);
+    stroke.setStrokeJoin(SkPaint::kRound_Join);
+    SkPaint fill = white;
+    fill.setStyle(SkPaint::kStrokeAndFill_Style);
+    fill.setStrokeWidth(2);
+    fill.setStrokeJoin(SkPaint::kRound_Join);
+
+    // Play, or pause.
+    if (layout.play.shown) {
+      const float x = left + (layout.play.from + layout.play.to) / 2;
+      if (state.playing) {
+        canvas.drawRRect(SkRRect::MakeRectXY(SkRect::MakeXYWH(x - 7, cy - 8, 5, 16), 1.5f, 1.5f), white);
+        canvas.drawRRect(SkRRect::MakeRectXY(SkRect::MakeXYWH(x + 2, cy - 8, 5, 16), 1.5f, 1.5f), white);
+      } else {
+        SkPathBuilder triangle;
+        triangle.moveTo(x - 5, cy - 8).lineTo(x - 5, cy + 8).lineTo(x + 8, cy).close();
+        canvas.drawPath(triangle.detach(), fill);
+      }
+    }
+    // The position: the track, what is buffered on it, what is played, and the thumb.
+    if (layout.progress.shown) {
+      const float from = left + layout.progress.from, to = left + layout.progress.to, width = to - from;
+      SkPaint track;
+      track.setAntiAlias(true);
+      track.setColor(SkColorSetARGB(80, 255, 255, 255));
+      canvas.drawRRect(SkRRect::MakeRectXY(SkRect::MakeXYWH(from, cy - 1.5f, width, 3), 1.5f, 1.5f), track);
+      const double duration = state.duration;
+      float played = from;
+      if (!std::isnan(duration) && duration > 0 && !std::isinf(duration)) {
+        SkPaint buffered;
+        buffered.setAntiAlias(true);
+        buffered.setColor(SkColorSetARGB(130, 255, 255, 255));
+        for (const media::TimeRange& range : state.buffered) {
+          const float a = from + width * static_cast<float>(std::clamp(range.start / duration, 0.0, 1.0)), b = from + width * static_cast<float>(std::clamp(range.end / duration, 0.0, 1.0));
+          if (b > a) canvas.drawRRect(SkRRect::MakeRectXY(SkRect::MakeLTRB(a, cy - 1.5f, b, cy + 1.5f), 1.5f, 1.5f), buffered);
+        }
+        played = from + width * static_cast<float>(std::clamp(state.currentTime / duration, 0.0, 1.0));
+        if (played > from) canvas.drawRRect(SkRRect::MakeRectXY(SkRect::MakeLTRB(from, cy - 1.5f, played, cy + 1.5f), 1.5f, 1.5f), white);
+      }
+      canvas.drawCircle(played, cy, 6.5f, white);
+    }
+    // The time: what is played, in white, and "/ the whole" in grey, to the right of the position.
+    if (layout.time.shown) {
+      if (sk_sp<SkTypeface> typeface = ControlsTypeface()) {
+        SkFont font(typeface, 13);
+        font.setEdging(SkFont::Edging::kAntiAlias);
+        font.setSubpixel(true);
+        const std::string played = ClockText(state.currentTime), whole = " / " + ClockText(state.duration);
+        const float wholeWidth = font.measureText(whole.data(), whole.size(), SkTextEncoding::kUTF8), playedWidth = font.measureText(played.data(), played.size(), SkTextEncoding::kUTF8);
+        const float x = left + layout.time.to - wholeWidth - playedWidth, y = cy + 4.5f;
+        SkPaint shadow;
+        shadow.setColor(SkColorSetARGB(110, 0, 0, 0));
+        canvas.drawSimpleText(played.data(), played.size(), SkTextEncoding::kUTF8, x + 0.5f, y + 1, font, shadow);
+        canvas.drawSimpleText(whole.data(), whole.size(), SkTextEncoding::kUTF8, x + playedWidth + 0.5f, y + 1, font, shadow);
+        canvas.drawSimpleText(played.data(), played.size(), SkTextEncoding::kUTF8, x, y, font, white);
+        SkPaint grey = white;
+        grey.setColor(SkColorSetARGB(190, 255, 255, 255));
+        canvas.drawSimpleText(whole.data(), whole.size(), SkTextEncoding::kUTF8, x + playedWidth, y, font, grey);
+      }
+    }
+    // The sound: a speaker with waves (crossed out when it is off), and the slider.
+    if (layout.mute.shown) {
+      const float sx = left + (layout.mute.from + layout.mute.to) / 2 - 9;
+      SkPathBuilder speaker;
+      speaker.moveTo(sx, cy - 3.5f).lineTo(sx + 4.5f, cy - 3.5f).lineTo(sx + 10, cy - 8).lineTo(sx + 10, cy + 8).lineTo(sx + 4.5f, cy + 3.5f).lineTo(sx, cy + 3.5f).close();
+      canvas.drawPath(speaker.detach(), fill);
+      const bool off = state.muted || state.volume <= 0;
+      if (off) {
+        canvas.drawLine(sx + 13, cy - 4, sx + 19, cy + 4, stroke);
+        canvas.drawLine(sx + 19, cy - 4, sx + 13, cy + 4, stroke);
+      } else {
+        canvas.drawArc(SkRect::MakeLTRB(sx + 7, cy - 5, sx + 17, cy + 5), -55, 110, false, stroke);
+        if (state.volume > 0.45) canvas.drawArc(SkRect::MakeLTRB(sx + 5, cy - 9, sx + 21, cy + 9), -55, 110, false, stroke);
+      }
+    }
+    if (layout.slider.shown) {
+      const float from = left + layout.slider.from, width = layout.slider.to - layout.slider.from;
+      const float volume = state.muted ? 0.f : static_cast<float>(std::clamp(state.volume, 0.0, 1.0));
+      SkPaint track;
+      track.setAntiAlias(true);
+      track.setColor(SkColorSetARGB(80, 255, 255, 255));
+      canvas.drawRRect(SkRRect::MakeRectXY(SkRect::MakeXYWH(from, cy - 1.5f, width, 3), 1.5f, 1.5f), track);
+      if (volume > 0) canvas.drawRRect(SkRRect::MakeRectXY(SkRect::MakeXYWH(from, cy - 1.5f, width * volume, 3), 1.5f, 1.5f), white);
+      canvas.drawCircle(from + width * volume, cy, 6, white);
+    }
+    // Full screen: four corners, pointing out (or in, when it is on).
+    if (layout.fullscreen.shown) {
+      const float x = left + (layout.fullscreen.from + layout.fullscreen.to) / 2, h = 8;
+      SkPathBuilder corners;
+      if (!state.fullscreen) {
+        corners.moveTo(x - h, cy - 2).lineTo(x - h, cy - h).lineTo(x - 2, cy - h);
+        corners.moveTo(x + 2, cy - h).lineTo(x + h, cy - h).lineTo(x + h, cy - 2);
+        corners.moveTo(x + h, cy + 2).lineTo(x + h, cy + h).lineTo(x + 2, cy + h);
+        corners.moveTo(x - 2, cy + h).lineTo(x - h, cy + h).lineTo(x - h, cy + 2);
+      } else {
+        corners.moveTo(x - h, cy - 3).lineTo(x - 3, cy - 3).lineTo(x - 3, cy - h);
+        corners.moveTo(x + 3, cy - h).lineTo(x + 3, cy - 3).lineTo(x + h, cy - 3);
+        corners.moveTo(x + h, cy + 3).lineTo(x + 3, cy + 3).lineTo(x + 3, cy + h);
+        corners.moveTo(x - 3, cy + h).lineTo(x - 3, cy + 3).lineTo(x - h, cy + 3);
+      }
+      canvas.drawPath(corners.detach(), stroke);
     }
   }
 

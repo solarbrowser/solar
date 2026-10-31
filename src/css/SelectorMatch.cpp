@@ -302,6 +302,8 @@ bool MatchesPseudo(PseudoClass pseudo, const Element* element, const MatchContex
   switch (pseudo) {
     case PseudoClass::Hover: return element->nodeDocument && element->nodeDocument->HoverInView() && OnPointerPath(element, element->nodeDocument->HoverInView());
     case PseudoClass::Active: return element->nodeDocument && element->nodeDocument->PressedInView() && OnPointerPath(element, element->nodeDocument->PressedInView());
+    // (The element that is full screen has the attribute src/web-api/js/fullscreen.js gives it.)
+    case PseudoClass::Fullscreen: return element->FindAttribute("", "data-solar-fullscreen") != nullptr;
     case PseudoClass::Root: return IsRoot(element);
     case PseudoClass::Empty: return IsEmpty(element);
     case PseudoClass::Target: return IsTarget(element);

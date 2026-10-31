@@ -4,9 +4,9 @@
 (() => {
   "use strict";
   const canPlayN = globalThis.__solarMediaCanPlay, openN = globalThis.__solarMediaOpen, controlN = globalThis.__solarMediaControl;
-  const stateN = globalThis.__solarMediaState, eventsN = globalThis.__solarMediaEvents, attachN = globalThis.__solarMediaAttach, openMseN = globalThis.__solarMediaOpenMse;
+  const layoutN = globalThis.__solarMediaControlsLayout, stateN = globalThis.__solarMediaState, eventsN = globalThis.__solarMediaEvents, attachN = globalThis.__solarMediaAttach, openMseN = globalThis.__solarMediaOpenMse;
   // (mediasource.js, which comes after, takes CanPlay too and lets go of it.)
-  for (const n of ["Open", "Control", "State", "Events", "Attach", "OpenMse"]) delete globalThis["__solarMedia" + n];
+  for (const n of ["Open", "Control", "State", "Events", "Attach", "OpenMse", "ControlsLayout"]) delete globalThis["__solarMedia" + n];
   if (typeof canPlayN !== "function" || typeof HTMLMediaElement !== "function") return;
 
   const proto = HTMLMediaElement.prototype;
@@ -373,12 +373,13 @@
     Object.defineProperty(globalThis, "Audio", { value: AudioConstructor, writable: true, configurable: true, enumerable: false });
   }
 
-  // ---- The controls of a video that has the attribute: drawn by the program (SkiaPainter DrawControls, which has the same measures), operated here ----
-  const BAR = 36;
-  const bar = (el) => {
+  // ---- The controls of a video that has the attribute: drawn by the program (SkiaPainter DrawControls), where media/Controls.h puts them, and operated here ----
+  const layoutOf = (el) => {
     const r = el.getBoundingClientRect();
-    return { r, w: r.width, h: r.height, from: BAR + (r.width >= 360 ? 140 : 8), to: r.width - BAR - 8 };
+    return { r, w: r.width, h: r.height, L: JSON.parse(layoutN(r.width, r.height)) };
   };
+  const within = (span, x) => span && x >= span[0] && x <= span[1];
+  const fullscreenOf = (el) => typeof document !== "undefined" && document.fullscreenElement === el;
   const showControls = (el, s, keepFor) => {
     if (s.id < 0) return;
     controlN(s.id, "controls", true);
@@ -386,10 +387,23 @@
     s.hideTimer = 0;
     if (keepFor && !s.paused) s.hideTimer = setTimeout(() => { if (!s.dragging && s.id >= 0 && !s.over) controlN(s.id, "controls", false); }, keepFor);
   };
-  const seekTo = (el, x, g) => {
+  const seekFraction = (el, x, span) => {
     const d = el.duration;
     if (!(d > 0) || !Number.isFinite(d)) return;
-    el.currentTime = Math.min(1, Math.max(0, (x - g.from) / (g.to - g.from))) * d;
+    el.currentTime = Math.min(1, Math.max(0, (x - span[0]) / (span[1] - span[0]))) * d;
+  };
+  const volumeFraction = (el, x, span) => {
+    const v = Math.min(1, Math.max(0, (x - span[0]) / (span[1] - span[0])));
+    el.volume = v;
+    el.muted = v === 0;
+  };
+  const toggleFullscreen = (el) => { if (fullscreenOf(el)) document.exitFullscreen(); else el.requestFullscreen().catch(() => {}); };
+  const drag = (el, s, span, apply) => {
+    s.dragging = true;
+    const move = (m) => apply(el, m.clientX - el.getBoundingClientRect().left, span);
+    const up = () => { s.dragging = false; document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up); };
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", up);
   };
   const bindControls = (el) => {
     const s = stateOf(el);
@@ -398,30 +412,68 @@
     el.addEventListener("mouseenter", () => { s.over = true; showControls(el, s, 0); });
     el.addEventListener("mousemove", () => { s.over = true; showControls(el, s, 2500); });
     el.addEventListener("mouseleave", () => { s.over = false; showControls(el, s, 600); });
+    const onFullscreen = () => { if (s.id >= 0) controlN(s.id, "fullscreen", fullscreenOf(el)); };
+    el.addEventListener("fullscreenchange", onFullscreen);
     el.addEventListener("mousedown", (e) => {
       if (!el.hasAttribute("controls") || e.button !== 0) return;
-      const g = bar(el);
+      const g = layoutOf(el);
       const x = e.clientX - g.r.left, y = e.clientY - g.r.top;
-      if (y < g.h - BAR || x < g.from - 4 || x > g.to + 4 || g.w < 120) return;
-      // On the position: a click or a drag seeks.
-      s.dragging = true;
-      seekTo(el, x, g);
-      const move = (m) => seekTo(el, m.clientX - el.getBoundingClientRect().left, bar(el));
-      const up = () => { s.dragging = false; document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up); };
-      document.addEventListener("mousemove", move);
-      document.addEventListener("mouseup", up);
+      if (!g.L.any || y < g.h - g.L.bar) return;
+      if (within(g.L.progress, x)) { seekFraction(el, x, g.L.progress); drag(el, s, g.L.progress, seekFraction); }
+      else if (within(g.L.slider, x)) { volumeFraction(el, x, g.L.slider); drag(el, s, g.L.slider, volumeFraction); }
     });
     el.addEventListener("click", (e) => {
       if (!el.hasAttribute("controls")) return;
-      const g = bar(el);
+      const g = layoutOf(el);
       const x = e.clientX - g.r.left, y = e.clientY - g.r.top;
-      const inBar = y >= g.h - BAR && g.w >= 120 && g.h >= 64;
-      if (inBar && x >= g.w - BAR) { el.muted = !el.muted; showControls(el, s, 2500); return; }
-      if (inBar && x >= BAR) return;  // (the time and the position: nothing on a click, the position was handled at the press)
+      if (g.L.any && y >= g.h - g.L.bar) {
+        if (within(g.L.play, x)) { if (el.paused) el.play().catch(() => {}); else el.pause(); }
+        else if (within(g.L.mute, x)) el.muted = !el.muted;
+        else if (within(g.L.fullscreen, x)) toggleFullscreen(el);
+        showControls(el, s, 2500);
+        return;
+      }
       if (el.paused) el.play().catch(() => {}); else el.pause();
       showControls(el, s, 2500);
     });
+    el.addEventListener("dblclick", (e) => {
+      const g = layoutOf(el);
+      if (!g.L.any || e.clientY - g.r.top < g.h - g.L.bar) toggleFullscreen(el);
+    });
   };
+  // The keys, while the pointer is over a video with controls, or it is full screen (a video is not focused by a click, here).
+  if (typeof document !== "undefined") {
+    document.addEventListener("keydown", (e) => {
+      if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+      const t = e.target;
+      if (t && (t.isContentEditable || /^(input|textarea|select)$/i.test(t.localName || ""))) return;
+      let el = null;
+      const fs = document.fullscreenElement;
+      if (fs) el = fs instanceof HTMLVideoElement ? fs : fs.querySelector && fs.querySelector("video[controls]");
+      if (!el) for (const v of document.querySelectorAll("video[controls]")) if (stateOf(v).over) { el = v; break; }
+      if (!el || !el.hasAttribute("controls")) return;
+      const s = stateOf(el);
+      const seek = (d) => { const dur = el.duration; el.currentTime = Math.max(0, Number.isFinite(dur) ? Math.min(dur, el.currentTime + d) : el.currentTime + d); };
+      let handled = true;
+      switch (e.key) {
+        case " ": case "k": if (el.paused) el.play().catch(() => {}); else el.pause(); break;
+        case "ArrowLeft": seek(-5); break;
+        case "ArrowRight": seek(5); break;
+        case "j": seek(-10); break;
+        case "l": seek(10); break;
+        case "ArrowUp": el.volume = Math.min(1, el.volume + 0.05); el.muted = false; break;
+        case "ArrowDown": el.volume = Math.max(0, el.volume - 0.05); break;
+        case "m": el.muted = !el.muted; break;
+        case "f": toggleFullscreen(el); break;
+        case "Home": el.currentTime = 0; break;
+        case "End": if (Number.isFinite(el.duration)) el.currentTime = el.duration; break;
+        default:
+          if (/^[0-9]$/.test(e.key) && Number.isFinite(el.duration)) el.currentTime = (Number(e.key) / 10) * el.duration;
+          else handled = false;
+      }
+      if (handled) { e.preventDefault(); showControls(el, s, 2500); }
+    });
+  }
 
   // ---- Finding the elements (the parser makes them without script) ----
   const scan = (root) => {

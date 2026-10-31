@@ -14,6 +14,7 @@
 
 #include "solar/dom/Damage.h"
 #include "solar/dom/NodeBindingsInternal.h"
+#include "solar/media/Controls.h"
 #include "solar/media/Mse.h"
 #include "solar/media/Player.h"
 #include "solar/net/HttpClient.h"
@@ -235,6 +236,15 @@ Item* ItemOf(State& state, Context& ctx, const Value& id) {
   return found == state.items.end() ? nullptr : found->second.get();
 }
 
+// __solarMediaControlsLayout(width, height): where the parts of the controls are (media/Controls.h), as JSON text: {bar, play: [from, to] or null, ...}.
+Value ControlsLayoutJson(Context& ctx, Value, qe::Args args, Value) {
+  if (args.size() < 2) return qe::Undefined();
+  const media::ControlsLayout c = media::LayoutControls(static_cast<float>(qe::ToNumber(ctx, args[0])), static_cast<float>(qe::ToNumber(ctx, args[1])));
+  auto span = [](const media::ControlsSpan& s) { return s.shown ? "[" + std::to_string(s.from) + "," + std::to_string(s.to) + "]" : std::string("null"); };
+  return qe::FromWtf8(ctx, std::string("{\"any\":") + (c.any ? "true" : "false") + ",\"bar\":" + std::to_string(c.bar) + ",\"play\":" + span(c.play) + ",\"progress\":" + span(c.progress) + ",\"time\":" + span(c.time) +
+                               ",\"mute\":" + span(c.mute) + ",\"slider\":" + span(c.slider) + ",\"fullscreen\":" + span(c.fullscreen) + "}");
+}
+
 // __solarMediaCanPlay(type, codecs): 0, 1 or 2.
 Value CanPlay(Context& ctx, Value, qe::Args args, Value) {
   if (args.empty()) return qe::FromNumber(0);
@@ -296,6 +306,9 @@ Value Control(Context& ctx, Value, qe::Args args, Value) {
     const bool visible = qe::ToBoolean(value);
     item->controlsOn = true;
     item->player->SetControlsVisible(visible);
+    for (dom::Element* element : item->elements) { dom::NoteDamage(element, dom::kDamageAttributes); dom::NoteTreeChangeAt(element); }
+  } else if (what == "fullscreen") {
+    item->player->SetFullscreen(qe::ToBoolean(value));
     for (dom::Element* element : item->elements) { dom::NoteDamage(element, dom::kDamageAttributes); dom::NoteTreeChangeAt(element); }
   } else if (what == "ahead") item->player->SetBufferAhead(static_cast<uint64_t>(qe::ToNumber(ctx, value)));
   else if (what == "close") {
@@ -472,6 +485,7 @@ Value OpenMse(Context& ctx, Value, qe::Args args, Value) {
 void InstallMediaNatives(qe::Realm& realm) {
   Context& ctx = realm.GetContext();
   qe::DefineGlobalFunction(ctx, "__solarMediaCanPlay", CanPlay, 2);
+  qe::DefineGlobalFunction(ctx, "__solarMediaControlsLayout", ControlsLayoutJson, 2);
   qe::DefineGlobalFunction(ctx, "__solarMediaOpen", Open, 2);
   qe::DefineGlobalFunction(ctx, "__solarMediaControl", Control, 3);
   qe::DefineGlobalFunction(ctx, "__solarMediaState", StateJson, 1);

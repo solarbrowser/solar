@@ -113,6 +113,9 @@ progress, meter { box-sizing: border-box; vertical-align: -0.2em; }
 address, blockquote, center, dialog, div, figure, figcaption, footer, form, header, hr, legend, listing, main, p, plaintext, pre, search, xmp, bdi, output { unicode-bidi: isolate; }
 bdo, bdo[dir] { unicode-bidi: isolate-override; }
 textarea[dir=auto i], pre[dir=auto i] { unicode-bidi: plaintext; }
+:fullscreen { position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important; width: 100% !important; height: 100% !important;
+  max-width: none !important; max-height: none !important; margin: 0 !important; z-index: 2147483647 !important; box-sizing: border-box !important; background-color: #000; }
+video:fullscreen { object-fit: contain; }
 )CSS";
 
 struct UserAgentRule {
@@ -133,7 +136,7 @@ const std::vector<UserAgentRule>& UserAgentRules() {
         if (!item.isDeclaration) continue;
         std::vector<Longhand> longhands;
         if (!ExpandDeclaration(Lower(item.declaration.name), Serialize(Trimmed(item.declaration.value)), longhands)) continue;
-        for (Longhand& l : longhands) rule.declarations.push_back({l.name, l.value, false, l.pendingShorthand, l.pendingText});
+        for (Longhand& l : longhands) rule.declarations.push_back({l.name, l.value, item.declaration.important, l.pendingShorthand, l.pendingText});
       }
       list.push_back(std::move(rule));
     }

@@ -251,6 +251,10 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
       // What the page's service worker script (src/web-api/js/serviceworker.js) tells the program: whether the page is controlled, and its answers for resources.
       Quanta::Context& pctx = realm.GetContext();
       Quanta::Value global = qe::FromObject(pctx.get_global_object());
+      qe::Set(pctx, global, "__solarWindowFullscreen", qe::NewFunction(pctx, "__solarWindowFullscreen", 1, [this](Quanta::Context&, Quanta::Value, qe::Args args, Quanta::Value) {
+        if (fullscreen_ && !args.empty()) fullscreen_(args[0].to_boolean());
+        return qe::Undefined();
+      }));
       qe::Set(pctx, global, "__solarSwControlled", qe::NewFunction(pctx, "__solarSwControlled", 1, [this](Quanta::Context&, Quanta::Value, qe::Args args, Quanta::Value) {
         swControlled_ = !args.empty() && args[0].to_boolean();
         return qe::Undefined();
@@ -637,6 +641,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
   bool painting_ = false;
   bool timing_ = false;
   std::function<void()> pump_;
+  std::function<void(bool)> fullscreen_;  // (set where the window is: the whole window is made full screen, or not)
   std::function<void()> idle_;  // called while a resource is waited for
   // A page asked to go somewhere (script, or a form): the window does it when the page's script has returned.
   struct Requested {
@@ -801,7 +806,7 @@ struct Frame {
 };
 
 struct UiCommand {
-  enum class Kind { Title, ScrollBy, ScrollTo, Forget, Shot, Quit, Clipboard } kind = Kind::Title;
+  enum class Kind { Title, ScrollBy, ScrollTo, Forget, Shot, Quit, Clipboard, Fullscreen } kind = Kind::Title;
   std::string text;
   double x = 0, y = 0;
   bool instant = false;
@@ -1086,6 +1091,7 @@ void RunWindow(Shared& shared, SDL_Window* window, SDL_Renderer* renderer, solar
           break;
         case UiCommand::Kind::Quit: running = false; break;
         case UiCommand::Kind::Clipboard: SDL_SetClipboardText(command.text.c_str()); break;
+        case UiCommand::Kind::Fullscreen: SDL_SetWindowFullscreen(window, command.instant); break;
       }
     }
     if (Frame next; shared.TakeFrame(next)) {
@@ -1491,6 +1497,12 @@ int PageMain(Shared& shared, int argc, char** argv) {
     return true;
   };
   // (The window is on a thread of its own: it keeps answering while the page waits.)
+  browser.fullscreen_ = [&](bool on) {
+    UiCommand command;
+    command.kind = UiCommand::Kind::Fullscreen;
+    command.instant = on;
+    shared.Post(std::move(command));
+  };
   browser.pump_ = [&] {
     if (shared.quit.load()) std::_Exit(0);
   };

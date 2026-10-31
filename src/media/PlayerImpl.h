@@ -48,6 +48,7 @@ struct Player::Impl {
   double rate = 1;
   bool loop = false;
   bool controlsVisible = false;
+  bool fullscreenOn = false;
 
   PlayerState st;
   std::vector<std::string> events;

@@ -730,7 +730,6 @@ const char* const kPlatformScript = R"JS(
   for (const [name, accessor] of Object.entries(accessors)) {
     if (!Object.getOwnPropertyDescriptor(documentProto, name)) Object.defineProperty(documentProto, name, { ...accessor, enumerable: true, configurable: true });
   }
-  if (!documentProto.exitFullscreen) define(documentProto, "exitFullscreen", function exitFullscreen() { return Promise.resolve(); });
   if (!documentProto.execCommand) define(documentProto, "execCommand", function execCommand() { return false; });
   if (!documentProto.queryCommandSupported) define(documentProto, "queryCommandSupported", function queryCommandSupported() { return false; });
 
@@ -1360,7 +1359,6 @@ const char* const kStubScript = R"JS(
     ensure(HTMLElement.prototype, "setPointerCapture", function setPointerCapture() {});
     ensure(HTMLElement.prototype, "releasePointerCapture", function releasePointerCapture() {});
     ensure(HTMLElement.prototype, "hasPointerCapture", function hasPointerCapture() { return false; });
-    ensure(HTMLElement.prototype, "requestFullscreen", function requestFullscreen() { return Promise.reject(new TypeError("Fullscreen is not supported.")); });
   }
   if (typeof HTMLInputElement === "function") ensure(HTMLInputElement.prototype, "showPicker", function showPicker() {});
   if (typeof HTMLDialogElement === "function") {
