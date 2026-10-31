@@ -24,4 +24,8 @@ inline void (*g_canvasDetach)(const void* element) = nullptr;
 struct Document;
 inline void (*g_refreshControls)(Document* document) = nullptr;
 
+// Whether an element is :valid (0), :invalid (1), :in-range (2) or :out-of-range (3): the constraints are checked by the page's script (src/html/FormsValidity.inc), which style asks through this.
+struct Element;
+inline bool (*g_validityQuery)(const Element* element, int which) = nullptr;
+
 }  // namespace solar::dom

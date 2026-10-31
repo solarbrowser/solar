@@ -508,4 +508,18 @@ const char* const kValidityScript = R"JS(
   };
   define(O, "text", function () { return optionText(this); }, function (v) { this.textContent = String(v); });
   define(O, "value", function () { const v = this.getAttributeNode("value"); return v && v.namespaceURI === null ? v.value : optionText(this); }, function (v) { this.setAttribute("value", String(v)); });
+
+  // ---- :valid, :invalid, :in-range and :out-of-range (asked by style, src/css/SelectorMatch.cpp) ----
+  setHelper("validity", (el, kind) => {
+    if (kind <= 1) {
+      let invalid;
+      if (el instanceof HTMLFormElement) invalid = controlsOf(el).some((c) => willValidate(c) && invalidNow(c));
+      else if (el instanceof HTMLFieldSetElement) invalid = Array.from(el.querySelectorAll("input, select, textarea, button")).some((c) => willValidate(c) && invalidNow(c));
+      else { if (!willValidate(el)) return false; invalid = invalidNow(el); }
+      return kind === 0 ? !invalid : invalid;
+    }
+    if (!(el instanceof HTMLInputElement) || !rangeApplies(typeOf(el)) || !willValidate(el) || (!el.hasAttribute("min") && !el.hasAttribute("max"))) return false;
+    const f = flagsOf(el), out = f.rangeUnderflow || f.rangeOverflow;
+    return kind === 2 ? !out : out;
+  });
 )JS";

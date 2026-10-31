@@ -110,6 +110,15 @@ bool ReadControl(dom::Element* element, ControlView& out) {
   return true;
 }
 
+// Whether the element is :valid, :invalid, :in-range or :out-of-range: the script that keeps the controls works it out.
+bool ValidityQuery(const dom::Element* element, int which) {
+  dom::Document* document = element ? element->nodeDocument : nullptr;
+  if (!document || !document->context) return false;
+  Value arguments[] = {qe::FromObject(const_cast<dom::Element*>(element)), qe::FromNumber(which)};
+  const Value result = CallHelper(document, "validity", arguments, 2);
+  return !qe::IsUndefined(result) && qe::ToBoolean(result);
+}
+
 void RefreshControls(dom::Document* document) {
   if (!document || !document->context) return;
   Context& ctx = *document->context;

@@ -12,6 +12,7 @@
 #include "solar/dom/NodeBindingsInternal.h"
 #include "solar/html/HtmlBindings.h"
 #include "solar/dom/MediaHook.h"
+#include "solar/dom/Damage.h"
 #include "solar/dom/Range.h"
 #include "solar/html/Errors.h"
 #include "solar/html/Frames.h"
@@ -521,6 +522,7 @@ Value FormChanged(Context& ctx, Value, qe::Args args, Value) {
     if (dom::Element* element = dom::ThisElement(ctx, args[0]); element && element->nodeDocument) {
       element->nodeDocument->NoteWrite();
       dom::MarkControlDirty(element);
+      dom::NoteDamage(element, dom::kDamageAttributes);  // (:valid, :invalid and :in-range depend on what the control holds)
       dom::NoteTreeChange();
     }
   }
@@ -1435,6 +1437,7 @@ const char* const kEventHandlerScript = R"JS(
 
 void InstallHtmlApis(Quanta::Embed::Realm& realm) {
   dom::g_refreshControls = &RefreshControls;
+  dom::g_validityQuery = &ValidityQuery;
   Install(realm);
 }
 void InstallHtmlApis(Quanta::Embed::Runtime& runtime) { Install(runtime); }

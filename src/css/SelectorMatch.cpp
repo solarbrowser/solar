@@ -8,6 +8,7 @@
 #include <cctype>
 
 #include "solar/css/Selectors.h"
+#include "solar/dom/MediaHook.h"
 
 namespace solar::css {
 
@@ -341,6 +342,10 @@ bool MatchesPseudo(PseudoClass pseudo, const Element* element, const MatchContex
     case PseudoClass::Defined: return element->customState == dom::CustomState::Uncustomized || element->customState == dom::CustomState::Custom;
     case PseudoClass::Open: return IsHtmlNamed(element, {"details", "dialog"}) && element->FindAttribute("", "open");
     case PseudoClass::Closed: return IsHtmlNamed(element, {"details", "dialog"}) && !element->FindAttribute("", "open");
+    case PseudoClass::Valid: return dom::g_validityQuery && IsHtmlNamed(element, {"input", "select", "textarea", "button", "fieldset", "form", "output", "object"}) && dom::g_validityQuery(element, 0);
+    case PseudoClass::Invalid: return dom::g_validityQuery && IsHtmlNamed(element, {"input", "select", "textarea", "button", "fieldset", "form", "output", "object"}) && dom::g_validityQuery(element, 1);
+    case PseudoClass::InRange: return dom::g_validityQuery && IsHtmlNamed(element, {"input"}) && dom::g_validityQuery(element, 2);
+    case PseudoClass::OutOfRange: return dom::g_validityQuery && IsHtmlNamed(element, {"input"}) && dom::g_validityQuery(element, 3);
     default:
       // The ones that depend on what the user is doing or on what is rendered: no element is one yet.
       return false;

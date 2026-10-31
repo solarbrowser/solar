@@ -132,6 +132,8 @@ bool ReadControl(dom::Element* element, ControlView& out);
 // Asks the script of the window for the state of the controls that changed since, and keeps it for ReadControl (which gives it as it was committed).
 // Called before a frame is made.
 void RefreshControls(dom::Document* document);
+// Whether the element is :valid (0), :invalid (1), :in-range (2) or :out-of-range (3).
+bool ValidityQuery(const dom::Element* element, int which);
 
 // Parses `markup` into `document`, a document made in `realm` that has had InstallWindow, runs its scripts, and
 // fires DOMContentLoaded and, once the frames in it have loaded, load. Returns whether every script ran.

@@ -1,0 +1,21 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>:valid and :invalid</title>
+<style>
+  input { display: block; margin: 4px; padding: 4px; border: 3px solid gray; width: 200px; }
+  input:valid { border-color: green; }
+  input:invalid { border-color: red; }
+  input:out-of-range { background: #fdd; }
+  input:in-range { background: #dfd; }
+</style>
+<input id="a" required placeholder="required, empty: invalid">
+<input id="b" required value="filled">
+<input id="c" type="email" value="not an email">
+<input id="d" type="number" min="1" max="10" value="5">
+<input id="e" type="number" min="1" max="10" value="50">
+<script>
+const c = (id) => getComputedStyle(document.getElementById(id)).borderTopColor;
+console.log("styles", ["a","b","c","d","e"].map(c).join(" "), getComputedStyle(document.getElementById("e")).backgroundColor);
+document.getElementById("a").value = "now valid";
+console.log("after", c("a"));
+</script>
