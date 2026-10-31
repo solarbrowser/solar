@@ -186,6 +186,14 @@ struct HttpConnection : ConnectionHandler {
 };
 
 // One fetch: a request and the redirects that follow it, each a hop on some connection.
+struct Exchange;
+// Held while a call into an exchange's handler is on the stack.
+struct HandlerCall {
+  explicit HandlerCall(Exchange& e);
+  ~HandlerCall();
+  Exchange& exchange;
+};
+
 struct Exchange : Http1ResponseParser::Sink, Http2Stream {
   HttpClient::Impl& impl;
   const uint64_t id;
@@ -217,6 +225,8 @@ struct Exchange : Http1ResponseParser::Sink, Http2Stream {
   std::unique_ptr<BodyDecoder> decoder;  // null when the body is delivered as it came
   std::string request;
   bool finished = false;
+  // How many calls into the handler are on the stack. What the handler does can run a loop of its own (a script that asks for layout waits for a font), and that loop must not destroy this.
+  int inHandler = 0;
   bool reusedConnection = false;
   bool staleRetried = false;
   bool anyResponseByte = false;
@@ -289,6 +299,7 @@ struct Exchange : Http1ResponseParser::Sink, Http2Stream {
       }
     }
     decoder = BodyDecoder::Create(h, options.maxDecodedBodyBytes);
+    HandlerCall held(*this);
     handler.OnResponseHead(h, current);
   }
   void OnBody(std::span<const uint8_t> data) override {
@@ -302,11 +313,13 @@ struct Exchange : Http1ResponseParser::Sink, Http2Stream {
     }
     if (finished || redirecting) return;
     if (!decoder) {
+      HandlerCall held(*this);
       handler.OnBody(data);
       return;
     }
     // A handler that finished the fetch from inside OnBody ends the decoding too.
     if (auto error = decoder->Decode(data, [this](std::span<const uint8_t> decoded) {
+          HandlerCall held(*this);
           handler.OnBody(decoded);
           return !finished;
         })) {
@@ -318,6 +331,7 @@ struct Exchange : Http1ResponseParser::Sink, Http2Stream {
     if (decoder) {
       // The body has ended, and a compressed one must have ended with it.
       if (auto error = decoder->Finish([this](std::span<const uint8_t> decoded) {
+            HandlerCall held(*this);
             handler.OnBody(decoded);
             return !finished;
           })) {
@@ -854,7 +868,12 @@ void Exchange::FollowRedirect() {
   if (url::SerializeOrigin(*next) != url::SerializeOrigin(current)) {
     std::erase_if(options.headers, [](const auto& header) { return EqualsIgnoreCase(header.first, "authorization"); });
   }
-  if (!handler.OnRedirect(*head, *next, options.headers)) {
+  bool allowed;
+  {
+    HandlerCall held(*this);
+    allowed = handler.OnRedirect(*head, *next, options.headers);
+  }
+  if (!allowed) {
     Fail("the redirect was refused");
     return;
   }
@@ -881,8 +900,16 @@ void Exchange::Fail(const std::string& message) {
       used->Close();  // nothing else is waiting for what this connection might become
     }
   }
-  handler.OnError(message);
+  {
+    HandlerCall held(*this);
+    handler.OnError(message);
+  }
   impl.ScheduleReap();
+}
+
+HandlerCall::HandlerCall(Exchange& e) : exchange(e) { ++exchange.inHandler; }
+HandlerCall::~HandlerCall() {
+  if (--exchange.inHandler == 0 && exchange.finished) exchange.impl.ScheduleReap();
 }
 
 void Exchange::Finish() {
@@ -891,7 +918,10 @@ void Exchange::Finish() {
     impl.loop.CancelTimer(timer);
     timer = 0;
   }
-  handler.OnEnd();
+  {
+    HandlerCall held(*this);
+    handler.OnEnd();
+  }
   impl.ScheduleReap();
 }
 
@@ -980,7 +1010,15 @@ void HttpClient::Impl::Reap() {
   reapQueued = false;
   connections.remove_if([](const std::unique_ptr<internal::HttpConnection>& c) { return c->dead; });
   for (auto it = exchanges.begin(); it != exchanges.end();) {
-    it = it->second->finished ? exchanges.erase(it) : std::next(it);
+    if (!it->second->finished || it->second->inHandler > 0) {
+      ++it;
+      continue;
+    }
+    // A stream of an HTTP/2 connection that is still open (a redirect's, or one the exchange finished before it closed) must not call what is about to be destroyed.
+    for (auto& connection : connections) {
+      if (connection->h2) connection->h2->Forget(it->second.get());
+    }
+    it = exchanges.erase(it);
   }
 }
 

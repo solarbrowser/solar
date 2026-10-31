@@ -204,6 +204,17 @@ void Http2Session::Reset(int32_t id) {
   if (!receiving_) Flush();
 }
 
+void Http2Session::Forget(Http2Stream* stream) {
+  bool any = false;
+  for (auto& [id, state] : streams_) {
+    if (state->sink != stream) continue;
+    state->sink = nullptr;
+    nghttp2_submit_rst_stream(session_, NGHTTP2_FLAG_NONE, id, NGHTTP2_CANCEL);
+    any = true;
+  }
+  if (any && !receiving_) Flush();
+}
+
 void Http2Session::Shutdown() {
   nghttp2_session_terminate_session(session_, NGHTTP2_NO_ERROR);
   if (!receiving_) Flush();

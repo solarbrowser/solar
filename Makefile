@@ -91,6 +91,8 @@ MEDIA_SOURCES = $(wildcard src/media/*.cpp)
 MEDIA_OBJECTS = $(MEDIA_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
 
 WEB_SOURCES = $(wildcard src/web/*.cpp) $(wildcard src/web-api/*.cpp)
+# What a realm with the page's APIs needs (the web APIs of a page reach into the document, layout and fonts).
+PAGE_OBJECTS = $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS)
 WEB_OBJECTS = $(WEB_SOURCES:%.cpp=$(OBJ_DIR)/%.o) $(MEDIA_OBJECTS) $(OBJ_DIR)/$(GEN_DIR)/WebApiScript.o $(OBJ_DIR)/$(GEN_DIR)/WebApiWorkerScript.o $(OBJ_DIR)/$(GEN_DIR)/StreamsScript.o $(OBJ_DIR)/$(GEN_DIR)/UiEventsScript.o $(OBJ_DIR)/$(GEN_DIR)/XhrScript.o $(OBJ_DIR)/$(GEN_DIR)/TypedOmScript.o $(OBJ_DIR)/$(GEN_DIR)/FontLoadingScript.o $(OBJ_DIR)/$(GEN_DIR)/LayoutScript.o $(OBJ_DIR)/$(GEN_DIR)/AnimationsScript.o
 
 # The scripts in src/web/js are compiled into the program as C++ sources made from them.
@@ -286,13 +288,13 @@ $(BUILD_DIR)/ValidationErrorTest: $(OBJ_DIR)/tests/ValidationErrorTest.o $(URL_O
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^
 
-$(BUILD_DIR)/UrlBindingsTest: $(OBJ_DIR)/tests/UrlBindingsTest.o $(URL_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
+$(BUILD_DIR)/UrlBindingsTest: $(OBJ_DIR)/tests/UrlBindingsTest.o $(URL_OBJECTS) $(PAGE_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
-	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS)
+	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS)
 
-$(BUILD_DIR)/UrlRealmsTest: $(OBJ_DIR)/tests/UrlRealmsTest.o $(URL_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
+$(BUILD_DIR)/UrlRealmsTest: $(OBJ_DIR)/tests/UrlRealmsTest.o $(URL_OBJECTS) $(PAGE_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
-	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS)
+	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS)
 
 # The value grammar does not need the DOM either.
 $(BUILD_DIR)/CssValuesTest: $(OBJ_DIR)/tests/CssValuesTest.o $(OBJ_DIR)/src/css/Tokenizer.o $(OBJ_DIR)/src/css/Syntax.o $(OBJ_DIR)/src/css/Values.o $(OBJ_DIR)/src/css/Calc.o $(OBJ_DIR)/src/css/Color.o $(OBJ_DIR)/src/css/Shorthands.o $(OBJ_DIR)/src/css/Properties.o $(OBJ_DIR)/src/css/PropertyData.o $(URL_OBJECTS)
@@ -317,28 +319,25 @@ $(BUILD_DIR)/HtmlTreeTest: $(OBJ_DIR)/tests/HtmlTreeTest.o $(HTML_OBJECTS) $(DOM
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS)
 
-$(BUILD_DIR)/DomTest: $(OBJ_DIR)/tests/DomTest.o $(URL_OBJECTS) $(DOM_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
+$(BUILD_DIR)/DomTest: $(OBJ_DIR)/tests/DomTest.o $(URL_OBJECTS) $(PAGE_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
-	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS)
+	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS)
 
 $(BUILD_DIR)/WptTest: $(OBJ_DIR)/tests/WptTest.o $(URL_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS)
 
-$(BUILD_DIR)/FetchBindingsTest: $(OBJ_DIR)/tests/FetchBindingsTest.o $(OBJ_DIR)/tests/support/TestServer.o $(URL_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
+$(BUILD_DIR)/FetchBindingsTest: $(OBJ_DIR)/tests/FetchBindingsTest.o $(OBJ_DIR)/tests/support/TestServer.o $(URL_OBJECTS) $(PAGE_OBJECTS) $(WEB_OBJECTS) $(NET_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
-	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS)
+	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS)
 
 $(BUILD_DIR)/GenIdnaTables: tools/GenIdnaTables.cpp
 	@mkdir -p $(BUILD_DIR)
 	@echo "[BUILD] $<"
 	@$(CXX) -std=c++20 -Wall -Wextra -O2 -o $@ $<
 
-WPT_FETCH = $(wildcard tests/wpt/fetch/api/headers/*.any.js tests/wpt/fetch/api/request/*.any.js tests/wpt/fetch/api/response/*.any.js)
-WPT_STREAMS = $(wildcard tests/wpt/streams/*.any.js tests/wpt/streams/piping/*.any.js tests/wpt/streams/readable-byte-streams/*.any.js tests/wpt/streams/readable-streams/*.any.js tests/wpt/streams/transform-streams/*.any.js tests/wpt/streams/writable-streams/*.any.js)
-# The WPT pages (dom/nodes, dom/ranges) that pass whole; a page is added to the list when it does.
-WPT_PAGES = $(shell cat tests/wpt-solar/dom-passing.txt)
-WPT_DOM = $(wildcard tests/dom/*.any.js tests/wpt/dom/abort/*.any.js tests/wpt/dom/events/*.any.js tests/wpt/webidl/*.any.js tests/wpt/encoding/*.any.js tests/wpt/encoding/streams/*.any.js tests/wpt/FileAPI/blob/*.any.js tests/wpt/FileAPI/file/*.any.js tests/wpt/xhr/formdata/*.any.js)
+# The .any.js files that pass whole (tests/wpt-solar/anyjs-passing.txt: url, dom, webidl, encoding, fetch, streams, FileAPI and our own); the rest of WPT's are not run.
+WPT_ANY = $(shell cat tests/wpt-solar/anyjs-passing.txt)
 
 PORTABLE_TESTS = FontTest BidiTest CssValuesTest HtmlTokenizerTest UrlTest SearchParamsTest ValidationErrorTest NormalizerTest PublicSuffixTest CookiesTest HttpCacheTest FetchHeadersTest CorsTest Http1ParserTest ContentDecoderTest AddressRaceTest HstsTest
 NET_TESTS = LoopTest ResolverTest NetTest HttpClientTest TlsTest Http2Test
@@ -355,7 +354,7 @@ test: $(addprefix $(BUILD_DIR)/,$(TESTS)) $(if $(filter linux,$(PLATFORM)),$(BUI
 	@for t in $(TESTS); do $(BUILD_DIR)/$$t || exit 1; done
 ifeq ($(PLATFORM),linux)
 	@for t in $(NET_TESTS) FetchBindingsTest; do SOLAR_LOOP_BACKEND=readiness $(BUILD_DIR)/$$t || exit 1; done
-	@$(BUILD_DIR)/WptTest $(wildcard tests/wpt/url/*.any.js) $(WPT_DOM) $(WPT_FETCH) $(WPT_STREAMS)
+	@$(BUILD_DIR)/WptTest $(WPT_ANY)
 	@python3 tools/wptrun.py --check tests/wpt-solar/dom-passing.txt tests/wpt-solar/css-passing.txt
 endif
 
@@ -367,7 +366,7 @@ test-wpt: $(BUILD_DIR)/WptTest
 # is tested that way itself, so this is for what Solar's own bindings keep alive (Persistents, Visit).
 test-gc: $(BUILD_DIR)/WptTest $(BUILD_DIR)/FetchBindingsTest
 	@QUANTA_GC_STRESS=2 $(BUILD_DIR)/FetchBindingsTest
-	@QUANTA_GC_STRESS=2 $(BUILD_DIR)/WptTest $(WPT_DOM) $(WPT_FETCH) $(WPT_STREAMS) > /dev/null
+	@QUANTA_GC_STRESS=2 $(BUILD_DIR)/WptTest $(WPT_ANY) > /dev/null
 
 # The tests that do not need Quanta, built with AddressSanitizer, UndefinedBehaviorSanitizer and
 # leak detection and run. Each is compiled straight from its sources.

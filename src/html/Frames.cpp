@@ -744,7 +744,7 @@ void CompleteLoad(Quanta::Embed::Realm& realm, dom::Document* document, bool not
   document->readyState = "interactive";
   realm.Evaluate("document.dispatchEvent(new Event('DOMContentLoaded', { bubbles: true }))", "page");
   // The autofocus candidate: the first element with the attribute takes the focus when nothing else has it (and a frame's, only if its page is the one in front).
-  realm.Evaluate("{ const e = document.querySelector('[autofocus]'); if (e && (!document.activeElement || document.activeElement === document.body || document.activeElement === document.documentElement)) e.focus(); }", "page");
+  realm.Evaluate("{ const e = window === window.top ? document.querySelector('[autofocus]') : null; if (e && (!document.activeElement || document.activeElement === document.body || document.activeElement === document.documentElement)) e.focus(); }", "page");
   const auto finish = [&realm, document, notifyFrame] {
     document->readyState = "complete";
     realm.Evaluate("window.dispatchEvent(new Event('load'))", "page");

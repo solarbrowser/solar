@@ -72,6 +72,8 @@ class Http2Session {
   int32_t Submit(const Http2Request& request, Http2Stream& stream);
   // The caller has lost interest in a stream: it gets no further calls.
   void Reset(int32_t id);
+  // `stream` is going away: no stream of this session calls it again (what it still has open is reset).
+  void Forget(Http2Stream* stream);
 
   // Tells the server this connection takes no more requests. Streams in flight still finish.
   void Shutdown();
