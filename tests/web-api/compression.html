@@ -1,0 +1,45 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Compression</title>
+<script>
+const ok = (name, condition, detail) => console.log((condition ? "ok   " : "FAIL ") + name + (condition ? "" : "  " + detail));
+const hex = (u8) => Array.from(u8, (b) => b.toString(16).padStart(2, "0")).join("");
+const collect = async (stream) => { const parts = []; const r = stream.getReader(); for (;;) { const { done, value } = await r.read(); if (done) break; parts.push(value); } const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0)); let at = 0; for (const p of parts) { out.set(p, at); at += p.length; } return out; };
+const through = async (bytes, transform) => collect(new Blob([bytes]).stream().pipeThrough(transform));
+async function run() {
+  ok("classes exist", typeof CompressionStream === "function" && typeof DecompressionStream === "function", "");
+  let e = null; try { new CompressionStream("br"); } catch (x) { e = x; }
+  ok("an unknown format is a TypeError", e instanceof TypeError, String(e));
+  const text = new TextEncoder().encode("hello hello hello hello hello hello ".repeat(200));
+  for (const format of ["gzip", "deflate", "deflate-raw"]) {
+    const packed = await through(text, new CompressionStream(format));
+    ok(format + ": smaller", packed.length < text.length / 10, packed.length);
+    if (format === "gzip") ok("gzip magic", packed[0] === 0x1f && packed[1] === 0x8b, hex(packed.slice(0, 4)));
+    if (format === "deflate") ok("zlib header", packed[0] === 0x78, hex(packed.slice(0, 2)));
+    const back = await through(packed, new DecompressionStream(format));
+    ok(format + ": round trip", back.length === text.length && back.every((b, i) => b === text[i]), back.length);
+  }
+  const gz = await through(new TextEncoder().encode("abc"), new CompressionStream("gzip"));
+  ok("a small gzip decodes", new TextDecoder().decode(await through(gz, new DecompressionStream("gzip"))) === "abc", "");
+  // fed in pieces
+  const cs = new CompressionStream("gzip");
+  const w = cs.writable.getWriter();
+  const result = collect(cs.readable);
+  for (let i = 0; i < 10; i++) await w.write(new TextEncoder().encode("piece " + i + " "));
+  await w.close();
+  const joined = await result;
+  ok("written in pieces", new TextDecoder().decode(await through(joined, new DecompressionStream("gzip"))) === Array.from({ length: 10 }, (_, i) => "piece " + i + " ").join(""), "");
+  // a stream cut short, and one that is not compressed
+  e = null; try { await through(gz.slice(0, gz.length - 5), new DecompressionStream("gzip")); } catch (x) { e = x; }
+  ok("a truncated stream is a TypeError", e instanceof TypeError, String(e));
+  e = null; try { await through(new TextEncoder().encode("not compressed at all"), new DecompressionStream("gzip")); } catch (x) { e = x; }
+  ok("data that is not gzip is a TypeError", e instanceof TypeError, String(e));
+  e = null; try { await through(new Uint8Array([...gz, 1, 2, 3]), new DecompressionStream("gzip")); } catch (x) { e = x; }
+  ok("data after the end is a TypeError", e instanceof TypeError, String(e));
+  // a known gzip of "hello\n"
+  const known = Uint8Array.from(atob("H4sIAAAAAAAAA8tIzcnJ5wIAIDA6NgYAAAA="), (c) => c.charCodeAt(0));
+  ok("a gzip made elsewhere", new TextDecoder().decode(await through(known, new DecompressionStream("gzip"))) === "hello\n", "");
+  ok("toStringTag", Object.prototype.toString.call(new CompressionStream("gzip")) === "[object CompressionStream]", "");
+}
+run().then(() => console.log("done"), (e) => { console.log("FAIL exception " + (e && e.stack || e)); console.log("done"); });
+</script>

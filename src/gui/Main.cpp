@@ -66,6 +66,7 @@
 #include "solar/web/FetchHost.h"
 #include "solar/web/JsEventLoop.h"
 #include "solar/web/Messaging.h"
+#include "solar/web-api/Compression.h"
 #include "solar/web-api/Crypto.h"
 #include "solar/web-api/IndexedDb.h"
 #include "solar/web-api/WebSocket.h"
@@ -163,6 +164,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
       bundle->host = std::make_unique<solar::web::FetchHost>(realm.GetContext(), config);
       solar::webapi::InstallWebSocketNatives(realm);
       solar::webapi::InstallCryptoNatives(realm);
+      solar::webapi::InstallCompressionNatives(realm);
       solar::webapi::InstallWorkerScope(realm);
     });
     qe::Realm* raw = bundle->realm.get();
@@ -211,6 +213,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
       solar::webapi::InstallIndexedDbNatives(realm);
       solar::webapi::InstallWebSocketNatives(realm);
       solar::webapi::InstallCryptoNatives(realm);
+      solar::webapi::InstallCompressionNatives(realm);
       solar::web::FetchHost::Config config;
       config.loop = &loop_;
       config.client = &client_;

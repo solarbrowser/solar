@@ -103,7 +103,7 @@ $(GEN_DIR)/WebApiScript.cpp: $(WEB_API_JS) $(BUILD_DIR)/EmbedScripts
 	@$(BUILD_DIR)/EmbedScripts WebApi $(WEB_API_JS) > $@
 
 # (And the global scope of a worker, in src/web-api/worker-js, with the APIs of the page's that a worker has as well.)
-WEB_API_WORKER_JS = $(sort $(wildcard src/web-api/worker-js/*.js) src/web-api/js/websocket.js src/web-api/js/eventsource.js src/web-api/js/crypto.js)
+WEB_API_WORKER_JS = $(sort $(wildcard src/web-api/worker-js/*.js) src/web-api/js/websocket.js src/web-api/js/eventsource.js src/web-api/js/crypto.js src/web-api/js/compression.js)
 $(GEN_DIR)/WebApiWorkerScript.cpp: $(WEB_API_WORKER_JS) $(BUILD_DIR)/EmbedScripts
 	@mkdir -p $(GEN_DIR)
 	@echo "[EMBED] $@"
