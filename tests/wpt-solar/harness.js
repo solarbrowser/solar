@@ -209,8 +209,164 @@
       },
     },
   };
-  globalThis.test_driver = new Proxy({}, {
-    get: (target, name) => (name === 'bidi' ? bidi : typeof name === 'string' ? () => Promise.reject(new Error('test_driver.' + name + ' is not available')) : undefined),
+  // The user of the tests: what testdriver asks for is done here with events made by the script, as the program does for the real user (clicks, keys, the actions of the
+  // WebDriver sequences, a recent action of the user that the Pointer Lock API asks for). What needs more than that is refused.
+  const activate = () => { try { document[Symbol.for('solar.activation')] = performance.now(); } catch (e) {} };
+  const KEYS = {
+    '\uE003': ['Backspace', 'Backspace', 8], '\uE004': ['Tab', 'Tab', 9], '\uE006': ['Enter', 'Enter', 13], '\uE007': ['Enter', 'Enter', 13], '\uE00C': ['Escape', 'Escape', 27],
+    '\uE00D': [' ', 'Space', 32], '\uE00E': ['PageUp', 'PageUp', 33], '\uE00F': ['PageDown', 'PageDown', 34], '\uE010': ['End', 'End', 35], '\uE011': ['Home', 'Home', 36],
+    '\uE012': ['ArrowLeft', 'ArrowLeft', 37], '\uE013': ['ArrowUp', 'ArrowUp', 38], '\uE014': ['ArrowRight', 'ArrowRight', 39], '\uE015': ['ArrowDown', 'ArrowDown', 40],
+    '\uE017': ['Delete', 'Delete', 46], '\uE008': ['Shift', 'ShiftLeft', 16], '\uE009': ['Control', 'ControlLeft', 17], '\uE00A': ['Alt', 'AltLeft', 18], '\uE03D': ['Meta', 'MetaLeft', 91],
+  };
+  const keyInfo = (value) => {
+    if (KEYS[value]) return { key: KEYS[value][0], code: KEYS[value][1], keyCode: KEYS[value][2], printable: value === '\uE00D' };
+    const upper = value.toUpperCase();
+    const code = /^[a-z]$/i.test(value) ? 'Key' + upper : /^[0-9]$/.test(value) ? 'Digit' + value : '';
+    return { key: value, code, keyCode: value.length === 1 ? upper.charCodeAt(0) : 0, printable: true };
+  };
+  const editable = (el) => el && ((el instanceof HTMLInputElement && !/^(checkbox|radio|button|submit|reset|image|file|range|color|hidden)$/.test(el.type)) || el instanceof HTMLTextAreaElement) && !el.disabled && !el.readOnly;
+  const insert = (el, text) => {
+    const start = el.selectionStart === null ? el.value.length : el.selectionStart, end = el.selectionEnd === null ? start : el.selectionEnd;
+    el.value = el.value.slice(0, start) + text + el.value.slice(end);
+    try { el.setSelectionRange(start + text.length, start + text.length); } catch (e) {}
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, data: text, inputType: 'insertText' }));
+  };
+  const erase = (el, forward) => {
+    let start = el.selectionStart === null ? el.value.length : el.selectionStart; const end = el.selectionEnd === null ? start : el.selectionEnd;
+    let to = end;
+    if (start === end) { if (forward) to = Math.min(el.value.length, end + 1); else start = Math.max(0, start - 1); }
+    if (start === to) return;
+    el.value = el.value.slice(0, start) + el.value.slice(to);
+    try { el.setSelectionRange(start, start); } catch (e) {}
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: forward ? 'deleteContentForward' : 'deleteContentBackward' }));
+  };
+  const modifiers = { shift: false, ctrl: false, alt: false, meta: false };
+  const keyDown = (target, value) => {
+    const info = keyInfo(value);
+    if (info.key === 'Shift') modifiers.shift = true; else if (info.key === 'Control') modifiers.ctrl = true; else if (info.key === 'Alt') modifiers.alt = true; else if (info.key === 'Meta') modifiers.meta = true;
+    const init = { bubbles: true, cancelable: true, composed: true, view: globalThis, key: info.key, code: info.code, keyCode: info.keyCode, which: info.keyCode, shiftKey: modifiers.shift, ctrlKey: modifiers.ctrl, altKey: modifiers.alt, metaKey: modifiers.meta };
+    activate();
+    const proceed = target.dispatchEvent(new KeyboardEvent('keydown', init));
+    if (!proceed) return;
+    if (info.printable && !modifiers.ctrl && !modifiers.meta) {
+      const text = info.key === ' ' ? ' ' : info.key;
+      if (target.dispatchEvent(new KeyboardEvent('keypress', { ...init, charCode: text.charCodeAt(0) })) && editable(target)) insert(target, text);
+    } else if (editable(target) && info.key === 'Backspace') erase(target, false);
+    else if (editable(target) && info.key === 'Delete') erase(target, true);
+    else if (info.key === 'Enter' && (target instanceof HTMLButtonElement || target instanceof HTMLAnchorElement)) target.click();
+  };
+  const keyUp = (target, value) => {
+    const info = keyInfo(value);
+    if (info.key === 'Shift') modifiers.shift = false; else if (info.key === 'Control') modifiers.ctrl = false; else if (info.key === 'Alt') modifiers.alt = false; else if (info.key === 'Meta') modifiers.meta = false;
+    target.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, cancelable: true, composed: true, view: globalThis, key: info.key, code: info.code, keyCode: info.keyCode, which: info.keyCode, shiftKey: modifiers.shift, ctrlKey: modifiers.ctrl, altKey: modifiers.alt, metaKey: modifiers.meta }));
+  };
+  const centerOf = (el) => { const r = el.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; };
+  const focusFor = (target) => {
+    for (let p = target; p; p = p.parentNode instanceof Element ? p.parentNode : null) {
+      if (typeof p.focus === 'function') { p.focus(); if (document.activeElement === p) return; }
+    }
+    if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
+  };
+  // The pointer: where it is, what is under it and the buttons held; with the pointer locked its events are the lock target's and tell how far it moved.
+  const pointers = new Map();
+  const pointerState = (id) => { if (!pointers.has(id)) pointers.set(id, { x: 0, y: 0, target: null, buttons: 0, downTarget: null }); return pointers.get(id); };
+  const fire = (state, type, button, extra) => {
+    const locked = document.pointerLockElement;
+    const target = locked || state.target || document.body || document.documentElement;
+    const init = { bubbles: true, cancelable: true, composed: true, view: globalThis, clientX: state.x, clientY: state.y, screenX: state.x, screenY: state.y, button, buttons: state.buttons, shiftKey: modifiers.shift, ctrlKey: modifiers.ctrl, altKey: modifiers.alt, metaKey: modifiers.meta, ...extra };
+    return target.dispatchEvent(new MouseEvent(type, init));
+  };
+  const firePointer = (state, type, button, extra) => {
+    if (typeof PointerEvent !== 'function') return;
+    const target = document.pointerLockElement || state.target || document.body || document.documentElement;
+    target.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: type !== 'pointerenter' && type !== 'pointerleave', composed: true, view: globalThis, pointerId: 1, pointerType: 'mouse', isPrimary: true,
+      clientX: state.x, clientY: state.y, button, buttons: state.buttons, ...extra }));
+  };
+  const underPoint = (x, y) => (typeof document.elementFromPoint === 'function' && document.elementFromPoint(x, y)) || document.body;
+  const pointerMove = (state, action) => {
+    let x = action.x || 0, y = action.y || 0;
+    const origin = action.origin === undefined ? 'viewport' : action.origin;
+    let target = null;
+    if (origin === 'pointer') { x += state.x; y += state.y; }
+    else if (origin !== 'viewport') { const [cx, cy] = centerOf(origin); x += cx; y += cy; target = origin; }
+    const dx = x - state.x, dy = y - state.y;
+    state.x = x; state.y = y;
+    if (document.pointerLockElement) { const at = { movementX: dx, movementY: dy, clientX: state.lockX === undefined ? x : state.lockX, clientY: state.lockY === undefined ? y : state.lockY }; firePointer(state, 'pointermove', -1, at); fire(state, 'mousemove', 0, at); return; }
+    const before = state.target;
+    state.target = target || underPoint(x, y);
+    if (before !== state.target) {
+      if (before) { fire({ ...state, target: before }, 'mouseout', 0); }
+      fire(state, 'mouseover', 0);
+    }
+    firePointer(state, 'pointermove', -1, { movementX: dx, movementY: dy });
+    fire(state, 'mousemove', 0, { movementX: dx, movementY: dy });
+  };
+  const pointerDown = (state, button) => {
+    activate();
+    state.buttons |= 1 << (button === 1 ? 2 : button === 2 ? 1 : 0);
+    if (document.pointerLockElement) state.lockX = state.x, state.lockY = state.y;
+    state.downTarget = document.pointerLockElement || state.target;
+    firePointer(state, 'pointerdown', button);
+    if (fire(state, 'mousedown', button, { detail: 1 }) && button === 0 && state.target && !document.pointerLockElement) focusFor(state.target);
+  };
+  const pointerUp = (state, button) => {
+    activate();
+    state.buttons &= ~(1 << (button === 1 ? 2 : button === 2 ? 1 : 0));
+    firePointer(state, 'pointerup', button);
+    fire(state, 'mouseup', button, { detail: 1 });
+    const target = document.pointerLockElement || state.target;
+    if (target && target === state.downTarget) {
+      if (button === 0 && typeof target.click === 'function' && !document.pointerLockElement) target.click();
+      else fire(state, button === 0 ? 'click' : button === 2 ? 'contextmenu' : 'auxclick', button, { detail: 1 });
+    }
+    state.downTarget = null;
+  };
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const driver = {
+    bidi,
+    click: async (element) => {
+      const [x, y] = centerOf(element);
+      const state = pointerState('click');
+      state.x = x; state.y = y; state.target = element; state.buttons = 0;
+      fire(state, 'mouseover', 0); fire(state, 'mousemove', 0);
+      pointerDown(state, 0); pointerUp(state, 0);
+    },
+    send_keys: async (element, keys) => {
+      if (element !== document.activeElement && typeof element.focus === 'function') element.focus();
+      const target = document.activeElement && document.activeElement !== document.body ? document.activeElement : element;
+      for (const ch of Array.from(String(keys))) { keyDown(target, ch); keyUp(target, ch); }
+    },
+    bless: async (intent, action) => { activate(); return typeof action === 'function' ? action() : undefined; },
+    action_sequence: async (sources) => {
+      const ticks = Math.max(0, ...sources.map((s) => s.actions.length));
+      for (let i = 0; i < ticks; i++) {
+        let wait = 0;
+        for (const source of sources) {
+          const action = source.actions[i];
+          if (!action) continue;
+          if (action.type === 'pause') { wait = Math.max(wait, action.duration || 0); continue; }
+          if (source.type === 'pointer') {
+            const state = pointerState(source.id);
+            if (action.type === 'pointerMove') pointerMove(state, action);
+            else if (action.type === 'pointerDown') pointerDown(state, action.button || 0);
+            else if (action.type === 'pointerUp') pointerUp(state, action.button || 0);
+          } else if (source.type === 'key') {
+            const target = document.activeElement || document.body;
+            if (action.type === 'keyDown') keyDown(target, action.value); else if (action.type === 'keyUp') keyUp(target, action.value);
+          }
+        }
+        if (wait) await sleep(wait);
+      }
+    },
+    set_permission: async () => {},
+    set_test_context: () => {},
+    minimize_window: async () => {},
+    set_window_rect: async () => {},
+    get_virtual_sensor_information: undefined,
+  };
+  for (const name of Object.keys(driver)) if (driver[name] === undefined) delete driver[name];
+  globalThis.test_driver = new Proxy(driver, {
+    get: (target, name) => (name in target ? target[name] : typeof name === 'string' ? () => Promise.reject(new Error('test_driver.' + name + ' is not available')) : undefined),
   });
   globalThis.test_driver_internal = globalThis.test_driver;
 

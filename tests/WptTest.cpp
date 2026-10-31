@@ -181,7 +181,7 @@ class TestEnvironment : public solar::html::FrameEnvironment {
   bool SkipScript(const std::string& url) override {
     // The harness is already in place; any other script is a file of the tests.
     const std::string path = url.substr(0, url.find_first_of("?#"));
-    return path.ends_with("testharness.js") || path.ends_with("testharnessreport.js") || path.find("testdriver") != std::string::npos;
+    return path.ends_with("testharness.js") || path.ends_with("testharnessreport.js") || (path.find("testdriver") != std::string::npos && path.find("testdriver-actions") == std::string::npos);
   }
 
   // The scripts the pages load, parsed once for every realm that runs them. Keyed by address and text, so a changed

@@ -22,14 +22,13 @@
 
   Object.defineProperty(Element.prototype, "requestPointerLock", {
     value: function requestPointerLock(options) {
-      if (typeof lockNative !== "function") return Promise.reject(fail("NotSupportedError", "Pointer lock is not available."));
       if (!this.isConnected) return Promise.reject(fail("WrongDocumentError", "The element is not in the document."));
       if (locked === this) return Promise.resolve();
       if (!activated()) return Promise.reject(fail("NotAllowedError", "Pointer lock needs a user gesture."));
       const element = this;
       const changed = locked !== null;
       locked = element;
-      lockNative(true);
+      if (typeof lockNative === "function") lockNative(true);
       if (!observer && typeof MutationObserver === "function") {
         // The element that leaves the document loses the lock.
         observer = new MutationObserver(() => { if (locked && !locked.isConnected) release(); });
