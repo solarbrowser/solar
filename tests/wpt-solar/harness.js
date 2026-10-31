@@ -251,6 +251,56 @@
     try { el.setSelectionRange(start, start); } catch (e) {}
     el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: forward ? 'deleteContentForward' : 'deleteContentBackward' }));
   };
+  // Sequential focus navigation (Tab): the elements that can be reached by it in the order the standard has it (positive tabindex first, then the rest in tree order), through shadow trees.
+  const tabbable = (el) => {
+    if (!(el instanceof HTMLElement || el instanceof SVGElement)) return false;
+    if (el.tabIndex < 0) return false;
+    if (el.matches && (el.matches(':disabled') || el.matches('[inert], [inert] *'))) return false;
+    if (el.localName === 'input' && el.type === 'hidden') return false;
+    if (el.getClientRects().length === 0) return false;
+    const style = getComputedStyle(el);
+    if (style.visibility !== 'visible') return false;
+    return true;
+  };
+  const collectTabbable = (root, out) => {
+    for (const child of root.children || []) {
+      if (tabbable(child)) out.push(child);
+      if (child.shadowRoot) collectTabbable(child.shadowRoot, out); else collectTabbable(child, out);
+    }
+  };
+  const tabOrder = () => {
+    const all = [];
+    collectTabbable(document, all);
+    // The content of an open popover comes right after the button that invoked it.
+    for (const invoker of [...all]) {
+      const target = invoker.popoverTargetElement;
+      if (!target || !target.matches(':popover-open')) continue;
+      const inside = all.filter((e) => e !== invoker && (e === target || target.contains(e)));
+      if (!inside.length) continue;
+      for (const e of inside) all.splice(all.indexOf(e), 1);
+      all.splice(all.indexOf(invoker) + 1, 0, ...inside);
+    }
+    const positive = all.filter((e) => e.tabIndex > 0).sort((a, b) => a.tabIndex - b.tabIndex);
+    return [...positive, ...all.filter((e) => e.tabIndex === 0)];
+  };
+  const moveFocus = (backward) => {
+    const order = tabOrder();
+    if (!order.length) { if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur(); return; }
+    let current = document.activeElement;
+    // (A focused element that is inside a shadow tree is looked for by its host as well.)
+    let index = order.indexOf(current);
+    while (index < 0 && current && current.getRootNode && current.getRootNode() !== document) { current = current.getRootNode().host; index = order.indexOf(current); }
+    if (index < 0) {
+      // Not on the order: the next one after it in tree order.
+      const pos = (a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
+      if (!current || current === document.body) index = backward ? order.length : -1;
+      else { const after = order.findIndex((e) => current.compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING); index = backward ? (after < 0 ? order.length : after) : after - 1; if (after < 0 && !backward) index = order.length - 1; }
+    }
+    const next = order[(index + (backward ? -1 : 1) + order.length) % order.length];
+    // (Past the end the focus goes out of the page: nothing is focused.)
+    if ((!backward && index === order.length - 1) || (backward && index <= 0)) { if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur(); return; }
+    next.focus();
+  };
   const modifiers = { shift: false, ctrl: false, alt: false, meta: false };
   const keyDown = (target, value) => {
     const info = keyInfo(value);
@@ -260,6 +310,7 @@
     activate();
     const proceed = target.dispatchEvent(new KeyboardEvent('keydown', init));
     if (!proceed) return;
+    if (info.key === 'Tab' && !modifiers.ctrl && !modifiers.alt) { moveFocus(modifiers.shift); return; }
     if (info.printable && !modifiers.ctrl && !modifiers.meta) {
       const text = info.key === ' ' ? ' ' : info.key;
       if (target.dispatchEvent(new KeyboardEvent('keypress', { ...init, charCode: text.charCodeAt(0) })) && editable(target)) insert(target, text);
