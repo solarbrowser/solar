@@ -66,6 +66,7 @@ html, address, blockquote, body, center, dialog, div, figure, figcaption, footer
 article, aside, h1, h2, h3, h4, h5, h6, hgroup, nav, section, dir, dd, dl, dt, menu, ol, ul, details, summary, fieldset, optgroup, option { display: block; }
 [hidden], area, base, basefont, datalist, head, link, meta, noembed, noframes, noscript, param, rp, script, style, template, title { display: none; }
 li { display: list-item; text-align: match-parent; }
+center { text-align: center; }
 table { display: table; } caption { display: table-caption; } colgroup, colgroup[hidden] { display: table-column-group; } col, col[hidden] { display: table-column; }
 thead, thead[hidden] { display: table-header-group; } tbody, tbody[hidden] { display: table-row-group; } tfoot, tfoot[hidden] { display: table-footer-group; }
 tr, tr[hidden] { display: table-row; } td, th, td[hidden], th[hidden] { display: table-cell; }

@@ -37,6 +37,15 @@ const std::string* Attr(const dom::Element* e, const char* name) {
 struct Hints {
   std::vector<DeclarationEntry> out;
   void Add(const char* name, std::string value) {
+    // (The shorthands are the four longhands: a hint is a declaration of one property at a time.)
+    const std::string n = name;
+    static const char* const sides[] = {"top", "right", "bottom", "left"};
+    if (n == "padding") { for (const char* side : sides) Add((std::string("padding-") + side).c_str(), value); return; }
+    if (n == "border-width" || n == "border-style" || n == "border-color") {
+      const std::string kind = n.substr(7);
+      for (const char* side : sides) Add((std::string("border-") + side + "-" + kind).c_str(), value);
+      return;
+    }
     DeclarationEntry entry;
     entry.name = name;
     entry.value = std::move(value);
@@ -199,9 +208,9 @@ std::vector<DeclarationEntry> PresentationalHints(const dom::Element* element) {
   if (const std::string* a = Attr(element, "align")) {
     const std::string v = Lower(*a);
     if (tag == "div" || tag == "p" || tag == "h1" || tag == "h2" || tag == "h3" || tag == "h4" || tag == "h5" || tag == "h6" || tag == "caption" || tag == "col" || tag == "colgroup" || rowGroup || row || cell) {
-      if (v == "left") h.Add("text-align", "-webkit-left");
-      else if (v == "right") h.Add("text-align", "-webkit-right");
-      else if (v == "center") h.Add("text-align", "-webkit-center");
+      if (v == "left") h.Add("text-align", "left");
+      else if (v == "right") h.Add("text-align", "right");
+      else if (v == "center") h.Add("text-align", "center");
       else if (v == "justify") h.Add("text-align", "justify");
     } else if (table) {
       if (v == "left") h.Add("float", "left");
