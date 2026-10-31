@@ -595,6 +595,8 @@ void Install(Host& host) {
   qe::DefineAccessor(document, "defaultView", GetDefaultView, nullptr);
   qe::DefineGlobalFunction(ctx, "__solarDocument", GlobalDocument, 0);
   qe::DefineGlobalFunction(ctx, "__solarSetWindow", SetWindowTarget, 1);
+  qe::DefineGlobalFunction(ctx, "__solarDelayLoad", [](Context& c, Value, qe::Args, Value) { return qe::FromBool(DelayDocumentLoad(dom::AssociatedDocument(c))); }, 0);
+  qe::DefineGlobalFunction(ctx, "__solarResumeLoad", [](Context& c, Value, qe::Args, Value) { ResumeDocumentLoad(dom::AssociatedDocument(c)); return qe::Undefined(); }, 0);
   qe::DefineGlobalFunction(ctx, "__solarSetDocumentUrl", SetDocumentUrl, 1);
   qe::DefineGlobalFunction(ctx, "__solarSetHelper", SetHelper, 2);
   qe::DefineGlobalFunction(ctx, "__solarFormChanged", FormChanged, 1);

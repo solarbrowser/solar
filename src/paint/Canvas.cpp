@@ -12,6 +12,11 @@
 
 #include "CanvasSurface.h"
 #include "include/core/SkData.h"
+#include "include/core/SkStream.h"
+#include "include/core/SkSurface.h"
+#include "modules/svg/include/SkSVGDOM.h"
+#include "modules/svg/include/SkSVGSVG.h"
+#include <optional>
 #include "include/core/SkFontMgr.h"
 #include "include/core/SkPathUtils.h"
 #include "include/core/SkRRect.h"
@@ -221,10 +226,37 @@ sk_sp<SkTypeface> TypefaceFor(const std::shared_ptr<font::Face>& face) {
   return typeface;
 }
 
+// An SVG as a picture: the size it says, or 300 by 150 where it says none (with a ratio only, 300 wide).
+static sk_sp<SkImage> DecodeSvg(const void* data, size_t size) {
+  SkMemoryStream stream(data, size, false);
+  sk_sp<SkSVGDOM> dom = SkSVGDOM::Builder().setFontManager(SkFontMgr::RefEmpty()).make(stream);
+  if (!dom || !dom->getRoot()) return nullptr;
+  SkSize box = dom->containerSize();
+  float width = box.width(), height = box.height();
+  if (width <= 0 || height <= 0) {
+    const std::optional<SkSVGViewBoxType>& view = dom->getRoot()->getViewBox();
+    if (view && view->width() > 0 && view->height() > 0) { width = 300; height = 300 * view->height() / view->width(); }
+    else { width = 300; height = 150; }
+    dom->setContainerSize(SkSize::Make(width, height));
+  }
+  const int w = std::max(1, static_cast<int>(std::ceil(width))), h = std::max(1, static_cast<int>(std::ceil(height)));
+  if (w > 8192 || h > 8192) return nullptr;
+  sk_sp<SkSurface> surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(w, h));
+  if (!surface) return nullptr;
+  dom->render(surface->getCanvas());
+  return surface->makeImageSnapshot();
+}
+
 sk_sp<SkImage> DecodeImage(const void* data, size_t size) {
   sk_sp<SkData> bytes = SkData::MakeWithCopy(data, size);
   sk_sp<SkImage> image = SkImages::DeferredFromEncodedData(bytes);
-  if (!image) return nullptr;
+  if (!image) {
+    // (Not a raster format: an SVG, if it looks like one.)
+    std::string head(static_cast<const char*>(data), std::min<size_t>(size, 4096));
+    for (char& c : head) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (head.find("<svg") != std::string::npos) return DecodeSvg(data, size);
+    return nullptr;
+  }
   // (Decoded now, so that what is drawn is the pixels and not a promise of them.)
   return image->makeRasterImage(nullptr);
 }

@@ -7,6 +7,9 @@
   const fetchN = globalThis.__solarImageFetch, decodeN = natives.decode, freeN = natives.free;
   delete globalThis.__solarImageFetch;
   delete globalThis.__solarImageNatives;
+  const delayLoad = globalThis.__solarDelayLoad, resumeLoad = globalThis.__solarResumeLoad;
+  delete globalThis.__solarDelayLoad;
+  delete globalThis.__solarResumeLoad;
   // (canvas.js, which comes before this, has taken __solarImageDecode and __solarImageFree away: it leaves them where this can reach, as __solarImageNatives.)
   if (typeof HTMLImageElement !== "function") return;
   const proto = HTMLImageElement.prototype;
@@ -24,6 +27,7 @@
     if (generation !== s.generation) return;  // (the source changed)
     if (s.id >= 0 && ids) ids.unregister(s);
     s.complete = true;
+    if (s.release) { const release = s.release; s.release = null; release(); }
     if (result) {
       s.id = result[0]; s.w = result[1]; s.h = result[2]; s.broken = false;
       if (ids) ids.register(s, result[0], s);
@@ -248,9 +252,17 @@
     writable: true, configurable: true, enumerable: false,
   });
 
-  // An image of the markup that has a load or an error handler (an attribute) is loaded at once, as a browser does for every one.
+  // The images of the markup are loaded as the page is made, and the window's load event waits for them.
   if (typeof MutationObserver === "function" && typeof document !== "undefined") {
-    const scan = (root) => { if (root.nodeType === 1) for (const el of root.localName === "img" ? [root] : root.querySelectorAll("img[onload], img[onerror]")) if (el.hasAttribute("src") && (el.hasAttribute("onload") || el.hasAttribute("onerror"))) load(el); };
+    const start = (el) => {
+      if (!(el.hasAttribute("src") || el.hasAttribute("srcset") || (el.parentNode && el.parentNode.localName === "picture"))) return;
+      const s = stateOf(el);
+      if (s.started) return;
+      const holding = typeof delayLoad === "function" && document.readyState !== "complete" && delayLoad();
+      load(el);
+      if (holding) { if (s.complete) resumeLoad(); else s.release = resumeLoad; }
+    };
+    const scan = (root) => { if (root.nodeType === 1) for (const el of root.localName === "img" ? [root] : root.querySelectorAll("img")) start(el); };
     new MutationObserver((records) => { for (const r of records) for (const n of r.addedNodes) scan(n); }).observe(document, { childList: true, subtree: true });
     document.addEventListener("DOMContentLoaded", () => scan(document.documentElement), { once: true });
   }

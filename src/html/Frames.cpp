@@ -1334,4 +1334,8 @@ namespace solar::html {
 
 double ScriptMillis() { return g_scriptMs; }
 
+// For the scripts of the program's: the window's load event waits for a picture of the markup (DelayDocumentLoad says whether it has to; ResumeDocumentLoad ends the wait).
+bool DelayDocumentLoad(dom::Document* document) { return document && DelayLoad(document); }
+void ResumeDocumentLoad(dom::Document* document) { if (document) ResumeLoad(document); }
+
 }  // namespace solar::html

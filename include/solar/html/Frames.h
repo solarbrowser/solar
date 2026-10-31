@@ -68,6 +68,9 @@ void SetFrameEnvironment(FrameEnvironment* environment);
 void RequestNavigation(dom::Document* document, const std::string& url, bool replace, const std::string& method = "GET", const std::string& body = "", const std::string& contentType = "");
 // How long scripts have run (for looking at where the time of a page goes).
 double ScriptMillis();
+// The window's load event waits for what the markup has asked for (a picture): DelayDocumentLoad is false when the document has loaded already.
+bool DelayDocumentLoad(dom::Document* document);
+void ResumeDocumentLoad(dom::Document* document);
 
 // Host code that makes or touches the things of a realm has to run as that realm, or the prototypes and holders it
 // finds are those of the realm that happens to be running. RunInRealm runs `work` that way.
