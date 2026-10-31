@@ -16,6 +16,7 @@
 #include <sstream>
 
 #include "Internal.h"
+#include "solar/dom/MediaHook.h"
 #include "solar/css/Logical.h"
 #include "solar/css/MediaQuery.h"
 #include "solar/css/Style.h"
@@ -180,6 +181,7 @@ LayoutFreeze::LayoutFreeze() { ++g_layoutFrozen; }
 LayoutFreeze::~LayoutFreeze() { --g_layoutFrozen; }
 
 Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
+  if (dom::g_refreshControls && g_layoutFrozen == 0) dom::g_refreshControls(document);
   if (g_layoutFrozen > 0 && document->layoutTree && document->layoutTree->root) return document->layoutTree.get();
   struct Timing {
     std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();

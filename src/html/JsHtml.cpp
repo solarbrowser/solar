@@ -11,6 +11,7 @@
 #include "solar/dom/CustomElements.h"
 #include "solar/dom/NodeBindingsInternal.h"
 #include "solar/html/HtmlBindings.h"
+#include "solar/dom/MediaHook.h"
 #include "solar/dom/Range.h"
 #include "solar/html/Errors.h"
 #include "solar/html/Frames.h"
@@ -1432,7 +1433,10 @@ const char* const kEventHandlerScript = R"JS(
 
 }  // namespace
 
-void InstallHtmlApis(Quanta::Embed::Realm& realm) { Install(realm); }
+void InstallHtmlApis(Quanta::Embed::Realm& realm) {
+  dom::g_refreshControls = &RefreshControls;
+  Install(realm);
+}
 void InstallHtmlApis(Quanta::Embed::Runtime& runtime) { Install(runtime); }
 
 namespace {

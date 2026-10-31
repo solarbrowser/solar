@@ -272,13 +272,15 @@ std::vector<DeclarationEntry> PresentationalHints(const dom::Element* element) {
   }
   if (tag == "ul" || tag == "ol" || tag == "li") {
     if (const std::string* a = Attr(element, "type")) {
-      const std::string t = *a;
-      if (t == "1") h.Add("list-style-type", "decimal");
-      else if (t == "a") h.Add("list-style-type", "lower-alpha");
-      else if (t == "A") h.Add("list-style-type", "upper-alpha");
-      else if (t == "i") h.Add("list-style-type", "lower-roman");
-      else if (t == "I") h.Add("list-style-type", "upper-roman");
-      else { const std::string l = Lower(t); if (l == "disc" || l == "circle" || l == "square") h.Add("list-style-type", l); }
+      const std::string t = *a, l = Lower(t);
+      const bool allowedForList = tag == "li";
+      if ((tag == "ol" || allowedForList) && t == "1") h.Add("list-style-type", "decimal");
+      else if ((tag == "ol" || allowedForList) && t == "a") h.Add("list-style-type", "lower-alpha");
+      else if ((tag == "ol" || allowedForList) && t == "A") h.Add("list-style-type", "upper-alpha");
+      else if ((tag == "ol" || allowedForList) && t == "i") h.Add("list-style-type", "lower-roman");
+      else if ((tag == "ol" || allowedForList) && t == "I") h.Add("list-style-type", "upper-roman");
+      else if ((tag == "ul" || allowedForList) && (l == "disc" || l == "circle" || l == "square" || l == "none")) h.Add("list-style-type", l);
+      else if (tag == "li" && (l == "disc" || l == "circle" || l == "square")) h.Add("list-style-type", l);
     }
   }
   if (tag == "body") {

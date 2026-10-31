@@ -498,6 +498,7 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
   s.fontFamily = get("font-family");
   s.zIndex = get("z-index");
   s.content = get("content");
+  s.fieldSizingContent = get("field-sizing") == "content";
   {
     const std::string contain = get("contain");
     const auto has = [&](const char* word) { return (" " + contain + " ").find(std::string(" ") + word + " ") != std::string::npos; };

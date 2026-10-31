@@ -89,7 +89,28 @@ bool ControlSize(LayoutContext& lc, dom::Element* element, Box& box) {
     box.controlAscent = -1;
     return true;
   }
+  // field-sizing: content: the text of the control (its value, or its placeholder when it has none) is what makes its size.
+  const auto contentSized = [&](bool multiline) {
+    const dom::ControlState* state = element->ControlInView();
+    std::string text = state ? state->value : "";
+    if (text.empty() && state) text = state->placeholder;
+    double widest = 0;
+    long lines = 1;
+    size_t at = 0;
+    while (at <= text.size()) {
+      size_t end = text.find('\n', at);
+      if (end == std::string::npos) end = text.size();
+      widest = std::max(widest, widthOf(text.substr(at, end - at)));
+      if (end >= text.size()) break;
+      ++lines;
+      at = end + 1;
+      if (!multiline) break;
+    }
+    box.naturalWidth = std::round(widest) + (multiline ? 0 : 2);
+    box.naturalHeight = (multiline ? lines : 1) * lineHeight;
+  };
   if (name == "textarea") {
+    if (box.style->fieldSizingContent) { contentSized(true); return true; }
     const long cols = PositiveInt(Attr(element, "cols"), 20), rows = PositiveInt(Attr(element, "rows"), 2);
     // (The width is that of a scrollbar more.)
     box.naturalWidth = std::round(cols * average) + 15;
@@ -159,6 +180,7 @@ bool ControlSize(LayoutContext& lc, dom::Element* element, Box& box) {
     return true;
   }
   // Text and the kinds that look like it.
+  if (box.style->fieldSizingContent) { contentSized(false); return true; }
   const long chars = PositiveInt(Attr(element, "size"), 20);
   box.naturalWidth = std::round(chars * average);
   box.naturalHeight = lineHeight;

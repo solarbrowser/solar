@@ -20,4 +20,8 @@ inline void (*g_mediaDetach)(const void* element) = nullptr;
 inline std::atomic<int> g_canvasAttached{0};
 inline void (*g_canvasDetach)(const void* element) = nullptr;
 
+// What a form control shows (its value, its placeholder) is in the page's script: layout asks for it to be read into the control before it needs the sizes (src/html/Interaction.cpp sets this).
+struct Document;
+inline void (*g_refreshControls)(Document* document) = nullptr;
+
 }  // namespace solar::dom
