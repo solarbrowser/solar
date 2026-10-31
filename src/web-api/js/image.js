@@ -148,8 +148,8 @@
     const unique = [];
     for (const c of list) if (!unique.some((u) => u.d === c.d)) unique.push(c);
     const dpr = typeof devicePixelRatio === "number" ? devicePixelRatio : 1;
-    for (const c of unique) if (c.d >= dpr) return c.url;
-    return unique[unique.length - 1].url;
+    for (const c of unique) if (c.d >= dpr) return c;
+    return unique[unique.length - 1];
   };
   const selectedUrl = (el) => {
     const base = el.baseURI;
@@ -158,7 +158,7 @@
       const candidates = parseSrcset(srcsetText || "");
       if (src) candidates.push({ url: src, w: null, d: null });
       const picked = pick(candidates, sizesText);
-      return picked === null ? "" : resolve(picked);
+      return picked === null ? { url: "", d: 1 } : { url: resolve(picked.url), d: picked.d || 1 };
     };
     const parent = el.parentNode;
     if (parent && parent.localName === "picture") {
@@ -174,7 +174,7 @@
         const candidates = parseSrcset(srcset);
         if (candidates.length === 0) continue;
         const picked = pick(candidates, child.getAttribute("sizes"));
-        if (picked) return resolve(picked);
+        if (picked) return { url: resolve(picked.url), d: picked.d || 1 };
       }
     }
     const src = el.getAttribute("src");
@@ -184,10 +184,12 @@
   // The picture of the element is fetched (if the source is a new one).
   const load = (el) => {
     const s = stateOf(el);
-    const url = selectedUrl(el);
-    if (s.started && url === s.url) return s;
+    const selection = selectedUrl(el);
+    const url = selection.url;
+    if (s.started && url === s.url) { s.density = selection.d; return s; }
     s.started = true;
     s.url = url;
+    s.density = selection.d;
     const generation = ++s.generation;
     if (s.id >= 0 && ids) { ids.unregister(s); if (typeof freeN === "function") freeN(s.id); }
     s.id = -1; s.w = s.h = 0; s.broken = false;
@@ -217,9 +219,25 @@
     get() {
       // (An image of the markup is asked for here the first time: the document's own load is the layout's.)
       const s = load(this);
-      return s.complete && !s.broken ? s[name] : 0;
+      return s.complete && !s.broken ? s[name] / (s.density > 0 ? s.density : 1) : 0;
     },
   });
+  // width and height: what the element is drawn at; when it is not drawn, what its attribute says, or the natural size.
+  const dimension = (name, natural, sides) => ({
+    get() {
+      if (this.isConnected && this.getClientRects().length > 0) {
+        const r = this.getBoundingClientRect(), style = getComputedStyle(this);
+        const extra = sides.reduce((sum, side) => sum + (parseFloat(style["padding" + side]) || 0) + (parseFloat(style["border" + side + "Width"]) || 0), 0);
+        return Math.max(0, Math.round(r[name] - extra));
+      }
+      const attribute = this.getAttribute(name);
+      if (attribute !== null && /^\s*\d+/.test(attribute)) return parseInt(attribute, 10);
+      return this[natural];
+    },
+    set(v) { v = Number(v); this.setAttribute(name, String(Number.isFinite(v) && v >= 0 ? Math.trunc(v) % 4294967296 : 0)); },
+  });
+  define(proto, "width", dimension("width", "naturalWidth", ["Left", "Right"]));
+  define(proto, "height", dimension("height", "naturalHeight", ["Top", "Bottom"]));
   define(proto, "naturalWidth", sized("w"));
   define(proto, "naturalHeight", sized("h"));
   define(proto, "complete", { get() { return load(this).complete; } });

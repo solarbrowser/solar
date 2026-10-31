@@ -187,8 +187,8 @@ double SourceSize(const std::string& sizes, const css::MediaEnvironment& environ
 }
 
 // The address (as written) of the picture: by the width and the density of the candidates, the first one that has the density of the screen or more, else the last.
-std::string PickCandidate(std::vector<SrcCandidate> candidates, const std::string& sizes, bool hasSizes, const css::MediaEnvironment& environment) {
-  if (candidates.empty()) return "";
+std::pair<std::string, double> PickCandidate(std::vector<SrcCandidate> candidates, const std::string& sizes, bool hasSizes, const css::MediaEnvironment& environment) {
+  if (candidates.empty()) return {"", 1};
   const double size = hasSizes ? SourceSize(sizes, environment) : environment.width;
   std::vector<std::pair<std::string, double>> list;
   for (const SrcCandidate& c : candidates) {
@@ -197,11 +197,12 @@ std::string PickCandidate(std::vector<SrcCandidate> candidates, const std::strin
     for (const auto& u : list) if (u.second == density) seen = true;
     if (!seen) list.emplace_back(c.url, density);
   }
-  for (const auto& u : list) if (u.second >= environment.resolution) return u.first;
-  return list.back().first;
+  for (const auto& u : list) if (u.second >= environment.resolution) return u;
+  return list.back();
 }
 
-std::string ChooseImageSource(const dom::Element* element) {
+// The address as written, and the density of the picture (its size is divided by it).
+std::pair<std::string, double> ChooseImageSource(const dom::Element* element) {
   const css::MediaEnvironment environment = css::EnvironmentFor(element->nodeDocument);
   auto attr = [](const dom::Element* e, const char* name, std::string& out) {
     if (const dom::Attr* a = e->FindAttribute(name)) { out = a->Value(); return true; }
@@ -227,8 +228,8 @@ std::string ChooseImageSource(const dom::Element* element) {
       }
       if (attr(source, "media", media) && !media.empty() && !css::MediaQueryMatches(media, environment)) continue;
       const bool hasSizes = attr(source, "sizes", sizes);
-      const std::string picked = PickCandidate(ParseSrcset(srcset), sizes, hasSizes, environment);
-      if (!picked.empty()) return picked;
+      const auto picked = PickCandidate(ParseSrcset(srcset), sizes, hasSizes, environment);
+      if (!picked.first.empty()) return picked;
     }
   }
   std::string src, srcset, sizes;
@@ -281,7 +282,9 @@ bool ReplacedSize(dom::Element* element, const std::string& base, Box& box) {
   if (name == "img" || (name == "input" && element->FindAttribute("type") && element->FindAttribute("type")->Value() == "image")) {
     box.attrWidth = attribute("width");
     box.attrHeight = attribute("height");
-    const std::string src = name == "img" ? ChooseImageSource(element) : (element->FindAttribute("src") ? element->FindAttribute("src")->Value() : std::string());
+    const auto chosen = name == "img" ? ChooseImageSource(element) : std::make_pair(element->FindAttribute("src") ? element->FindAttribute("src")->Value() : std::string(), 1.0);
+    const std::string& src = chosen.first;
+    const double density = chosen.second > 0 ? chosen.second : 1;
     double w = -1, h = -1, ratio = 0;
     if (!src.empty()) box.imageUrl = AbsoluteAddress(src, base);
     if (!src.empty() && box.attrWidth > 0 && box.attrHeight > 0) {
@@ -290,8 +293,8 @@ bool ReplacedSize(dom::Element* element, const std::string& base, Box& box) {
       box.naturalHeight = box.attrHeight;
       box.naturalRatio = box.attrWidth / box.attrHeight;
     } else if (!src.empty() && ImageMetricsOf(src, base, w, h, ratio)) {
-      box.naturalWidth = w;
-      box.naturalHeight = h;
+      box.naturalWidth = w / density;
+      box.naturalHeight = h / density;
       box.naturalRatio = ratio;
     } else {
       box.naturalWidth = box.naturalHeight = 0;  // broken: nothing, unless the attributes say
