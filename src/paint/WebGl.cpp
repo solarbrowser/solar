@@ -22,6 +22,7 @@
 #include <set>
 #include <span>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -61,12 +62,14 @@ void* OpenLibrary(const char* const* names) {
     directory.assign(self, static_cast<size_t>(length));
     directory.resize(directory.rfind('/') + 1);
   }
-  for (const char* const* name = names; *name; ++name) {
-    if (!directory.empty()) {
-      for (const char* sub : {"angle/", ""}) {
+  if (!directory.empty()) {
+    for (const char* sub : {"angle/", ""}) {
+      for (const char* const* name = names; *name; ++name) {
         if (void* handle = dlopen((directory + sub + *name).c_str(), RTLD_NOW | RTLD_LOCAL)) return handle;
       }
     }
+  }
+  for (const char* const* name = names; *name; ++name) {
     if (void* handle = dlopen(*name, RTLD_NOW | RTLD_LOCAL)) return handle;
   }
   return nullptr;
@@ -112,6 +115,8 @@ bool InitDisplay(Egl& egl, EGLDisplay display) {
 // Loads the libraries and finds a display, once. The display is ANGLE's (the backend asked for in SOLAR_ANGLE_BACKEND, or the platform's) when the library is ANGLE; else a device of
 // the machine that EGL can use with no window (a GPU), else the default display.
 bool EnsureEgl() {
+  static std::mutex lock;
+  std::lock_guard<std::mutex> guard(lock);
   Egl& egl = TheEgl();
   if (egl.tried) return egl.ok;
   egl.tried = true;
@@ -135,7 +140,7 @@ bool EnsureEgl() {
   egl.angle = extensions.find("EGL_ANGLE_platform_angle") != std::string::npos;
   auto getPlatformDisplay = Proc<PFNEGLGETPLATFORMDISPLAYEXTPROC>(egl, "eglGetPlatformDisplayEXT");
   if (egl.angle && getPlatformDisplay) {
-    EGLint type = EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE;
+    EGLint type = EGL_PLATFORM_ANGLE_TYPE_OPENGL_ANGLE;  // (Linux: Vulkan is there with SOLAR_ANGLE_BACKEND=vulkan)
 #if defined(_WIN32)
     type = EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE;
 #elif defined(__APPLE__)
@@ -197,7 +202,7 @@ struct GlContext {
   std::vector<std::string> extensions;
 };
 
-EGLContext g_current = EGL_NO_CONTEXT;
+thread_local EGLContext g_current = EGL_NO_CONTEXT;  // (a worker has its contexts on its own thread)
 
 void MakeCurrent(GlContext& g) {
   if (g_current == g.context) return;
@@ -326,7 +331,7 @@ struct WebGlState {
 };
 
 WebGlState& StateFor(Natives& n) {
-  static std::map<Natives*, std::unique_ptr<WebGlState>> states;
+  thread_local std::map<Natives*, std::unique_ptr<WebGlState>> states;
   auto& slot = states[&n];
   if (!slot) {
     slot = std::make_unique<WebGlState>();

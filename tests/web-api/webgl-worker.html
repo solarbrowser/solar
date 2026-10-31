@@ -1,0 +1,16 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>WebGL in a worker</title>
+<script>
+const ok = (name, condition, detail) => console.log((condition ? "ok   " : "FAIL ") + name + (condition ? "" : "  " + detail));
+const code = `
+  const c = new OffscreenCanvas(16, 16);
+  const gl = c.getContext("webgl2");
+  gl.clearColor(1, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+  const d = new Uint8Array(4); gl.readPixels(8, 8, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, d);
+  postMessage({ ctx: gl instanceof WebGL2RenderingContext, pixel: Array.from(d), err: gl.getError() });`;
+const w = new Worker(URL.createObjectURL(new Blob([code])));
+w.onmessage = (e) => { ok("webgl2 in a worker", e.data.ctx && e.data.pixel.join() === "255,0,0,255" && e.data.err === 0, JSON.stringify(e.data));
+  const main = new OffscreenCanvas(8, 8).getContext("webgl"); ok("offscreen on the page", main instanceof WebGLRenderingContext, String(main)); console.log("done"); };
+w.onerror = (e) => console.log("FAIL worker error " + e.message);
+</script>

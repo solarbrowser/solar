@@ -27,7 +27,7 @@ async function run() {
   ok("constants", gl.TRIANGLES === 4 && WebGLRenderingContext.COLOR_BUFFER_BIT === 0x4000 && gl.UNPACK_FLIP_Y_WEBGL === 0x9240, "");
   ok("getParameter", gl.getParameter(gl.VERSION).startsWith("WebGL 1.0") && gl.getParameter(gl.MAX_TEXTURE_SIZE) >= 2048 && gl.getParameter(gl.VIEWPORT) instanceof Int32Array &&
     gl.getParameter(gl.VIEWPORT).join() === "0,0,200,200" && gl.getParameter(gl.BLEND) === false, gl.getParameter(gl.VERSION));
-  console.log("renderer: " + gl.getExtension("WEBGL_debug_renderer_info") && gl.getParameter(0x9246));
+  gl.getExtension("WEBGL_debug_renderer_info"); console.log("renderer: " + gl.getParameter(0x9246));
 
   gl.clearColor(0, 0, 1, 1);
   gl.clear(gl.COLOR_BUFFER_BIT);

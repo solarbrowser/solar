@@ -4,6 +4,7 @@
 .history/
 .cache/
 *.code-workspace
+.claude/
 
 # Temporary files
 *.bak
@@ -57,3 +58,4 @@ Thumbs.db
 /solar-cli
 quanta-icu.postcard
 tests/web-api/media/big*.mp4
+angle/

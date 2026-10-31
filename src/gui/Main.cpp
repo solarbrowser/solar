@@ -175,6 +175,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
       solar::webapi::InstallCacheStoreNatives(realm);
       solar::webapi::InstallCompressionNatives(realm);
       solar::webapi::InstallCanvasNatives(realm);
+      solar::webapi::InstallWebGlNatives(realm);
       solar::webapi::InstallWorkerScope(realm);
       // A service worker answers a navigation through this.
       Quanta::Context& wctx = realm.GetContext();
