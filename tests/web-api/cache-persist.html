@@ -1,0 +1,17 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Cache persistence</title>
+<script>
+// Open with #write, then again with #read (needs wsserver.py; SOLAR_IDB_DIR names where it is kept).
+(async () => {
+  if (location.hash === "#write") {
+    const c = await caches.open("persist");
+    await c.put("/kept", new Response("still here", { headers: { "x-a": "b" } }));
+    await new Promise((r) => setTimeout(r, 500));
+    console.log("written");
+  } else {
+    const hit = await caches.match("/kept");
+    console.log(hit ? "ok   read back: " + (await hit.text()) + " " + hit.headers.get("x-a") : "FAIL nothing there");
+  }
+})();
+</script>
