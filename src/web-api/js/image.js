@@ -123,9 +123,13 @@
     parts.push(text.slice(start));
     return parts;
   };
-  const sourceSize = (sizes) => {
+  // sizes="auto" (for a lazy image): the width the image is drawn at, when it is drawn.
+  const autoWidth = (el) => ((el.getAttribute("loading") || "").toLowerCase() === "lazy" && el.isConnected && el.getClientRects().length ? el.getBoundingClientRect().width : null);
+  const sourceSize = (sizes, el) => {
     const fallback = () => (typeof innerWidth === "number" ? innerWidth : 800);
     if (sizes === null || sizes === undefined) return fallback();
+    sizes = sizes.replace(/\/\*[^]*?\*\//g, " ");
+    if (el && /^\s*auto\s*(,|$)/i.test(sizes)) { const w = autoWidth(el); if (w !== null) return w; sizes = sizes.replace(/^\s*auto\s*,?/i, ""); }
     const entries = splitTop(sizes, ",").map((e) => e.trim()).filter((e) => e !== "");
     for (let i = 0; i < entries.length; i++) {
       const entry = entries[i];
@@ -141,9 +145,9 @@
     return fallback();
   };
   const SUPPORTED_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/svg+xml", "image/bmp", "image/x-icon", "image/vnd.microsoft.icon", "image/apng", "image/pjpeg"]);
-  const pick = (candidates, sizes) => {
+  const pick = (candidates, sizes, el) => {
     if (candidates.length === 0) return null;
-    const size = sourceSize(sizes);
+    const size = sourceSize(sizes, el);
     const list = candidates.map((c) => ({ url: c.url, d: c.w !== null ? c.w / size : c.d === null ? 1 : c.d }));
     const unique = [];
     for (const c of list) if (!unique.some((u) => u.d === c.d)) unique.push(c);
@@ -157,7 +161,7 @@
     const choose = (srcsetText, sizesText, src) => {
       const candidates = parseSrcset(srcsetText || "");
       if (src) candidates.push({ url: src, w: null, d: null });
-      const picked = pick(candidates, sizesText);
+      const picked = pick(candidates, sizesText, el);
       return picked === null ? { url: "", d: 1 } : { url: resolve(picked.url), d: picked.d || 1 };
     };
     const parent = el.parentNode;
@@ -173,7 +177,7 @@
         if (media !== null && media.trim() !== "" && typeof matchMedia === "function" && !matchMedia(media).matches) continue;
         const candidates = parseSrcset(srcset);
         if (candidates.length === 0) continue;
-        const picked = pick(candidates, child.getAttribute("sizes"));
+        const picked = pick(candidates, child.getAttribute("sizes"), el);
         if (picked) return { url: resolve(picked.url), d: picked.d || 1 };
       }
     }

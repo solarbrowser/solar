@@ -1,3 +1,4 @@
+#include <cstring>
 /*
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -128,25 +129,85 @@ std::vector<SrcCandidate> ParseSrcset(const std::string& input) {
   }
 }
 
-// A length of the sizes attribute in pixels, or a negative number if it is not one this understands (a calc() is not).
+// A length of the sizes attribute in pixels, or a negative number if it is not one this understands: numbers with px, vw, vh, vmin, vmax, em and rem, and calc(), min(), max() and clamp() of them.
+struct LengthParser {
+  const std::string& t;
+  size_t i = 0;
+  const css::MediaEnvironment& env;
+  bool bad = false;
+  void Space() { while (i < t.size() && IsHtmlSpace(t[i])) ++i; }
+  bool Is(const char* word) { return t.compare(i, std::strlen(word), word) == 0; }
+  double Value() {  // a number with a unit, a function, or a parenthesized sum
+    Space();
+    if (i >= t.size()) { bad = true; return 0; }
+    if (t[i] == '(') { ++i; const double v = Sum(); Space(); if (i < t.size() && t[i] == ')') ++i; else bad = true; return v; }
+    for (const char* fn : {"calc(", "min(", "max(", "clamp("}) {
+      if (Is(fn)) {
+        const std::string name(fn);
+        i += name.size();
+        std::vector<double> args;
+        args.push_back(Sum());
+        Space();
+        while (i < t.size() && t[i] == ',') { ++i; args.push_back(Sum()); Space(); }
+        if (i < t.size() && t[i] == ')') ++i; else bad = true;
+        if (name == "calc(") return args.empty() ? 0 : args[0];
+        if (name == "min(") return *std::min_element(args.begin(), args.end());
+        if (name == "max(") return *std::max_element(args.begin(), args.end());
+        return args.size() == 3 ? std::max(args[0], std::min(args[1], args[2])) : (bad = true, 0.0);
+      }
+    }
+    char* end = nullptr;
+    const double number = std::strtod(t.c_str() + i, &end);
+    if (end == t.c_str() + i) { bad = true; return 0; }
+    i = static_cast<size_t>(end - t.c_str());
+    size_t u = i;
+    while (u < t.size() && std::isalpha(static_cast<unsigned char>(t[u]))) ++u;
+    const std::string unit = t.substr(i, u - i);
+    i = u;
+    if (unit == "px") return number;
+    if (unit == "vw") return number * env.width / 100;
+    if (unit == "vh") return number * env.height / 100;
+    if (unit == "vmin") return number * std::min(env.width, env.height) / 100;
+    if (unit == "vmax") return number * std::max(env.width, env.height) / 100;
+    if (unit == "em" || unit == "rem") return number * 16;
+    if (unit.empty()) return number;  // (a bare number: a factor in calc(), or 0)
+    bad = true;
+    return 0;
+  }
+  double Product() {
+    double v = Value();
+    for (;;) {
+      Space();
+      if (i < t.size() && t[i] == '*') { ++i; v *= Value(); }
+      else if (i < t.size() && t[i] == '/') { ++i; const double d = Value(); if (d == 0) bad = true; else v /= d; }
+      else return v;
+    }
+  }
+  double Sum() {
+    double v = Product();
+    for (;;) {
+      Space();
+      if (i < t.size() && (t[i] == '+' || t[i] == '-') && i + 1 < t.size() && IsHtmlSpace(t[i + 1])) { const char op = t[i++]; const double r = Product(); v = op == '+' ? v + r : v - r; }
+      else return v;
+    }
+  }
+};
+
 double SizesLength(const std::string& text, const css::MediaEnvironment& environment) {
   std::string t = text;
   while (!t.empty() && IsHtmlSpace(t.back())) t.pop_back();
-  size_t i = 0;
-  while (i < t.size() && IsHtmlSpace(t[i])) ++i;
-  t = t.substr(i);
-  char* end = nullptr;
-  const double number = std::strtod(t.c_str(), &end);
-  if (!end || end == t.c_str() || t[0] == '-' || t[0] == '+') return -1;
-  const std::string unit(end);
-  if (unit == "px") return number;
-  if (unit == "vw") return number * environment.width / 100;
-  if (unit == "vh") return number * environment.height / 100;
-  if (unit == "vmin") return number * std::min(environment.width, environment.height) / 100;
-  if (unit == "vmax") return number * std::max(environment.width, environment.height) / 100;
-  if (unit == "em" || unit == "rem") return number * 16;
-  if (unit.empty() && number == 0) return 0;
-  return -1;
+  size_t first = 0;
+  while (first < t.size() && IsHtmlSpace(t[first])) ++first;
+  t = t.substr(first);
+  if (t.empty() || t[0] == '-' || t[0] == '+') return -1;
+  // A plain number is only valid as zero.
+  LengthParser parser{t, 0, environment};
+  const double v = parser.Sum();
+  parser.Space();
+  if (parser.bad || parser.i != t.size() || v < 0) return -1;
+  const bool isFunction = t.find('(') != std::string::npos;
+  if (!isFunction) { char* end = nullptr; std::strtod(t.c_str(), &end); if (*end == '\0' && v != 0) return -1; }
+  return v;
 }
 
 double SourceSize(const std::string& sizes, const css::MediaEnvironment& environment) {

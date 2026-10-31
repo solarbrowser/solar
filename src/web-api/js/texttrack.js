@@ -379,6 +379,7 @@
         setTimeout(() => o._list.dispatchEvent(Object.assign(new Event("addtrack"), { track })), 0);
       }
       if (el.hasAttribute("default") && !o._tracks.some((t) => t !== track && t._mode === "showing")) track.mode = "showing";
+      if (track._mode !== "disabled") loadTrack(el);
     };
     const detach = (el) => {
       const info = infos.get(el);
@@ -395,6 +396,18 @@
       }).observe(document, { childList: true, subtree: true });
     }
     document.addEventListener("DOMContentLoaded", () => { for (const el of document.querySelectorAll("track")) attach(el); }, { once: true });
+    // A track put in a media element that is not in the document has its track too: the insertions are looked at.
+    for (const name of ["appendChild", "insertBefore", "replaceChild"]) {
+      const original = Node.prototype[name];
+      const wrapper = ({ [name](...args) {
+        const result = Reflect.apply(original, this, args);
+        const node = args[0];
+        if (node && node.nodeType === 1 && this instanceof HTMLMediaElement) { if (node.localName === "track") attach(node); }
+        return result;
+      } })[name];
+      Object.defineProperty(wrapper, "length", { value: original.length, configurable: true });
+      Object.defineProperty(Node.prototype, name, { value: wrapper, writable: true, configurable: true, enumerable: true });
+    }
     // (Attributes the track reflects are read when it is asked.)
     for (const [name, attr] of [["label", "label"], ["srclang", "srclang"]]) define(P, name, { get() { return this.getAttribute(attr) || ""; }, set(v) { this.setAttribute(attr, String(v)); } });
   }

@@ -252,6 +252,7 @@
     get() { return stateOf(this).volume; },
     set(v) {
       v = Number(v);
+      if (!Number.isFinite(v)) throw new TypeError("Failed to set the 'volume' property on 'HTMLMediaElement': The provided double value is non-finite.");
       if (!(v >= 0 && v <= 1)) throw fail("IndexSizeError", `Failed to set the 'volume' property on 'HTMLMediaElement': The volume provided (${v}) is outside the range [0, 1].`);
       const s = stateOf(this);
       if (s.volume === v) return;
