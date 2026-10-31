@@ -1,0 +1,27 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Pointer lock</title>
+<style>body { margin: 0; } #box { position: absolute; left: 20px; top: 20px; width: 200px; height: 100px; background: #3b7ddd; color: #fff; }</style>
+<div id="box">click me</div>
+<script>
+// Run by tests/web-api/run-pointerlock.sh: a click locks, relative moves are measured, Escape unlocks.
+const log = (s) => console.log(s);
+const ok = (name, condition, detail) => log((condition ? "ok   " : "FAIL ") + name + (condition ? "" : "  " + detail));
+const box = document.getElementById("box");
+ok("the API is there", typeof box.requestPointerLock === "function" && typeof document.exitPointerLock === "function" && document.pointerLockElement === null, "");
+let changes = 0, moved = [0, 0], downs = 0, ups = 0, clicks = 0;
+document.addEventListener("pointerlockchange", () => {
+  changes++;
+  if (document.pointerLockElement) return;
+  ok("moved by the relative steps", moved[0] === 8 && moved[1] === -3, JSON.stringify(moved));
+  ok("unlocked by Escape", changes === 2, changes);
+  log("done");
+});
+document.addEventListener("pointerlockerror", () => log("pointerlockerror"));
+box.addEventListener("mousemove", (e) => { moved[0] += e.movementX; moved[1] += e.movementY; });
+box.addEventListener("mousedown", () => downs++);
+box.addEventListener("mouseup", () => ups++);
+box.addEventListener("click", () => { clicks++; if (clicks === 1) box.requestPointerLock().then(() => log("locked: " + (document.pointerLockElement === box))); });
+const bad = document.createElement("div");
+bad.requestPointerLock().then(() => log("FAIL a detached element locked"), (e) => ok("a detached element is refused", e.name === "WrongDocumentError", e.name));
+</script>

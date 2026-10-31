@@ -262,6 +262,10 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
         if (fullscreen_ && !args.empty()) fullscreen_(args[0].to_boolean());
         return qe::Undefined();
       }));
+      qe::Set(pctx, global, "__solarPointerLock", qe::NewFunction(pctx, "__solarPointerLock", 1, [this](Quanta::Context&, Quanta::Value, qe::Args args, Quanta::Value) {
+        if (pointerLock_ && !args.empty()) pointerLock_(args[0].to_boolean());
+        return qe::Undefined();
+      }));
       qe::Set(pctx, global, "__solarSwControlled", qe::NewFunction(pctx, "__solarSwControlled", 1, [this](Quanta::Context&, Quanta::Value, qe::Args args, Quanta::Value) {
         swControlled_ = !args.empty() && args[0].to_boolean();
         return qe::Undefined();
@@ -648,6 +652,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
   bool painting_ = false;
   bool timing_ = false;
   std::function<void()> pump_;
+  std::function<void(bool)> pointerLock_;  // (set where the window is: the pointer is hidden and locked, or not)
   std::function<void(bool)> fullscreen_;  // (set where the window is: the whole window is made full screen, or not)
   std::function<void()> idle_;  // called while a resource is waited for
   // A page asked to go somewhere (script, or a form): the window does it when the page's script has returned.
@@ -812,8 +817,11 @@ struct Frame {
   double maxX = 0, maxY = 0;  // how far the page can be scrolled
 };
 
+// The pointer is locked to an element of the page (the Pointer Lock API): the window hides the pointer and gives movements, and the page's mouse events are the locked element's.
+std::atomic<bool> g_pointerLocked{false};
+
 struct UiCommand {
-  enum class Kind { Title, ScrollBy, ScrollTo, Forget, Shot, Quit, Clipboard, Fullscreen } kind = Kind::Title;
+  enum class Kind { Title, ScrollBy, ScrollTo, Forget, Shot, Quit, Clipboard, Fullscreen, PointerLock } kind = Kind::Title;
   std::string text;
   double x = 0, y = 0;
   bool instant = false;
@@ -909,6 +917,7 @@ void RunWindow(Shared& shared, SDL_Window* window, SDL_Renderer* renderer, solar
   Clock::time_point scrollActive = Clock::now() - std::chrono::seconds(10);
   // The scrollbar of the window floats over the page: it shows while the page is scrolled (and under the pointer), then fades; it can be dragged.
   bool barDrag = false, barHover = false;
+  float lockedAtX = 0, lockedAtY = 0;  // (where the pointer was when it was locked: it goes back there)
   double barGrab = 0;
   struct Bar {
     double top = 0, height = 0, track = 0, maxY = 0;
@@ -1030,6 +1039,12 @@ void RunWindow(Shared& shared, SDL_Window* window, SDL_Renderer* renderer, solar
         }
         case SDL_EVENT_MOUSE_MOTION: {
           const int ww = shared.width.load();
+          if (g_pointerLocked.load()) {
+            UiEvent forward;
+            forward.event = event;
+            shared.PushEvent(std::move(forward));
+            break;
+          }
           if (barDrag) {
             Bar bar;
             if (barOf(bar) && bar.track > bar.height) {
@@ -1053,6 +1068,12 @@ void RunWindow(Shared& shared, SDL_Window* window, SDL_Renderer* renderer, solar
         }
         case SDL_EVENT_MOUSE_BUTTON_DOWN: {
           const int ww = shared.width.load(), wh = shared.height.load();
+          if (g_pointerLocked.load()) {
+            UiEvent forward;
+            forward.event = event;
+            shared.PushEvent(std::move(forward));
+            break;
+          }
           Bar bar;
           if (event.button.button == SDL_BUTTON_LEFT && event.button.x >= ww - 16 && barOf(bar)) {
             if (event.button.y >= bar.top && event.button.y <= bar.top + bar.height) {
@@ -1070,6 +1091,12 @@ void RunWindow(Shared& shared, SDL_Window* window, SDL_Renderer* renderer, solar
           break;
         }
         case SDL_EVENT_MOUSE_BUTTON_UP: {
+          if (g_pointerLocked.load()) {
+            UiEvent forward;
+            forward.event = event;
+            shared.PushEvent(std::move(forward));
+            break;
+          }
           if (barDrag) {
             barDrag = false;
             dirty = true;
@@ -1099,6 +1126,15 @@ void RunWindow(Shared& shared, SDL_Window* window, SDL_Renderer* renderer, solar
         case UiCommand::Kind::Quit: running = false; break;
         case UiCommand::Kind::Clipboard: SDL_SetClipboardText(command.text.c_str()); break;
         case UiCommand::Kind::Fullscreen: SDL_SetWindowFullscreen(window, command.instant); break;
+        case UiCommand::Kind::PointerLock:
+          if (command.instant) {
+            SDL_GetMouseState(&lockedAtX, &lockedAtY);
+            SDL_SetWindowRelativeMouseMode(window, true);
+          } else {
+            SDL_SetWindowRelativeMouseMode(window, false);
+            SDL_WarpMouseInWindow(window, lockedAtX, lockedAtY);
+          }
+          break;
       }
     }
     if (Frame next; shared.TakeFrame(next)) {
@@ -1504,6 +1540,13 @@ int PageMain(Shared& shared, int argc, char** argv) {
     return true;
   };
   // (The window is on a thread of its own: it keeps answering while the page waits.)
+  browser.pointerLock_ = [&](bool on) {
+    g_pointerLocked = on;
+    UiCommand command;
+    command.kind = UiCommand::Kind::PointerLock;
+    command.instant = on;
+    shared.Post(std::move(command));
+  };
   browser.fullscreen_ = [&](bool on) {
     UiCommand command;
     command.kind = UiCommand::Kind::Fullscreen;
@@ -2021,6 +2064,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
   };
   // What is under the pointer is what is hovered.
   double pointerX = 0, pointerY = 0;
+  int lockButtons = 0;  // (the buttons held while the pointer is locked)
   bool pointerKnown = false, hoverStale = false;
   bool suppressText = false;  // a script cancelled the key that is about to give a character
   Clock::time_point lastScrollInput = Clock::now() - std::chrono::seconds(10);
@@ -2298,6 +2342,12 @@ int PageMain(Shared& shared, int argc, char** argv) {
           break;
         }
         case SDL_EVENT_MOUSE_MOTION: {
+          if (g_pointerLocked.load()) {
+            // Locked: the page hears how far the pointer went, and the pointer stays where it was.
+            solar::html::RunInRealm(*realm, [&] { solar::html::DispatchLocked(document, "mousemove", pointerX, pointerY, 0, lockButtons, event.motion.xrel, event.motion.yrel); });
+            dirty = true;
+            break;
+          }
           pointerX = event.motion.x;
           pointerY = event.motion.y;
           pointerKnown = true;
@@ -2345,6 +2395,13 @@ int PageMain(Shared& shared, int argc, char** argv) {
           break;
         }
         case SDL_EVENT_MOUSE_BUTTON_DOWN: {
+          if (g_pointerLocked.load()) {
+            const int b = event.button.button == SDL_BUTTON_LEFT ? 0 : event.button.button == SDL_BUTTON_MIDDLE ? 1 : 2;
+            lockButtons |= 1 << b;
+            solar::html::RunInRealm(*realm, [&] { solar::html::DispatchLocked(document, "mousedown", pointerX, pointerY, b, lockButtons, 0, 0); });
+            dirty = true;
+            break;
+          }
           if (hoverStale) updateHover();
           pointerX = event.button.x;
           pointerY = event.button.y;
@@ -2475,6 +2532,13 @@ int PageMain(Shared& shared, int argc, char** argv) {
           break;
         }
         case SDL_EVENT_MOUSE_BUTTON_UP: {
+          if (g_pointerLocked.load()) {
+            const int b = event.button.button == SDL_BUTTON_LEFT ? 0 : event.button.button == SDL_BUTTON_MIDDLE ? 1 : 2;
+            lockButtons &= ~(1 << b);
+            solar::html::RunInRealm(*realm, [&] { solar::html::DispatchLocked(document, "mouseup", pointerX, pointerY, b, lockButtons, 0, 0); });
+            dirty = true;
+            break;
+          }
           if (dragField) dragField = nullptr;
           const bool draggedFar = pageSelecting && (std::fabs(event.button.x - pressStartX) > 4 || std::fabs(event.button.y - pressStartY) > 4);
           pageSelecting = false;
@@ -2553,7 +2617,15 @@ int PageMain(Shared& shared, int argc, char** argv) {
       script.pop_back();
       scriptQuiet = 0;
       SDL_Event e{};
-      if (step.rfind("c:", 0) == 0 || step.rfind("m:", 0) == 0 || step.rfind("p:", 0) == 0 || step.rfind("u:", 0) == 0) {
+      if (step.rfind("r:", 0) == 0) {
+        // (r:dx,dy: the mouse moves by that much, as with the pointer locked.)
+        float dx = 0, dy = 0;
+        std::sscanf(step.c_str() + 2, "%f,%f", &dx, &dy);
+        e.type = SDL_EVENT_MOUSE_MOTION;
+        e.motion.xrel = dx;
+        e.motion.yrel = dy;
+        SDL_PushEvent(&e);
+      } else if (step.rfind("c:", 0) == 0 || step.rfind("m:", 0) == 0 || step.rfind("p:", 0) == 0 || step.rfind("u:", 0) == 0) {
         float x = 0, y = 0;
         std::sscanf(step.c_str() + 2, "%f,%f", &x, &y);
         e.type = SDL_EVENT_MOUSE_MOTION;

@@ -78,6 +78,8 @@ void RunInRealm(Quanta::Embed::Realm& realm, const std::function<void()>& work);
 // submits, follows a label). Both say whether no script stopped the event. TypeInto types `text` into a text control, or edits it
 // (kind: "text", "backspace", "delete", "left", "right", "home", "end"); it says whether the control was one that took it.
 bool DispatchPointer(dom::Document* document, dom::Element* target, const char* type, double x, double y, int button, int buttons);
+// With the pointer locked (the Pointer Lock API) the mouse events go to the locked element, with how far the pointer moved.
+bool DispatchLocked(dom::Document* document, const char* type, double x, double y, int button, int buttons, double movementX, double movementY);
 bool DispatchClick(dom::Document* document, dom::Element* target, double x, double y, int button);
 // A key (type: keydown, keypress, keyup; modifiers: 1 ctrl, 2 shift, 4 alt, 8 meta) goes to `target`; false when a script cancelled it.
 bool DispatchKey(dom::Document* document, dom::Element* target, const char* type, const std::string& key, const std::string& code, int keyCode, bool repeat, int modifiers);

@@ -49,6 +49,14 @@ bool DispatchPointer(dom::Document* document, dom::Element* target, const char* 
   return qe::IsUndefined(result) ? true : qe::ToBoolean(result);
 }
 
+bool DispatchLocked(dom::Document* document, const char* type, double x, double y, int button, int buttons, double movementX, double movementY) {
+  if (!document || !document->context) return true;
+  Context& ctx = *document->context;
+  Value arguments[] = {qe::FromUtf8(ctx, type), qe::FromNumber(x), qe::FromNumber(y), qe::FromNumber(button), qe::FromNumber(buttons), qe::FromNumber(movementX), qe::FromNumber(movementY)};
+  const Value result = CallHelper(document, "locked", arguments, 7);
+  return qe::IsUndefined(result) ? true : qe::ToBoolean(result);
+}
+
 bool DispatchKey(dom::Document* document, dom::Element* target, const char* type, const std::string& key, const std::string& code, int keyCode, bool repeat, int modifiers) {
   if (!document || !document->context || !target) return true;
   Context& ctx = *document->context;

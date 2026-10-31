@@ -330,7 +330,10 @@ const char* const kFormScript = R"JS(
   };
   // The click of the program: the event, and then what the target does when no script stopped it. The pointer is where it was.
   const clickEvent = (x, y, button) => new MouseEvent("click", { bubbles: true, cancelable: true, composed: true, view: globalThis, clientX: x, clientY: y, button, detail: 1 });
+  // What the user does is an activation (the Pointer Lock API asks for one): its time is kept for a while.
+  const activate = () => { try { document[Symbol.for("solar.activation")] = performance.now(); } catch (e) {} };
   setHelper("click", (target, x, y, button) => {
+    activate();
     if (disabledNow(target) && target instanceof HTMLInputElement) return false;
     const t = activationTarget(target);
     const before = t ? preActivate(t) : null;
@@ -348,7 +351,18 @@ const char* const kFormScript = R"JS(
     this.dispatchEvent(ev);
     if (t && !(t instanceof HTMLAnchorElement)) postActivate(t, ev, before);
   });
+  // With the pointer locked: the mouse events are the locked element's, and the position stays where it was.
+  setHelper("locked", (type, x, y, button, buttons, mx, my) => {
+    if (type !== "mousemove") activate();
+    const t = document.pointerLockElement;
+    if (!t) return true;
+    const init = { bubbles: true, cancelable: true, composed: true, view: globalThis, clientX: x, clientY: y, button, buttons, movementX: mx, movementY: my };
+    const proceed = t.dispatchEvent(new MouseEvent(type, { ...init, detail: type === "mousemove" ? 0 : 1 }));
+    if (type === "mouseup") t.dispatchEvent(new MouseEvent("click", { ...init, detail: 1 }));
+    return proceed;
+  });
   setHelper("pointer", (target, type, x, y, button, buttons) => {
+    if (type !== "mousemove") activate();
     const proceed = target.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, composed: true, view: globalThis, clientX: x, clientY: y, button, buttons, detail: type === "mousemove" ? 0 : 1 }));
     // A press gives the focus to the nearest thing that can take it, or takes it from what has it.
     if (type === "mousedown" && proceed && button === 0) {
@@ -364,6 +378,7 @@ const char* const kFormScript = R"JS(
   });
   // A key of the keyboard: the event goes to the target (the focused element, or the body).
   setHelper("key", (target, type, key, code, keyCode, repeat, mods) => {
+    if (type === "keydown") activate();
     const ev = new KeyboardEvent(type, { bubbles: true, cancelable: true, composed: true, view: globalThis, key, code, keyCode, charCode: type === "keypress" ? keyCode : 0, repeat, ctrlKey: !!(mods & 1), shiftKey: !!(mods & 2), altKey: !!(mods & 4), metaKey: !!(mods & 8) });
     try { if (ev.which === undefined || ev.which === 0) Object.defineProperty(ev, "which", { value: keyCode }); } catch (e) {}
     return target.dispatchEvent(ev);
