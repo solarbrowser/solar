@@ -448,6 +448,25 @@
       step_func: (f) => function (...args) { try { return f.apply(t, args); } catch (e) { fail(e); } },
       unreached_func: (message) => () => fail(new Error('unreachable test function was called: ' + message)),
       step_timeout: (f, ms) => setTimeout(t.step_func(f), ms),
+      // An AbortSignal that aborts when the test is over (its cleanup).
+      get_signal: () => {
+        if (!t.__controller) { t.__controller = new AbortController(); cleanups.push(() => t.__controller.abort()); }
+        return t.__controller.signal;
+      },
+      // step_wait(cond, description, timeout, interval): resolves when cond() is true, fails the test when it is not in time.
+      step_wait: (cond, description, timeout = 3000, interval = 100) => new Promise((resolve, reject) => {
+        const start = Date.now();
+        const check = () => {
+          let value;
+          try { value = cond(); } catch (e) { fail(e); reject(e); return; }
+          if (value) { resolve(value); return; }
+          if (Date.now() - start > timeout) { const e = new Error('step_wait: timed out' + (description ? ': ' + description : '')); fail(e); reject(e); return; }
+          setTimeout(check, interval);
+        };
+        check();
+      }),
+      step_wait_func: (cond, func, description, timeout, interval) => t.step_wait(cond, description, timeout, interval).then((v) => { if (func) t.step(func, v); return v; }),
+      step_wait_func_done: (cond, func, description, timeout, interval) => t.step_wait(cond, description, timeout, interval).then((v) => { if (func) t.step(func, v); if (typeof t.done === 'function') t.done(); return v; }),
     };
     return t;
   };

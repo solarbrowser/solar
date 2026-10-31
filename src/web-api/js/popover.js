@@ -260,6 +260,33 @@
   // What leaves the document is hidden without a word.
   const sweep = () => { for (const el of [...topLayer]) if (isShowing(el) && !connected(el)) hidePopover(el, false, false, false, null, true); };
   if (typeof MutationObserver === "function") new MutationObserver(sweep).observe(document, { childList: true, subtree: true });
+  // The tree changes the page makes are looked at before and after, so that what was taken out is hidden before it can be put back.
+  const wrapMutators = (proto, names) => {
+    for (const name of names) {
+      const d = Object.getOwnPropertyDescriptor(proto, name);
+      if (!d || typeof d.value !== "function") continue;
+      const original = d.value;
+      const wrapper = ({ [name](...args) {
+        if (topLayer.length) sweep();
+        const result = Reflect.apply(original, this, args);
+        if (topLayer.length) sweep();
+        return result;
+      } })[name];
+      Object.defineProperty(wrapper, "length", { value: original.length, configurable: true });
+      Object.defineProperty(proto, name, { value: wrapper, writable: d.writable, configurable: true, enumerable: d.enumerable });
+    }
+  };
+  wrapMutators(Node.prototype, ["appendChild", "insertBefore", "removeChild", "replaceChild"]);
+  wrapMutators(Element.prototype, ["remove", "replaceWith", "append", "prepend", "before", "after", "replaceChildren", "insertAdjacentElement", "insertAdjacentHTML"]);
+  if (typeof ChildNode === "function") wrapMutators(ChildNode.prototype, ["remove", "replaceWith", "before", "after"]);
+  for (const name of ["innerHTML", "outerHTML", "textContent"]) {
+    for (const proto of [Element.prototype, Node.prototype]) {
+      const d = Object.getOwnPropertyDescriptor(proto, name);
+      if (!d || !d.set) continue;
+      const set = d.set;
+      Object.defineProperty(proto, name, { get: d.get, set(v) { if (topLayer.length) sweep(); Reflect.apply(set, this, [v]); if (topLayer.length) sweep(); }, enumerable: d.enumerable, configurable: true });
+    }
+  }
   const connectedCheck = (el) => { if (isShowing(el) && !connected(el)) hidePopover(el, false, false, false, null, true); };
   for (const [proto, name] of [[Element.prototype, "isConnected"], [Node.prototype, "isConnected"]]) {
     const d = Object.getOwnPropertyDescriptor(proto, name);
@@ -280,17 +307,24 @@
     if (typeof HTMLInputElement === "function" && el instanceof HTMLInputElement && /^(button|reset|submit|image)$/i.test(el.type)) return el.type.toLowerCase() === "button" || !el.form;
     return false;
   };
-  function invokerTarget(el) {
-    if (!isInvokerElement(el) || !el.hasAttribute("popovertarget")) return null;
+  // What the attribute names (an id in the tree the invoker is in, or an element that was given), whatever it is.
+  function namedTarget(el) {
+    if (!el.hasAttribute("popovertarget")) return null;
     const explicit = explicitTargets.get(el);
     let target;
     if (explicit !== undefined) target = explicit.getRootNode() === el.getRootNode() ? explicit : null;
     else { const root = el.getRootNode(); const id = el.getAttribute("popovertarget"); target = root && typeof root.getElementById === "function" ? root.getElementById(id) : null; }
+    return target instanceof Element ? target : null;
+  }
+  // The popover an invoker shows or hides: it has to be one, and the invoker has to be an invoker.
+  function invokerTarget(el) {
+    if (!isInvokerElement(el)) return null;
+    const target = namedTarget(el);
     return target instanceof HTMLElement && popoverType(target) !== "none" ? target : null;
   }
   for (const C of [HTMLButtonElement, HTMLInputElement]) {
     define(C.prototype, "popoverTargetElement", {
-      get() { return invokerTarget(this); },
+      get() { return namedTarget(this); },
       set(value) {
         if (value !== null && value !== undefined && !(value instanceof Element)) throw new TypeError("Failed to set the 'popoverTargetElement' property: The provided value is not of type 'Element'.");
         if (value === null || value === undefined) { this.removeAttribute("popovertarget"); return; }
@@ -343,6 +377,8 @@
   // Escape closes the topmost popover that is open (the hint ones first).
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape" || e.defaultPrevented) return;
+    const above = topLayer[topLayer.length - 1];
+    if (above && above instanceof HTMLDialogElement && above[Symbol.for("solar.modal")]) return;
     const top = hintStack.length ? hintStack[hintStack.length - 1] : autoStack[autoStack.length - 1];
     if (top) hidePopover(top, true, true, false, null);
   });
