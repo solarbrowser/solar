@@ -110,6 +110,8 @@ const defineInterface = (name, parent, members, legacyInit, extras) => {
     defineProperty(method, 'length', { value: 1, configurable: true });
     defineProperty(C.prototype, initName, { value: method, writable: true, enumerable: true, configurable: true });
   }
+  // (The length of a constructor is the number of arguments it needs.)
+  defineProperty(C, 'length', { value: 1, configurable: true });
   if (extras) extras(C, check);
   defineProperty(global, name, { value: C, writable: true, enumerable: false, configurable: true });
   interfaces[name] = C;
@@ -125,6 +127,9 @@ const emptyString = () => '';
 
 const UIEvent = defineInterface('UIEvent', Event, [member('detail', zero, toLong), member('view', nullTarget, toWindow)],
   ['initUIEvent', [null, null, null, member('view', nullTarget, toWindow), member('detail', zero, toLong)]]);
+
+// The pseudo-element an event was aimed at (none: events are not aimed at pseudo-elements here).
+defineProperty(UIEvent.prototype, 'pseudoTarget', { get: Object.getOwnPropertyDescriptor({ get pseudoTarget() { return null; } }, 'pseudoTarget').get, enumerable: true, configurable: true });
 
 const modifierMembers = [
   member('altKey', falseValue, toBoolean), member('ctrlKey', falseValue, toBoolean), member('metaKey', falseValue, toBoolean), member('shiftKey', falseValue, toBoolean),

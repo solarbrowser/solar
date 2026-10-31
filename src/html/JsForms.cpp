@@ -332,13 +332,26 @@ const char* const kFormScript = R"JS(
   const clickEvent = (x, y, button, detail = 1) => new (typeof PointerEvent === "function" ? PointerEvent : MouseEvent)("click", { bubbles: true, cancelable: true, composed: true, view: globalThis, clientX: x, clientY: y, button, detail, pointerId: -1 });
   // What the user does is an activation (the Pointer Lock API asks for one): its time is kept for a while.
   const activate = () => { try { document[Symbol.for("solar.activation")] = performance.now(); } catch (e) {} };
+  // A click event that a script dispatches on a check box or a radio button does what a click does (the legacy-pre-activation behaviour): the one the program or click() makes does it itself.
+  let ownClick = null;
+  const nativeDispatch = EventTarget.prototype.dispatchEvent;
+  method(EventTarget.prototype, "dispatchEvent", function dispatchEvent(event) {
+    if (arguments.length < 1 || event === ownClick || !(event instanceof MouseEvent) || event.type !== "click" || !(this instanceof HTMLInputElement) || !/^(checkbox|radio)$/.test(typeOf(this)) || disabledNow(this)) return nativeDispatch.apply(this, arguments);
+    const before = preActivate(this);
+    const proceed = nativeDispatch.apply(this, arguments);
+    postActivate(this, event, before);
+    return proceed;
+  });
   setHelper("click", (target, x, y, button) => {
     activate();
     if (disabledNow(target) && target instanceof HTMLInputElement) return false;
     const t = activationTarget(target);
     const before = t ? preActivate(t) : null;
     const ev = clickEvent(x, y, button);
-    const proceed = target.dispatchEvent(ev);
+    const outer = ownClick;
+    ownClick = ev;
+    let proceed;
+    try { proceed = target.dispatchEvent(ev); } finally { ownClick = outer; }
     if (t && !(t instanceof HTMLAnchorElement)) postActivate(t, ev, before);
     return proceed;
   });
@@ -348,7 +361,9 @@ const char* const kFormScript = R"JS(
     const t = activationTarget(this);
     const before = t ? preActivate(t) : null;
     const ev = clickEvent(0, 0, 0, 0);
-    this.dispatchEvent(ev);
+    const outer = ownClick;
+    ownClick = ev;
+    try { this.dispatchEvent(ev); } finally { ownClick = outer; }
     if (t && !(t instanceof HTMLAnchorElement)) postActivate(t, ev, before);
   });
   // With the pointer locked: the mouse events are the locked element's, and the position stays where it was.

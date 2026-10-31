@@ -172,10 +172,58 @@ class TestEnvironment : public solar::html::FrameEnvironment {
     const std::string origin = "http://web-platform.test:8000/";
     if (!url.starts_with(origin)) return std::nullopt;
     std::string path = url.substr(origin.size());
+    const std::string rest = path.substr(path.find_first_of("?#") == std::string::npos ? path.size() : path.find_first_of("?#"));
     path = path.substr(0, path.find_first_of("?#"));
     std::string contents;
     if (!ReadFile("tests/wpt/" + path, contents)) return std::nullopt;
+    if (path.find(".sub.") != std::string::npos) contents = Substitute(contents, rest);
     return contents;
+  }
+
+  // What the WPT server does to a file with .sub. in its name: {{GET[name]}} is the parameter of the query, {{host}}, {{ports[http][0]}} and {{location[...]}} the server's.
+  static std::string Substitute(const std::string& text, const std::string& rest) {
+    std::map<std::string, std::string> query;
+    if (rest.starts_with("?")) {
+      const std::string q = rest.substr(1, rest.find('#') == std::string::npos ? std::string::npos : rest.find('#') - 1);
+      size_t at = 0;
+      while (at <= q.size()) {
+        size_t end = q.find('&', at);
+        if (end == std::string::npos) end = q.size();
+        const std::string pair = q.substr(at, end - at);
+        const size_t eq = pair.find('=');
+        auto decode = [](const std::string& v) {
+          std::string out;
+          for (size_t i = 0; i < v.size(); ++i) {
+            if (v[i] == '%' && i + 2 < v.size() + 0 && std::isxdigit(static_cast<unsigned char>(v[i + 1])) && std::isxdigit(static_cast<unsigned char>(v[i + 2]))) { out += static_cast<char>(std::stoi(v.substr(i + 1, 2), nullptr, 16)); i += 2; }
+            else out += v[i] == '+' ? ' ' : v[i];
+          }
+          return out;
+        };
+        if (!pair.empty()) query[decode(eq == std::string::npos ? pair : pair.substr(0, eq))] = eq == std::string::npos ? "" : decode(pair.substr(eq + 1));
+        at = end + 1;
+      }
+    }
+    std::string out;
+    size_t at = 0;
+    while (true) {
+      const size_t open = text.find("{{", at);
+      if (open == std::string::npos) { out += text.substr(at); break; }
+      const size_t close = text.find("}}", open);
+      if (close == std::string::npos) { out += text.substr(at); break; }
+      out += text.substr(at, open - at);
+      const std::string name = text.substr(open + 2, close - open - 2);
+      std::string value;
+      bool known = true;
+      if (name.starts_with("GET[") && name.ends_with("]")) { const auto found = query.find(name.substr(4, name.size() - 5)); value = found == query.end() ? "" : found->second; }
+      else if (name == "host" || name == "location[hostname]" || name == "domains[]") value = "web-platform.test";
+      else if (name == "location[host]") value = "web-platform.test:8000";
+      else if (name == "location[port]" || name == "ports[http][0]") value = "8000";
+      else if (name == "location[protocol]") value = "http:";
+      else known = false;
+      out += known ? value : text.substr(open, close + 2 - open);
+      at = close + 2;
+    }
+    return out;
   }
 
   bool SkipScript(const std::string& url) override {

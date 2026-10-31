@@ -65,6 +65,15 @@ JsEvent* ThisEvent(Context& ctx, const Value& thisValue) {
 
 char g_windowTargetKey;
 
+// What a script is given for an event target: the window is its own target, not the object that holds its listeners.
+Value ExposeTarget(Context& ctx, JsEventTarget* target) {
+  if (target && target == qe::GetRealmData(ctx, &g_windowTargetKey)) {
+    const Value window = qe::Get(ctx, qe::FromObject(ctx.get_global_object()), "window");
+    if (qe::IsObject(window)) return window;
+  }
+  return qe::FromObject(target);
+}
+
 JsEventTarget* ThisTarget(Context& ctx, const Value& thisValue) {
   JsEventTarget* self = DOMObject::Cast<JsEventTarget>(thisValue);
   if (!self) {
@@ -185,12 +194,12 @@ Value GetType(Context& ctx, Value t, qe::Args, Value) {
 
 Value GetTarget(Context& ctx, Value t, qe::Args, Value) {
   JsEvent* self = ThisEvent(ctx, t);
-  return self && self->target ? qe::FromObject(self->target) : qe::Null();
+  return self && self->target ? ExposeTarget(ctx, self->target) : qe::Null();
 }
 
 Value GetCurrentTarget(Context& ctx, Value t, qe::Args, Value) {
   JsEvent* self = ThisEvent(ctx, t);
-  return self && self->currentTarget ? qe::FromObject(self->currentTarget) : qe::Null();
+  return self && self->currentTarget ? ExposeTarget(ctx, self->currentTarget) : qe::Null();
 }
 
 Value GetEventPhase(Context& ctx, Value t, qe::Args, Value) {
@@ -282,9 +291,9 @@ Value SetRelatedTarget(Context&, Value, qe::Args args, Value) {
   return qe::Undefined();
 }
 
-Value GetRelatedTarget(Context&, Value, qe::Args args, Value) {
+Value GetRelatedTarget(Context& ctx, Value, qe::Args args, Value) {
   JsEvent* event = args.empty() ? nullptr : DOMObject::Cast<JsEvent>(args[0]);
-  return event && event->relatedTarget ? qe::FromObject(event->relatedTarget) : qe::Null();
+  return event && event->relatedTarget ? ExposeTarget(ctx, event->relatedTarget) : qe::Null();
 }
 
 // __solarEventUninitialized(event): what createEvent leaves an event as, until it is initialized.
@@ -353,7 +362,7 @@ Value ComposedPath(Context& ctx, Value t, qe::Args, Value) {
     }
   }
   Value array = qe::NewArray(ctx);
-  for (JsEventTarget* node : composed) qe::ArrayPush(ctx, array, qe::FromObject(node));
+  for (JsEventTarget* node : composed) qe::ArrayPush(ctx, array, ExposeTarget(ctx, node));
   return array;
 }
 
