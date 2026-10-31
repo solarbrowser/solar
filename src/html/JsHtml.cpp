@@ -1377,7 +1377,7 @@ const char* const kEventHandlerScript = R"JS(
     "slotchange", "stalled", "submit", "suspend", "timeupdate", "toggle", "volumechange", "waiting", "wheel", "pointerdown", "pointerup", "pointermove",
     "pointerover", "pointerout", "pointerenter", "pointerleave", "pointercancel", "gotpointercapture", "lostpointercapture", "touchstart", "touchend", "touchmove",
     "touchcancel", "transitionend", "animationend", "animationstart", "animationiteration", "readystatechange", "fullscreenchange", "fullscreenerror",
-    "selectionchange", "visibilitychange", "securitypolicyviolation"];
+    "selectionchange", "visibilitychange", "securitypolicyviolation", "beforetoggle"];
   // click(): what a click of the mouse does, which is the event, if the element is not disabled.
   Object.defineProperty(HTMLElement.prototype, "click", { value: function click() {
     if (this.hasAttribute("disabled") && /^(button|input|select|textarea|fieldset|optgroup|option)$/.test(this.localName)) return;

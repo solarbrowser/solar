@@ -113,6 +113,71 @@ progress, meter { box-sizing: border-box; vertical-align: -0.2em; }
 address, blockquote, center, dialog, div, figure, figcaption, footer, form, header, hr, legend, listing, main, p, plaintext, pre, search, xmp, bdi, output { unicode-bidi: isolate; }
 bdo, bdo[dir] { unicode-bidi: isolate-override; }
 textarea[dir=auto i], pre[dir=auto i] { unicode-bidi: plaintext; }
+[popover]:not(:popover-open):not(dialog[open]) { display: none; }
+[popover] { position: fixed; inset: 0; width: fit-content; height: fit-content; margin: auto; border: solid; padding: 0.25em; overflow: auto; color: CanvasText; background-color: Canvas; }
+dialog:not([open]):not(:popover-open) { display: none; }
+dialog { position: absolute; inset-inline: 0; width: fit-content; height: fit-content; margin: auto; border: solid; padding: 1em; background-color: Canvas; color: CanvasText; }
+dialog:modal { position: fixed; overflow: auto; inset-block: 0; max-width: calc(100% - 6px - 2em); max-height: calc(100% - 6px - 2em); }
+[data-solar-layer="1"] { z-index: 2147483001; }
+[data-solar-layer="2"] { z-index: 2147483002; }
+[data-solar-layer="3"] { z-index: 2147483003; }
+[data-solar-layer="4"] { z-index: 2147483004; }
+[data-solar-layer="5"] { z-index: 2147483005; }
+[data-solar-layer="6"] { z-index: 2147483006; }
+[data-solar-layer="7"] { z-index: 2147483007; }
+[data-solar-layer="8"] { z-index: 2147483008; }
+[data-solar-layer="9"] { z-index: 2147483009; }
+[data-solar-layer="10"] { z-index: 2147483010; }
+[data-solar-layer="11"] { z-index: 2147483011; }
+[data-solar-layer="12"] { z-index: 2147483012; }
+[data-solar-layer="13"] { z-index: 2147483013; }
+[data-solar-layer="14"] { z-index: 2147483014; }
+[data-solar-layer="15"] { z-index: 2147483015; }
+[data-solar-layer="16"] { z-index: 2147483016; }
+[data-solar-layer="17"] { z-index: 2147483017; }
+[data-solar-layer="18"] { z-index: 2147483018; }
+[data-solar-layer="19"] { z-index: 2147483019; }
+[data-solar-layer="20"] { z-index: 2147483020; }
+[data-solar-layer="21"] { z-index: 2147483021; }
+[data-solar-layer="22"] { z-index: 2147483022; }
+[data-solar-layer="23"] { z-index: 2147483023; }
+[data-solar-layer="24"] { z-index: 2147483024; }
+[data-solar-layer="25"] { z-index: 2147483025; }
+[data-solar-layer="26"] { z-index: 2147483026; }
+[data-solar-layer="27"] { z-index: 2147483027; }
+[data-solar-layer="28"] { z-index: 2147483028; }
+[data-solar-layer="29"] { z-index: 2147483029; }
+[data-solar-layer="30"] { z-index: 2147483030; }
+[data-solar-layer="31"] { z-index: 2147483031; }
+[data-solar-layer="32"] { z-index: 2147483032; }
+[data-solar-layer="33"] { z-index: 2147483033; }
+[data-solar-layer="34"] { z-index: 2147483034; }
+[data-solar-layer="35"] { z-index: 2147483035; }
+[data-solar-layer="36"] { z-index: 2147483036; }
+[data-solar-layer="37"] { z-index: 2147483037; }
+[data-solar-layer="38"] { z-index: 2147483038; }
+[data-solar-layer="39"] { z-index: 2147483039; }
+[data-solar-layer="40"] { z-index: 2147483040; }
+[data-solar-layer="41"] { z-index: 2147483041; }
+[data-solar-layer="42"] { z-index: 2147483042; }
+[data-solar-layer="43"] { z-index: 2147483043; }
+[data-solar-layer="44"] { z-index: 2147483044; }
+[data-solar-layer="45"] { z-index: 2147483045; }
+[data-solar-layer="46"] { z-index: 2147483046; }
+[data-solar-layer="47"] { z-index: 2147483047; }
+[data-solar-layer="48"] { z-index: 2147483048; }
+[data-solar-layer="49"] { z-index: 2147483049; }
+[data-solar-layer="50"] { z-index: 2147483050; }
+[data-solar-layer="51"] { z-index: 2147483051; }
+[data-solar-layer="52"] { z-index: 2147483052; }
+[data-solar-layer="53"] { z-index: 2147483053; }
+[data-solar-layer="54"] { z-index: 2147483054; }
+[data-solar-layer="55"] { z-index: 2147483055; }
+[data-solar-layer="56"] { z-index: 2147483056; }
+[data-solar-layer="57"] { z-index: 2147483057; }
+[data-solar-layer="58"] { z-index: 2147483058; }
+[data-solar-layer="59"] { z-index: 2147483059; }
+[data-solar-layer="60"] { z-index: 2147483060; }
 :fullscreen { position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important; width: 100% !important; height: 100% !important;
   max-width: none !important; max-height: none !important; margin: 0 !important; z-index: 2147483647 !important; box-sizing: border-box !important; background-color: #000; }
 video:fullscreen { object-fit: contain; }

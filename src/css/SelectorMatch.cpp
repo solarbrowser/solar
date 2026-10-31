@@ -304,6 +304,9 @@ bool MatchesPseudo(PseudoClass pseudo, const Element* element, const MatchContex
     case PseudoClass::Active: return element->nodeDocument && element->nodeDocument->PressedInView() && OnPointerPath(element, element->nodeDocument->PressedInView());
     // (The element that is full screen has the attribute src/web-api/js/fullscreen.js gives it.)
     case PseudoClass::Fullscreen: return element->FindAttribute("", "data-solar-fullscreen") != nullptr;
+    // (What is open as a popover or as a modal dialog has the attribute src/web-api/js/popover.js and dialog.js give it.)
+    case PseudoClass::PopoverOpen: return element->FindAttribute("", "data-solar-popover-open") != nullptr;
+    case PseudoClass::Modal: return element->FindAttribute("", "data-solar-modal") != nullptr;
     case PseudoClass::Root: return IsRoot(element);
     case PseudoClass::Empty: return IsEmpty(element);
     case PseudoClass::Target: return IsTarget(element);

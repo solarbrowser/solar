@@ -704,8 +704,6 @@ tests/wpt/shadow-dom/layout-slot-no-longer-fallback.html
 tests/wpt/shadow-dom/manual-slot-assignment-no-wrong-unassign.html
 tests/wpt/shadow-dom/nested-hover-pseudo-class-removal.html
 tests/wpt/shadow-dom/nested-slot-remove-crash.html
-tests/wpt/shadow-dom/reference-target/tentative/property-reflection-idl-setters.html
-tests/wpt/shadow-dom/reference-target/tentative/property-reflection-imperative-setup.html
 tests/wpt/shadow-dom/reference/empty.html
 tests/wpt/shadow-dom/scroll-restore-shadow.html
 tests/wpt/shadow-dom/shadow-host-child-restyle-crash.html
