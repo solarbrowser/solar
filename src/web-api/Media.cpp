@@ -12,6 +12,7 @@
 
 #include "solar/dom/Damage.h"
 #include "solar/dom/NodeBindingsInternal.h"
+#include "solar/media/Mse.h"
 #include "solar/media/Player.h"
 #include "solar/net/HttpClient.h"
 #include "solar/url/Parser.h"
@@ -58,6 +59,14 @@ struct Transfer final : net::FetchHandler {
   void OnError(std::string_view) override { stream->Finish(true); }
 };
 
+// A MediaSource of the page: its buffers, and the callback that tells script that one of them finished what it was doing.
+struct MseItem {
+  std::shared_ptr<media::MseSource> source;
+  std::map<uint32_t, std::shared_ptr<media::MseBuffer>> buffers;
+  qe::Persistent callback;
+  std::shared_ptr<std::atomic<bool>> pending = std::make_shared<std::atomic<bool>>(false);
+};
+
 struct Item {
   std::shared_ptr<media::Player> player;
   std::shared_ptr<media::ByteStream> stream;
@@ -76,13 +85,17 @@ struct State : std::enable_shared_from_this<State> {
   Context* ctx;
   web::FetchHost* host;
   std::map<uint32_t, std::unique_ptr<Item>> items;
-  uint32_t next = 1;
+  std::map<uint32_t, std::unique_ptr<MseItem>> sources;
+  std::map<uint32_t, std::pair<uint32_t, std::shared_ptr<media::MseBuffer>>> bufferIndex;  // buffer number -> (source number, buffer)
+  uint32_t next = 1, nextBuffer = 1;
   std::shared_ptr<bool> alive = std::make_shared<bool>(true);
 
   void CloseAll() {
     *alive = false;
     for (auto& [id, item] : items) Release(*item);
     items.clear();
+    sources.clear();
+    bufferIndex.clear();
   }
   void Release(Item& item) {
     item.handle.Cancel();
@@ -258,6 +271,151 @@ Value Attach(Context& ctx, Value, qe::Args args, Value) {
   return qe::Undefined();
 }
 
+
+
+// ---- Media Source Extensions ----
+
+// __solarMseCreate(callback): the number of a new MediaSource.
+Value MseCreate(Context& ctx, Value, qe::Args args, Value) {
+  State* state = StateOf(ctx);
+  if (!state || args.empty() || !qe::IsCallable(args[0])) return qe::FromNumber(-1);
+  auto item = std::make_unique<MseItem>();
+  item->callback = qe::Persistent(ctx, args[0]);
+  const uint32_t id = state->next++;
+  web::FetchHost* host = state->host;
+  std::shared_ptr<bool> alive = state->alive;
+  State* raw = state;
+  std::shared_ptr<std::atomic<bool>> pending = item->pending;
+  item->source = media::MseSource::Create([host, id, alive, raw, pending] {
+    if (pending->exchange(true)) return;
+    host->config().loop->Post([host, id, alive, raw, pending] {
+      pending->store(false);
+      if (!*alive) return;
+      const auto found = raw->sources.find(id);
+      if (found == raw->sources.end()) return;
+      Context& c = *raw->ctx;
+      qe::Call(c, found->second->callback.Get(), qe::Undefined());
+      if (qe::HasException(c)) c.clear_exception();
+      host->config().afterScript();
+    });
+  });
+  state->sources[id] = std::move(item);
+  return qe::FromNumber(id);
+}
+
+// __solarMseAddBuffer(source, mime): the number of a buffer, or -1 if the type cannot be played.
+Value MseAddBuffer(Context& ctx, Value, qe::Args args, Value) {
+  State* state = StateOf(ctx);
+  if (!state || args.size() < 2) return qe::FromNumber(-1);
+  const auto found = state->sources.find(qe::ToUint32(ctx, args[0]));
+  if (found == state->sources.end()) return qe::FromNumber(-1);
+  auto buffer = found->second->source->AddBuffer(qe::ToWtf8(ctx, args[1]));
+  if (!buffer) return qe::FromNumber(-1);
+  const uint32_t id = state->nextBuffer++;
+  found->second->buffers[id] = buffer;
+  state->bufferIndex[id] = {found->first, buffer};
+  return qe::FromNumber(id);
+}
+
+// __solarMseAppend(buffer, bytes): true, or false where it would be over the quota.
+Value MseAppend(Context& ctx, Value, qe::Args args, Value) {
+  State* state = StateOf(ctx);
+  if (!state || args.size() < 2) return qe::FromBool(false);
+  const auto found = state->bufferIndex.find(qe::ToUint32(ctx, args[0]));
+  if (found == state->bufferIndex.end()) return qe::FromBool(false);
+  auto bytes = qe::BytesOf(args[1]);
+  if (!bytes) return qe::FromBool(false);
+  return qe::FromBool(found->second.second->Append(bytes->data(), bytes->size()));
+}
+
+// __solarMseBuffer(buffer, what, a, b): "abort", "remove" (start, end), "offset" (seconds), or "state" (JSON text: updating, failed, buffered, bytes).
+Value MseBuffer(Context& ctx, Value, qe::Args args, Value) {
+  State* state = StateOf(ctx);
+  if (!state || args.size() < 2) return qe::Undefined();
+  const auto found = state->bufferIndex.find(qe::ToUint32(ctx, args[0]));
+  if (found == state->bufferIndex.end()) return qe::Undefined();
+  media::MseBuffer& buffer = *found->second.second;
+  const std::string what = qe::ToWtf8(ctx, args[1]);
+  if (what == "abort") buffer.Abort();
+  else if (what == "remove" && args.size() > 3) buffer.Remove(qe::ToNumber(ctx, args[2]), qe::ToNumber(ctx, args[3]));
+  else if (what == "offset" && args.size() > 2) buffer.SetTimestampOffset(qe::ToNumber(ctx, args[2]));
+  else if (what == "state") {
+    auto number = [](double v) { return std::isnan(v) ? std::string("null") : (std::isinf(v) ? std::string("1e999") : std::to_string(v)); };
+    std::string json = std::string("{\"updating\":") + (buffer.updating() ? "true" : "false") + ",\"failed\":" + (buffer.failed() ? "true" : "false") + ",\"bytes\":" + std::to_string(buffer.bytes()) + ",\"buffered\":[";
+    const auto ranges = buffer.Buffered();
+    for (size_t i = 0; i < ranges.size(); ++i) json += (i ? "," : "") + std::string("[") + number(ranges[i].start) + "," + number(ranges[i].end) + "]";
+    return qe::FromWtf8(ctx, json + "]}");
+  }
+  return qe::Undefined();
+}
+
+// __solarMseSource(source, what, value): "duration", "end", "reopen", "removeBuffer" (a buffer's number), "close".
+Value MseSourceCall(Context& ctx, Value, qe::Args args, Value) {
+  State* state = StateOf(ctx);
+  if (!state || args.size() < 2) return qe::Undefined();
+  const uint32_t id = qe::ToUint32(ctx, args[0]);
+  const auto found = state->sources.find(id);
+  if (found == state->sources.end()) return qe::Undefined();
+  const std::string what = qe::ToWtf8(ctx, args[1]);
+  media::MseSource& source = *found->second->source;
+  if (what == "duration" && args.size() > 2) source.SetDuration(qe::ToNumber(ctx, args[2]));
+  else if (what == "end") source.EndOfStream();
+  else if (what == "reopen") source.Reopen();
+  else if (what == "removeBuffer" && args.size() > 2) {
+    const uint32_t number = qe::ToUint32(ctx, args[2]);
+    const auto buffer = state->bufferIndex.find(number);
+    if (buffer != state->bufferIndex.end()) {
+      source.RemoveBuffer(buffer->second.second);
+      found->second->buffers.erase(number);
+      state->bufferIndex.erase(buffer);
+    }
+  } else if (what == "buffered") {
+    std::string json = "[";
+    const auto ranges = source.Buffered();
+    for (size_t i = 0; i < ranges.size(); ++i) json += (i ? "," : "") + std::string("[") + std::to_string(ranges[i].start) + "," + std::to_string(ranges[i].end) + "]";
+    return qe::FromWtf8(ctx, json + "]");
+  }
+  return qe::Undefined();
+}
+
+// __solarMediaOpenMse(source, callback): a player for what the page appends to the MediaSource (the number is as __solarMediaOpen's).
+Value OpenMse(Context& ctx, Value, qe::Args args, Value) {
+  State* state = StateOf(ctx);
+  if (!state || args.size() < 2 || !qe::IsCallable(args[1])) return qe::FromNumber(-1);
+  const auto source = state->sources.find(qe::ToUint32(ctx, args[0]));
+  if (source == state->sources.end()) return qe::FromNumber(-1);
+  auto item = std::make_unique<Item>();
+  item->callback = qe::Persistent(ctx, args[1]);
+  const uint32_t id = state->next++;
+  web::FetchHost* host = state->host;
+  std::shared_ptr<bool> alive = state->alive;
+  State* raw = state;
+  std::shared_ptr<std::atomic<bool>> pending = item->pending;
+  item->player = media::Player::CreateMse(source->second->source, [host, id, alive, raw, pending] {
+    if (pending->exchange(true)) return;
+    host->config().loop->Post([host, id, alive, raw, pending] {
+      pending->store(false);
+      if (!*alive) return;
+      const auto found = raw->items.find(id);
+      if (found == raw->items.end()) return;
+      Context& c = *raw->ctx;
+      if (found->second->player && !found->second->elements.empty()) {
+        const media::PlayerState s = found->second->player->State();
+        if (s.videoWidth != found->second->lastWidth || s.videoHeight != found->second->lastHeight) {
+          found->second->lastWidth = s.videoWidth;
+          found->second->lastHeight = s.videoHeight;
+          for (dom::Element* element : found->second->elements) { dom::NoteDamage(element, dom::kDamageAttributes); dom::NoteTreeChangeAt(element); }
+        }
+      }
+      qe::Call(c, found->second->callback.Get(), qe::Undefined());
+      if (qe::HasException(c)) c.clear_exception();
+      host->config().afterScript();
+    });
+  });
+  state->items[id] = std::move(item);
+  return qe::FromNumber(id);
+}
+
 }  // namespace
 
 void InstallMediaNatives(qe::Realm& realm) {
@@ -268,6 +426,12 @@ void InstallMediaNatives(qe::Realm& realm) {
   qe::DefineGlobalFunction(ctx, "__solarMediaState", StateJson, 1);
   qe::DefineGlobalFunction(ctx, "__solarMediaEvents", EventsJson, 1);
   qe::DefineGlobalFunction(ctx, "__solarMediaAttach", Attach, 2);
+  qe::DefineGlobalFunction(ctx, "__solarMediaOpenMse", OpenMse, 2);
+  qe::DefineGlobalFunction(ctx, "__solarMseCreate", MseCreate, 1);
+  qe::DefineGlobalFunction(ctx, "__solarMseAddBuffer", MseAddBuffer, 2);
+  qe::DefineGlobalFunction(ctx, "__solarMseAppend", MseAppend, 2);
+  qe::DefineGlobalFunction(ctx, "__solarMseBuffer", MseBuffer, 4);
+  qe::DefineGlobalFunction(ctx, "__solarMseSource", MseSourceCall, 3);
 }
 
 }  // namespace solar::webapi

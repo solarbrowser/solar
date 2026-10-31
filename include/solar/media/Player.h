@@ -100,6 +100,8 @@ class Player {
  public:
   // Starts playing from the stream (paused). `changed` is called, from any thread, when the state or the events have something new.
   static std::shared_ptr<Player> Create(std::shared_ptr<ByteStream> stream, std::function<void()> changed);
+  // The same over a MediaSource (media/Mse.h): what plays is what the page has appended.
+  static std::shared_ptr<Player> CreateMse(std::shared_ptr<class MseSource> source, std::function<void()> changed);
   ~Player();
   Player(const Player&) = delete;
   Player& operator=(const Player&) = delete;

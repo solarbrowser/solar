@@ -1,0 +1,135 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>MediaSource</title>
+<style>body { margin: 8px; background: #eee; } video { display: block; }</style>
+<video id="v" muted></video>
+<script>
+// Needs tests/web-api/wsserver.py (serving media/frag.mp4 and media/frag.webm). Pieces of a fragmented MP4 are appended as a player would.
+const ok = (name, condition, detail) => console.log((condition ? "ok   " : "FAIL ") + name + (condition ? "" : "  " + detail));
+const wait = (target, type, ms = 8000) => new Promise((resolve, reject) => { const t = setTimeout(() => reject(new Error("timeout waiting for " + type)), ms); target.addEventListener(type, (e) => { clearTimeout(t); resolve(e); }, { once: true }); });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const boxes = (bytes) => {
+  const out = [];
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  for (let at = 0; at + 8 <= bytes.length;) {
+    const size = view.getUint32(at);
+    out.push({ type: String.fromCharCode(...bytes.slice(at + 4, at + 8)), start: at, end: at + size });
+    at += size;
+  }
+  return out;
+};
+const append = async (sb, bytes) => { const done = wait(sb, "updateend"); sb.appendBuffer(bytes); await done; };
+async function run() {
+  const v = document.getElementById("v");
+  ok("MediaSource exists", typeof MediaSource === "function" && typeof SourceBuffer === "function", typeof MediaSource);
+  ok("isTypeSupported", MediaSource.isTypeSupported('video/mp4; codecs="avc1.42E01E, mp4a.40.2"') === true && MediaSource.isTypeSupported('video/webm; codecs="vp9"') === true && MediaSource.isTypeSupported("video/x-nonsense") === false && MediaSource.isTypeSupported('video/mp4; codecs="nothing"') === false, "");
+
+  const file = new Uint8Array(await (await fetch("media/frag.mp4")).arrayBuffer());
+  const top = boxes(file);
+  const initEnd = top.find((b) => b.type === "moof").start;
+  const init = file.slice(0, initEnd);
+  const segments = [];
+  for (let i = 0; i < top.length; i++) if (top[i].type === "moof") segments.push(file.slice(top[i].start, top[i + 1].end));
+  ok("the file is an init segment and fragments", top[0].type === "ftyp" && top[1].type === "moov" && segments.length >= 6, top.map((b) => b.type).join().slice(0, 60) + " " + segments.length);
+
+  const events = [];
+  for (const name of ["loadedmetadata", "canplay", "playing", "waiting", "seeking", "seeked", "ended", "error", "durationchange"]) v.addEventListener(name, () => events.push(name));
+  const ms = new MediaSource();
+  ok("closed at first", ms.readyState === "closed" && ms.sourceBuffers.length === 0 && Object.prototype.toString.call(ms) === "[object MediaSource]", ms.readyState);
+  const url = URL.createObjectURL(ms);
+  ok("an object URL", url.startsWith("blob:"), url);
+  v.src = url;
+  await wait(ms, "sourceopen");
+  ok("open when the element has it", ms.readyState === "open", ms.readyState);
+  let e = null; try { ms.addSourceBuffer("video/x-nonsense"); } catch (x) { e = x; }
+  ok("a type that cannot be played is NotSupportedError", e && e.name === "NotSupportedError", String(e));
+  const sb = ms.addSourceBuffer('video/mp4; codecs="avc1.64001E, mp4a.40.2"');
+  ok("a SourceBuffer", sb instanceof SourceBuffer && ms.sourceBuffers.length === 1 && ms.sourceBuffers[0] === sb && !sb.updating && sb.buffered.length === 0, "");
+
+  // init segment
+  const updatestart = wait(sb, "updatestart"), update = wait(sb, "update");
+  const initDone = wait(sb, "updateend");
+  sb.appendBuffer(init);
+  ok("appending: updating, and a second append is InvalidStateError", sb.updating === true, "");
+  e = null; try { sb.appendBuffer(segments[0]); } catch (x) { e = x; }
+  ok("append while updating is InvalidStateError", e && e.name === "InvalidStateError", String(e));
+  await updatestart; await update; await initDone;
+  ok("updateend: not updating", !sb.updating, "");
+  ms.duration = 8;
+  await sleep(300);
+  ok("the element has its metadata at once: size and duration", v.videoWidth === 320 && v.videoHeight === 180 && v.duration === 8 && v.readyState >= 1, `${v.videoWidth}x${v.videoHeight} ${v.duration} ${v.readyState}`);
+
+  // the first seconds
+  await append(sb, segments[0]);
+  await append(sb, segments[1]);
+  ok("buffered: the two seconds", sb.buffered.length === 1 && sb.buffered.start(0) <= 0.1 && Math.abs(sb.buffered.end(0) - 2) < 0.2, sb.buffered.length ? `${sb.buffered.start(0)}-${sb.buffered.end(0)}` : "none");
+  await wait(v, "canplay");
+  ok("the element is ready and its buffered shows it", v.readyState >= 3 && v.buffered.length === 1 && v.buffered.end(0) >= 1.8, `${v.readyState} ${v.buffered.length}`);
+  await v.play();
+  await append(sb, segments[2]);
+  await sleep(1100);
+  ok("it plays what was appended", v.currentTime > 0.7 && v.currentTime < 1.8 && !v.paused, v.currentTime);
+  v.pause();
+
+  // appending the rest, and running out
+  for (let i = 3; i < segments.length; i++) await append(sb, segments[i]);
+  ms.endOfStream();
+  ok("endOfStream: ended, and the duration is what was appended", ms.readyState === "ended" && Math.abs(ms.duration - 8) < 0.3, ms.readyState + " " + ms.duration);
+  await wait(ms, "sourceended");
+
+  // a seek into the buffer, then out of it
+  const seekedInside = wait(v, "seeked");
+  v.currentTime = 5;
+  await seekedInside;
+  ok("seeking inside the buffer", Math.abs(v.currentTime - 5) < 0.15, v.currentTime);
+  ok("remove(0, 4) and the buffered range begins at 4", await (async () => { const done = wait(sb, "updateend"); sb.remove(0, 4); await done; return sb.buffered.length === 1 && sb.buffered.start(0) >= 3.9; })(), sb.buffered.length ? sb.buffered.start(0) : "none");
+  const seeking = wait(v, "seeking");
+  v.currentTime = 1;
+  await seeking;
+  await sleep(300);
+  ok("a seek to what is not buffered waits (seeking stays true)", v.seeking === true, "");
+  // the page appends from there
+  await append(sb, segments[0]);
+  await append(sb, segments[1]);
+  await wait(v, "seeked");
+  ok("seeked once the data is there", Math.abs(v.currentTime - 1) < 0.15 && !v.seeking, v.currentTime);
+
+  // play to the end of the buffer: ended (the page says the end again: it was appended to since)
+  for (let i = 2; i < segments.length; i++) { /* (still there from before) */ }
+  ms.endOfStream();
+  const ended = wait(v, "ended", 12000);
+  v.currentTime = 7.2;
+  await wait(v, "seeked");
+  await v.play();
+  await ended;
+  ok("it plays on to the end and ends", v.ended && v.paused, `${v.ended} ${v.paused} ${v.currentTime}`);
+
+  // removeSourceBuffer
+  ms.removeSourceBuffer(sb);
+  ok("removeSourceBuffer", ms.sourceBuffers.length === 0, ms.sourceBuffers.length);
+
+  // WebM
+  const webm = new Uint8Array(await (await fetch("media/frag.webm")).arrayBuffer());
+  let firstCluster = -1;
+  for (let i = 0; i + 4 < webm.length; i++) if (webm[i] === 0x1F && webm[i + 1] === 0x43 && webm[i + 2] === 0xB6 && webm[i + 3] === 0x75) { firstCluster = i; break; }
+  const w = document.createElement("video");
+  document.body.appendChild(w);
+  const ms2 = new MediaSource();
+  w.src = URL.createObjectURL(ms2);
+  await wait(ms2, "sourceopen");
+  const sb2 = ms2.addSourceBuffer('video/webm; codecs="vp9"');
+  await append(sb2, webm.slice(0, firstCluster));
+  ms2.duration = 6;
+  for (let at = firstCluster; at < webm.length; at += 40000) await append(sb2, webm.slice(at, Math.min(webm.length, at + 40000)));
+  ok("webm: appended in pieces, buffered", sb2.buffered.length === 1 && sb2.buffered.end(0) > 5, sb2.buffered.length ? sb2.buffered.end(0) : "none");
+  await wait(w, "canplay");
+  ok("webm: size and ready", w.videoWidth === 256 && w.videoHeight === 144 && w.readyState >= 3, `${w.videoWidth}x${w.videoHeight} ${w.readyState}`);
+  w.currentTime = 2;
+  await wait(w, "seeked");
+  ok("webm: seek", Math.abs(w.currentTime - 2) < 0.15, w.currentTime);
+
+  // a picture to look at
+  v.src = URL.createObjectURL(new MediaSource());
+}
+run().then(() => console.log("done"), (e) => { console.log("FAIL exception " + (e && e.stack || e)); console.log("done"); });
+</script>

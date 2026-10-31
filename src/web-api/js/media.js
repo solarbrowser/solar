@@ -4,8 +4,9 @@
 (() => {
   "use strict";
   const canPlayN = globalThis.__solarMediaCanPlay, openN = globalThis.__solarMediaOpen, controlN = globalThis.__solarMediaControl;
-  const stateN = globalThis.__solarMediaState, eventsN = globalThis.__solarMediaEvents, attachN = globalThis.__solarMediaAttach;
-  for (const n of ["CanPlay", "Open", "Control", "State", "Events", "Attach"]) delete globalThis["__solarMedia" + n];
+  const stateN = globalThis.__solarMediaState, eventsN = globalThis.__solarMediaEvents, attachN = globalThis.__solarMediaAttach, openMseN = globalThis.__solarMediaOpenMse;
+  // (mediasource.js, which comes after, takes CanPlay too and lets go of it.)
+  for (const n of ["Open", "Control", "State", "Events", "Attach", "OpenMse"]) delete globalThis["__solarMedia" + n];
   if (typeof canPlayN !== "function" || typeof HTMLMediaElement !== "function") return;
 
   const proto = HTMLMediaElement.prototype;
@@ -141,6 +142,7 @@
     stopTimer(s);
     if (s.id >= 0) { attachN(-1, el); controlN(s.id, "close"); }
     s.id = -1;
+    if (s.mse) { s.mse._closed(); s.mse = null; }
   };
 
   const load = (el, s) => {
@@ -189,7 +191,14 @@
     s.deferred = false;
     const myLoad = s.loadId;
     let id = -1;
-    id = openN(s.currentSrc, () => { if (s.loadId === myLoad) sync(el, s, id); });
+    const mse = globalThis.__solarMediaSourceOf ? globalThis.__solarMediaSourceOf(s.currentSrc) : null;
+    if (mse) {
+      // The page makes the media: what it appends is what plays.
+      id = openMseN(mse._id, () => { if (s.loadId === myLoad) sync(el, s, id); });
+      if (id >= 0) { s.mse = mse; mse._open(el); }
+    } else {
+      id = openN(s.currentSrc, () => { if (s.loadId === myLoad) sync(el, s, id); });
+    }
     if (id < 0) { s.networkState = 3; s.error = new MediaError(4, "The resource could not be opened."); fire(el, "error"); return; }
     s.id = id;
     attachN(id, el);

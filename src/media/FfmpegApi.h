@@ -30,7 +30,8 @@ namespace solar::media {
   X(avcodec, avcodec_find_decoder) X(avcodec, avcodec_alloc_context3) X(avcodec, avcodec_parameters_to_context)           \
   X(avcodec, avcodec_open2) X(avcodec, avcodec_free_context) X(avcodec, avcodec_send_packet)                              \
   X(avcodec, avcodec_receive_frame) X(avcodec, avcodec_flush_buffers) X(avcodec, av_packet_alloc)                         \
-  X(avcodec, av_packet_free) X(avcodec, av_packet_unref)                                                                   \
+  X(avcodec, av_packet_free) X(avcodec, av_packet_unref) X(avcodec, av_packet_clone)                                       \
+  X(avcodec, avcodec_parameters_alloc) X(avcodec, avcodec_parameters_copy) X(avcodec, avcodec_parameters_free)             \
   X(avutil, av_malloc) X(avutil, av_freep) X(avutil, av_frame_alloc) X(avutil, av_frame_free) X(avutil, av_frame_unref)  \
   X(avutil, av_frame_clone) X(avutil, av_channel_layout_default) X(avutil, av_channel_layout_copy)                        \
   X(avutil, av_channel_layout_uninit)                                                                                      \
