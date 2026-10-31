@@ -66,6 +66,31 @@ def websocket(c, headers, path):
         else:
             c.sendall(frame(kind, message))
 
+def sse(c, path, headers):
+    import time
+    if path.startswith("/sse-204"):
+        c.sendall(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n"); return
+    if path.startswith("/sse-html"):
+        c.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi"); return
+    c.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n")
+    last = headers.get("last-event-id", "")
+    if last == "":
+        c.sendall(b"\xef\xbb\xbf: comment\r\ndata: one\r\n\r\n")
+        time.sleep(0.1)
+        c.sendall(b"id: 7\nevent: custom\ndata: a\ndata: b\n\n")
+        time.sleep(0.1)
+        c.sendall(b"retry: 100\ndata:x\n\r\n")
+        time.sleep(0.05)
+        c.sendall(b"data: split")
+        time.sleep(0.05)
+        c.sendall(b"ed\r")
+        time.sleep(0.05)
+        c.sendall(b"\n\r\n")
+        time.sleep(0.1)
+    else:
+        c.sendall(("data: again " + last + "\n\n").encode())
+        time.sleep(30)
+
 def serve(c):
     try:
         buf = b""
@@ -78,6 +103,8 @@ def serve(c):
             if path == "/reject":
                 c.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n"); return
             websocket(c, headers, path.split("?")[0]); return
+        if path.startswith("/sse"):
+            sse(c, path, headers); return
         name = os.path.join(ROOT, path.lstrip("/").split("?")[0])
         if os.path.isfile(name):
             body = open(name, "rb").read()

@@ -1,0 +1,45 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>EventSource</title>
+<script>
+// Needs tests/web-api/wsserver.py (which serves this page and /events too).
+const ok = (name, condition, detail) => console.log((condition ? "ok   " : "FAIL ") + name + (condition ? "" : "  " + detail));
+const wait = (target, type) => new Promise((resolve) => target.addEventListener(type, resolve, { once: true }));
+async function run() {
+  ok("EventSource exists", typeof EventSource === "function" && EventSource.CLOSED === 2, typeof EventSource);
+  let t = null; try { new EventSource(); } catch (e) { t = e; }
+  ok("no argument is a TypeError", t instanceof TypeError, String(t));
+  const es = new EventSource("/sse");
+  ok("CONNECTING, url, withCredentials", es.readyState === 0 && es.url === location.origin + "/sse" && es.withCredentials === false, es.url);
+  ok("an EventTarget", es instanceof EventTarget && Object.prototype.toString.call(es) === "[object EventSource]", "");
+  await wait(es, "open");
+  ok("open: OPEN", es.readyState === 1, es.readyState);
+  let m = await wait(es, "message");
+  ok("first message (BOM and comment skipped)", m.data === "one" && m.type === "message" && m.lastEventId === "" && m.origin === location.origin, JSON.stringify([m.data, m.type]));
+  const custom = await new Promise((r) => es.addEventListener("custom", r, { once: true }));
+  ok("named event, two data lines, id", custom.data === "a\nb" && custom.type === "custom" && custom.lastEventId === "7", JSON.stringify([custom.data, custom.lastEventId]));
+  m = await wait(es, "message");
+  ok("data: with no space, id kept, retry read", m.data === "x" && m.lastEventId === "7", JSON.stringify([m.data, m.lastEventId]));
+  m = await wait(es, "message");
+  ok("a message split in pieces, CR then LF", m.data === "split" + "ed", m.data);
+  // the stream ends: error, then connected again with Last-Event-ID
+  await wait(es, "error");
+  ok("the stream ended: CONNECTING again", es.readyState === 0, es.readyState);
+  m = await wait(es, "message");
+  ok("reconnected with Last-Event-ID", m.data === "again 7", m.data);
+  es.close();
+  ok("close(): CLOSED", es.readyState === 2, es.readyState);
+  const h = new EventSource("/sse-html");
+  await wait(h, "error");
+  ok("a reply that is not a stream fails for good", h.readyState === 2, h.readyState);
+  const n = new EventSource("/sse-204");
+  await wait(n, "error");
+  ok("204 fails for good", n.readyState === 2, n.readyState);
+  const onm = new EventSource("/sse");
+  let got = null; onm.onmessage = (e) => { got = e.data; };
+  await wait(onm, "message");
+  ok("onmessage", got === "one", got);
+  onm.close();
+}
+run().then(() => console.log("done"), (e) => { console.log("FAIL exception " + (e && e.stack || e)); console.log("done"); });
+</script>
