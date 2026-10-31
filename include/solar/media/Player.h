@@ -188,5 +188,8 @@ uint64_t FrameCounter();  // changes when any player has a new picture
 void AttachPlayer(const void* element, std::shared_ptr<Player> player);
 void DetachPlayer(const void* element);
 std::shared_ptr<Player> PlayerOf(const void* element);
+// The text of the captions that show on a video now (its lines are separated by newlines): a script keeps it, the painter draws it.
+void SetCaptions(const void* element, std::string text);
+std::string CaptionsOf(const void* element);
 
 }  // namespace solar::media

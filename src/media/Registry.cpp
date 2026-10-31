@@ -22,6 +22,13 @@ std::unordered_map<const void*, std::shared_ptr<Player>>& Players() {
 }
 }  // namespace
 
+namespace {
+std::unordered_map<const void*, std::string>& Captions() {
+  static std::unordered_map<const void*, std::string> captions;
+  return captions;
+}
+}  // namespace
+
 void AttachPlayer(const void* element, std::shared_ptr<Player> player) {
   std::shared_ptr<Player> old;  // (let go outside the lock: a player's destructor waits for its thread)
   {
@@ -48,6 +55,7 @@ void DetachPlayer(const void* element) {
   std::shared_ptr<Player> old;
   {
     std::lock_guard lock(g_mutex);
+    Captions().erase(element);
     const auto found = Players().find(element);
     if (found == Players().end()) return;
     old = std::move(found->second);
@@ -60,6 +68,20 @@ std::shared_ptr<Player> PlayerOf(const void* element) {
   std::lock_guard lock(g_mutex);
   const auto found = Players().find(element);
   return found == Players().end() ? nullptr : found->second;
+}
+
+// ---- captions ----
+
+void SetCaptions(const void* element, std::string text) {
+  std::lock_guard lock(g_mutex);
+  if (text.empty()) Captions().erase(element);
+  else Captions()[element] = std::move(text);
+}
+
+std::string CaptionsOf(const void* element) {
+  std::lock_guard lock(g_mutex);
+  const auto found = Captions().find(element);
+  return found == Captions().end() ? std::string() : found->second;
 }
 
 // ---- canPlayType ----

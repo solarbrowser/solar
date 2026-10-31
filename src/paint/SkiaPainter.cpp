@@ -510,6 +510,37 @@ struct SkiaPainter::Impl {
     }
   }
 
+  // The captions of a video: white lines on a dark band, at the bottom, above the controls when they are there.
+  void DrawCaptions(SkCanvas& canvas, const SkRect& box, const std::string& text, bool controls, bool controlsShown) {
+    sk_sp<SkTypeface> typeface = ControlsTypeface();
+    if (text.empty() || !typeface || box.width() < 40 || box.height() < 30) return;
+    const float size = std::clamp(box.height() / 18.0f, 12.0f, 32.0f);
+    SkFont font(typeface, size);
+    font.setEdging(SkFont::Edging::kAntiAlias);
+    std::vector<std::string> lines;
+    size_t at = 0;
+    while (at <= text.size()) {
+      size_t end = text.find('\n', at);
+      if (end == std::string::npos) end = text.size();
+      if (end > at) lines.push_back(text.substr(at, end - at));
+      at = end + 1;
+    }
+    if (lines.empty()) return;
+    const float lineHeight = size * 1.25f;
+    float bottom = box.bottom() - std::max(12.0f, box.height() * 0.05f) - (controls && controlsShown ? 48.0f : 0.0f);
+    SkPaint back, white;
+    back.setColor(SkColorSetARGB(204, 0, 0, 0));
+    white.setAntiAlias(true);
+    white.setColor(SK_ColorWHITE);
+    for (size_t i = lines.size(); i-- > 0;) {
+      const float width = font.measureText(lines[i].data(), lines[i].size(), SkTextEncoding::kUTF8);
+      const float x = box.centerX() - width / 2, base = bottom - size * 0.25f;
+      canvas.drawRect(SkRect::MakeLTRB(x - size * 0.3f, bottom - lineHeight, x + width + size * 0.3f, bottom), back);
+      canvas.drawSimpleText(lines[i].data(), lines[i].size(), SkTextEncoding::kUTF8, x, base, font, white);
+      bottom -= lineHeight;
+    }
+  }
+
   void DrawVideoItem(SkCanvas& canvas, const DrawVideo& item) {
     const SkRRect clip = ToSk(item.clip);
     const SkRect box = clip.getBounds();
@@ -526,6 +557,7 @@ struct SkiaPainter::Impl {
         DrawElementImage(canvas, poster);
       }
       if (item.controls && item.player) DrawControls(canvas, box, item.player->State());
+      DrawCaptions(canvas, box, item.captions, item.controls, true);
       return;
     }
     VideoPicture& picture = videoPictures[item.player.get()];
@@ -564,6 +596,7 @@ struct SkiaPainter::Impl {
     canvas.drawImageRect(picture.image, SkRect::MakeXYWH(x, y, w, h), SkSamplingOptions(SkFilterMode::kLinear), nullptr);
     canvas.restore();
     if (item.controls) DrawControls(canvas, box, state);
+    DrawCaptions(canvas, box, item.captions, item.controls, !state.playing || state.controlsVisible);
   }
 
   // A canvas: the picture that was last made of it, fitted into the box.

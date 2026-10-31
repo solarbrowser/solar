@@ -193,6 +193,7 @@ struct DrawVideo {
   Length x{0, 50, false}, y{0, 50, false};
   ImageRef poster;  // shown until there is a picture
   bool controls = false;  // the element has the controls attribute: they are drawn over the picture
+  std::string captions;   // the text of the captions that show now, in lines
 };
 
 // A canvas element: the picture the page has drawn on it so far (the surface is asked for it each time the list is drawn), in its content box as object-fit says.

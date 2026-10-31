@@ -17,6 +17,8 @@
       });
     }
   };
+  const setCaptions = globalThis.__solarMediaCaptions;
+  delete globalThis.__solarMediaCaptions;
   const TOKEN = Symbol("texttrack");
   const finite = (v, what) => { v = Number(v); if (!Number.isFinite(v)) throw new TypeError("The provided double value for " + what + " is non-finite."); return v; };
 
@@ -38,6 +40,43 @@
   handlerProps(TextTrackCue, ["enter", "exit"]);
   publish(TextTrackCue, "TextTrackCue");
   const ALIGN = ["start", "center", "end", "left", "right"];
+  // The cue text as DOM: the cue text parsing rules (https://www.w3.org/TR/webvtt1/#cue-text-parsing-rules), with the entities and the tags c, i, b, u, ruby, rt, v, lang and timestamps.
+  const ENTITIES = { "&amp;": "&", "&lt;": "<", "&gt;": ">", "&lrm;": "\u200E", "&rlm;": "\u200F", "&nbsp;": "\u00A0" };
+  const unescapeText = (t) => t.replace(/&(amp|lt|gt|lrm|rlm|nbsp);/g, (m) => ENTITIES[m]);
+  const cueToFragment = (input) => {
+    const fragment = document.createDocumentFragment();
+    let current = fragment;
+    const stack = [];  // names of open elements
+    const re = /<(\/?)([^>]*)>|([^<]+)|</g;
+    let m;
+    while ((m = re.exec(input)) !== null) {
+      if (m[3] !== undefined) { current.appendChild(document.createTextNode(unescapeText(m[3]))); continue; }
+      if (m[0] === "<") { current.appendChild(document.createTextNode("<")); continue; }
+      const closing = m[1] === "/", body = m[2];
+      if (closing) {
+        const name = body.trim().split(/[.\s]/)[0];
+        if (stack.length && stack[stack.length - 1].name === name) { stack.pop(); current = current.parentNode; }
+        else if (name === "ruby" && stack.length >= 2 && stack[stack.length - 1].name === "rt" && stack[stack.length - 2].name === "ruby") { stack.pop(); stack.pop(); current = current.parentNode.parentNode; }
+        continue;
+      }
+      const ts = timestamp(body.trim());
+      if (ts !== null) { const pi = document.createProcessingInstruction("timestamp", body.trim()); current.appendChild(pi); continue; }
+      const parts = /^([a-z]+)((?:\.[^\s.]+)*)(?:[ \t]+(.*))?$/.exec(body.trim());
+      if (!parts) continue;
+      const tag = parts[1], classes = parts[2].split(".").filter(Boolean), annotation = (parts[3] || "").trim();
+      const element = { c: "span", i: "i", b: "b", u: "u", ruby: "ruby", rt: "rt", v: "span", lang: "span" }[tag];
+      if (!element) continue;
+      if (tag === "rt" && !(stack.length && stack[stack.length - 1].name === "ruby")) continue;
+      const node = document.createElement(element);
+      if (classes.length) node.setAttribute("class", classes.join(" "));
+      if (tag === "v") node.setAttribute("title", annotation);
+      if (tag === "lang") node.setAttribute("lang", annotation);
+      current.appendChild(node);
+      stack.push({ name: tag });
+      current = node;
+    }
+    return fragment;
+  };
   class VTTCue extends TextTrackCue {
     constructor(startTime, endTime, text) {
       if (arguments.length < 3) throw new TypeError("Failed to construct 'VTTCue': 3 arguments required, but only " + arguments.length + " present.");
@@ -65,12 +104,7 @@
     set align(v) { v = String(v); if (ALIGN.includes(v)) this._align = v; }
     get text() { return this._text; }
     set text(v) { this._text = String(v); }
-    getCueAsHTML() {
-      const fragment = document.createDocumentFragment();
-      // (The tags of the cue text are not interpreted yet: the text is the text.)
-      fragment.append(this._text.replace(/<[^>]*>/g, ""));
-      return fragment;
-    }
+    getCueAsHTML() { return cueToFragment(this._text); }
   }
   Object.defineProperty(VTTCue, "length", { value: 3, configurable: true });
   for (const name of ["region", "vertical", "snapToLines", "line", "lineAlign", "position", "positionAlign", "size", "align", "text", "getCueAsHTML"]) Object.defineProperty(VTTCue.prototype, name, { enumerable: true });
@@ -172,6 +206,7 @@
       this._active = active;
       const entered = active.filter((c) => !before.includes(c)), left = before.filter((c) => !active.includes(c));
       if (!entered.length && !left.length) return;
+      showCaptions(media);
       for (const c of left) { c._active = false; setTimeout(() => c.dispatchEvent(new Event("exit")), 0); }
       for (const c of entered) { c._active = true; setTimeout(() => c.dispatchEvent(new Event("enter")), 0); }
       setTimeout(() => { this.dispatchEvent(new Event("cuechange")); if (this._element) this._element.dispatchEvent(new Event("cuechange")); }, 0);
@@ -237,6 +272,16 @@
     addTrack(this, track);
     return track;
   });
+  // The text of the cues that are active on the tracks that show, on a video.
+  const showCaptions = (media) => {
+    if (typeof setCaptions !== "function" || !media || !(media instanceof HTMLVideoElement)) return;
+    const lines = [];
+    for (const t of ownerFor(media)._tracks) {
+      if (t._mode !== "showing" || (t._kind !== "subtitles" && t._kind !== "captions")) continue;
+      for (const c of t._active) lines.push(c._text.replace(/<[^>]*>/g, ""));
+    }
+    setCaptions(media, lines.join("\n"));
+  };
   // The cues follow the time of the media.
   const follow = (media) => { for (const t of ownerFor(media)._tracks) t._update(); };
   document.addEventListener("timeupdate", (e) => { if (e.target instanceof HTMLMediaElement && owners.has(e.target)) follow(e.target); }, true);

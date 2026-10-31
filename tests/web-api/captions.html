@@ -1,0 +1,13 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Captions</title>
+<style>body { margin: 8px; background: #222; } video { background: #345; display: block; }</style>
+<video id="v" width="480" height="270"></video>
+<script>
+const v = document.getElementById("v");
+const t = v.addTextTrack("captions", "English", "en");
+t.mode = "showing";
+t.addCue(new VTTCue(0, 100, "Merhaba <b>dünya</b>\nikinci satır"));
+t.addCue(new VTTCue(200, 300, "never now"));
+setTimeout(() => console.log("active", t.activeCues.length, t.cues.length, t.cues[0].text.split("\n").length), 50);
+</script>

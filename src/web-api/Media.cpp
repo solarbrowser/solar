@@ -482,10 +482,23 @@ Value OpenMse(Context& ctx, Value, qe::Args args, Value) {
 
 }  // namespace
 
+// __solarMediaCaptions(element, text): the captions that show on the video now.
+static Value Captions(Context& ctx, Value, qe::Args args, Value) {
+  if (args.size() < 2) return qe::Undefined();
+  dom::Element* element = dom::ThisElement(ctx, args[0]);
+  if (!element) return qe::Undefined();
+  const std::string text = qe::ToWtf8(ctx, args[1]);
+  if (media::CaptionsOf(element) == text) return qe::Undefined();
+  media::SetCaptions(element, text);
+  dom::NoteDamage(element, dom::kDamageAttributes);
+  return qe::Undefined();
+}
+
 void InstallMediaNatives(qe::Realm& realm) {
   Context& ctx = realm.GetContext();
   qe::DefineGlobalFunction(ctx, "__solarMediaCanPlay", CanPlay, 2);
   qe::DefineGlobalFunction(ctx, "__solarMediaControlsLayout", ControlsLayoutJson, 2);
+  qe::DefineGlobalFunction(ctx, "__solarMediaCaptions", Captions, 2);
   qe::DefineGlobalFunction(ctx, "__solarMediaOpen", Open, 2);
   qe::DefineGlobalFunction(ctx, "__solarMediaControl", Control, 3);
   qe::DefineGlobalFunction(ctx, "__solarMediaState", StateJson, 1);

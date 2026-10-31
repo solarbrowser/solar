@@ -1140,8 +1140,9 @@ class Painter {
     DrawVideo item;
     item.player = media::PlayerOf(element);
     if (!box.imageUrl.empty()) item.poster = ImageFor(box.imageUrl);  // (the poster attribute, made absolute by layout)
-    if (!item.player && !item.poster) return;
+    if (!item.player && !item.poster && media::CaptionsOf(element).empty()) return;
     item.controls = element->FindAttribute("controls") != nullptr;
+    item.captions = media::CaptionsOf(element);
     layout::Edges insets;
     insets.top = box.border.top + box.padding.top;
     insets.right = box.border.right + box.padding.right;
