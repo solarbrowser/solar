@@ -1,3 +1,0 @@
-rules:
-- MutationObserver-*: [mutationobserver]
-- Document-createEvent.https.html: [events]

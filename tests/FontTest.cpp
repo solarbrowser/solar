@@ -42,7 +42,7 @@ int main() {
   // WOFF2: Red Hat Text (SIL Open Font License), with glyf and hmtx stored transformed.
   {
     std::string data;
-    if (FILE* file = std::fopen("tests/wpt/fonts/RedHatText-Regular.woff2", "rb")) {
+    if (FILE* file = std::fopen("tests/wpt-solar/fonts/RedHatText-Regular.woff2", "rb")) {
       char buffer[4096];
       size_t n;
       while ((n = std::fread(buffer, 1, sizeof buffer, file)) > 0) data.append(buffer, n);

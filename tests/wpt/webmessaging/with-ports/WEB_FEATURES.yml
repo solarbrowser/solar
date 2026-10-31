@@ -1,3 +1,0 @@
-rules:
-- 027.html: [channel-messaging]
-- "*": [postmessage]

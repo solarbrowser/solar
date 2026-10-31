@@ -1,3 +1,0 @@
-rules:
-- alignment-baseline-*: [alignment-baseline]
-- dominant-baseline-no-interpolation.html: [dominant-baseline]

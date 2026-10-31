@@ -208,6 +208,13 @@ class TestEnvironment : public solar::html::FrameEnvironment {
   std::vector<std::unique_ptr<RealmBundle>> bundles_;
 };
 
+// Where a page is on the server it is tested on: its path below tests/wpt (the web-platform-tests submodule), or /solar/ for the pages of our own (tests/wpt-solar/pages).
+std::string PageUrlPath(const std::string& path) {
+  const std::string own = "tests/wpt-solar/pages/";
+  if (path.starts_with(own)) return "solar/" + path.substr(own.size());
+  return std::filesystem::relative(path, "tests/wpt").string();
+}
+
 bool RunFile(const std::string& path, const std::string& harness, const std::string& resources,
              const std::string& skipFile) {
   std::string source;
@@ -270,18 +277,18 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
     // A page: it has a window and a document of its own, which its scripts run in.
     solar::html::RunInRealm(realm, [&] {
       document = solar::dom::NewDocument(realm.GetContext(), true);
-      document->url = "http://web-platform.test:8000/" + std::filesystem::relative(path, "tests/wpt").string();
+      document->url = "http://web-platform.test:8000/" + PageUrlPath(path);
       solar::html::InstallWindow(realm, document);
     });
   }
   qe::EvaluateResult result = realm.Evaluate(std::string(std::getenv("WPT_ALL") ? "globalThis.__allFailures = true;\n" : "") + skips + resources + harness, "harness.js");
   if (result.ok && !prelude.empty()) result = realm.Evaluate(prelude, "prelude.js");
   if (result.ok && isWindowScript) {
-    const std::string address = "http://web-platform.test:8000/" + std::filesystem::relative(path, "tests/wpt").string();
+    const std::string address = "http://web-platform.test:8000/" + PageUrlPath(path);
     if (!solar::html::LoadPage(realm, document, "<!DOCTYPE html><html><head></head><body></body></html>", "text/html")) result.ok = false;
     if (result.ok) result = realm.Evaluate(source, name);
   } else if (result.ok && isHtml) {
-    const std::string address = "http://web-platform.test:8000/" + std::filesystem::relative(path, "tests/wpt").string();
+    const std::string address = "http://web-platform.test:8000/" + PageUrlPath(path);
     if (!solar::html::LoadPage(realm, document, source, environment.ContentType(address))) {
       result.ok = false;
       result.error = "a script of the page failed";
@@ -321,19 +328,20 @@ int main(int argc, char** argv) {
     return 2;
   }
   std::string harness;
-  if (!ReadFile("tests/wpt/harness.js", harness)) {
-    std::fprintf(stderr, "cannot open tests/wpt/harness.js\n");
+  if (!ReadFile("tests/wpt-solar/harness.js", harness)) {
+    std::fprintf(stderr, "cannot open tests/wpt-solar/harness.js\n");
     return 2;
   }
 
   // Ahem, the font the layout tests are written for, is installed as if the machine had it.
   solar::font::Database::System().AddDirectory("tests/wpt/fonts");
+  solar::font::Database::System().AddDirectory("tests/wpt-solar/fonts");
 
   std::string resources = LoadResources("tests/data");
 
   int failed = 0;
   for (int i = 1; i < argc; ++i) {
-    if (!RunFile(argv[i], harness, resources, "tests/wpt/skip.tsv")) ++failed;
+    if (!RunFile(argv[i], harness, resources, "tests/wpt-solar/skip.tsv")) ++failed;
   }
   std::printf("wpt: %d of %d files passed\n", argc - 1 - failed, argc - 1);
   return failed == 0 ? 0 : 1;

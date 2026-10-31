@@ -1,4 +1,0 @@
-rules:
-- starting-style-*: [starting-style]
-- transition-behavior.html: [transition-behavior]
-- "*": [transitions]

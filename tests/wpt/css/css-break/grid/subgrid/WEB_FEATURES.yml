@@ -1,4 +1,0 @@
-rules:
-- subgrid-container-fragmentation-003.html: [column-breaks]
-- subgrid-container-fragmentation-004.html: [column-breaks]
-- subgrid-container-fragmentation-005.html: [column-breaks]

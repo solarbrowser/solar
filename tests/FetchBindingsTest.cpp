@@ -183,7 +183,7 @@ int main(int argc, char** argv) {
   std::signal(SIGPIPE, SIG_IGN);
 #endif
   std::string harness, test;
-  if (!ReadFile("tests/wpt/harness.js", harness) || !ReadFile(file, test)) {
+  if (!ReadFile("tests/wpt-solar/harness.js", harness) || !ReadFile(file, test)) {
     std::fprintf(stderr, "cannot read the harness or %s\n", file.c_str());
     return 2;
   }

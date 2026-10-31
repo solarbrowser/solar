@@ -1,3 +1,0 @@
-rules:
-- HTMLBaseElement.html: [base, customized-built-in-elements]
-- "**": [customized-built-in-elements]

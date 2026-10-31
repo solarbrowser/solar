@@ -1,3 +1,0 @@
-rules:
-- layer.html: [cascade-layers]
-- supports-import-parsing.html: [import]

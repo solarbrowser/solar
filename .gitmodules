@@ -9,3 +9,6 @@
 [submodule "third_party/angle"]
 	path = third_party/angle
 	url = https://github.com/google/angle
+[submodule "tests/wpt"]
+	path = tests/wpt
+	url = https://github.com/web-platform-tests/wpt

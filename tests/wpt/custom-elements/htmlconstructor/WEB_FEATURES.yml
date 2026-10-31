@@ -1,3 +1,0 @@
-rules:
-- newtarget.html: [autonomous-custom-elements]
-- newtarget-customized-builtins.html: [customized-built-in-elements]

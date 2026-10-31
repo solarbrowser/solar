@@ -1,3 +1,0 @@
-rules:
-- slotchange-events.html: [slot, move-before]
-- "**": [move-before]

@@ -1,4 +1,0 @@
-rules:
-- animation-composition-*: [animation-composition]
-- animation-timing-function-invalid.html: [steps-easing]
-- "*": [animations-css]

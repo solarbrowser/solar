@@ -1,2 +1,0 @@
-rules:
-- "**": [layout-direction-override]

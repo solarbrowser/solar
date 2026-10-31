@@ -1,4 +1,0 @@
-rules:
-- text-align-last-*: [text-align-last]
-- text-align-*-last-*: [text-align-last]
-- text-align-*: [text-align]
