@@ -36,6 +36,8 @@
 #include "solar/web/JsEventLoop.h"
 #include "solar/web/TimerHost.h"
 #include "solar/web/UrlBindings.h"
+#include "solar/net/Resolver.h"
+#include "support/TestServer.h"
 #ifdef SOLAR_WPT_CANVAS
 #include "solar/paint/Canvas.h"
 #include "solar/web-api/ImageLoad.h"
@@ -273,6 +275,97 @@ std::string PageUrlPath(const std::string& path) {
   return std::filesystem::relative(path, "tests/wpt").string();
 }
 
+
+// The server the pages are tested against (web-platform.test and its subdomains): it gives what is in tests/wpt (and /solar/ from tests/wpt-solar/pages), with the Content-Type the extension says, the
+// headers of a file's .headers, and the substitutions of a .sub. file. WPT's own server has handlers in Python that are not here: what they answer is a 404.
+std::string ServerContentType(const std::string& path) {
+  static const std::map<std::string, std::string> types = {
+      {"html", "text/html; charset=utf-8"}, {"htm", "text/html; charset=utf-8"}, {"xhtml", "application/xhtml+xml"}, {"xht", "application/xhtml+xml"}, {"svg", "image/svg+xml"},
+      {"js", "text/javascript; charset=utf-8"}, {"mjs", "text/javascript; charset=utf-8"}, {"css", "text/css"}, {"json", "application/json"}, {"png", "image/png"}, {"jpg", "image/jpeg"},
+      {"jpeg", "image/jpeg"}, {"gif", "image/gif"}, {"webp", "image/webp"}, {"avif", "image/avif"}, {"ico", "image/x-icon"}, {"bmp", "image/bmp"}, {"apng", "image/apng"},
+      {"mp4", "video/mp4"}, {"webm", "video/webm"}, {"ogv", "video/ogg"}, {"ogg", "audio/ogg"}, {"oga", "audio/ogg"}, {"mp3", "audio/mpeg"}, {"wav", "audio/wav"}, {"txt", "text/plain"},
+      {"xml", "application/xml"}, {"woff", "font/woff"}, {"woff2", "font/woff2"}, {"ttf", "font/ttf"}, {"otf", "font/otf"}, {"pdf", "application/pdf"}, {"vtt", "text/vtt"}, {"wasm", "application/wasm"}};
+  const size_t dot = path.rfind('.');
+  if (dot == std::string::npos) return "application/octet-stream";
+  const auto found = types.find(path.substr(dot + 1));
+  return found == types.end() ? "application/octet-stream" : found->second;
+}
+
+std::string UrlDecode(const std::string& v) {
+  std::string out;
+  for (size_t i = 0; i < v.size(); ++i) {
+    if (v[i] == '%' && i + 2 < v.size() + 0 && std::isxdigit(static_cast<unsigned char>(v[i + 1])) && std::isxdigit(static_cast<unsigned char>(v[i + 2]))) { out += static_cast<char>(std::stoi(v.substr(i + 1, 2), nullptr, 16)); i += 2; }
+    else out += v[i];
+  }
+  return out;
+}
+
+void ServeWpt(int client) {
+  using solar::test::TestServer;
+  const std::string head = TestServer::ReadHead(client);
+  const size_t lineEnd = head.find("\r\n");
+  const std::string line = head.substr(0, lineEnd);
+  const size_t a = line.find(' '), b = line.find(' ', a + 1);
+  if (a == std::string::npos || b == std::string::npos) return;
+  const std::string method = line.substr(0, a);
+  std::string target = line.substr(a + 1, b - a - 1);
+  const size_t q = target.find('?');
+  const std::string query = q == std::string::npos ? "" : target.substr(q);
+  std::string path = UrlDecode(q == std::string::npos ? target : target.substr(0, q));
+  path = path.substr(0, path.find('#'));
+  auto reply = [&](int status, const std::string& reason, const std::string& type, const std::string& body, const std::string& extra, bool headOnly) {
+    std::string out = "HTTP/1.1 " + std::to_string(status) + " " + reason + "\r\nContent-Type: " + type + "\r\nContent-Length: " + std::to_string(body.size()) + "\r\nConnection: close\r\n" + extra + "\r\n";
+    if (!headOnly) out += body;
+    TestServer::SendAll(client, out);
+  };
+  if (method != "GET" && method != "HEAD") { reply(405, "Method Not Allowed", "text/plain", "", "", true); return; }
+  std::string file;
+  const std::string own = "/solar/";
+  if (path.starts_with(own)) file = "tests/wpt-solar/pages/" + path.substr(own.size());
+  else file = "tests/wpt" + path;
+  if (path.find("..") != std::string::npos || !std::filesystem::is_regular_file(file)) { reply(404, "Not Found", "text/plain", "not found", "", method == "HEAD"); return; }
+  std::string contents;
+  ReadFile(file, contents);
+  if (file.find(".sub.") != std::string::npos) contents = TestEnvironment::Substitute(contents, query);
+  std::string type = ServerContentType(file), extra;
+  std::string sidecar;
+  if (ReadFile(file + ".headers", sidecar)) {
+    std::istringstream lines(sidecar);
+    std::string headerLine;
+    while (std::getline(lines, headerLine)) {
+      if (!headerLine.empty() && headerLine.back() == '\r') headerLine.pop_back();
+      const size_t colon = headerLine.find(':');
+      if (colon == std::string::npos) continue;
+      std::string name = headerLine.substr(0, colon), value = headerLine.substr(colon + 1);
+      while (!value.empty() && value.front() == ' ') value.erase(value.begin());
+      if (name == "Content-Type" || name == "content-type") type = value;
+      else extra += name + ": " + value + "\r\n";
+    }
+  }
+  reply(200, "OK", type, contents, extra, method == "HEAD");
+}
+
+// Names of the test's hosts go to the server on the loopback interface; the port the page says is the server's.
+solar::net::SystemResolverOptions WptResolverOptions(uint16_t port) {
+  solar::net::SystemResolverOptions options;
+  options.lookup = [port](const std::string& host, uint16_t, solar::net::SocketAddress::Family family) {
+    solar::net::ResolveResult result;
+    if (host == "web-platform.test" || host.ends_with(".web-platform.test") || host == "not-web-platform.test" || host.ends_with(".not-web-platform.test")) {
+      if (family == solar::net::SocketAddress::Family::IPv4) {
+        solar::net::SocketAddress address;
+        address.family = family;
+        address.bytes = {127, 0, 0, 1};
+        address.port = port;
+        result.addresses.push_back(address);
+      }
+    } else {
+      result.error = "cannot resolve " + host;
+    }
+    return result;
+  };
+  return options;
+}
+
 bool RunFile(const std::string& path, const std::string& harness, const std::string& resources,
              const std::string& skipFile) {
   std::string source;
@@ -309,8 +402,11 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
   isolate->SetPromiseRejectionHandler(solar::html::MakeRejectionHandler());
   // Where an error came from, down to the line and column of each call in its stack.
   isolate->SetSourcePositionTracking(true);
+  solar::test::TestServer server(ServeWpt);
   auto loop = solar::net::Loop::Create();
-  solar::net::HttpClient client(*loop);
+  solar::net::HttpClientOptions clientOptions;
+  clientOptions.resolver = solar::net::MakeSystemResolver(*loop, WptResolverOptions(server.port()));
+  solar::net::HttpClient client(*loop, std::move(clientOptions));
   // The tasks of the page are the program's: timers go into its queue, which its event loop runs.
   solar::web::TimerHost timers;
   isolate->SetTimerProvider(timers.Provider());

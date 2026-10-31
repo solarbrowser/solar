@@ -43,11 +43,144 @@
     finish(el, s, generation, result || null);
   };
 
+
+  // ---- Which picture: src, srcset, sizes and picture (https://html.spec.whatwg.org/multipage/images.html#updating-the-image-data) ----
+  const isSpace = (c) => c === " " || c === "\t" || c === "\n" || c === "\f" || c === "\r";
+  // Parsing a srcset attribute: candidates with a URL and a width or density.
+  const parseSrcset = (input) => {
+    const candidates = [];
+    let pos = 0;
+    const n = input.length;
+    for (;;) {
+      while (pos < n && (isSpace(input[pos]) || input[pos] === ",")) pos++;
+      if (pos >= n) return candidates;
+      let start = pos;
+      while (pos < n && !isSpace(input[pos])) pos++;
+      let url = input.slice(start, pos);
+      const descriptors = [];
+      if (url.endsWith(",")) { url = url.replace(/,+$/, ""); }
+      else {
+        // The descriptors: up to the comma that is outside parentheses.
+        let current = "", state = "in-descriptor";
+        let depth = 0;
+        for (;;) {
+          while (pos < n && isSpace(input[pos]) && state !== "after") pos++;
+          if (pos >= n) { if (current) descriptors.push(current); break; }
+          const c = input[pos];
+          if (state === "in-descriptor") {
+            if (isSpace(c)) { if (current) { descriptors.push(current); current = ""; } state = "after"; }
+            else if (c === ",") { pos++; if (current) descriptors.push(current); break; }
+            else if (c === "(") { current += c; state = "in-parens"; }
+            else current += c;
+          } else if (state === "in-parens") {
+            if (c === ")") { current += c; state = "in-descriptor"; } else current += c;
+          } else {
+            if (!isSpace(c)) state = "in-descriptor"; else { pos++; continue; }
+            continue;
+          }
+          pos++;
+        }
+        if (state === "after" && current) descriptors.push(current);
+      }
+      if (url === "") continue;
+      // Descriptors: w, x, h (h is accepted and ignored, and not with w and x); an error drops the candidate.
+      let width = null, density = null, error = false, height = null;
+      for (const d of descriptors) {
+        const last = d[d.length - 1], value = d.slice(0, -1);
+        if (last === "w" && /^\d+$/.test(value)) { if (width !== null || density !== null) error = true; else { width = parseInt(value, 10); if (width === 0) error = true; } }
+        else if (last === "x" && /^-?(\d+|\d*\.\d+)([eE][-+]?\d+)?$/.test(value)) { if (width !== null || density !== null || height !== null) error = true; else { density = Number(value); if (density < 0) error = true; } }
+        else if (last === "h" && /^\d+$/.test(value)) { if (density !== null || height !== null) error = true; else height = parseInt(value, 10); }
+        else error = true;
+      }
+      if (height !== null && width === null) error = true;
+      if (error) continue;
+      candidates.push({ url, w: width, d: density });
+    }
+  };
+  // The length a sizes attribute gives: the first entry whose media condition holds, or 100vw.
+  const lengthPx = (text) => {
+    text = text.trim();
+    if (!/^(calc|min|max|clamp)\(|^[-+]?(\d+|\d*\.\d+)([eE][-+]?\d+)?[a-zA-Z%]*$/.test(text)) return null;
+    if (/^[-+]?(\d+|\d*\.\d+)([eE][-+]?\d+)?$/.test(text) && Number(text) !== 0) return null;
+    if (/%$/.test(text)) return null;
+    if (/^-/.test(text) && !/^-?0/.test(text) && !/^calc|^min|^max|^clamp/.test(text)) return null;
+    if (typeof document === "undefined" || !document.documentElement) return null;
+    const probe = document.createElement("div");
+    probe.style.cssText = "position:absolute;visibility:hidden;margin:0;padding:0;border:0;height:0;width:" + text;
+    if (probe.style.width === "") return null;
+    document.documentElement.appendChild(probe);
+    const w = probe.getBoundingClientRect().width;
+    probe.remove();
+    return w;
+  };
+  const splitTop = (text, separator) => {
+    const parts = []; let depth = 0, start = 0;
+    for (let i = 0; i < text.length; i++) { const c = text[i]; if (c === "(") depth++; else if (c === ")") depth--; else if (c === separator && depth === 0) { parts.push(text.slice(start, i)); start = i + 1; } }
+    parts.push(text.slice(start));
+    return parts;
+  };
+  const sourceSize = (sizes) => {
+    const fallback = () => (typeof innerWidth === "number" ? innerWidth : 800);
+    if (sizes === null || sizes === undefined) return fallback();
+    const entries = splitTop(sizes, ",").map((e) => e.trim()).filter((e) => e !== "");
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      // The length is the last token (or function) of the entry; what is before is the media condition.
+      const m = /^(.*?)\s*((?:calc|min|max|clamp)\([^]*\)|[^\s()]+)$/.exec(entry);
+      if (!m) continue;
+      const width = lengthPx(m[2]);
+      if (width === null) continue;
+      const condition = m[1].trim();
+      if (condition === "") { return width; }
+      if (typeof matchMedia === "function" && matchMedia(condition.startsWith("(") || /^(not|only)\b/i.test(condition) ? condition : "(" + condition + ")").matches) return width;
+    }
+    return fallback();
+  };
+  const SUPPORTED_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/svg+xml", "image/bmp", "image/x-icon", "image/vnd.microsoft.icon", "image/apng", "image/pjpeg"]);
+  const pick = (candidates, sizes) => {
+    if (candidates.length === 0) return null;
+    const size = sourceSize(sizes);
+    const list = candidates.map((c) => ({ url: c.url, d: c.w !== null ? c.w / size : c.d === null ? 1 : c.d }));
+    const unique = [];
+    for (const c of list) if (!unique.some((u) => u.d === c.d)) unique.push(c);
+    const dpr = typeof devicePixelRatio === "number" ? devicePixelRatio : 1;
+    for (const c of unique) if (c.d >= dpr) return c.url;
+    return unique[unique.length - 1].url;
+  };
+  const selectedUrl = (el) => {
+    const base = el.baseURI;
+    const resolve = (u) => { try { return new URL(u, base).href; } catch (e) { return ""; } };
+    const choose = (srcsetText, sizesText, src) => {
+      const candidates = parseSrcset(srcsetText || "");
+      if (src) candidates.push({ url: src, w: null, d: null });
+      const picked = pick(candidates, sizesText);
+      return picked === null ? "" : resolve(picked);
+    };
+    const parent = el.parentNode;
+    if (parent && parent.localName === "picture") {
+      for (const child of parent.children) {
+        if (child === el) break;
+        if (child.localName !== "source") continue;
+        const srcset = child.getAttribute("srcset");
+        if (srcset === null) continue;
+        const type = child.getAttribute("type");
+        if (type !== null && type.trim() !== "" && !SUPPORTED_TYPES.has(type.trim().toLowerCase().split(";")[0].trim())) continue;
+        const media = child.getAttribute("media");
+        if (media !== null && media.trim() !== "" && typeof matchMedia === "function" && !matchMedia(media).matches) continue;
+        const candidates = parseSrcset(srcset);
+        if (candidates.length === 0) continue;
+        const picked = pick(candidates, child.getAttribute("sizes"));
+        if (picked) return resolve(picked);
+      }
+    }
+    const src = el.getAttribute("src");
+    return choose(el.getAttribute("srcset"), el.getAttribute("sizes"), src ? src : "");
+  };
+
   // The picture of the element is fetched (if the source is a new one).
   const load = (el) => {
     const s = stateOf(el);
-    const attribute = el.getAttribute("src");
-    const url = attribute ? new URL(attribute, el.baseURI).href : "";
+    const url = selectedUrl(el);
     if (s.started && url === s.url) return s;
     s.started = true;
     s.url = url;
@@ -86,7 +219,7 @@
   define(proto, "naturalWidth", sized("w"));
   define(proto, "naturalHeight", sized("h"));
   define(proto, "complete", { get() { return load(this).complete; } });
-  define(proto, "currentSrc", { get() { const a = this.getAttribute("src"); return a ? new URL(a, this.baseURI).href : ""; } });
+  define(proto, "currentSrc", { get() { return load(this).url; } });
   Object.defineProperty(proto, "decode", {
     value: function decode() {
       const s = load(this);
