@@ -1,0 +1,58 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>WebGL cube</title>
+<style>body { margin: 8px; background: #222; } canvas { display: block; }</style>
+<canvas id="c" width="480" height="360"></canvas>
+<script>
+const ok = (name, condition, detail) => console.log((condition ? "ok   " : "FAIL ") + name + (condition ? "" : "  " + detail));
+const gl = document.getElementById("c").getContext("webgl2", { antialias: true, depth: true });
+const compile = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+const p = gl.createProgram();
+gl.attachShader(p, compile(gl.VERTEX_SHADER, `#version 300 es
+in vec3 pos; in vec3 normal; in vec2 uv; uniform mat4 mvp; uniform mat3 nm; out vec3 n; out vec2 t;
+void main(){ n = nm * normal; t = uv; gl_Position = mvp * vec4(pos, 1.0); }`));
+gl.attachShader(p, compile(gl.FRAGMENT_SHADER, `#version 300 es
+precision mediump float; in vec3 n; in vec2 t; uniform sampler2D tex; uniform vec3 light; out vec4 o;
+void main(){ float d = max(dot(normalize(n), normalize(light)), 0.0); o = vec4(texture(tex, t).rgb * (0.25 + 0.75 * d), 1.0); }`));
+gl.linkProgram(p);
+if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+// a cube: 6 faces, 4 vertices each (position, normal, uv)
+const faces = [[[0,0,1],[1,0,0],[0,1,0]], [[0,0,-1],[-1,0,0],[0,1,0]], [[1,0,0],[0,0,-1],[0,1,0]], [[-1,0,0],[0,0,1],[0,1,0]], [[0,1,0],[1,0,0],[0,0,-1]], [[0,-1,0],[1,0,0],[0,0,1]]];
+const verts = [], idx = [];
+faces.forEach(([n, u, v], f) => {
+  for (const [a, b] of [[-1,-1],[1,-1],[1,1],[-1,1]]) verts.push(n[0]+u[0]*a+v[0]*b, n[1]+u[1]*a+v[1]*b, n[2]+u[2]*a+v[2]*b, ...n, (a+1)/2, (b+1)/2);
+  idx.push(f*4, f*4+1, f*4+2, f*4, f*4+2, f*4+3);
+});
+const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+const vb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, vb); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(verts), gl.STATIC_DRAW);
+const ib = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(idx), gl.STATIC_DRAW);
+for (const [name, size, off] of [["pos", 3, 0], ["normal", 3, 12], ["uv", 2, 24]]) { const l = gl.getAttribLocation(p, name); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, size, gl.FLOAT, false, 32, off); }
+// a checker texture made by a 2D canvas
+const tc = document.createElement("canvas"); tc.width = tc.height = 64; const t2 = tc.getContext("2d");
+for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) { t2.fillStyle = (x + y) % 2 ? "#f4b942" : "#3b7ddd"; t2.fillRect(x * 8, y * 8, 8, 8); }
+const tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, tc); gl.generateMipmap(gl.TEXTURE_2D);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+const mul = (a, b) => { const o = new Float32Array(16); for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) for (let k = 0; k < 4; k++) o[c*4+r] += a[k*4+r] * b[c*4+k]; return o; };
+const persp = (fov, asp, n, f) => { const t = 1 / Math.tan(fov / 2); return new Float32Array([t/asp,0,0,0, 0,t,0,0, 0,0,(f+n)/(n-f),-1, 0,0,2*f*n/(n-f),0]); };
+const rotY = (a) => new Float32Array([Math.cos(a),0,-Math.sin(a),0, 0,1,0,0, Math.sin(a),0,Math.cos(a),0, 0,0,0,1]);
+const rotX = (a) => new Float32Array([1,0,0,0, 0,Math.cos(a),Math.sin(a),0, 0,-Math.sin(a),Math.cos(a),0, 0,0,0,1]);
+const move = (z) => new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,z,1]);
+gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE); gl.useProgram(p);
+gl.uniform3f(gl.getUniformLocation(p, "light"), 0.5, 0.8, 1);
+const draw = (angle) => {
+  const model = mul(rotY(angle), rotX(angle * 0.6));
+  gl.uniformMatrix4fv(gl.getUniformLocation(p, "mvp"), false, mul(persp(0.9, 480 / 360, 0.1, 20), mul(move(-5), model)));
+  gl.uniformMatrix3fv(gl.getUniformLocation(p, "nm"), false, new Float32Array([model[0],model[1],model[2], model[4],model[5],model[6], model[8],model[9],model[10]]));
+  gl.viewport(0, 0, 480, 360); gl.clearColor(0.1, 0.12, 0.16, 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.drawElements(gl.TRIANGLES, 36, gl.UNSIGNED_SHORT, 0);
+};
+const px = (x, y) => { const d = new Uint8Array(4); gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, d); return Array.from(d); };
+draw(0.7);
+const centre = px(240, 180), corner = px(3, 3);
+ok("the cube is drawn, the background is not", centre.slice(0, 3).join() !== "26,31,41" && Math.abs(corner[0] - 26) < 3 && Math.abs(corner[2] - 41) < 3 && gl.getError() === 0, JSON.stringify([centre, corner]));
+let frames = 0;
+// (it keeps turning for as long as the page is open; the log says so once, after 20 frames)
+const loop = () => { draw(0.7 + (frames++) * 0.02); if (frames === 20) console.log("done " + frames); requestAnimationFrame(loop); };
+requestAnimationFrame(loop);
+</script>
