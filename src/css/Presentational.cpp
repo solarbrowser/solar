@@ -76,7 +76,8 @@ bool ParseDimension(const std::string& text, std::string& out) {
     ++i;
     while (i < text.size() && text[i] >= '0' && text[i] <= '9') ++i;
   }
-  const std::string number = text.substr(start, i - start);
+  std::string number = text.substr(start, i - start);
+  if (!number.empty() && number.back() == '.') number.pop_back();
   out = number + (i < text.size() && text[i] == '%' ? "%" : "px");
   return true;
 }
@@ -148,7 +149,11 @@ std::vector<DeclarationEntry> PresentationalHints(const dom::Element* element) {
   if (!element->IsHtml()) return h.out;
   const std::string& tag = element->localName;
   const auto dimension = [&](const char* attr, const char* property) {
-    if (const std::string* v = Attr(element, attr)) { std::string out; if (ParseDimension(*v, out)) h.Add(property, out); }
+    if (const std::string* v = Attr(element, attr)) {
+      std::string out;
+      // (A cell of width 0 has none: the standard leaves it out.)
+      if (ParseDimension(*v, out) && !((tag == "td" || tag == "th" || tag == "table") && std::strtod(out.c_str(), nullptr) == 0)) h.Add(property, out);
+    }
   };
   const auto color = [&](const char* attr, const char* property) {
     if (const std::string* v = Attr(element, attr)) { std::string out; if (ParseLegacyColor(*v, out)) h.Add(property, out); }
@@ -156,16 +161,16 @@ std::vector<DeclarationEntry> PresentationalHints(const dom::Element* element) {
   const bool table = tag == "table", cell = tag == "td" || tag == "th", rowGroup = tag == "thead" || tag == "tbody" || tag == "tfoot", row = tag == "tr";
 
   // Sizes.
-  if (table || cell || tag == "col" || tag == "colgroup") dimension("width", "width");
-  if (table || cell || row || rowGroup) dimension("height", "height");
+  if (table || cell || tag == "col" || tag == "colgroup" || tag == "marquee") dimension("width", "width");
+  if (table || cell || row || rowGroup || tag == "marquee") dimension("height", "height");
   if (tag == "hr") dimension("width", "width");
   if (tag == "img" || tag == "embed" || tag == "object" || tag == "iframe" || tag == "video") {
     // (Those that are replaced are taken by the block that sets width and height by their own rules.)
   }
-  if (tag == "img" || tag == "embed" || tag == "object" || tag == "applet" || tag == "marquee") {
-    double v;
-    if (const std::string* a = Attr(element, "hspace")) if (ParseNonNegative(*a, v)) { const std::string px = std::to_string(static_cast<long>(v)) + "px"; h.Add("margin-left", px); h.Add("margin-right", px); }
-    if (const std::string* a = Attr(element, "vspace")) if (ParseNonNegative(*a, v)) { const std::string px = std::to_string(static_cast<long>(v)) + "px"; h.Add("margin-top", px); h.Add("margin-bottom", px); }
+  if (tag == "img" || tag == "embed" || tag == "object" || tag == "applet" || tag == "marquee" || tag == "input") {
+    std::string px;
+    if (const std::string* a = Attr(element, "hspace")) if (ParseDimension(*a, px)) { h.Add("margin-left", px); h.Add("margin-right", px); }
+    if (const std::string* a = Attr(element, "vspace")) if (ParseDimension(*a, px)) { h.Add("margin-top", px); h.Add("margin-bottom", px); }
   }
   if (tag == "img" || tag == "object" || tag == "input") {
     double v;

@@ -1707,7 +1707,8 @@ void BuildUntimed(dom::Element* element, ElementStyle& style, const std::string&
           ++i;
           while (i < text.size() && text[i] >= '0' && text[i] <= '9') ++i;
         }
-        const std::string number = text.substr(start, i - start);
+        std::string number = text.substr(start, i - start);
+        if (!number.empty() && number.back() == '.') number.pop_back();
         const bool percent = i < text.size() && text[i] == '%';
         DeclarationEntry entry;
         entry.name = name;
