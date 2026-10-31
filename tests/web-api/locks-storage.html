@@ -1,0 +1,55 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Locks and storage</title>
+<script>
+const ok = (name, condition, detail) => console.log((condition ? "ok   " : "FAIL ") + name + (condition ? "" : "  " + detail));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function run() {
+  const L = navigator.locks;
+  ok("navigator.locks", L instanceof LockManager, String(L));
+  const order = [];
+  const a = L.request("r", async (lock) => { order.push("a1 " + lock.mode + " " + lock.name); await sleep(30); order.push("a2"); return 7; });
+  const b = L.request("r", async () => { order.push("b"); return 8; });
+  ok("results come back", (await a) === 7 && (await b) === 8, "");
+  ok("exclusive locks wait their turn", order.join() === "a1 exclusive r,a2,b", order.join());
+  const shared = [];
+  await Promise.all([1, 2].map((i) => L.request("s", { mode: "shared" }, async () => { shared.push("in" + i); await sleep(20); shared.push("out" + i); })));
+  ok("shared locks overlap", shared.join() === "in1,in2,out1,out2", shared.join());
+  const held = L.request("x", () => sleep(60));
+  let got = "unset"; await L.request("x", { ifAvailable: true }, (lock) => { got = lock; });
+  ok("ifAvailable gives null when held", got === null, String(got));
+  const snapshot = await L.query();
+  ok("query shows the held lock", snapshot.held.some((l) => l.name === "x" && l.mode === "exclusive"), JSON.stringify(snapshot));
+  const ctl = new AbortController();
+  const waiting = L.request("x", { signal: ctl.signal }, () => "never");
+  ctl.abort();
+  let err = null; try { await waiting; } catch (e) { err = e; }
+  ok("an aborted request rejects", err && err.name === "AbortError", String(err));
+  await held;
+  const stolen = L.request("y", () => sleep(100));
+  let stolenError = null;
+  const thief = await L.request("y", { steal: true }, () => "mine");
+  ok("steal takes the lock", thief === "mine", String(thief));
+  void stolen; void stolenError;
+  let t = null; try { await L.request("-bad", () => {}); } catch (e) { t = e; }
+  ok("a name that starts with - is NotSupportedError", t && t.name === "NotSupportedError", String(t));
+  ok("a failing callback rejects the request", await L.request("z", () => { throw new Error("boom"); }).then(() => false, (e) => e.message === "boom"), "");
+
+  const est = await navigator.storage.estimate();
+  ok("storage.estimate", est.quota > 0 && est.usage === 0 && (await navigator.storage.persisted()) === false, JSON.stringify(est));
+  const p = await navigator.permissions.query({ name: "geolocation" });
+  ok("permissions.query", p instanceof PermissionStatus && p.state === "prompt" && p.name === "geolocation", p.state);
+  t = null; try { await navigator.permissions.query({ name: "nonsense" }); } catch (e) { t = e; }
+  ok("an unknown permission is a TypeError", t instanceof TypeError, String(t));
+  await navigator.clipboard.writeText("copied");
+  ok("clipboard round trip", (await navigator.clipboard.readText()) === "copied", "");
+  ok("scheduler.postTask", (await scheduler.postTask(() => 42, { priority: "background" })) === 42, "");
+  const tc = new TaskController();
+  const cancelled = scheduler.postTask(() => 1, { signal: tc.signal, delay: 50 });
+  tc.abort();
+  ok("an aborted task rejects", await cancelled.then(() => false, () => true), "");
+  await scheduler.yield();
+  ok("scheduler.yield", true, "");
+}
+run().then(() => console.log("done"), (e) => { console.log("FAIL exception " + (e && e.stack || e)); console.log("done"); });
+</script>

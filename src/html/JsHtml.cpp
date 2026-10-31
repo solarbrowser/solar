@@ -769,7 +769,6 @@ const char* const kPlatformScript = R"JS(
     if (!navigator.sendBeacon) define(navigator, "sendBeacon", function sendBeacon() { return true; });
     if (!("connection" in navigator)) Object.defineProperty(navigator, "connection", { value: Object.assign(new EventTarget(), { effectiveType: "4g", downlink: 10, rtt: 50, saveData: false }), configurable: true, enumerable: true });
     if (!("deviceMemory" in navigator)) Object.defineProperty(navigator, "deviceMemory", { value: 8, configurable: true, enumerable: true });
-    if (!("clipboard" in navigator)) Object.defineProperty(navigator, "clipboard", { value: { writeText: () => Promise.reject(new DOMException("Write permission denied.", "NotAllowedError")), readText: () => Promise.reject(new DOMException("Read permission denied.", "NotAllowedError")) }, configurable: true, enumerable: true });
     if (!("mediaDevices" in navigator)) Object.defineProperty(navigator, "mediaDevices", { value: Object.assign(new EventTarget(), { enumerateDevices: () => Promise.resolve([]), getUserMedia: () => Promise.reject(new DOMException("Requested device not found", "NotFoundError")), getSupportedConstraints: () => ({}) }), configurable: true, enumerable: true });
     if (!("serviceWorker" in navigator)) Object.defineProperty(navigator, "serviceWorker", { value: Object.assign(new EventTarget(), { controller: null, ready: new Promise(() => {}), register: () => Promise.reject(new DOMException("Service workers are not supported.", "SecurityError")), getRegistrations: () => Promise.resolve([]) }), configurable: true, enumerable: true });
   }
@@ -1228,8 +1227,6 @@ const char* const kStubScript = R"JS(
     ensure(navigator, "canShare", function canShare() { return false; });
     if (!("plugins" in navigator)) Object.defineProperty(navigator, "plugins", { value: Object.assign([], { item: () => null, namedItem: () => null, refresh() {} }), enumerable: true, configurable: true });
     if (!("mimeTypes" in navigator)) Object.defineProperty(navigator, "mimeTypes", { value: Object.assign([], { item: () => null, namedItem: () => null }), enumerable: true, configurable: true });
-    if (!("permissions" in navigator)) Object.defineProperty(navigator, "permissions", { value: { query: (descriptor) => Promise.resolve(Object.assign(new EventTarget(), { name: descriptor && descriptor.name, state: "prompt", onchange: null })) }, enumerable: true, configurable: true });
-    if (!("storage" in navigator)) Object.defineProperty(navigator, "storage", { value: { estimate: () => Promise.resolve({ usage: 0, quota: 0 }), persist: () => Promise.resolve(false), persisted: () => Promise.resolve(false) }, enumerable: true, configurable: true });
     if (!("geolocation" in navigator)) {
       const denied = () => ({ code: 1, message: "User denied Geolocation", PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
       Object.defineProperty(navigator, "geolocation", { value: {
