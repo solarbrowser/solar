@@ -233,7 +233,7 @@ bool RunScript(Quanta::Embed::Realm& realm, dom::Document* document, dom::Elemen
     const std::string address = Resolve(source->value, BaseOf(document));
     if (g_environment && g_environment->SkipScript(address)) return true;
     if (!ScriptAllowed(realm.GetContext(), document, script, &address)) return true;
-    std::optional<std::string> loaded = g_environment ? g_environment->Load(address) : std::nullopt;
+    std::optional<std::string> loaded = LoadResource(address);  // (a data: or blob: address is read here, not asked of the environment)
     if (!loaded) {
       if (g_environment) g_environment->ScriptFailed("cannot load script " + source->value);
       FireEvent(realm.GetContext(), script, "error");
