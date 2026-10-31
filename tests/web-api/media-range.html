@@ -1,0 +1,89 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Media download</title>
+<video id="v" muted></video>
+<script>
+// Needs tests/web-api/wsserver.py (Range and /__log) and media/big.mp4 and media/big-tail.mp4 (26 MB each: tests/web-api/run-media.sh makes them).
+const ok = (name, condition, detail) => console.log((condition ? "ok   " : "FAIL ") + name + (condition ? "" : "  " + detail));
+const wait = (target, type, ms = 15000) => new Promise((resolve, reject) => { const t = setTimeout(() => reject(new Error("timeout waiting for " + type)), ms); target.addEventListener(type, (e) => { clearTimeout(t); resolve(e); }, { once: true }); });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const log = async (reset) => (await (await fetch("/__log" + (reset ? "?reset" : ""))).json());
+const served = (entries, name) => entries.filter((e) => e[0].includes(name)).reduce((n, e) => n + (e[2] - e[1]), 0);
+const MB = 1048576;
+async function run() {
+  const v = document.getElementById("v");
+  await log(true);
+  const size = 25995222;
+
+  // The metadata of a file that has its index first: a part of it comes, not all
+  v.src = "media/big.mp4";
+  await wait(v, "loadedmetadata");
+  await sleep(600);
+  let entries = await log();
+  ok("metadata: it asked for ranges, the first from 0", entries.length >= 1 && entries[0][1] === 0 && entries[0][2] - entries[0][1] <= 4 * MB, JSON.stringify(entries.slice(0, 3)));
+  ok("only a part of the file came (paused, metadata only)", served(entries, "big.mp4") <= 8 * MB, served(entries, "big.mp4") / MB + " MB");
+  ok("size and duration", v.videoWidth === 640 && v.videoHeight === 360 && Math.abs(v.duration - 40) < 0.5, `${v.videoWidth}x${v.videoHeight} ${v.duration}`);
+
+  // playing fetches ahead
+  await v.play();
+  await sleep(1500);
+  entries = await log();
+  ok("playing: it fetches ahead, but not the whole file", served(entries, "big.mp4") > 6 * MB && served(entries, "big.mp4") < 22 * MB, served(entries, "big.mp4") / MB + " MB");
+  ok("buffered reaches ahead of the position", v.buffered.length >= 1 && v.buffered.end(v.buffered.length - 1) > v.currentTime + 3, v.buffered.length ? v.buffered.end(v.buffered.length - 1) : "none");
+  v.pause();
+
+  // a seek far into the file asks for that place, and plays from it
+  await log(true);
+  const seeked = wait(v, "seeked");
+  v.currentTime = 36;
+  await seeked;
+  entries = await log();
+  ok("seek to 36 s: a range from far into the file (not from the start)", entries.some((e) => e[1] > 0.8 * size - 4 * MB) && !entries.some((e) => e[1] === 0), JSON.stringify(entries.slice(0, 4)));
+  ok("seek: little was fetched for it", served(entries, "big.mp4") <= 12 * MB, served(entries, "big.mp4") / MB + " MB");
+  ok("seeked at the target", Math.abs(v.currentTime - 36) < 0.2, v.currentTime);
+  await v.play();
+  await sleep(1000);
+  ok("it plays from there", v.currentTime > 36.6, v.currentTime);
+  v.pause();
+  v.currentTime = 3;
+  await wait(v, "seeked");
+  ok("and back to the start (what was let go of is fetched again)", Math.abs(v.currentTime - 3) < 0.2, v.currentTime);
+
+  // a file with its index at the end
+  await log(true);
+  const t = document.createElement("video");
+  t.muted = true;
+  t.src = "media/big-tail.mp4";
+  await wait(t, "loadedmetadata");
+  entries = await log();
+  ok("index at the end: the metadata came, from a range near the end", t.videoWidth === 640 && Math.abs(t.duration - 40) < 0.5 && entries.some((e) => e[1] > 0.9 * size - 4 * MB), JSON.stringify(entries) + " " + t.videoWidth);
+  ok("index at the end: and not the whole file", served(entries, "big-tail.mp4") < 14 * MB, served(entries, "big-tail.mp4") / MB + " MB");
+  await t.play();
+  await sleep(800);
+  ok("index at the end: it plays", t.currentTime > 0.3, t.currentTime);
+  t.pause();
+
+  // a server that does not do ranges: the whole comes, in one go
+  await log(true);
+  const n = document.createElement("video");
+  n.muted = true;
+  n.src = "media/test.mp4?norange";
+  await wait(n, "loadedmetadata");
+  await wait(n, "canplaythrough");
+  await n.play();
+  await sleep(600);
+  entries = await log();
+  ok("no ranges: the file was fetched whole, in one request, and plays", entries.length === 1 && entries[0][1] === 0 && n.currentTime > 0.2, JSON.stringify(entries) + " " + n.currentTime);
+  n.currentTime = 4;
+  await wait(n, "seeked");
+  ok("no ranges: a seek works (it is all kept)", Math.abs(n.currentTime - 4) < 0.2, n.currentTime);
+
+  // a short file: one range, then the end
+  await log(true);
+  const s = document.createElement("audio");
+  s.src = "media/test.wav";
+  await wait(s, "canplay");
+  ok("a short file is one range", (await log()).length === 1, JSON.stringify(await log()));
+}
+run().then(() => console.log("done"), (e) => { console.log("FAIL exception " + (e && e.stack || e)); console.log("done"); });
+</script>

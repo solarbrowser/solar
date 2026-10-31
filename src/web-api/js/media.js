@@ -206,6 +206,8 @@
     controlN(id, "muted", s.muted);
     controlN(id, "rate", s.rate);
     controlN(id, "loop", !!el.loop);
+    // How much is fetched ahead: a video that is to be played, or whose page asked for it all (preload=auto), a lot; one that only wants its metadata, a little.
+    controlN(id, "ahead", !s.paused || el.preload === "auto" ? 16 * 1048576 : 2 * 1048576);
     if (!s.paused) controlN(id, "play");
     // timeupdate while it plays
     s.timer = setInterval(() => { if (s.id === id && !s.paused) { s.native = JSON.parse(stateN(id)); timeupdate(el, s); } }, 250);
@@ -308,7 +310,7 @@
       s.paused = false;
       s.playWanted = true;
       if (s.deferred) start(this, s);
-      if (s.id >= 0) controlN(s.id, "play");
+      if (s.id >= 0) { controlN(s.id, "ahead", 16 * 1048576); controlN(s.id, "play"); }
       if (s.ended && s.id >= 0) { s.ended = false; }
       return new Promise((resolve, reject) => {
         if (wasPaused) {

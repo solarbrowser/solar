@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <map>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -22,23 +23,44 @@
 // to read and events to take, and a callback that says there is something new (it may be called from any thread).
 namespace solar::media {
 
-// The bytes of a resource, as they come. The network side appends; the player reads (and waits for what has not come yet).
+// The bytes of a resource. Two ways of filling it:
+//  * Append and Finish, for what comes in order and is all kept (a blob, what a page appends to a MediaSource);
+//  * for the network, a fetcher: the stream asks for the piece it wants (an HTTP Range request), the bytes come with Put, and what the reader is not near is let go of, so a
+//    long video is neither downloaded whole nor kept whole. The reader (the player's thread) says where it is by reading; the stream fetches from there, 4 MB at a time, until
+//    it has 16 MB ahead of the reader, and a read of somewhere that is not there (a seek) makes it fetch from that place.
 class ByteStream {
  public:
+  using Fetcher = std::function<void(uint64_t from, uint64_t to, uint64_t generation)>;  // [from, to): the fetch before it is no longer wanted
+
   void Append(const uint8_t* data, size_t size);
-  // The end: `failed` if the transfer broke off.
+  // The end of what is appended: `failed` if the transfer broke off.
   void Finish(bool failed);
-  // The size the server announced (Content-Length), or 0.
+
+  // Ranges. `SetFetcher` makes the stream fetch what is read. The fetcher is called from whichever thread needed the data, and does not wait.
+  void SetFetcher(Fetcher fetcher);
   void SetTotal(uint64_t total);
+  // The server does not do ranges: the whole resource comes in one fetch, from the start, and all of it is kept.
+  void SetSequential();
+  // Bytes of the fetch of this generation, from `offset`.
+  void Put(uint64_t generation, uint64_t offset, const uint8_t* data, size_t size);
+  // The fetch of this generation is over (`ok` false if it broke off; `endOfResource` when the server had nothing at its start: the resource is shorter than thought).
+  void FetchDone(uint64_t generation, bool ok, bool endOfResource = false);
+  // How far ahead of the reader the stream fetches (16 MB by default: a video that is going to be played; a paused one that has not been asked for more keeps less).
+  void SetAhead(uint64_t bytes);
+  // Gives up: nothing more is asked for.
+  void Stop();
 
   // For the reader: up to `size` bytes from `offset`, waiting until there are some or the stream is at its end (0), `interrupted` says to stop (-1), the wait has gone on
-  // for `timeoutMs` (-2), or the stream broke off (-3).
+  // for `timeoutMs` (-2), or the transfer broke off (-3).
   int64_t Read(uint64_t offset, uint8_t* out, size_t size, const std::function<bool()>& interrupted, int timeoutMs = 1000000000);
-  // The size, once it is known (when the stream is finished, or announced), or -1.
+  // The size, once it is known, or -1.
   int64_t Size() const;
-  // Waits until the stream is finished (or interrupted).
-  bool WaitForEnd(const std::function<bool()>& interrupted);
+  // Waits until the size is known (for a stream that is read from its end).
+  bool WaitForSize(const std::function<bool()>& interrupted);
+  // How much was appended in all (for the streams that are appended to).
   uint64_t available() const;
+  // The byte ranges that are kept, in order.
+  std::vector<std::pair<uint64_t, uint64_t>> Coverage() const;
   uint64_t total() const;
   bool finished() const;
   bool failed() const;
@@ -46,11 +68,25 @@ class ByteStream {
   void Poke();
 
  private:
+  void PlanLocked(std::unique_lock<std::mutex>& lock);
+  void EvictLocked();
+  void Request(std::unique_lock<std::mutex>& lock, uint64_t from);
+  uint64_t CoveredFromLocked(uint64_t from) const;  // the first offset at or after `from` that is not kept
+
   mutable std::mutex mutex_;
   std::condition_variable cv_;
-  std::string bytes_;
+  std::map<uint64_t, std::string> chunks_;
+  uint64_t appended_ = 0;
   uint64_t total_ = 0;
-  bool finished_ = false, failed_ = false;
+  bool finished_ = false, failed_ = false, sequential_ = false, stopped_ = false;
+  Fetcher fetcher_;
+  uint64_t generation_ = 0;
+  bool fetching_ = false;
+  uint64_t fetchStart_ = 0, fetchEnd_ = 0;  // [start, end) of the fetch that is going
+  uint64_t readPos_ = 0;
+  int errors_ = 0;
+  size_t kept_ = 0;
+  uint64_t ahead_ = uint64_t{16} << 20;
 };
 
 // One picture of a video, as the sink draws it: B, G, R, A in a byte each (the byte order of the platform's N32 on little-endian machines), opaque.
@@ -108,6 +144,8 @@ class Player {
 
   void Play();
   void Pause();
+  // How much of the resource is fetched ahead of what is decoded (bytes).
+  void SetBufferAhead(uint64_t bytes);
   void Seek(double seconds);
   void SetVolume(double volume);
   void SetMuted(bool muted);

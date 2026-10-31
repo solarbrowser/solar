@@ -6,7 +6,9 @@
 
 #include "solar/web-api/Media.h"
 
+#include <cinttypes>
 #include <cmath>
+#include <cstdio>
 #include <map>
 #include <memory>
 
@@ -41,22 +43,81 @@ std::string Escape(const std::string& s) {
 
 struct State;
 
-// The resource, fetched into the player's stream (as the loop gets it).
-struct Transfer final : net::FetchHandler {
+// The fetches of one resource: ranges of it, one at a time, as the stream asks for them (src/media/Player.h, ByteStream). A fetch is of the loop; the stream asks from
+// the thread of the player, so the request is posted.
+struct Fetcher : std::enable_shared_from_this<Fetcher> {
+  web::FetchHost* host = nullptr;
   std::shared_ptr<media::ByteStream> stream;
-  bool failed = false;
-  void OnResponseHead(const net::HttpResponseHead& head, const url::Url&) override {
-    if (head.status < 200 || head.status >= 300) {
-      failed = true;
-      return;
+  url::Url url;
+  bool dead = false;
+
+  struct Transfer final : net::FetchHandler {
+    Fetcher* owner = nullptr;
+    uint64_t generation = 0, from = 0, pos = 0;
+    bool failed = false, settled = false, ended = false;
+    void OnResponseHead(const net::HttpResponseHead& head, const url::Url&) override {
+      if (head.status == 206) {
+        // Content-Range: bytes first-last/total
+        uint64_t first = 0, last = 0, total = 0;
+        const auto range = head.Header("content-range");
+        if (!range || std::sscanf(std::string(*range).c_str(), "bytes %" SCNu64 "-%" SCNu64 "/%" SCNu64, &first, &last, &total) < 2 || first != from) {
+          failed = true;
+          return;
+        }
+        pos = first;
+        if (total) owner->stream->SetTotal(total);
+      } else if (head.status == 200 && from == 0) {
+        // The server does not do ranges: the whole of it comes now.
+        owner->stream->SetSequential();
+        if (auto length = head.Header("content-length")) owner->stream->SetTotal(static_cast<uint64_t>(std::strtoull(std::string(*length).c_str(), nullptr, 10)));
+        pos = 0;
+      } else if (head.status == 416) {
+        settled = true;
+        owner->stream->FetchDone(generation, true, true);
+      } else {
+        failed = true;
+      }
     }
-    if (auto length = head.Header("content-length")) stream->SetTotal(static_cast<uint64_t>(std::strtoull(std::string(*length).c_str(), nullptr, 10)));
+    void OnBody(std::span<const uint8_t> data) override {
+      if (failed || settled) return;
+      owner->stream->Put(generation, pos, data.data(), data.size());
+      pos += data.size();
+    }
+    void OnEnd() override {
+      ended = true;
+      if (!settled) owner->stream->FetchDone(generation, !failed);
+    }
+    void OnError(std::string_view) override {
+      ended = true;
+      if (!settled) owner->stream->FetchDone(generation, false);
+    }
+  };
+  std::vector<std::unique_ptr<Transfer>> transfers;
+  net::FetchHandle handle;
+
+  // On the loop: [from, to) is fetched, and what was being fetched is let go of.
+  void Start(uint64_t from, uint64_t to, uint64_t generation) {
+    if (dead) return;
+    handle.Cancel();
+    std::erase_if(transfers, [](const std::unique_ptr<Transfer>& t) { return t->ended; });
+    auto transfer = std::make_unique<Transfer>();
+    transfer->owner = this;
+    transfer->generation = generation;
+    transfer->from = from;
+    transfer->pos = from;
+    net::FetchOptions options;
+    options.timeout = std::chrono::minutes(2);
+    options.initiator = host->config().pageUrl;
+    options.headers.emplace_back("Accept", "*/*");
+    options.headers.emplace_back("Range", "bytes=" + std::to_string(from) + "-" + std::to_string(to - 1));
+    handle = host->config().client->Fetch(url, *transfer, std::move(options));
+    transfers.push_back(std::move(transfer));
   }
-  void OnBody(std::span<const uint8_t> data) override {
-    if (!failed) stream->Append(data.data(), data.size());
+  void Stop() {
+    dead = true;
+    handle.Cancel();
+    stream->Stop();
   }
-  void OnEnd() override { stream->Finish(failed); }
-  void OnError(std::string_view) override { stream->Finish(true); }
 };
 
 // A MediaSource of the page: its buffers, and the callback that tells script that one of them finished what it was doing.
@@ -70,8 +131,7 @@ struct MseItem {
 struct Item {
   std::shared_ptr<media::Player> player;
   std::shared_ptr<media::ByteStream> stream;
-  std::unique_ptr<Transfer> transfer;
-  net::FetchHandle handle;
+  std::shared_ptr<Fetcher> fetcher;
   qe::Persistent callback;
   std::shared_ptr<std::atomic<bool>> pending = std::make_shared<std::atomic<bool>>(false);
   std::vector<dom::Element*> elements;
@@ -98,7 +158,7 @@ struct State : std::enable_shared_from_this<State> {
     bufferIndex.clear();
   }
   void Release(Item& item) {
-    item.handle.Cancel();
+    if (item.fetcher) item.fetcher->Stop();
     for (dom::Element* element : item.elements) media::DetachPlayer(element);
     item.elements.clear();
     if (item.stream) item.stream->Finish(true);
@@ -178,13 +238,14 @@ Value Open(Context& ctx, Value, qe::Args args, Value) {
       item->stream->Finish(true);
     }
   } else if (auto parsed = url::Parse(address); parsed && (parsed->scheme == "http" || parsed->scheme == "https")) {
-    item->transfer = std::make_unique<Transfer>();
-    item->transfer->stream = item->stream;
-    net::FetchOptions options;
-    options.timeout = std::chrono::hours(12);
-    options.initiator = host->config().pageUrl;
-    options.headers.emplace_back("Accept", "*/*");
-    item->handle = host->config().client->Fetch(*parsed, *item->transfer, std::move(options));
+    item->fetcher = std::make_shared<Fetcher>();
+    item->fetcher->host = host;
+    item->fetcher->stream = item->stream;
+    item->fetcher->url = *parsed;
+    std::shared_ptr<Fetcher> fetcher = item->fetcher;
+    item->stream->SetFetcher([fetcher](uint64_t from, uint64_t to, uint64_t generation) {
+      fetcher->host->config().loop->Post([fetcher, from, to, generation] { fetcher->Start(from, to, generation); });
+    });
   } else {
     item->stream->Finish(true);
   }
@@ -207,6 +268,7 @@ Value Control(Context& ctx, Value, qe::Args args, Value) {
   else if (what == "muted") item->player->SetMuted(qe::ToBoolean(value));
   else if (what == "rate") item->player->SetRate(qe::ToNumber(ctx, value));
   else if (what == "loop") item->player->SetLoop(qe::ToBoolean(value));
+  else if (what == "ahead") item->player->SetBufferAhead(static_cast<uint64_t>(qe::ToNumber(ctx, value)));
   else if (what == "close") {
     const uint32_t id = qe::ToUint32(ctx, args[0]);
     state->Release(*item);

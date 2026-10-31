@@ -31,10 +31,18 @@ int PlayingCount() { return g_playing.load(); }
 uint64_t FrameCounter() { return g_frames.load(); }
 // ---- ByteStream ----
 
+namespace {
+constexpr uint64_t kChunk = uint64_t{4} << 20;  // what one Range request asks for
+constexpr size_t kKeep = size_t{96} << 20;      // what is kept, at most (the part nearest the reader stays)
+}  // namespace
+
 void ByteStream::Append(const uint8_t* data, size_t size) {
   {
     std::lock_guard lock(mutex_);
-    bytes_.append(reinterpret_cast<const char*>(data), size);
+    std::string& chunk = chunks_[0];
+    chunk.append(reinterpret_cast<const char*>(data), size);
+    appended_ += size;
+    kept_ += size;
   }
   cv_.notify_all();
 }
@@ -48,45 +56,240 @@ void ByteStream::Finish(bool failed) {
   cv_.notify_all();
 }
 
-void ByteStream::SetTotal(uint64_t total) {
+void ByteStream::SetFetcher(Fetcher fetcher) {
   std::lock_guard lock(mutex_);
-  total_ = total;
+  fetcher_ = std::move(fetcher);
+}
+
+void ByteStream::SetTotal(uint64_t total) {
+  {
+    std::lock_guard lock(mutex_);
+    total_ = total;
+  }
+  cv_.notify_all();
+}
+
+void ByteStream::SetSequential() {
+  std::lock_guard lock(mutex_);
+  sequential_ = true;
+}
+
+void ByteStream::SetAhead(uint64_t bytes) {
+  {
+    std::unique_lock lock(mutex_);
+    ahead_ = bytes;
+    PlanLocked(lock);
+  }
+  cv_.notify_all();
+}
+
+void ByteStream::Stop() {
+  {
+    std::lock_guard lock(mutex_);
+    stopped_ = true;
+    fetcher_ = nullptr;
+  }
+  cv_.notify_all();
 }
 
 void ByteStream::Poke() { cv_.notify_all(); }
 
+// The first offset at or after `from` that is not kept.
+uint64_t ByteStream::CoveredFromLocked(uint64_t from) const {
+  uint64_t at = from;
+  for (auto it = chunks_.upper_bound(at); ; ) {
+    if (it == chunks_.begin()) break;
+    auto before = std::prev(it);
+    const uint64_t end = before->first + before->second.size();
+    if (end > at && before->first <= at) {
+      at = end;
+      it = chunks_.upper_bound(at);
+      continue;
+    }
+    break;
+  }
+  return at;
+}
+
+// Starts a fetch of [from, from + 4 MB) (the one that is going is let go of): the fetcher is called without the lock.
+void ByteStream::Request(std::unique_lock<std::mutex>& lock, uint64_t from) {
+  if (!fetcher_ || stopped_) return;
+  uint64_t to = from + kChunk;
+  if (total_ && to > total_) to = total_;
+  if (to <= from) return;
+  fetching_ = true;
+  fetchStart_ = from;
+  fetchEnd_ = to;
+  const uint64_t generation = ++generation_;
+  Fetcher fetcher = fetcher_;
+  lock.unlock();
+  fetcher(from, to, generation);
+  lock.lock();
+}
+
+// With nothing going: the next piece is fetched if the reader has less than 16 MB ahead.
+void ByteStream::PlanLocked(std::unique_lock<std::mutex>& lock) {
+  if (!fetcher_ || stopped_ || sequential_ || fetching_ || failed_) return;
+  const uint64_t gap = CoveredFromLocked(readPos_);
+  if (total_ && gap >= total_) return;
+  if (gap - readPos_ >= ahead_) return;
+  Request(lock, gap);
+}
+
+void ByteStream::EvictLocked() {
+  if (sequential_ || !fetcher_) return;
+  while (kept_ > kKeep) {
+    // The chunk farthest from the reader, but not the one it is in, nor the one that is coming.
+    auto far = chunks_.end();
+    uint64_t farthest = 0;
+    for (auto it = chunks_.begin(); it != chunks_.end(); ++it) {
+      const uint64_t start = it->first, end = it->first + it->second.size();
+      if ((readPos_ >= start && readPos_ < end) || (fetching_ && start == fetchStart_)) continue;
+      const uint64_t distance = readPos_ < start ? start - readPos_ : readPos_ - end;
+      if (far == chunks_.end() || distance > farthest) {
+        far = it;
+        farthest = distance;
+      }
+    }
+    if (far == chunks_.end()) return;
+    kept_ -= far->second.size();
+    chunks_.erase(far);
+  }
+}
+
+void ByteStream::Put(uint64_t generation, uint64_t offset, const uint8_t* data, size_t size) {
+  {
+    std::unique_lock lock(mutex_);
+    if (generation != generation_ || stopped_) return;
+    // The bytes join the chunk that begins where this fetch began (made if there is none).
+    std::string& chunk = chunks_[fetchStart_];
+    if (offset != fetchStart_ + chunk.size()) return;  // (out of place: dropped)
+    chunk.append(reinterpret_cast<const char*>(data), size);
+    kept_ += size;
+    if (sequential_) appended_ += size;
+    EvictLocked();
+  }
+  cv_.notify_all();
+}
+
+void ByteStream::FetchDone(uint64_t generation, bool ok, bool endOfResource) {
+  {
+    std::unique_lock lock(mutex_);
+    if (generation != generation_ || stopped_) return;
+    fetching_ = false;
+    if (sequential_) {
+      finished_ = true;
+      failed_ = !ok;
+    } else if (endOfResource) {
+      if (fetchStart_ > 0 && (!total_ || total_ > fetchStart_)) total_ = fetchStart_;
+    } else if (!ok) {
+      if (++errors_ >= 3) {
+        failed_ = true;
+        finished_ = true;
+      }
+    } else {
+      errors_ = 0;
+      // The chunk is joined with the one that follows if they meet.
+      auto it = chunks_.find(fetchStart_);
+      if (it != chunks_.end()) {
+        auto next = std::next(it);
+        while (next != chunks_.end() && next->first <= it->first + it->second.size()) {
+          const uint64_t end = it->first + it->second.size();
+          if (next->first + next->second.size() > end) it->second.append(next->second, end - next->first, std::string::npos);
+          kept_ -= std::min<size_t>(kept_, next->second.size());
+          kept_ += 0;
+          next = chunks_.erase(next);
+        }
+        // (What was counted for the joined chunks is the size of what is there now.)
+        kept_ = 0;
+        for (const auto& [start, bytes] : chunks_) kept_ += bytes.size();
+      }
+    }
+    PlanLocked(lock);
+  }
+  cv_.notify_all();
+}
+
 int64_t ByteStream::Read(uint64_t offset, uint8_t* out, size_t size, const std::function<bool()>& interrupted, int timeoutMs) {
   std::unique_lock lock(mutex_);
   const auto deadline = Clock::now() + std::chrono::milliseconds(timeoutMs);
+  readPos_ = offset;
   for (;;) {
-    if (offset < bytes_.size()) {
-      const size_t n = std::min<uint64_t>(size, bytes_.size() - offset);
-      std::memcpy(out, bytes_.data() + offset, n);
-      return static_cast<int64_t>(n);
+    auto it = chunks_.upper_bound(offset);
+    if (it != chunks_.begin()) {
+      --it;
+      const uint64_t end = it->first + it->second.size();
+      if (it->first <= offset && offset < end) {
+        const size_t n = static_cast<size_t>(std::min<uint64_t>(size, end - offset));
+        std::memcpy(out, it->second.data() + (offset - it->first), n);
+        readPos_ = offset + n;
+        // (The reader has moved on: more is fetched if there is room ahead.)
+        if (fetcher_ && !fetching_) PlanLocked(lock);
+        return static_cast<int64_t>(n);
+      }
     }
-    if (finished_) return failed_ ? -3 : 0;
+    if (failed_ && (finished_ || !fetcher_)) return -3;
+    if (fetcher_) {
+      if (total_ && offset >= total_) return 0;
+      if (!sequential_) {
+        // Wanted: a fetch that will bring it. One that is going is left to if it is about to (the offset is at or just ahead of what it has brought).
+        const uint64_t brought = fetchStart_ + (chunks_.count(fetchStart_) ? chunks_[fetchStart_].size() : 0);
+        const bool coming = fetching_ && offset >= fetchStart_ && offset < std::max(brought, fetchStart_) + (uint64_t{256} << 10) && offset < fetchEnd_;
+        if (!coming) Request(lock, offset);
+      }
+    } else if (finished_) {
+      return failed_ ? -3 : 0;
+    }
     if (interrupted && interrupted()) return -1;
-    if (cv_.wait_until(lock, deadline) == std::cv_status::timeout && offset >= bytes_.size() && !finished_) return -2;
+    if (stopped_) return -1;
+    if (cv_.wait_until(lock, deadline) == std::cv_status::timeout) {
+      // (Looked at again, then given up.)
+      auto again = chunks_.upper_bound(offset);
+      bool there = false;
+      if (again != chunks_.begin()) {
+        --again;
+        there = again->first <= offset && offset < again->first + again->second.size();
+      }
+      if (!there && !(finished_ && !fetcher_)) return -2;
+    }
   }
 }
 
 int64_t ByteStream::Size() const {
   std::lock_guard lock(mutex_);
-  if (finished_) return static_cast<int64_t>(bytes_.size());
-  return total_ ? static_cast<int64_t>(total_) : -1;
+  if (finished_ && !fetcher_) return static_cast<int64_t>(appended_);
+  if (total_) return static_cast<int64_t>(total_);
+  if (finished_) return static_cast<int64_t>(appended_);
+  return -1;
 }
 
-bool ByteStream::WaitForEnd(const std::function<bool()>& interrupted) {
+bool ByteStream::WaitForSize(const std::function<bool()>& interrupted) {
   std::unique_lock lock(mutex_);
-  while (!finished_) {
+  while (!((finished_ && !fetcher_) || total_ || finished_)) {
     if (interrupted && interrupted()) return false;
     cv_.wait_for(lock, std::chrono::milliseconds(50));
   }
   return true;
 }
 
-uint64_t ByteStream::available() const { std::lock_guard lock(mutex_); return bytes_.size(); }
-uint64_t ByteStream::total() const { std::lock_guard lock(mutex_); return finished_ ? bytes_.size() : total_; }
+uint64_t ByteStream::available() const { std::lock_guard lock(mutex_); return appended_; }
+
+std::vector<std::pair<uint64_t, uint64_t>> ByteStream::Coverage() const {
+  std::lock_guard lock(mutex_);
+  std::vector<std::pair<uint64_t, uint64_t>> out;
+  for (const auto& [start, bytes] : chunks_) {
+    const uint64_t end = start + bytes.size();
+    if (!out.empty() && start <= out.back().second) out.back().second = std::max(out.back().second, end);
+    else out.push_back({start, end});
+  }
+  return out;
+}
+
+uint64_t ByteStream::total() const {
+  std::lock_guard lock(mutex_);
+  if (total_) return total_;
+  return finished_ || sequential_ ? appended_ : 0;
+}
 bool ByteStream::finished() const { std::lock_guard lock(mutex_); return finished_; }
 bool ByteStream::failed() const { std::lock_guard lock(mutex_); return failed_; }
 
@@ -139,6 +342,10 @@ void Player::Play() {
   impl_->cv.notify_all();
   if (impl_->stream) impl_->stream->Poke();
   impl_->Notify();
+}
+
+void Player::SetBufferAhead(uint64_t bytes) {
+  if (impl_->stream) impl_->stream->SetAhead(bytes);
 }
 
 void Player::Pause() {

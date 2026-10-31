@@ -191,8 +191,10 @@ struct Player::Impl {
       case SEEK_SET: target = offset; break;
       case SEEK_CUR: target = static_cast<int64_t>(self->ioPos) + offset; break;
       case SEEK_END: {
-        if (!self->stream->WaitForEnd([self] { return self->Interrupted(); })) return AVERROR_EXIT;
-        target = self->stream->Size() + offset;
+        if (!self->stream->WaitForSize([self] { return self->Interrupted(); })) return AVERROR_EXIT;
+        const int64_t size = self->stream->Size();
+        if (size < 0) return -1;
+        target = size + offset;
         break;
       }
       default: return -1;
@@ -396,10 +398,15 @@ struct Player::Impl {
     st.buffered.clear();
     if (mse) {
       st.buffered = mse->Buffered();
-    } else if (!std::isnan(st.duration) && st.duration > 0) {
+    } else if (stream && !std::isnan(st.duration) && st.duration > 0) {
+      // (The time of a byte is taken as proportional: the ranges of bytes that are kept, as ranges of the duration.)
       const uint64_t total = stream->total();
-      const double fraction = total ? std::min(1.0, static_cast<double>(stream->available()) / static_cast<double>(total)) : (stream->finished() ? 1.0 : 0.0);
-      if (fraction > 0) st.buffered.push_back({0, st.duration * fraction});
+      if (total) {
+        for (const auto& [from, to] : stream->Coverage()) {
+          const double start = st.duration * static_cast<double>(from) / static_cast<double>(total), end = st.duration * static_cast<double>(std::min(to, total)) / static_cast<double>(total);
+          if (end > start) st.buffered.push_back({start, end});
+        }
+      }
     } else if (decodedEnd > 0) {
       st.buffered.push_back({0, decodedEnd});
     }

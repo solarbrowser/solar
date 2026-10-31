@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 # A server for tests/web-api/websocket.html: serves the tests directory over HTTP and speaks WebSocket (RFC 6455) on the same port.
 #   python3 tests/web-api/wsserver.py [port]   (then open http://127.0.0.1:<port>/websocket.html)
-import base64, hashlib, os, socket, struct, sys, threading, zlib
+import base64, hashlib, json, os, socket, struct, sys, threading, zlib
+
+LOG = []  # [path, from, to) of the files that were given, for /__log
 
 GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -126,9 +128,27 @@ def serve(c):
             websocket(c, headers, path.split("?")[0]); return
         if path.startswith("/sse"):
             sse(c, path, headers); return
+        if path.startswith("/__log"):
+            body = json.dumps(LOG).encode()
+            if "reset" in path: LOG.clear()
+            c.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + str(len(body)).encode() + b"\r\nConnection: close\r\n\r\n" + body); return
         name = os.path.join(ROOT, path.lstrip("/").split("?")[0])
         if os.path.isfile(name):
             body = open(name, "rb").read()
+            # Ranges: a file can be asked for a piece (media does), and what was asked for and given is logged (/__log) for the tests to look at.
+            wanted = headers.get("range", "")
+            if wanted.startswith("bytes=") and "norange" not in path:
+                first, _, last = wanted[6:].partition("-")
+                a = int(first) if first else max(0, len(body) - int(last))
+                z = min(len(body) - 1, int(last)) if first and last else len(body) - 1
+                if a >= len(body):
+                    c.sendall(b"HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */" + str(len(body)).encode() + b"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"); return
+                piece = body[a:z + 1]
+                LOG.append([path, a, z + 1])
+                types = {".mp4": b"video/mp4", ".webm": b"video/webm", ".ogg": b"audio/ogg", ".wav": b"audio/wav"}
+                kind = types.get(os.path.splitext(name)[1], b"application/octet-stream")
+                c.sendall(b"HTTP/1.1 206 Partial Content\r\nContent-Type: " + kind + b"\r\nAccept-Ranges: bytes\r\nContent-Range: bytes %d-%d/%d\r\nContent-Length: %d\r\nConnection: close\r\n\r\n" % (a, z, len(body), len(piece)) + piece); return
+            LOG.append([path, 0, len(body)])
             types = {".js": b"text/javascript", ".mp4": b"video/mp4", ".webm": b"video/webm", ".ogg": b"audio/ogg", ".wav": b"audio/wav", ".mp3": b"audio/mpeg", ".css": b"text/css"}
             kind = types.get(os.path.splitext(name)[1], b"text/html; charset=utf-8")
             c.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: " + kind + b"\r\nContent-Length: " + str(len(body)).encode() + b"\r\nConnection: close\r\n\r\n" + body)
