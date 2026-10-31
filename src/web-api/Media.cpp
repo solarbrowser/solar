@@ -125,7 +125,6 @@ struct MseItem {
   std::shared_ptr<media::MseSource> source;
   std::map<uint32_t, std::shared_ptr<media::MseBuffer>> buffers;
   qe::Persistent callback;
-  std::shared_ptr<std::atomic<bool>> pending = std::make_shared<std::atomic<bool>>(false);
 };
 
 struct Item {
@@ -133,7 +132,6 @@ struct Item {
   std::shared_ptr<media::ByteStream> stream;
   std::shared_ptr<Fetcher> fetcher;
   qe::Persistent callback;
-  std::shared_ptr<std::atomic<bool>> pending = std::make_shared<std::atomic<bool>>(false);
   std::vector<dom::Element*> elements;
   int lastWidth = 0, lastHeight = 0;  // the size the elements were laid out with
 };
@@ -181,6 +179,49 @@ State* StateOf(Context& ctx) {
   return guard->state.get();
 }
 
+
+// What the player's thread (or a MediaSource's) calls when it has something to tell: one task of the loop for all that happened meanwhile, which looks at the player's size (a
+// video that has one now, or another, is laid out again) and calls the script's callback.
+enum class Kind { Player, Source };
+std::function<void()> Notifier(State* state, uint32_t id, Kind kind) {
+  auto pending = std::make_shared<std::atomic<bool>>(false);
+  web::FetchHost* host = state->host;
+  std::shared_ptr<bool> alive = state->alive;
+  return [state, id, kind, pending, host, alive] {
+    if (pending->exchange(true)) return;
+    host->config().loop->Post([state, id, kind, pending, host, alive] {
+      pending->store(false);
+      if (!*alive) return;
+      Context& c = *state->ctx;
+      qe::Persistent* callback = nullptr;
+      if (kind == Kind::Source) {
+        const auto found = state->sources.find(id);
+        if (found == state->sources.end()) return;
+        callback = &found->second->callback;
+      } else {
+        const auto found = state->items.find(id);
+        if (found == state->items.end()) return;
+        Item& item = *found->second;
+        if (item.player && !item.elements.empty()) {
+          const media::PlayerState s = item.player->State();
+          if (s.videoWidth != item.lastWidth || s.videoHeight != item.lastHeight) {
+            item.lastWidth = s.videoWidth;
+            item.lastHeight = s.videoHeight;
+            for (dom::Element* element : item.elements) {
+              dom::NoteDamage(element, dom::kDamageAttributes);
+              dom::NoteTreeChangeAt(element);
+            }
+          }
+        }
+        callback = &item.callback;
+      }
+      qe::Call(c, callback->Get(), qe::Undefined());
+      if (qe::HasException(c)) c.clear_exception();
+      host->config().afterScript();
+    });
+  };
+}
+
 Item* ItemOf(State& state, Context& ctx, const Value& id) {
   const auto found = state.items.find(qe::ToUint32(ctx, id));
   return found == state.items.end() ? nullptr : found->second.get();
@@ -202,33 +243,7 @@ Value Open(Context& ctx, Value, qe::Args args, Value) {
   item->stream = std::make_shared<media::ByteStream>();
   item->callback = qe::Persistent(ctx, args[1]);
   const uint32_t id = state->next++;
-  web::FetchHost* host = state->host;
-  std::shared_ptr<bool> alive = state->alive;
-  State* raw = state;
-  std::shared_ptr<std::atomic<bool>> pending = item->pending;
-  item->player = media::Player::Create(item->stream, [host, id, alive, raw, pending] {
-    // (From the player's thread: the script is told on the loop's, once for all the changes there were meanwhile.)
-    if (pending->exchange(true)) return;
-    host->config().loop->Post([host, id, alive, raw, pending] {
-      pending->store(false);
-      if (!*alive) return;
-      const auto found = raw->items.find(id);
-      if (found == raw->items.end()) return;
-      Context& c = *raw->ctx;
-      // A video that has a size now (or another) is laid out again.
-      if (found->second->player && !found->second->elements.empty()) {
-        const media::PlayerState state = found->second->player->State();
-        if (state.videoWidth != found->second->lastWidth || state.videoHeight != found->second->lastHeight) {
-          found->second->lastWidth = state.videoWidth;
-          found->second->lastHeight = state.videoHeight;
-          for (dom::Element* element : found->second->elements) { dom::NoteDamage(element, dom::kDamageAttributes); dom::NoteTreeChangeAt(element); }
-        }
-      }
-      qe::Call(c, found->second->callback.Get(), qe::Undefined());
-      if (qe::HasException(c)) c.clear_exception();
-      host->config().afterScript();
-    });
-  });
+  item->player = media::Player::Create(item->stream, Notifier(state, id, Kind::Player));
   if (address.rfind("blob:", 0) == 0) {
     if (auto blob = web::LookupBlobUrl(address)) {
       item->stream->SetTotal(blob->data->size());
@@ -239,7 +254,7 @@ Value Open(Context& ctx, Value, qe::Args args, Value) {
     }
   } else if (auto parsed = url::Parse(address); parsed && (parsed->scheme == "http" || parsed->scheme == "https")) {
     item->fetcher = std::make_shared<Fetcher>();
-    item->fetcher->host = host;
+    item->fetcher->host = state->host;
     item->fetcher->stream = item->stream;
     item->fetcher->url = *parsed;
     std::shared_ptr<Fetcher> fetcher = item->fetcher;
@@ -344,23 +359,7 @@ Value MseCreate(Context& ctx, Value, qe::Args args, Value) {
   auto item = std::make_unique<MseItem>();
   item->callback = qe::Persistent(ctx, args[0]);
   const uint32_t id = state->next++;
-  web::FetchHost* host = state->host;
-  std::shared_ptr<bool> alive = state->alive;
-  State* raw = state;
-  std::shared_ptr<std::atomic<bool>> pending = item->pending;
-  item->source = media::MseSource::Create([host, id, alive, raw, pending] {
-    if (pending->exchange(true)) return;
-    host->config().loop->Post([host, id, alive, raw, pending] {
-      pending->store(false);
-      if (!*alive) return;
-      const auto found = raw->sources.find(id);
-      if (found == raw->sources.end()) return;
-      Context& c = *raw->ctx;
-      qe::Call(c, found->second->callback.Get(), qe::Undefined());
-      if (qe::HasException(c)) c.clear_exception();
-      host->config().afterScript();
-    });
-  });
+  item->source = media::MseSource::Create(Notifier(state, id, Kind::Source));
   state->sources[id] = std::move(item);
   return qe::FromNumber(id);
 }
@@ -449,31 +448,7 @@ Value OpenMse(Context& ctx, Value, qe::Args args, Value) {
   auto item = std::make_unique<Item>();
   item->callback = qe::Persistent(ctx, args[1]);
   const uint32_t id = state->next++;
-  web::FetchHost* host = state->host;
-  std::shared_ptr<bool> alive = state->alive;
-  State* raw = state;
-  std::shared_ptr<std::atomic<bool>> pending = item->pending;
-  item->player = media::Player::CreateMse(source->second->source, [host, id, alive, raw, pending] {
-    if (pending->exchange(true)) return;
-    host->config().loop->Post([host, id, alive, raw, pending] {
-      pending->store(false);
-      if (!*alive) return;
-      const auto found = raw->items.find(id);
-      if (found == raw->items.end()) return;
-      Context& c = *raw->ctx;
-      if (found->second->player && !found->second->elements.empty()) {
-        const media::PlayerState s = found->second->player->State();
-        if (s.videoWidth != found->second->lastWidth || s.videoHeight != found->second->lastHeight) {
-          found->second->lastWidth = s.videoWidth;
-          found->second->lastHeight = s.videoHeight;
-          for (dom::Element* element : found->second->elements) { dom::NoteDamage(element, dom::kDamageAttributes); dom::NoteTreeChangeAt(element); }
-        }
-      }
-      qe::Call(c, found->second->callback.Get(), qe::Undefined());
-      if (qe::HasException(c)) c.clear_exception();
-      host->config().afterScript();
-    });
-  });
+  item->player = media::Player::CreateMse(source->second->source, Notifier(state, id, Kind::Player));
   state->items[id] = std::move(item);
   return qe::FromNumber(id);
 }
