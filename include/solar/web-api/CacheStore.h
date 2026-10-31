@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <string>
+
 #include "quanta/Embed.h"
 
 // The Cache API (src/web-api/js/cache.js) keeps what it caches here, in the program and not in a realm, so that a page and a service worker of one origin see the same
@@ -16,5 +18,9 @@ namespace solar::webapi {
 // Defines in a realm __solarCacheNames, __solarCacheOpen, __solarCacheHas, __solarCacheDelete, __solarCacheMetas, __solarCacheBody, __solarCachePut, __solarCacheRemove,
 // __solarCacheFlush, __solarKvRead and __solarKvWrite.
 void InstallCacheStoreNatives(Quanta::Embed::Realm& realm);
+
+// Whether the origin has a service worker registered whose scope begins the address (the program does not start fetching what the page will ask for before the page's
+// worker is there to be asked).
+bool HasServiceWorkerFor(const std::string& origin, const std::string& url);
 
 }  // namespace solar::webapi

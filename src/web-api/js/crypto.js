@@ -143,7 +143,41 @@
     void op;
     return { iv: new Uint8Array(0), aad: new Uint8Array(0), tag: 16 };
   };
+  // AES-CTR counts in the low `length` bits of the counter block only, and wraps there without carrying into the rest; OpenSSL counts in all 128. So the data is cut where
+  // the low bits wrap, and each piece is run with the counter as it is by then.
+  const aesCtr = (alg, key, data) => {
+    const counter = copy(alg.counter, "counter");
+    const bits = alg.length;
+    if (bits >= 128) return need(aesN(alg.name, 1, secret.get(key), counter, data, new Uint8Array(0), 16));
+    const low = (c) => { let v = 0n; for (let i = 0; i < 16; i++) v = (v << 8n) | BigInt(c[i]); return v & ((1n << BigInt(bits)) - 1n); };
+    const clear = (c) => {
+      const out = new Uint8Array(c);
+      for (let i = 0; i < bits; i++) out[15 - (i >> 3)] &= ~(1 << (i & 7));
+      return out;
+    };
+    const room = 1n << BigInt(bits);
+    const parts = [];
+    let rest = data, current = counter;
+    while (rest.length) {
+      const blocks = BigInt(Math.ceil(rest.length / 16));
+      const until = room - low(current);
+      const take = blocks <= until ? rest.length : Number(until) * 16;
+      parts.push(new Uint8Array(need(aesN(alg.name, 1, secret.get(key), current, rest.subarray(0, take), new Uint8Array(0), 16))));
+      rest = rest.subarray(take);
+      current = clear(current);
+    }
+    const out = new Uint8Array(data.length);
+    let at = 0;
+    for (const part of parts) { out.set(part, at); at += part.length; }
+    return out.buffer;
+  };
   const aesRun = (alg, key, data, encrypt) => {
+    if (alg.name === "AES-CTR") {
+      const length = alg.length;
+      if (!(length >= 1 && length <= 128)) throw fail("OperationError", "The length must be between 1 and 128.");
+      if (copy(alg.counter, "counter").length !== 16) throw fail("OperationError", "The counter must be 16 bytes long.");
+      return aesCtr(alg, key, data);
+    }
     const p = aesParams(alg, encrypt);
     return need(aesN(alg.name, encrypt ? 1 : 0, secret.get(key), p.iv, data, p.aad, p.tag));
   };

@@ -1,6 +1,8 @@
 <!doctype html>
 <meta charset="utf-8">
 <title>Service worker</title>
+<link rel="stylesheet" href="/virtual.css">
+<script src="/virtual.js"></script>
 <script>
 // Needs tests/web-api/wsserver.py and SOLAR_IDB_DIR set to a scratch directory. Open it as it is, then again with #again (the worker is kept, and controls the page from the start),
 // then with #clean (unregisters).
@@ -45,6 +47,8 @@ async function run() {
   }
   if (location.hash === "#again") {
     ok("controlled from the start", sw.controller !== null, "");
+    ok("a script the worker made ran", window.__fromWorker === 1, String(window.__fromWorker));
+    ok("a style sheet the worker made applies", getComputedStyle(document.documentElement).getPropertyValue("--from-worker").trim() === "1", getComputedStyle(document.documentElement).getPropertyValue("--from-worker"));
     await checks();
     return;
   }

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # A server for tests/web-api/websocket.html: serves the tests directory over HTTP and speaks WebSocket (RFC 6455) on the same port.
 #   python3 tests/web-api/wsserver.py [port]   (then open http://127.0.0.1:<port>/websocket.html)
-import base64, hashlib, os, socket, struct, sys, threading
+import base64, hashlib, os, socket, struct, sys, threading, zlib
 
 GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -30,6 +30,7 @@ def read_frame(c):
     mask = read_exact(c, 4) if b1 & 0x80 else None
     data = read_exact(c, n)
     if mask: data = bytes(b ^ mask[i & 3] for i, b in enumerate(data))
+    read_frame.rsv1 = bool(b0 & 0x40)
     return bool(b0 & 0x80), b0 & 15, data
 
 def websocket(c, headers, path):
@@ -37,7 +38,27 @@ def websocket(c, headers, path):
     accept = base64.b64encode(hashlib.sha1(headers["sec-websocket-key"].encode() + GUID).digest()).decode()
     reply = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " + accept + "\r\n"
     if protocols: reply += "Sec-WebSocket-Protocol: " + protocols[-1] + "\r\n"
+    if path == "/deflate" and "permessage-deflate" in headers.get("sec-websocket-extensions", ""):
+        reply += "Sec-WebSocket-Extensions: permessage-deflate\r\n"
     c.sendall((reply + "\r\n").encode())
+    if path == "/deflate":
+        # permessage-deflate: the extension is taken, every message is deflated (context kept), and what the page sent is inflated and echoed back
+        c.sendall(frame(1, b"deflate-ready"))
+        inflater = zlib.decompressobj(-15)
+        deflater = zlib.compressobj(wbits=-15)
+        while True:
+            fin, op, data = read_frame(c)
+            if op == 8:
+                c.sendall(frame(8, data[:2] if data else b"")); return
+            if op in (9, 10): continue
+            compressed = read_frame.rsv1
+            text = inflater.decompress(data + b"\xff\xff"[:0] + (b"\x00\x00\xff\xff" if compressed else b"")) if compressed else data
+            packed = deflater.compress(b"echo:" + text) + deflater.flush(zlib.Z_SYNC_FLUSH)
+            head = bytes([0xC0 | op])
+            n = len(packed[:-4])
+            body = packed[:-4]
+            head += bytes([n]) if n < 126 else bytes([126]) + struct.pack(">H", n) if n < 65536 else bytes([127]) + struct.pack(">Q", n)
+            c.sendall(head + body)
     if path == "/refuse-close":
         c.sendall(frame(8, struct.pack(">H", 4001) + b"bye")); return
     if path == "/drop":

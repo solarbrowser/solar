@@ -117,6 +117,24 @@ async function run() {
   ok("send while CONNECTING is an InvalidStateError", t && t.name === "InvalidStateError", String(t));
   w8.close();
 
+  // permessage-deflate
+  const wd = new WebSocket(base + "/deflate");
+  const ready = wait(wd, "message");
+  await wait(wd, "open");
+  ok("permessage-deflate is negotiated", wd.extensions === "permessage-deflate", wd.extensions);
+  await ready;
+  const long = "compress me please ".repeat(100);
+  wd.send(long);
+  m = await wait(wd, "message");
+  ok("a deflated message goes and comes back (context kept)", m.data === "echo:" + long, m.data.slice(0, 40));
+  wd.send(long + "second");
+  m = await wait(wd, "message");
+  ok("the next message too", m.data === "echo:" + long + "second", m.data.slice(0, 40));
+  wd.send("short");
+  ok("a short message (not deflated) is echoed", (await wait(wd, "message")).data === "echo:short", "");
+  wd.close();
+  await wait(wd, "close");
+
   // a worker has it too
   const worker = new Worker(URL.createObjectURL(new Blob([`
     const ws = new WebSocket(${JSON.stringify(base + "/echo")});

@@ -321,6 +321,22 @@ Value KvWrite(Context& ctx, Value, qe::Args args, Value) {
 
 }  // namespace
 
+bool HasServiceWorkerFor(const std::string& origin, const std::string& url) {
+  if (!Persistent(origin)) return false;
+  std::ifstream in(KvFile(origin, "sw-registrations"), std::ios::binary);
+  if (!in) return false;
+  std::stringstream buffer;
+  buffer << in.rdbuf();
+  const std::string text = buffer.str();
+  // (The scopes are the "scope" strings of the file; one that begins the address is a registration for it.)
+  for (size_t at = text.find("\"scope\":\""); at != std::string::npos; at = text.find("\"scope\":\"", at + 1)) {
+    const size_t from = at + 9, end = text.find('"', from);
+    if (end == std::string::npos) break;
+    if (url.compare(0, end - from, text, from, end - from) == 0) return true;
+  }
+  return false;
+}
+
 void InstallCacheStoreNatives(qe::Realm& realm) {
   Context& ctx = realm.GetContext();
   qe::DefineGlobalFunction(ctx, "__solarCacheNames", Names, 1);

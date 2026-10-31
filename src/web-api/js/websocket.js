@@ -126,7 +126,12 @@
         this.#queue = this.#queue.then(() => { if (this.#state === OPEN) send(id, typeof copy === "string" ? copy : copy); });
         return;
       }
-      send(this.#id, typeof data === "string" ? data : ArrayBuffer.isView(data) || data instanceof ArrayBuffer ? data : String(data));
+      const payload = typeof data === "string" ? data : ArrayBuffer.isView(data) || data instanceof ArrayBuffer ? data : String(data);
+      send(this.#id, payload);
+      // (The network takes what is sent on the loop's next turn: until then it is buffered.)
+      const size = typeof payload === "string" ? new TextEncoder().encode(payload).length : payload.byteLength;
+      this.#buffered += size;
+      setTimeout(() => { this.#buffered -= size; }, 0);
     }
     #queue = null;
     close(code, reason) {

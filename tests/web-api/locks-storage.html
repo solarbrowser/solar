@@ -48,8 +48,25 @@ async function run() {
   const cancelled = scheduler.postTask(() => 1, { signal: tc.signal, delay: 50 });
   tc.abort();
   ok("an aborted task rejects", await cancelled.then(() => false, () => true), "");
+  const wk = new Worker(URL.createObjectURL(new Blob([`
+    (async () => {
+      const got = await navigator.locks.request("w", (l) => l.name);
+      const p = await navigator.permissions.query({ name: "geolocation" });
+      postMessage({ got, perm: p.state, est: (await navigator.storage.estimate()).quota > 0, sched: typeof scheduler.postTask });
+    })();
+  `], { type: "text/javascript" })));
+  const fromWorker = await new Promise((r) => { wk.onmessage = (m) => r(m.data); });
+  ok("a worker has locks, permissions, storage and scheduler", fromWorker.got === "w" && fromWorker.perm === "prompt" && fromWorker.est === true && fromWorker.sched === "function", JSON.stringify(fromWorker));
+  wk.terminate();
   await scheduler.yield();
   ok("scheduler.yield", true, "");
+  const ws = new WebSocket("ws://" + location.host + "/echo");
+  await new Promise((r) => { ws.onopen = r; });
+  ws.send("12345");
+  ok("bufferedAmount counts what is not yet sent", ws.bufferedAmount === 5, ws.bufferedAmount);
+  await sleep(20);
+  ok("and is 0 when it is", ws.bufferedAmount === 0, ws.bufferedAmount);
+  ws.close();
 }
 run().then(() => console.log("done"), (e) => { console.log("FAIL exception " + (e && e.stack || e)); console.log("done"); });
 </script>

@@ -8,6 +8,7 @@
 
 #include <openssl/evp.h>
 #include <openssl/rand.h>
+#include <zlib.h>
 
 #include <algorithm>
 #include <cstring>
@@ -115,10 +116,6 @@ struct WebSocketClient::Impl {
 
 struct WebSocketClient::Impl::Connection final : ConnectionHandler {
   Connection(Impl& i, uint64_t id_, url::Url u, WebSocketHandler& h, WebSocketOptions o) : impl(i), id(id_), url(std::move(u)), handler(h), options(std::move(o)) {}
-  ~Connection() override {
-    if (closeTimer) impl.loop.CancelTimer(closeTimer);
-  }
-
   Impl& impl;
   uint64_t id;
   url::Url url;
@@ -136,6 +133,17 @@ struct WebSocketClient::Impl::Connection final : ConnectionHandler {
   std::string message;  // the message being put together from fragments
   bool messageBinary = false;
   bool inMessage = false;
+  bool messageCompressed = false;
+  // permessage-deflate (RFC 7692), when the server agreed to it.
+  bool deflating = false, deflaterReady = false, inflaterReady = false;
+  bool clientNoTakeover = false, serverNoTakeover = false;
+  int clientBits = 15, serverBits = 15;
+  z_stream deflater{}, inflater{};
+  ~Connection() override {
+    if (closeTimer) impl.loop.CancelTimer(closeTimer);
+    if (deflaterReady) deflateEnd(&deflater);
+    if (inflaterReady) inflateEnd(&inflater);
+  }
   // How it ended, to be told when the transport is closed.
   bool closeReceived = false;
   bool closeSent = false;
@@ -195,6 +203,7 @@ struct WebSocketClient::Impl::Connection final : ConnectionHandler {
     std::string request = "GET " + target + " HTTP/1.1\r\nHost: " + url::GetHost(forCookies) + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: " + key +
                           "\r\nSec-WebSocket-Version: 13\r\n";
     if (!options.origin.empty()) request += "Origin: " + options.origin + "\r\n";
+    request += "Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\r\n";
     if (!options.protocols.empty()) {
       request += "Sec-WebSocket-Protocol: ";
       for (size_t i = 0; i < options.protocols.size(); ++i) request += (i ? ", " : "") + options.protocols[i];
@@ -263,7 +272,11 @@ struct WebSocketClient::Impl::Connection final : ConnectionHandler {
     }
     const std::string expected = Base64(reinterpret_cast<const uint8_t*>(Sha1(key + kGuid).data()), 20);
     if (fields["sec-websocket-accept"] != expected) { Fail("the Sec-WebSocket-Accept of the response is not the one for the key"); return false; }
-    if (fields.count("sec-websocket-extensions")) { Fail("the server chose an extension that was not offered"); return false; }
+    std::string extensions;
+    if (fields.count("sec-websocket-extensions")) {
+      if (!AcceptExtensions(fields["sec-websocket-extensions"])) { Fail("the server chose an extension that was not offered, or parameters that are not allowed"); return false; }
+      extensions = "permessage-deflate";
+    }
     const std::string protocol = fields["sec-websocket-protocol"];
     if (!protocol.empty()) {
       if (std::find(options.protocols.begin(), options.protocols.end(), protocol) == options.protocols.end()) { Fail("the server chose a sub-protocol that was not offered"); return false; }
@@ -275,7 +288,85 @@ struct WebSocketClient::Impl::Connection final : ConnectionHandler {
     forCookies.scheme = url.scheme == "wss" ? "https" : "http";
     for (const auto& [name, value] : cookiesSet) impl.http.cookies()->Store(forCookies, value, CookieRequest{});
     state = State::Open;
-    handler.OnOpen(protocol, "");
+    handler.OnOpen(protocol, extensions);
+    return true;
+  }
+
+  // The server's Sec-WebSocket-Extensions: only permessage-deflate was offered, and only once.
+  bool AcceptExtensions(const std::string& value) {
+    if (value.find(',') != std::string::npos) return false;
+    size_t at = 0;
+    bool first = true;
+    while (at <= value.size()) {
+      size_t end = value.find(';', at);
+      if (end == std::string::npos) end = value.size();
+      std::string token = Lower(Trim(value.substr(at, end - at)));
+      at = end + 1;
+      if (first) {
+        first = false;
+        if (token != "permessage-deflate") return false;
+        continue;
+      }
+      std::string name = token, argument;
+      if (const size_t eq = token.find('='); eq != std::string::npos) {
+        name = Trim(token.substr(0, eq));
+        argument = Trim(token.substr(eq + 1));
+        if (argument.size() >= 2 && argument.front() == '"' && argument.back() == '"') argument = argument.substr(1, argument.size() - 2);
+      }
+      auto bits = [&](int& out) {
+        if (argument.empty() || argument.size() > 2 || !std::isdigit(static_cast<unsigned char>(argument[0]))) return false;
+        out = std::atoi(argument.c_str());
+        return out >= 8 && out <= 15;
+      };
+      if (name == "server_no_context_takeover") serverNoTakeover = true;
+      else if (name == "client_no_context_takeover") clientNoTakeover = true;
+      else if (name == "server_max_window_bits") { if (!bits(serverBits)) return false; }
+      else if (name == "client_max_window_bits") { if (!bits(clientBits)) return false; }
+      else return false;
+      if (end == value.size()) break;
+    }
+    // (zlib's raw streams do not take a window of 8: 9 holds the same.)
+    if (deflateInit2(&deflater, Z_DEFAULT_COMPRESSION, Z_DEFLATED, -std::max(9, clientBits), 8, Z_DEFAULT_STRATEGY) != Z_OK) return false;
+    deflaterReady = true;
+    if (inflateInit2(&inflater, -std::max(9, serverBits)) != Z_OK) return false;
+    inflaterReady = true;
+    deflating = true;
+    return true;
+  }
+
+  // A message as it goes: deflated, without the empty block that ends it.
+  bool Compress(const std::string& in, std::string& out) {
+    deflater.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(in.data()));
+    deflater.avail_in = static_cast<uInt>(in.size());
+    uint8_t buffer[16384];
+    do {
+      deflater.next_out = buffer;
+      deflater.avail_out = sizeof buffer;
+      if (deflate(&deflater, Z_SYNC_FLUSH) == Z_STREAM_ERROR) return false;
+      out.append(reinterpret_cast<char*>(buffer), sizeof buffer - deflater.avail_out);
+    } while (deflater.avail_out == 0);
+    if (out.size() < 4 || out.compare(out.size() - 4, 4, std::string("\x00\x00\xff\xff", 4)) != 0) return false;
+    out.resize(out.size() - 4);
+    if (clientNoTakeover) deflateReset(&deflater);
+    return true;
+  }
+
+  bool Decompress(const std::string& in, std::string& out) {
+    std::string input = in;
+    input.append("\x00\x00\xff\xff", 4);
+    inflater.next_in = reinterpret_cast<Bytef*>(input.data());
+    inflater.avail_in = static_cast<uInt>(input.size());
+    uint8_t buffer[16384];
+    for (;;) {
+      inflater.next_out = buffer;
+      inflater.avail_out = sizeof buffer;
+      const int status = inflate(&inflater, Z_SYNC_FLUSH);
+      if (status != Z_OK && status != Z_BUF_ERROR && status != Z_STREAM_END) return false;
+      out.append(reinterpret_cast<char*>(buffer), sizeof buffer - inflater.avail_out);
+      if (out.size() > options.maxMessageBytes) return false;
+      if (inflater.avail_out != 0 || status == Z_STREAM_END) break;
+    }
+    if (serverNoTakeover) inflateReset(&inflater);
     return true;
   }
 
@@ -290,7 +381,8 @@ struct WebSocketClient::Impl::Connection final : ConnectionHandler {
       const bool masked = b1 & 0x80;
       uint64_t length = b1 & 0x7F;
       size_t header = 2;
-      if (reserved) { Fail("a frame has a reserved bit set", 1002); return; }
+      const bool compressed = (reserved & 4) != 0;
+      if ((reserved & 3) || (compressed && (!deflating || opcode == 0 || opcode >= 8))) { Fail("a frame has a reserved bit set", 1002); return; }
       if (masked) { Fail("a frame from the server is masked", 1002); return; }
       if (length == 126) {
         if (pending.size() < 4) return;
@@ -309,11 +401,11 @@ struct WebSocketClient::Impl::Connection final : ConnectionHandler {
       if (pending.size() < header + length) return;
       const std::string payload = pending.substr(header, static_cast<size_t>(length));
       pending.erase(0, header + static_cast<size_t>(length));
-      if (!Frame(fin, opcode, payload)) return;
+      if (!Frame(fin, opcode, payload, compressed)) return;
     }
   }
 
-  bool Frame(bool fin, int opcode, const std::string& payload) {
+  bool Frame(bool fin, int opcode, const std::string& payload, bool compressed) {
     switch (opcode) {
       case 0:  // continuation
         if (!inMessage) { Fail("a continuation with nothing to continue", 1002); return false; }
@@ -323,6 +415,7 @@ struct WebSocketClient::Impl::Connection final : ConnectionHandler {
       case 2:
         if (inMessage) { Fail("a new message while another is not done", 1002); return false; }
         inMessage = true;
+        messageCompressed = compressed;
         messageBinary = opcode == 2;
         message = payload;
         break;
@@ -363,6 +456,11 @@ struct WebSocketClient::Impl::Connection final : ConnectionHandler {
       return true;
     }
     inMessage = false;
+    if (messageCompressed) {
+      std::string plain;
+      if (!Decompress(message, plain)) { Fail("a compressed message could not be inflated", 1007); return false; }
+      message = std::move(plain);
+    }
     if (!messageBinary && !ValidUtf8(message)) { Fail("a text message is not UTF-8", 1007); return false; }
     std::string whole = std::move(message);
     message.clear();
@@ -370,10 +468,10 @@ struct WebSocketClient::Impl::Connection final : ConnectionHandler {
     return state == State::Open || state == State::Closing;
   }
 
-  void SendFrame(int opcode, std::string payload) {
+  void SendFrame(int opcode, std::string payload, bool rsv1 = false) {
     if (!transport || state == State::Closed) return;
     std::string frame;
-    frame += static_cast<char>(0x80 | opcode);
+    frame += static_cast<char>(0x80 | (rsv1 ? 0x40 : 0) | opcode);
     const size_t n = payload.size();
     if (n < 126) {
       frame += static_cast<char>(0x80 | n);
@@ -394,6 +492,10 @@ struct WebSocketClient::Impl::Connection final : ConnectionHandler {
 
   void Send(std::string data, bool binary) {
     if (state != State::Open) return;
+    if (deflating && data.size() >= 32) {  // (a short message costs more to deflate than it saves)
+      std::string packed;
+      if (Compress(data, packed)) { SendFrame(binary ? 2 : 1, std::move(packed), true); return; }
+    }
     SendFrame(binary ? 2 : 1, std::move(data));
   }
 

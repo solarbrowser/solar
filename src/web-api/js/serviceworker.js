@@ -7,7 +7,8 @@
   "use strict";
   const create = globalThis.__solarWorkerCreate, start = globalThis.__solarWorkerStart, terminate = globalThis.__solarWorkerTerminate;
   const kvRead = globalThis.__solarKvRead, kvWrite = globalThis.__solarKvWrite;
-  delete globalThis.__solarKvRead; delete globalThis.__solarKvWrite;
+  const tellControlled = globalThis.__solarSwControlled, resourceDone = globalThis.__solarSwResourceDone;
+  delete globalThis.__solarKvRead; delete globalThis.__solarKvWrite; delete globalThis.__solarSwControlled; delete globalThis.__solarSwResourceDone;
   if (typeof create !== "function" || typeof MessageChannel !== "function" || typeof document === "undefined" || typeof fetch !== "function") return;
   const nativeFetch = globalThis.fetch;
   const secure = typeof isSecureContext === "boolean" ? isSecureContext : true;
@@ -88,7 +89,7 @@
     if (w.state !== "redundant") setState(w, "redundant");
     try { terminate(w.id); } catch (e) { /* (already) */ }
     try { w.port.close(); } catch (e) { /* (already) */ }
-    if (controller === w) controller = null;
+    if (controller === w) { controller = null; if (tellControlled) tellControlled(false); }
   };
   const step = (w, name) => new Promise((resolve) => {
     w.waiters.set(name, resolve);
@@ -111,6 +112,7 @@
   const setController = (w) => {
     if (controller === w) return;
     controller = w;
+    if (tellControlled) tellControlled(!!w);
     containerObject.dispatchEvent(new Event("controllerchange"));
   };
 
@@ -333,6 +335,33 @@
     } catch (e) { /* (read-only here) */ }
     return response;
   };
+  // The program asks for each resource of a controlled page (pictures, styles, scripts) through this, before the network: true if the worker will answer.
+  Object.defineProperty(globalThis, "__solarSwResource", {
+    value(url, id) {
+      const w = controller;
+      if (!w || w.state === "redundant" || w.gone || !resourceDone) return false;
+      const u = new URL(url);
+      if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+      const fid = nextFetch++;
+      new Promise((resolve, reject) => {
+        w.fetches.set(fid, { resolve, reject });
+        w.port.postMessage({
+          t: "fetch", id: fid, clientId: clientIdOf(),
+          request: { url, method: "GET", headers: [], mode: u.origin === origin ? "same-origin" : "no-cors", credentials: "include", cache: "default", redirect: "follow", referrer: location.href },
+        });
+      }).then((result) => {
+        if (result.kind === "fallback") resourceDone(id, 1, 0, "", undefined);
+        else if (result.kind === "error") resourceDone(id, 2, 0, "", undefined);
+        else {
+          const d = result.response;
+          const type = d.headers.find((h) => h[0].toLowerCase() === "content-type");
+          resourceDone(id, 0, d.status, type ? type[1] : "", d.body);
+        }
+      }, () => resourceDone(id, 2, 0, "", undefined));
+      return true;
+    },
+    writable: true, configurable: true, enumerable: false,
+  });
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, "fetch");
   Object.defineProperty(globalThis, "fetch", {
     ...descriptor,
@@ -358,7 +387,7 @@
       if (reg) {
         const k = kept.find((x) => x.scope === reg.scope);
         const w = spawn(reg, k.scriptURL, k.source, "activated");
-        if (w.failed) { retire(w); } else { reg.active = w; controller = w; }
+        if (w.failed) { retire(w); } else { reg.active = w; controller = w; if (tellControlled) tellControlled(true); }
       }
     }
     Object.defineProperty(Navigator.prototype, "serviceWorker", { get() { return containerObject; }, enumerable: true, configurable: true });

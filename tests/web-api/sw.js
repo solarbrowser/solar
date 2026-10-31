@@ -13,6 +13,10 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (url.pathname === "/virtual") {
     event.respondWith(new Response("made by the worker " + event.request.method, { status: 201, statusText: "Made", headers: { "x-sw": "yes", "content-type": "text/plain" } }));
+  } else if (url.pathname === "/virtual.js") {
+    event.respondWith(new Response("window.__fromWorker = 1;", { headers: { "content-type": "text/javascript" } }));
+  } else if (url.pathname === "/virtual.css") {
+    event.respondWith(new Response("html { --from-worker: 1; }", { headers: { "content-type": "text/css" } }));
   } else if (url.pathname === "/precached") {
     event.respondWith(caches.match(event.request));
   } else if (url.pathname === "/echo-body") {

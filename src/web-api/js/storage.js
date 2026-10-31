@@ -23,7 +23,7 @@
 
   // ---- Permissions ----
   const names = {
-    "geolocation": "prompt", "notifications": Notification && Notification.permission === "granted" ? "granted" : "prompt", "camera": "prompt", "microphone": "prompt",
+    "geolocation": "prompt", "notifications": "prompt", "camera": "prompt", "microphone": "prompt",
     "clipboard-read": "prompt", "clipboard-write": "granted", "persistent-storage": "prompt", "push": "prompt", "midi": "prompt", "background-sync": "granted",
     "screen-wake-lock": "granted", "accelerometer": "granted", "gyroscope": "granted", "magnetometer": "granted", "storage-access": "prompt", "payment-handler": "granted",
   };

@@ -1,0 +1,33 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>SharedWorker</title>
+<script>
+const ok = (name, condition, detail) => console.log((condition ? "ok   " : "FAIL ") + name + (condition ? "" : "  " + detail));
+const next = (port) => new Promise((resolve) => { port.onmessage = (e) => resolve(e.data); });
+async function run() {
+  ok("SharedWorker exists", typeof SharedWorker === "function", typeof SharedWorker);
+  const script = URL.createObjectURL(new Blob([`
+    let count = 0;
+    onconnect = (e) => {
+      const port = e.ports[0];
+      count++;
+      port.onmessage = (m) => port.postMessage({ echo: m.data, connections: count, name: self.name, scope: typeof SharedWorkerGlobalScope, win: typeof window });
+      port.postMessage({ hello: count });
+    };
+  `], { type: "text/javascript" }));
+  const a = new SharedWorker(script, "shared-1");
+  ok("port", a.port instanceof MessagePort && a instanceof EventTarget, String(a.port));
+  ok("the first connection says hello", (await next(a.port)).hello === 1, "");
+  a.port.postMessage("one");
+  let r = await next(a.port);
+  ok("echo, name, no window", r.echo === "one" && r.name === "shared-1" && r.win === "undefined", JSON.stringify(r));
+  const b = new SharedWorker(script, "shared-1");
+  ok("a second SharedWorker of the same address and name connects to the same worker", (await next(b.port)).hello === 2, "");
+  const c = new SharedWorker(script, "other");
+  ok("another name is another worker", (await next(c.port)).hello === 1, "");
+  let t = null; try { new SharedWorker("https://other.example/x.js"); } catch (e) { t = e; }
+  ok("another origin is a SecurityError", t && t.name === "SecurityError", String(t));
+  ok("toStringTag", Object.prototype.toString.call(a) === "[object SharedWorker]", "");
+}
+run().then(() => console.log("done"), (e) => { console.log("FAIL exception " + (e && e.stack || e)); console.log("done"); });
+</script>

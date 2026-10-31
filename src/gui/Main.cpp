@@ -66,6 +66,7 @@
 #include "solar/web/FetchHost.h"
 #include "solar/web/JsEventLoop.h"
 #include "solar/web/Messaging.h"
+#include "solar/url/Origin.h"
 #include "solar/web-api/CacheStore.h"
 #include "solar/web-api/Compression.h"
 #include "solar/web-api/Crypto.h"
@@ -182,13 +183,21 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
       }
     }
   }
-  std::optional<std::string> LoadScript(const std::string& url) override { return Load(url); }
+  std::optional<std::string> LoadScript(const std::string& url) override {
+    // (importScripts and the like are not the worker's to answer: it is the one asking.)
+    const bool was = bypassWorker_;
+    bypassWorker_ = true;
+    auto text = Load(url);
+    bypassWorker_ = was;
+    return text;
+  }
   std::function<void(qe::Realm*)> dropTimers_;  // (set where the timers are: the tasks of a worker that is let go are not to run)
 
   // A page that is left: its realm goes, and with it what only it kept.
   void ReleaseRealm(qe::Realm* realm) {
     // (What the realm's own data holds is not let go with the realm: the document it points at is let go first.)
     solar::html::RunInRealm(*realm, [&] { solar::dom::SetAssociatedDocument(realm->GetContext(), nullptr); });
+    if (pageRealm_ == realm) pageRealm_ = nullptr;
     for (auto it = bundles_.begin(); it != bundles_.end(); ++it) {
       if ((*it)->realm.get() == realm) {
         bundles_.erase(it);
@@ -223,7 +232,23 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
       config.pageUrl = *solar::url::Parse(pageUrl_.empty() ? "about:blank" : pageUrl_);
       config.afterScript = [this] { events_.AfterScript(); };
       bundle->host = std::make_unique<solar::web::FetchHost>(realm.GetContext(), config);
+      // What the page's service worker script (src/web-api/js/serviceworker.js) tells the program: whether the page is controlled, and its answers for resources.
+      Quanta::Context& pctx = realm.GetContext();
+      Quanta::Value global = qe::FromObject(pctx.get_global_object());
+      qe::Set(pctx, global, "__solarSwControlled", qe::NewFunction(pctx, "__solarSwControlled", 1, [this](Quanta::Context&, Quanta::Value, qe::Args args, Quanta::Value) {
+        swControlled_ = !args.empty() && args[0].to_boolean();
+        return qe::Undefined();
+      }));
+      qe::Set(pctx, global, "__solarSwResourceDone", qe::NewFunction(pctx, "__solarSwResourceDone", 5, [this](Quanta::Context& c, Quanta::Value, qe::Args args, Quanta::Value) {
+        if (args.size() < 5) return qe::Undefined();
+        std::string body;
+        if (auto bytes = qe::BytesOf(args[4])) body.assign(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+        WorkerAnswered(qe::ToUint32(c, args[0]), static_cast<int>(qe::ToNumber(c, args[1])), static_cast<int>(qe::ToNumber(c, args[2])), qe::ToWtf8(c, args[3]), std::move(body));
+        return qe::Undefined();
+      }));
     });
+    pageRealm_ = &realm;
+    swControlled_ = false;
     bundles_.push_back(std::move(bundle));
     return &realm;
   }
@@ -234,6 +259,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     std::string url;
     int status = 0;
     bool done = false, failed = false;
+    bool viaWorker = false;  // asked of the page's service worker (what it made is that page's, not to be kept for the next)
     std::string body, contentType;
     Clock::time_point started = Clock::now();
     void OnResponseHead(const solar::net::HttpResponseHead& head, const solar::url::Url&) override {
@@ -269,8 +295,60 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     resource->url = url;
     Resource* raw = resource.get();
     resources_[url] = std::move(resource);
+    if (swControlled_ && !bypassWorker_ && pageRealm_ && AskWorker(raw)) return raw;
     client_.Fetch(*parsed, *raw, solar::net::FetchOptions());
     return raw;
+  }
+
+  // A page that a service worker controls asks it for each resource first (its fetch event); the worker's answer, or its leaving the request to the network, comes
+  // back through __solarSwResourceDone. False where the page has no way to ask.
+  bool AskWorker(Resource* resource) {
+    const uint32_t id = nextSw_++;
+    bool taken = false;
+    solar::html::RunInRealm(*pageRealm_, [&] {
+      Quanta::Context& ctx = pageRealm_->GetContext();
+      Quanta::Value function = qe::Get(ctx, qe::FromObject(ctx.get_global_object()), "__solarSwResource");
+      if (qe::IsCallable(function)) {
+        Quanta::Value arguments[] = {qe::FromWtf8(ctx, resource->url), qe::FromNumber(id)};
+        Quanta::Value result = qe::Call(ctx, function, qe::Undefined(), qe::Args(arguments, 2));
+        taken = !qe::HasException(ctx) && result.to_boolean();
+      }
+      if (qe::HasException(ctx)) ctx.clear_exception();
+    });
+    if (!taken) return false;
+    resource->viaWorker = true;
+    swPending_[id] = resource->url;
+    return true;
+  }
+  void WorkerAnswered(uint32_t id, int mode, int status, const std::string& contentType, std::string body) {
+    const auto pending = swPending_.find(id);
+    if (pending == swPending_.end()) return;
+    const std::string url = pending->second;
+    swPending_.erase(pending);
+    const auto found = resources_.find(url);
+    if (found == resources_.end()) return;
+    Resource* resource = found->second.get();
+    if (mode == 1) {  // left to the network
+      resource->viaWorker = false;
+      if (auto parsed = solar::url::Parse(url)) client_.Fetch(*parsed, *resource, solar::net::FetchOptions());
+      return;
+    }
+    if (mode == 2) {
+      resource->failed = true;
+    } else {
+      resource->status = status;
+      resource->contentType = contentType;
+      resource->body = std::move(body);
+    }
+    resource->Finish();
+  }
+  // The page is left: what its worker made is not for the next page.
+  void DropWorkerResources() {
+    for (auto it = resources_.begin(); it != resources_.end();) {
+      if (it->second->viaWorker && it->second->done) it = resources_.erase(it);
+      else ++it;
+    }
+    swControlled_ = false;
   }
 
   void WaitFor(Resource* resource) {
@@ -455,6 +533,10 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
   std::map<std::string, std::pair<std::string, std::shared_ptr<qe::Script>>> scripts_;
   std::vector<std::unique_ptr<RealmBundle>> bundles_;
   std::map<std::string, std::unique_ptr<Resource>> resources_;
+  qe::Realm* pageRealm_ = nullptr;
+  bool swControlled_ = false, bypassWorker_ = false;
+  uint32_t nextSw_ = 1;
+  std::map<uint32_t, std::string> swPending_;
   Resource* waiting_ = nullptr;
   bool arrived_ = false, sizesArrived_ = false;
   std::set<std::string> layoutImages_;
@@ -1213,7 +1295,11 @@ int PageMain(Shared& shared, int argc, char** argv) {
     solar::paint::SetPopup(solar::paint::Popup{});
     browser.SetPageUrl(address);
     browser.SetContentType(address, type);
-    browser.Prefetch(markup, address);
+    {
+      const auto parsedAddress = solar::url::Parse(address);
+      const bool hasWorker = parsedAddress && solar::webapi::HasServiceWorkerFor(solar::url::SerializeOrigin(*parsedAddress), address);
+      if (!hasWorker) browser.Prefetch(markup, address);
+    }
     realm = browser.CreateRealm();
     solar::html::RunInRealm(*realm, [&] {
       document = solar::dom::NewDocument(realm->GetContext(), true);
@@ -1253,6 +1339,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
       lap("realm released");
       solar::layout::ForgetImages();
       shared.Post({UiCommand::Kind::Forget});
+      browser.DropWorkerResources();
       browser.TrimResources(48u << 20);
       lap("resources trimmed");
       isolate->CollectGarbage();

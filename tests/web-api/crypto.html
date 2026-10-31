@@ -56,6 +56,14 @@ async function run() {
   const tk = await s.importKey("raw", fromHex("2b7e151628aed2a6abf7158809cf4f3c"), "AES-CTR", false, ["encrypt"]);
   ok("CTR vector", hex(await s.encrypt({ name: "AES-CTR", counter: fromHex("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"), length: 64 }, tk, fromHex("6bc1bee22e409f96e93d7e117393172a"))) === "874d6191b620e3261bef6864990db6ce", "");
 
+  // CTR counts in the low bits only: with length 8 the counter wraps from ..ff to ..00 without carrying
+  const wrapKey = await s.importKey("raw", fromHex("2b7e151628aed2a6abf7158809cf4f3c"), "AES-CTR", false, ["encrypt"]);
+  const base = fromHex("000102030405060708090a0b0c0d0eff"), wrapped0 = fromHex("000102030405060708090a0b0c0d0e00");
+  const both = hex(await s.encrypt({ name: "AES-CTR", counter: base, length: 8 }, wrapKey, new Uint8Array(32)));
+  const one = hex(await s.encrypt({ name: "AES-CTR", counter: base, length: 8 }, wrapKey, new Uint8Array(16)));
+  const two = hex(await s.encrypt({ name: "AES-CTR", counter: wrapped0, length: 8 }, wrapKey, new Uint8Array(16)));
+  ok("CTR wraps in the low bits without carrying", both === one + two && one !== two, both);
+
   // PBKDF2 (RFC 6070), HKDF (RFC 5869 test 1)
   const pk = await s.importKey("raw", enc("password"), "PBKDF2", false, ["deriveBits", "deriveKey"]);
   ok("PBKDF2 vector", hex(await s.deriveBits({ name: "PBKDF2", hash: "SHA-1", salt: enc("salt"), iterations: 2 }, pk, 160)) === "ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957", "");

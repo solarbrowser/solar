@@ -98,4 +98,53 @@
   handler(Worker.prototype, ["message", "messageerror", "error"]);
   Object.defineProperty(Worker.prototype, Symbol.toStringTag, { value: "Worker", configurable: true });
   Object.defineProperty(globalThis, "Worker", { value: Worker, writable: true, configurable: true, enumerable: false });
+
+  // ---- SharedWorker: a worker that every SharedWorker of this page with the same address and name connects to; it is a dedicated worker with a wrapper that turns a
+  // message into a connect event with the port of the connection (a worker is never shared between pages: a page is a realm of its own here) ----
+  const shared = new Map();
+  class SharedWorker extends EventTarget {
+    #port;
+    constructor(scriptURL, options) {
+      super();
+      if (arguments.length === 0) throw new TypeError("Failed to construct 'SharedWorker': 1 argument required, but only 0 present.");
+      let url;
+      try { url = new URL(String(scriptURL), document.baseURI); } catch (e) {
+        throw new DOMException(`Failed to construct 'SharedWorker': Script at '${scriptURL}' is not a valid URL.`, "SyntaxError");
+      }
+      if (url.protocol !== "blob:" && url.protocol !== "data:" && url.origin !== location.origin) {
+        throw new DOMException(`Failed to construct 'SharedWorker': Script at '${url.href}' cannot be accessed from origin '${location.origin}'.`, "SecurityError");
+      }
+      const given = typeof options === "string" ? { name: options } : typeof options === "object" && options !== null ? options : {};
+      const name = given.name === undefined ? "" : String(given.name);
+      const module = given.type === "module";
+      const key = url.href + "|" + name;
+      let worker = shared.get(key);
+      if (!worker) {
+        const source = `
+          Object.defineProperty(self, "name", { value: ${JSON.stringify(name)}, configurable: true });
+          (() => {
+            let h = null, ready = ${module ? "false" : "true"}; const waiting = [];
+            Object.defineProperty(self, "onconnect", { get() { return h; }, set(f) { h = typeof f === "function" ? f : null; }, configurable: true, enumerable: true });
+            addEventListener("connect", (e) => { if (h) h.call(self, e); });
+            const connect = (port) => { const ev = new MessageEvent("connect", { ports: [port] }); Object.defineProperty(ev, "source", { value: port }); dispatchEvent(ev); };
+            addEventListener("message", (e) => {
+              if (!e.data || e.data.__solarShared !== true) return;
+              if (ready) connect(e.ports[0]); else waiting.push(e.ports[0]);
+            });
+            ${module ? `import(${JSON.stringify(url.href)}).then(() => { ready = true; for (const p of waiting.splice(0)) connect(p); }, (error) => { throw error; });` : `importScripts(${JSON.stringify(url.href)});`}
+          })();`;
+        const blob = new Blob([source], { type: "text/javascript" });
+        worker = new Worker(URL.createObjectURL(blob), { type: module ? "module" : "classic", name });
+        shared.set(key, worker);
+      }
+      worker.addEventListener("error", (e) => this.dispatchEvent(new ErrorEvent("error", { message: e.message, filename: e.filename, lineno: e.lineno, colno: e.colno, cancelable: true })));
+      const channel = new MessageChannel();
+      this.#port = channel.port1;
+      worker.postMessage({ __solarShared: true }, [channel.port2]);
+    }
+    get port() { return this.#port; }
+  }
+  handler(SharedWorker.prototype, ["error"]);
+  Object.defineProperty(SharedWorker.prototype, Symbol.toStringTag, { value: "SharedWorker", configurable: true });
+  Object.defineProperty(globalThis, "SharedWorker", { value: SharedWorker, writable: true, configurable: true, enumerable: false });
 })();
