@@ -91,12 +91,14 @@
   }
 
   // ---- Talking to the page ----
-  port.onmessage = (e) => {
+  // (A service worker's port is its own: serviceworker-scope.js, which comes after this, takes it.)
+  if (info.serviceWorker) { global.__solarSwInfo = info; global.__solarSwPort = port; global.__solarSwTarget = target; }
+  else port.onmessage = (e) => {
     const event = new MessageEvent("message", { data: e.data, ports: [...e.ports], origin: "", lastEventId: "", source: null });
     Object.defineProperty(event, "target", { value: global, configurable: true });
     target.dispatchEvent(event);
   };
-  port.onmessageerror = () => {
+  if (!info.serviceWorker) port.onmessageerror = () => {
     const event = new MessageEvent("messageerror", {});
     Object.defineProperty(event, "target", { value: global, configurable: true });
     target.dispatchEvent(event);

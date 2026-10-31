@@ -770,7 +770,6 @@ const char* const kPlatformScript = R"JS(
     if (!("connection" in navigator)) Object.defineProperty(navigator, "connection", { value: Object.assign(new EventTarget(), { effectiveType: "4g", downlink: 10, rtt: 50, saveData: false }), configurable: true, enumerable: true });
     if (!("deviceMemory" in navigator)) Object.defineProperty(navigator, "deviceMemory", { value: 8, configurable: true, enumerable: true });
     if (!("mediaDevices" in navigator)) Object.defineProperty(navigator, "mediaDevices", { value: Object.assign(new EventTarget(), { enumerateDevices: () => Promise.resolve([]), getUserMedia: () => Promise.reject(new DOMException("Requested device not found", "NotFoundError")), getSupportedConstraints: () => ({}) }), configurable: true, enumerable: true });
-    if (!("serviceWorker" in navigator)) Object.defineProperty(navigator, "serviceWorker", { value: Object.assign(new EventTarget(), { controller: null, ready: new Promise(() => {}), register: () => Promise.reject(new DOMException("Service workers are not supported.", "SecurityError")), getRegistrations: () => Promise.resolve([]) }), configurable: true, enumerable: true });
   }
   if (!("visualViewport" in globalThis)) Object.defineProperty(globalThis, "visualViewport", { get() { return Object.assign(new EventTarget(), { width: innerWidth, height: innerHeight, scale: 1, offsetLeft: 0, offsetTop: 0, pageLeft: scrollX, pageTop: scrollY }); }, configurable: true, enumerable: true });
 })();

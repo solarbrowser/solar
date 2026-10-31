@@ -1,0 +1,70 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Service worker</title>
+<script>
+// Needs tests/web-api/wsserver.py and SOLAR_IDB_DIR set to a scratch directory. Open it as it is, then again with #again (the worker is kept, and controls the page from the start),
+// then with #clean (unregisters).
+const ok = (name, condition, detail) => console.log((condition ? "ok   " : "FAIL ") + name + (condition ? "" : "  " + detail));
+const wait = (target, type) => new Promise((resolve) => target.addEventListener(type, resolve, { once: true }));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const ask = (worker, message) => { const p = wait(navigator.serviceWorker, "message"); worker.postMessage(message); return p.then((e) => e.data); };
+async function checks() {
+  const sw = navigator.serviceWorker;
+  ok("controlled by the worker", sw.controller && sw.controller.state === "activated" && sw.controller.scriptURL.endsWith("/sw.js"), String(sw.controller));
+  const r = await fetch("/virtual");
+  ok("fetch() is answered by the worker", r.status === 201 && r.statusText === "Made" && r.headers.get("x-sw") === "yes" && (await r.text()) === "made by the worker GET", r.status);
+  ok("the answer's url and type", r.url.endsWith("/virtual") && r.type === "basic", r.url + " " + r.type);
+  ok("method reaches the worker", (await (await fetch("/virtual", { method: "POST", body: "x" })).text()) === "made by the worker POST", "");
+  ok("a body reaches the worker", (await (await fetch("/echo-body", { method: "POST", body: "payload" })).text()) === "got payload", "");
+  ok("the worker uses the Cache API", (await (await fetch("/precached")).text()) === "from the cache", "");
+  ok("the page sees the cache the worker made", (await (await caches.match("/precached")).text()) === "from the cache", "");
+  ok("a slow answer", (await (await fetch("/slow")).text()) === "slow", "");
+  let e = null; try { await fetch("/fail"); } catch (x) { e = x; }
+  ok("a rejected respondWith is a network error", e instanceof TypeError, String(e));
+  ok("not handled goes to the network", (await fetch("/serviceworker.html")).status === 200, "");
+  ok("the worker's own fetch is not intercepted", (await (await fetch("/via-network")).text()) === "network said 200", "");
+  const pong = await ask(sw.controller, "ping");
+  ok("postMessage and event.source.postMessage", pong.pong === true && pong.scope === true && pong.win === "undefined" && pong.doc === "undefined", JSON.stringify(pong));
+  const clients = await ask(sw.controller, "clients");
+  ok("clients.matchAll", clients.clients === 1 && clients.type === "window" && clients.url === location.href, JSON.stringify(clients));
+  await fetch("/throws-late");
+  await sleep(50);
+  ok("respondWith after the handler is InvalidStateError", (await ask(sw.controller, "late")).late === "InvalidStateError", "");
+  const reg = await sw.ready;
+  ok("ready: the registration", reg instanceof ServiceWorkerRegistration && reg.active === sw.controller && reg.scope === location.origin + "/", reg.scope);
+  ok("getRegistration", (await sw.getRegistration()) === reg && (await sw.getRegistrations()).length === 1, "");
+}
+async function run() {
+  const sw = navigator.serviceWorker;
+  ok("serviceWorker exists", sw instanceof ServiceWorkerContainer && sw instanceof EventTarget, String(sw));
+  if (location.hash === "#clean") {
+    const reg = await sw.getRegistration();
+    ok("the kept registration is there", !!reg, "");
+    ok("unregister", (await reg.unregister()) === true && (await sw.getRegistrations()).length === 0, "");
+    return;
+  }
+  if (location.hash === "#again") {
+    ok("controlled from the start", sw.controller !== null, "");
+    await checks();
+    return;
+  }
+  ok("not controlled yet", sw.controller === null, String(sw.controller));
+  let e = null; try { await sw.register("/serviceworker.html"); } catch (x) { e = x; }
+  ok("a script with the wrong MIME type is refused", e && e.name === "SecurityError", String(e));
+  e = null; try { await sw.register("https://other.example/sw.js"); } catch (x) { e = x; }
+  ok("another origin is a SecurityError", e && e.name === "SecurityError", String(e));
+  const states = [];
+  const reg = await sw.register("/sw.js", { scope: "/" });
+  ok("register gives a registration", reg instanceof ServiceWorkerRegistration && reg.scope === location.origin + "/" && reg.installing, String(reg));
+  const worker = reg.installing || reg.waiting || reg.active;
+  worker.addEventListener("statechange", () => states.push(worker.state));
+  const changed = wait(sw, "controllerchange");
+  await changed;
+  ok("claim() makes the page controlled (controllerchange)", sw.controller !== null && sw.controller.scriptURL.endsWith("/sw.js"), String(sw.controller));
+  while (worker.state !== "activated") await wait(worker, "statechange");
+  ok("the states went installing -> installed -> activating -> activated", states.join() === "installed,activating,activated", states.join());
+  ok("register again with the same script is the same registration", (await sw.register("/sw.js", { scope: "/" })) === reg, "");
+  await checks();
+}
+run().then(() => console.log("done"), (e) => { console.log("FAIL exception " + (e && e.stack || e)); console.log("done"); });
+</script>
