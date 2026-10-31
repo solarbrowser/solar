@@ -329,7 +329,7 @@ const char* const kFormScript = R"JS(
     }
   };
   // The click of the program: the event, and then what the target does when no script stopped it. The pointer is where it was.
-  const clickEvent = (x, y, button) => new MouseEvent("click", { bubbles: true, cancelable: true, composed: true, view: globalThis, clientX: x, clientY: y, button, detail: 1 });
+  const clickEvent = (x, y, button, detail = 1) => new (typeof PointerEvent === "function" ? PointerEvent : MouseEvent)("click", { bubbles: true, cancelable: true, composed: true, view: globalThis, clientX: x, clientY: y, button, detail, pointerId: -1 });
   // What the user does is an activation (the Pointer Lock API asks for one): its time is kept for a while.
   const activate = () => { try { document[Symbol.for("solar.activation")] = performance.now(); } catch (e) {} };
   setHelper("click", (target, x, y, button) => {
@@ -347,7 +347,7 @@ const char* const kFormScript = R"JS(
     if (this.hasAttribute("disabled") && /^(button|input|select|textarea|fieldset|optgroup|option)$/.test(this.localName)) return;
     const t = activationTarget(this);
     const before = t ? preActivate(t) : null;
-    const ev = clickEvent(0, 0, 0);
+    const ev = clickEvent(0, 0, 0, 0);
     this.dispatchEvent(ev);
     if (t && !(t instanceof HTMLAnchorElement)) postActivate(t, ev, before);
   });

@@ -226,6 +226,7 @@
   };
   const editable = (el) => el && ((el instanceof HTMLInputElement && !/^(checkbox|radio|button|submit|reset|image|file|range|color|hidden)$/.test(el.type)) || el instanceof HTMLTextAreaElement) && !el.disabled && !el.readOnly;
   const insert = (el, text) => {
+    if (!el.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, data: text, inputType: 'insertText' }))) return;
     const start = el.selectionStart === null ? el.value.length : el.selectionStart, end = el.selectionEnd === null ? start : el.selectionEnd;
     el.value = el.value.slice(0, start) + text + el.value.slice(end);
     try { el.setSelectionRange(start + text.length, start + text.length); } catch (e) {}
@@ -243,6 +244,7 @@
   const modifiers = { shift: false, ctrl: false, alt: false, meta: false };
   const keyDown = (target, value) => {
     const info = keyInfo(value);
+    if (modifiers.shift && /^[a-z]$/.test(info.key)) { info.key = info.key.toUpperCase(); }
     if (info.key === 'Shift') modifiers.shift = true; else if (info.key === 'Control') modifiers.ctrl = true; else if (info.key === 'Alt') modifiers.alt = true; else if (info.key === 'Meta') modifiers.meta = true;
     const init = { bubbles: true, cancelable: true, composed: true, view: globalThis, key: info.key, code: info.code, keyCode: info.keyCode, which: info.keyCode, shiftKey: modifiers.shift, ctrlKey: modifiers.ctrl, altKey: modifiers.alt, metaKey: modifiers.meta };
     activate();
@@ -255,10 +257,13 @@
     else if (editable(target) && info.key === 'Delete') erase(target, true);
     else if (info.key === 'Enter' && (target instanceof HTMLButtonElement || target instanceof HTMLAnchorElement)) target.click();
   };
+  // (Space on a button clicks when the key comes up.)
   const keyUp = (target, value) => {
     const info = keyInfo(value);
+    const clicks = info.key === ' ' && (target instanceof HTMLButtonElement || (target instanceof HTMLInputElement && /^(button|submit|reset|checkbox|radio)$/.test(target.type)));
     if (info.key === 'Shift') modifiers.shift = false; else if (info.key === 'Control') modifiers.ctrl = false; else if (info.key === 'Alt') modifiers.alt = false; else if (info.key === 'Meta') modifiers.meta = false;
     target.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, cancelable: true, composed: true, view: globalThis, key: info.key, code: info.code, keyCode: info.keyCode, which: info.keyCode, shiftKey: modifiers.shift, ctrlKey: modifiers.ctrl, altKey: modifiers.alt, metaKey: modifiers.meta }));
+    if (clicks) target.click();
   };
   const centerOf = (el) => { const r = el.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; };
   const focusFor = (target) => {
@@ -270,16 +275,17 @@
   // The pointer: where it is, what is under it and the buttons held; with the pointer locked its events are the lock target's and tell how far it moved.
   const pointers = new Map();
   const pointerState = (id) => { if (!pointers.has(id)) pointers.set(id, { x: 0, y: 0, target: null, buttons: 0, downTarget: null }); return pointers.get(id); };
-  const fire = (state, type, button, extra) => {
+  const fire = (state, type, button, extra, at, plain) => {
     const locked = document.pointerLockElement;
-    const target = locked || state.target || document.body || document.documentElement;
-    const init = { bubbles: true, cancelable: true, composed: true, view: globalThis, clientX: state.x, clientY: state.y, screenX: state.x, screenY: state.y, button, buttons: state.buttons, shiftKey: modifiers.shift, ctrlKey: modifiers.ctrl, altKey: modifiers.alt, metaKey: modifiers.meta, ...extra };
+    const target = at || locked || state.target || document.body || document.documentElement;
+    const init = { bubbles: !plain, cancelable: !plain, composed: true, view: globalThis, clientX: state.x, clientY: state.y, screenX: state.x, screenY: state.y, button, buttons: state.buttons, shiftKey: modifiers.shift, ctrlKey: modifiers.ctrl, altKey: modifiers.alt, metaKey: modifiers.meta, ...extra };
     return target.dispatchEvent(new MouseEvent(type, init));
   };
-  const firePointer = (state, type, button, extra) => {
+  const firePointer = (state, type, button, extra, at) => {
     if (typeof PointerEvent !== 'function') return;
-    const target = document.pointerLockElement || state.target || document.body || document.documentElement;
-    target.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: type !== 'pointerenter' && type !== 'pointerleave', composed: true, view: globalThis, pointerId: 1, pointerType: 'mouse', isPrimary: true,
+    const target = at || document.pointerLockElement || state.target || document.body || document.documentElement;
+    const plain = type === 'pointerenter' || type === 'pointerleave';
+    target.dispatchEvent(new PointerEvent(type, { bubbles: !plain, cancelable: !plain, composed: true, view: globalThis, pointerId: 1, pointerType: 'mouse', isPrimary: true,
       clientX: state.x, clientY: state.y, button, buttons: state.buttons, ...extra }));
   };
   const underPoint = (x, y) => (typeof document.elementFromPoint === 'function' && document.elementFromPoint(x, y)) || document.body;
@@ -295,8 +301,14 @@
     const before = state.target;
     state.target = target || underPoint(x, y);
     if (before !== state.target) {
-      if (before) { fire({ ...state, target: before }, 'mouseout', 0); }
-      fire(state, 'mouseover', 0);
+      // out and over, then leave for the ancestors the pointer left (inner first) and enter for those it came into (outer first).
+      const parentOf = (n) => (n.parentNode instanceof Element ? n.parentNode : (n.parentNode && n.parentNode.host) || null);
+      const chain = (n) => { const c = []; for (; n; n = parentOf(n)) c.push(n); return c; };
+      const from = before ? chain(before) : [], to = chain(state.target);
+      if (before) { firePointer(state, 'pointerout', -1, {}, before); fire(state, 'mouseout', 0, {}, before); }
+      for (const n of from) if (!to.includes(n)) { firePointer(state, 'pointerleave', -1, {}, n); fire(state, 'mouseleave', 0, {}, n, true); }
+      firePointer(state, 'pointerover', -1, {}, state.target); fire(state, 'mouseover', 0, {}, state.target);
+      for (const n of to.slice().reverse()) if (!from.includes(n)) { firePointer(state, 'pointerenter', -1, {}, n); fire(state, 'mouseenter', 0, {}, n, true); }
     }
     firePointer(state, 'pointermove', -1, { movementX: dx, movementY: dy });
     fire(state, 'mousemove', 0, { movementX: dx, movementY: dy });
@@ -306,20 +318,32 @@
     state.buttons |= 1 << (button === 1 ? 2 : button === 2 ? 1 : 0);
     if (document.pointerLockElement) state.lockX = state.x, state.lockY = state.y;
     state.downTarget = document.pointerLockElement || state.target;
+    const now = performance.now();
+    state.count = state.lastTarget === state.downTarget && state.lastButton === button && now - (state.lastTime || -1e9) < 500 ? (state.count || 0) + 1 : 1;
+    state.lastTarget = state.downTarget; state.lastButton = button; state.lastTime = now;
     firePointer(state, 'pointerdown', button);
-    if (fire(state, 'mousedown', button, { detail: 1 }) && button === 0 && state.target && !document.pointerLockElement) focusFor(state.target);
+    if (fire(state, 'mousedown', button, { detail: state.count }) && button === 0 && state.target && !document.pointerLockElement) focusFor(state.target);
   };
   const pointerUp = (state, button) => {
     activate();
     state.buttons &= ~(1 << (button === 1 ? 2 : button === 2 ? 1 : 0));
     firePointer(state, 'pointerup', button);
-    fire(state, 'mouseup', button, { detail: 1 });
-    const target = document.pointerLockElement || state.target;
-    if (target && target === state.downTarget) {
-      if (button === 0 && typeof target.click === 'function' && !document.pointerLockElement) target.click();
-      else fire(state, button === 0 ? 'click' : button === 2 ? 'contextmenu' : 'auxclick', button, { detail: 1 });
-    }
+    const count = state.count || 1;
+    fire(state, 'mouseup', button, { detail: count });
+    const up = document.pointerLockElement || state.target, down = state.downTarget;
     state.downTarget = null;
+    if (!up || !down) return;
+    // The click goes to the nearest common ancestor of what was pressed and what was released.
+    const parentOf = (n) => (n.parentNode instanceof Element ? n.parentNode : (n.parentNode && n.parentNode.host) || null);
+    let target = null;
+    for (let n = down; n && !target; n = parentOf(n)) if (n === up || n.contains(up) || (n.getRootNode && n.getRootNode() === up.getRootNode() && n.contains(up))) target = n;
+    if (!target) return;
+    const state2 = { ...state, target };
+    if (button === 0) {
+      if (count === 1 && target === up && !document.pointerLockElement && typeof target.click === 'function') target.click();
+      else fire(state2, 'click', 0, { detail: count }, target);
+      if (count % 2 === 0) fire(state2, 'dblclick', 0, { detail: count }, target);
+    } else fire(state2, button === 2 ? 'contextmenu' : 'auxclick', button, { detail: count }, target);
   };
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const driver = {
@@ -334,7 +358,14 @@
     send_keys: async (element, keys) => {
       if (element !== document.activeElement && typeof element.focus === 'function') element.focus();
       const target = document.activeElement && document.activeElement !== document.body ? document.activeElement : element;
-      for (const ch of Array.from(String(keys))) { keyDown(target, ch); keyUp(target, ch); }
+      // (A modifier stays down until the end of the keys, or until the null key.)
+    const held = [];
+    for (const ch of Array.from(String(keys))) {
+      if (ch === '\uE000') { for (const m of held.splice(0)) keyUp(target, m); continue; }
+      keyDown(target, ch);
+      if (ch === '\uE008' || ch === '\uE009' || ch === '\uE00A' || ch === '\uE03D') held.push(ch); else keyUp(target, ch);
+    }
+    for (const m of held) keyUp(target, m);
     },
     bless: async (intent, action) => { activate(); return typeof action === 'function' ? action() : undefined; },
     action_sequence: async (sources) => {
@@ -350,6 +381,14 @@
             if (action.type === 'pointerMove') pointerMove(state, action);
             else if (action.type === 'pointerDown') pointerDown(state, action.button || 0);
             else if (action.type === 'pointerUp') pointerUp(state, action.button || 0);
+          } else if (source.type === 'wheel' && action.type === 'scroll') {
+            const state = pointerState(source.id);
+            const origin = action.origin === undefined ? 'viewport' : action.origin;
+            let x = action.x || 0, y = action.y || 0, target;
+            if (origin !== 'viewport' && origin !== 'pointer') { const [cx, cy] = centerOf(origin); x += cx; y += cy; target = origin; }
+            target = target || underPoint(x, y);
+            const wheel = new WheelEvent('wheel', { bubbles: true, cancelable: true, composed: true, view: globalThis, clientX: x, clientY: y, deltaX: action.deltaX || 0, deltaY: action.deltaY || 0, deltaMode: 0 });
+            if (target.dispatchEvent(wheel)) { try { window.scrollBy(action.deltaX || 0, action.deltaY || 0); } catch (e) {} }
           } else if (source.type === 'key') {
             const target = document.activeElement || document.body;
             if (action.type === 'keyDown') keyDown(target, action.value); else if (action.type === 'keyUp') keyUp(target, action.value);
