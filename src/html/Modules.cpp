@@ -121,7 +121,8 @@ ImportMap* ImportMapOf(dom::Document* document, bool create) {
 bool Resolve(qe::Realm* realm, const std::string& specifier, const std::string& referrer, std::string& resolved, std::string& error) {
   dom::Document* document = DocumentOf(realm);
   std::string base = VisibleModuleUrl(referrer);
-  if (base.empty() && document) base = DocumentBaseUrl(document);
+  // (The referrer of code made from a string, eval or a timer's, or of an attribute's, is no address: the page's is the base.)
+  if ((base.empty() || !url::Parse(base)) && document) base = DocumentBaseUrl(document);
   const std::optional<url::Url> baseUrl = url::Parse(base);
   const std::optional<url::Url> asUrl = ParseUrlLike(specifier, baseUrl);
   const std::string normalized = asUrl ? url::Serialize(*asUrl) : specifier;

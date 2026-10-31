@@ -492,7 +492,12 @@
   };
 
   // Setup code is just run; a test file that names its setup tests asynchronously is not supported.
-  globalThis.setup = (func) => { if (typeof func === 'function') func(); };
+  globalThis.setup = (func, properties) => {
+    // A page that allows uncaught exceptions has them reported (as error events) without failing the test.
+    const props = typeof func === 'function' ? properties : func;
+    if (props && props.allow_uncaught_exception && typeof addEventListener === 'function') addEventListener('error', (e) => { if (e && typeof e.preventDefault === 'function') e.preventDefault(); });
+    if (typeof func === 'function') func();
+  };
 
   const messageOf = (e) => String(e && e.message !== undefined ? e.message : e);
 
