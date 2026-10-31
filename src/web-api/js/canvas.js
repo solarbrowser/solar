@@ -623,6 +623,8 @@
     const made = context ? encode(false, context._surface, type, quality) : null;
     setTimeout(() => callback(made ? new Blob([made.bytes], { type: made.mime }) : null), 0);
   });
+  // requestPaint(): the canvas says when it has been painted (a paint event, the next task).
+  define(canvasProto, "requestPaint", function requestPaint() { setTimeout(() => this.dispatchEvent(new Event("paint")), 0); });
   define(canvasProto, "transferControlToOffscreen", function transferControlToOffscreen() { throw fail("InvalidStateError", "transferControlToOffscreen is not supported."); });
 
   // ---- OffscreenCanvas ----
