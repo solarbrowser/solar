@@ -59,6 +59,7 @@ Cv Pct(double v) {
 Cv NumFine(double v) {
   Cv c = Num(0);
   c.token.number = Round8(v);
+  c.token.isInteger = c.token.number == std::floor(c.token.number);
   return c;
 }
 Cv Ident(const std::string& name) {
@@ -258,6 +259,7 @@ Cv LegacyRgb(const double rgb[3], double alpha) {
     parts.push_back(Comma());
     Cv alphaCv = Num(0);
     alphaCv.token.number = std::stod(AlphaText(a));
+    alphaCv.token.isInteger = alphaCv.token.number == std::floor(alphaCv.token.number);
     parts.push_back(alphaCv);
     return Fn("rgba", parts);
   }
@@ -1241,6 +1243,7 @@ Cv N(double v) {
 Cv NN(double v) {  // eight decimals, for color()'s channels
   Cv c = Num(0);
   c.token.number = Round8(v);
+  c.token.isInteger = c.token.number == std::floor(c.token.number);
   return c;
 }
 

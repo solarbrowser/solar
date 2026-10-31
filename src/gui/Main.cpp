@@ -74,6 +74,8 @@
 #include "solar/web-api/Compression.h"
 #include "solar/web-api/Crypto.h"
 #include "solar/web-api/IndexedDb.h"
+#include "solar/paint/Canvas.h"
+#include "solar/web-api/ImageLoad.h"
 #include "solar/web-api/Media.h"
 #include "solar/web-api/WebSocket.h"
 #include "solar/web-api/Worker.h"
@@ -172,6 +174,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
       solar::webapi::InstallCryptoNatives(realm);
       solar::webapi::InstallCacheStoreNatives(realm);
       solar::webapi::InstallCompressionNatives(realm);
+      solar::webapi::InstallCanvasNatives(realm);
       solar::webapi::InstallWorkerScope(realm);
       // A service worker answers a navigation through this.
       Quanta::Context& wctx = realm.GetContext();
@@ -242,6 +245,8 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
       solar::webapi::InstallCacheStoreNatives(realm);
       solar::webapi::InstallCompressionNatives(realm);
       solar::webapi::InstallMediaNatives(realm);
+      solar::webapi::InstallCanvasNatives(realm);
+      solar::webapi::InstallImageLoadNatives(realm);
       solar::web::FetchHost::Config config;
       config.loop = &loop_;
       config.client = &client_;

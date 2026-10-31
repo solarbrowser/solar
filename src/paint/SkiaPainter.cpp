@@ -28,6 +28,7 @@
 #include "include/effects/SkGradient.h"
 #include "solar/font/Database.h"
 #include "solar/media/Controls.h"
+#include "CanvasSurface.h"
 #include "include/core/SkM44.h"
 #include "include/core/SkPaint.h"
 #include "include/core/SkPath.h"
@@ -565,6 +566,33 @@ struct SkiaPainter::Impl {
     if (item.controls) DrawControls(canvas, box, state);
   }
 
+  // A canvas: the picture that was last made of it, fitted into the box.
+  void DrawCanvasItem(SkCanvas& canvas, const DrawCanvas& item) {
+    if (!item.surface) return;
+    sk_sp<SkImage> image = item.surface->Latest();
+    if (!image) return;
+    const SkRRect clip = ToSk(item.clip);
+    const SkRect box = clip.getBounds();
+    if (box.width() <= 0 || box.height() <= 0) return;
+    const float iw = static_cast<float>(image->width()), ih = static_cast<float>(image->height());
+    if (iw <= 0 || ih <= 0) return;
+    float w = box.width(), h = box.height();
+    const float contain = std::min(box.width() / iw, box.height() / ih), cover = std::max(box.width() / iw, box.height() / ih);
+    switch (item.fit) {
+      case ObjectFit::Contain: w = iw * contain; h = ih * contain; break;
+      case ObjectFit::Cover: w = iw * cover; h = ih * cover; break;
+      case ObjectFit::None: w = iw; h = ih; break;
+      case ObjectFit::ScaleDown: w = iw * std::min(1.0f, contain); h = ih * std::min(1.0f, contain); break;
+      default: break;
+    }
+    const float x = box.left() + item.x.Of(box.width() - w), y = box.top() + item.y.Of(box.height() - h);
+    canvas.save();
+    if (clip.isRect()) canvas.clipRect(box, true);
+    else canvas.clipRRect(clip, true);
+    canvas.drawImageRect(image, SkRect::MakeXYWH(x, y, w, h), item.pixelated ? SkSamplingOptions(SkFilterMode::kNearest) : SkSamplingOptions(SkFilterMode::kLinear), nullptr);
+    canvas.restore();
+  }
+
   void DrawElementImage(SkCanvas& canvas, const DrawImage& item) {
     if (!item.image || !item.image->bytes) return;
     Decoded& decoded = DecodedOf(item.image);
@@ -838,6 +866,8 @@ void SkiaPainter::Draw(const DisplayList& list, SkCanvas& canvas, double scrollX
       impl_->DrawElementImage(canvas, *image);
     } else if (const auto* video = std::get_if<DrawVideo>(&item)) {
       impl_->DrawVideoItem(canvas, *video);
+    } else if (const auto* canvasItem = std::get_if<DrawCanvas>(&item)) {
+      impl_->DrawCanvasItem(canvas, *canvasItem);
     } else if (std::holds_alternative<PushMask>(item)) {
       canvas.saveLayer(nullptr, nullptr);
     } else if (const auto* mask = std::get_if<PopMask>(&item)) {

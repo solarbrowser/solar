@@ -1,0 +1,203 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Canvas 2D</title>
+<style>body { margin: 8px; background: #ddd; } canvas { background: #fff; display: block; }</style>
+<canvas id="c" width="320" height="240"></canvas>
+<script>
+// The pixels are read back (getImageData) and checked, and what was drawn is shown for a screenshot.
+const ok = (name, condition, detail) => console.log((condition ? "ok   " : "FAIL ") + name + (condition ? "" : "  " + detail));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function run() {
+  const c = document.getElementById("c");
+  ok("canvas basics", c.width === 320 && c.height === 240 && typeof c.getContext === "function", `${c.width}x${c.height}`);
+  const ctx = c.getContext("2d");
+  ok("a context", ctx instanceof CanvasRenderingContext2D && ctx.canvas === c && c.getContext("2d") === ctx && c.getContext("webgl") === null, String(ctx));
+  const px = (x, y) => Array.from(ctx.getImageData(x, y, 1, 1).data);
+  const near = (a, b, tol = 3) => a.every((v, i) => Math.abs(v - b[i]) <= tol);
+
+  ok("defaults", ctx.fillStyle === "#000000" && ctx.strokeStyle === "#000000" && ctx.lineWidth === 1 && ctx.globalAlpha === 1 && ctx.font === "10px sans-serif" && ctx.lineCap === "butt" &&
+    ctx.textAlign === "start" && ctx.textBaseline === "alphabetic" && ctx.globalCompositeOperation === "source-over" && ctx.imageSmoothingEnabled === true, "");
+  ctx.fillStyle = "red";
+  ok("a color is given back serialized", ctx.fillStyle === "#ff0000", ctx.fillStyle);
+  ctx.fillStyle = "rgba(0, 128, 255, 0.5)";
+  ok("with alpha", ctx.fillStyle === "rgba(0, 128, 255, 0.5)", ctx.fillStyle);
+  ctx.fillStyle = "not a color";
+  ok("a bad color is ignored", ctx.fillStyle === "rgba(0, 128, 255, 0.5)", ctx.fillStyle);
+
+  ctx.fillStyle = "#ff0000";
+  ctx.fillRect(10, 10, 50, 50);
+  ok("fillRect", near(px(30, 30), [255, 0, 0, 255]) && px(70, 30)[3] === 0 && px(5, 5)[3] === 0, JSON.stringify(px(30, 30)));
+  ctx.clearRect(20, 20, 10, 10);
+  ok("clearRect", px(25, 25)[3] === 0 && near(px(40, 40), [255, 0, 0, 255]), JSON.stringify(px(25, 25)));
+
+  ctx.fillStyle = "blue";
+  ctx.globalAlpha = 0.5;
+  ctx.fillRect(80, 10, 40, 40);
+  ok("globalAlpha", Math.abs(px(100, 30)[3] - 128) <= 2 && px(100, 30)[2] > 250, JSON.stringify(px(100, 30)));
+  ctx.globalAlpha = 1;
+
+  // paths
+  ctx.beginPath();
+  ctx.moveTo(140, 10); ctx.lineTo(190, 10); ctx.lineTo(190, 50); ctx.closePath();
+  ctx.fillStyle = "#00ff00";
+  ctx.fill();
+  ok("a path is filled", near(px(180, 20), [0, 255, 0, 255]) && px(145, 40)[3] === 0, JSON.stringify(px(180, 20)));
+  ctx.strokeStyle = "#000"; ctx.lineWidth = 6;
+  ctx.beginPath(); ctx.moveTo(200, 30); ctx.lineTo(250, 30); ctx.stroke();
+  ok("stroke: width and caps", near(px(225, 30), [0, 0, 0, 255]) && near(px(225, 27), [0, 0, 0, 255]) && px(225, 22)[3] === 0 && px(198, 30)[3] === 0, JSON.stringify(px(225, 27)));
+  ctx.lineCap = "round"; ctx.beginPath(); ctx.moveTo(200, 45); ctx.lineTo(250, 45); ctx.stroke();
+  ok("a round cap reaches past the end", px(198, 45)[3] > 0 && ctx.lineCap === "round", JSON.stringify(px(198, 45)));
+  ctx.lineCap = "butt"; ctx.lineWidth = 1;
+
+  // arcs
+  ctx.beginPath(); ctx.arc(40, 120, 30, 0, Math.PI * 2); ctx.fillStyle = "#ff8800"; ctx.fill();
+  ok("arc: a circle", near(px(40, 120), [255, 136, 0, 255]) && near(px(40, 95), [255, 136, 0, 255]) && px(40, 85)[3] === 0 && px(66, 146)[3] === 0, JSON.stringify([px(40, 95), px(40, 85)]));
+  ctx.beginPath(); ctx.arc(120, 120, 30, 0, Math.PI); ctx.fillStyle = "#880088"; ctx.fill();
+  ok("a half circle", near(px(120, 135), [136, 0, 136, 255]) && px(120, 105)[3] === 0, JSON.stringify(px(120, 135)));
+  ctx.beginPath(); ctx.ellipse(200, 120, 40, 20, 0, 0, Math.PI * 2); ctx.fillStyle = "#008888"; ctx.fill();
+  ok("an ellipse", near(px(230, 120), [0, 136, 136, 255]) && px(200, 105)[3] > 0 && px(200, 90)[3] === 0, JSON.stringify(px(230, 120)));
+  ctx.beginPath(); ctx.roundRect(250, 100, 50, 40, 10); ctx.fillStyle = "#444"; ctx.fill();
+  ok("roundRect: the corner is cut, the middle is filled", px(251, 101)[3] === 0 && near(px(275, 120), [68, 68, 68, 255]), JSON.stringify(px(251, 101)));
+  ctx.beginPath(); ctx.moveTo(10, 170); ctx.arcTo(60, 170, 60, 220, 20); ctx.lineTo(60, 220); ctx.strokeStyle = "#a00"; ctx.lineWidth = 3; ctx.stroke(); ctx.lineWidth = 1;
+  ok("arcTo draws a rounded corner", px(30, 170)[3] > 0 && px(60, 200)[3] > 0 && px(10, 200)[3] === 0, JSON.stringify([px(30, 170), px(60, 200)]));
+
+  // transforms, state, clip
+  ctx.save();
+  ctx.translate(100, 170); ctx.rotate(Math.PI / 2); ctx.scale(2, 1);
+  ctx.fillStyle = "#0000ff"; ctx.fillRect(0, 0, 10, 20);
+  ctx.restore();
+  ok("translate, rotate and scale (a 20x20 square turned a quarter: 40 wide, 10 tall at the left)", near(px(80, 175), [0, 0, 255, 255]) && px(110, 175)[3] === 0, JSON.stringify([px(80, 175), px(110, 175)]));
+  const m = ctx.getTransform();
+  ok("restore brought the matrix back", m.a === 1 && m.d === 1 && m.e === 0 && m.f === 0, JSON.stringify(m));
+  ctx.save(); ctx.translate(5, 6); ctx.scale(2, 3); const t = ctx.getTransform(); ctx.restore();
+  ok("getTransform inside", t.a === 2 && t.d === 3 && t.e === 5 && t.f === 6, JSON.stringify(t));
+  ctx.save();
+  ctx.beginPath(); ctx.rect(150, 160, 30, 30); ctx.clip();
+  ctx.fillStyle = "#ff00ff"; ctx.fillRect(140, 150, 100, 100);
+  ctx.restore();
+  ok("clip", near(px(160, 170), [255, 0, 255, 255]) && px(190, 170)[3] === 0 && px(160, 200)[3] === 0, JSON.stringify([px(160, 170), px(190, 170)]));
+
+  // gradients and patterns
+  const g = ctx.createLinearGradient(200, 0, 300, 0);
+  g.addColorStop(0, "#000"); g.addColorStop(1, "#fff");
+  ctx.fillStyle = g; ctx.fillRect(200, 160, 100, 20);
+  ok("linear gradient", near(px(205, 170), [13, 13, 13, 255], 12) && near(px(250, 170), [128, 128, 128, 255], 8) && near(px(295, 170), [242, 242, 242, 255], 12), JSON.stringify([px(205, 170), px(250, 170), px(295, 170)]));
+  const r = ctx.createRadialGradient(250, 210, 0, 250, 210, 20);
+  r.addColorStop(0, "#f00"); r.addColorStop(1, "#00f");
+  ctx.fillStyle = r; ctx.fillRect(230, 190, 40, 40);
+  ok("radial gradient", near(px(250, 210), [255, 0, 0, 255], 12) && px(231, 191)[2] > 200, JSON.stringify([px(250, 210), px(231, 191)]));
+  let e = null; try { g.addColorStop(2, "red"); } catch (x) { e = x; }
+  ok("a stop out of range is IndexSizeError", e && e.name === "IndexSizeError", String(e));
+  e = null; try { g.addColorStop(0.5, "nonsense"); } catch (x) { e = x; }
+  ok("a bad stop color is SyntaxError", e && e.name === "SyntaxError", String(e));
+  ctx.fillStyle = "#123456";
+  ok("a fillStyle that is a gradient is given back", (ctx.fillStyle = g, ctx.fillStyle === g), "");
+
+  // Path2D
+  const p = new Path2D();
+  p.rect(270, 160, 30, 30);
+  p.moveTo(280, 170); p.lineTo(290, 170); p.lineTo(290, 180); p.closePath();
+  ctx.fillStyle = "#222";
+  ctx.fill(p);
+  ok("Path2D", near(px(273, 163), [34, 34, 34, 255]), JSON.stringify(px(273, 163)));
+  const q = new Path2D("M 10 10 h 30 v 30 h -30 z");
+  ok("Path2D from SVG data: hit tests", ctx.isPointInPath(q, 20, 20) === true && ctx.isPointInPath(q, 50, 50) === false, "");
+  ctx.beginPath(); ctx.rect(0, 0, 40, 40);
+  ok("isPointInPath on the current path", ctx.isPointInPath(20, 20) === true && ctx.isPointInPath(60, 20) === false, "");
+  ctx.lineWidth = 10; ctx.beginPath(); ctx.moveTo(0, 100); ctx.lineTo(50, 100);
+  ok("isPointInStroke", ctx.isPointInStroke(25, 103) === true && ctx.isPointInStroke(25, 110) === false, "");
+  ctx.lineWidth = 1;
+
+  // text
+  ctx.font = "20px sans-serif";
+  ok("font is given back", ctx.font === "20px sans-serif", ctx.font);
+  const mt = ctx.measureText("Hello");
+  ok("measureText", mt instanceof TextMetrics && mt.width > 30 && mt.width < 80 && mt.actualBoundingBoxAscent > 5, JSON.stringify(mt));
+  ctx.fillStyle = "#000"; ctx.fillText("Hello", 10, 232);
+  ok("fillText draws", ctx.getImageData(10, 215, 50, 20).data.some((v, i) => i % 4 === 3 && v > 0), "");
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ok("textAlign and textBaseline", ctx.textAlign === "center" && ctx.textBaseline === "middle", "");
+  ctx.font = "bold 16px serif";
+  ok("a font with weight and a family", ctx.font === "bold 16px serif", ctx.font);
+  ctx.font = "nonsense";
+  ok("a bad font is ignored", ctx.font === "bold 16px serif", ctx.font);
+  ctx.textAlign = "start"; ctx.textBaseline = "alphabetic";
+
+  // images: canvas to canvas, ImageData, pixels
+  const small = document.createElement("canvas"); small.width = 20; small.height = 20;
+  const sctx = small.getContext("2d"); sctx.fillStyle = "#0f0"; sctx.fillRect(0, 0, 20, 20); sctx.fillStyle = "#f00"; sctx.fillRect(0, 0, 10, 10);
+  ctx.drawImage(small, 200, 200);
+  ok("drawImage of a canvas", near(px(205, 205), [255, 0, 0, 255]) && near(px(215, 215), [0, 255, 0, 255]), JSON.stringify([px(205, 205), px(215, 215)]));
+  ctx.drawImage(small, 0, 0, 10, 10, 280, 200, 20, 20);
+  ok("drawImage with a source and a destination rectangle", near(px(290, 210), [255, 0, 0, 255]), JSON.stringify(px(290, 210)));
+  const id = ctx.createImageData(2, 2);
+  id.data.set([255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 128]);
+  ctx.putImageData(id, 300, 220);
+  ok("putImageData and getImageData", near(px(300, 220), [255, 0, 0, 255], 1) && near(px(301, 220), [0, 255, 0, 255], 1) && near(px(300, 221), [0, 0, 255, 255], 1) && px(301, 221)[3] > 120 && px(301, 221)[3] < 136, JSON.stringify([px(300, 220), px(301, 221)]));
+  e = null; try { ctx.getImageData(0, 0, 0, 5); } catch (x) { e = x; }
+  ok("getImageData of no width is IndexSizeError", e && e.name === "IndexSizeError", String(e));
+  ok("createImageData", id.width === 2 && id.height === 2 && id.data.length === 16 && ctx.createImageData(id).data.every((v) => v === 0), "");
+  const pat = ctx.createPattern(small, "repeat");
+  ctx.fillStyle = pat; ctx.fillRect(100, 200, 60, 20);
+  ok("a pattern repeats", near(px(105, 205), [255, 0, 0, 255]) && near(px(125, 205), [255, 0, 0, 255]) && near(px(115, 215), [0, 255, 0, 255]), JSON.stringify([px(105, 205), px(125, 205)]));
+
+  // compositing, shadows, dashes
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, 0, 0);
+  ctx.globalCompositeOperation = "xor";
+  ok("globalCompositeOperation", ctx.globalCompositeOperation === "xor", ctx.globalCompositeOperation);
+  ctx.globalCompositeOperation = "bogus";
+  ok("a bad operation is ignored", ctx.globalCompositeOperation === "xor", "");
+  ctx.globalCompositeOperation = "source-over";
+  ctx.setLineDash([5, 3, 2]);
+  ok("line dash: an odd list is doubled", ctx.getLineDash().join() === "5,3,2,5,3,2", ctx.getLineDash().join());
+  ctx.setLineDash([]);
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.8)"; ctx.shadowBlur = 0; ctx.shadowOffsetX = 8; ctx.shadowOffsetY = 8;
+  ctx.fillStyle = "#c00"; ctx.fillRect(170, 60, 20, 20);
+  ctx.restore();
+  ok("a shadow: offset and not blurred", px(195, 85)[3] > 150 && near(px(180, 70), [204, 0, 0, 255]), JSON.stringify(px(195, 85)));
+  ok("save and restore the state", ctx.shadowOffsetX === 0 && ctx.shadowColor === "rgba(0, 0, 0, 0)", `${ctx.shadowOffsetX} ${ctx.shadowColor}`);
+
+  // sizes, files, bitmaps
+  const url = c.toDataURL();
+  ok("toDataURL is a PNG", url.startsWith("data:image/png;base64,iVBOR") && url.length > 400, url.slice(0, 40));
+  ok("a jpeg", c.toDataURL("image/jpeg", 0.8).startsWith("data:image/jpeg;base64,/9j/"), c.toDataURL("image/jpeg").slice(0, 30));
+  const blob = await new Promise((resolve) => c.toBlob(resolve));
+  ok("toBlob", blob instanceof Blob && blob.type === "image/png" && blob.size > 200, String(blob && blob.size));
+  const bitmap = await createImageBitmap(small);
+  ok("createImageBitmap of a canvas", bitmap instanceof ImageBitmap && bitmap.width === 20 && bitmap.height === 20, String(bitmap));
+  ctx.drawImage(bitmap, 150, 100);
+  ok("drawImage of an ImageBitmap", near(px(155, 105), [255, 0, 0, 255]), JSON.stringify(px(155, 105)));
+  bitmap.close();
+  ok("a closed bitmap has no size", bitmap.width === 0, bitmap.width);
+  const cropped = await createImageBitmap(small, 0, 0, 10, 10);
+  ok("createImageBitmap with a crop", cropped.width === 10 && cropped.height === 10, `${cropped.width}x${cropped.height}`);
+  const off = new OffscreenCanvas(40, 30);
+  const octx = off.getContext("2d");
+  octx.fillStyle = "#00f"; octx.fillRect(0, 0, 40, 30);
+  ctx.drawImage(off, 280, 20);
+  ok("OffscreenCanvas draws like a canvas", near(px(290, 30), [0, 0, 255, 255]) && off.width === 40, JSON.stringify(px(290, 30)));
+  const ob = await off.convertToBlob();
+  ok("convertToBlob", ob.type === "image/png" && ob.size > 50, String(ob.size));
+  // a worker draws on an OffscreenCanvas and gives the picture back
+  const w = new Worker(URL.createObjectURL(new Blob([`
+    const off = new OffscreenCanvas(8, 8);
+    const x = off.getContext("2d");
+    x.fillStyle = "#0a0"; x.fillRect(0, 0, 8, 8);
+    const data = x.getImageData(0, 0, 1, 1).data;
+    createImageBitmap(off).then((b) => postMessage({ pixel: Array.from(data), width: b.width, type: typeof OffscreenCanvas, blob: off.width }, []));
+  `], { type: "text/javascript" })));
+  const fromWorker = await new Promise((r) => { w.onmessage = (m) => r(m.data); });
+  ok("a worker draws on an OffscreenCanvas", fromWorker.pixel.join() === "0,170,0,255" && fromWorker.width === 8 && fromWorker.type === "function", JSON.stringify(fromWorker));
+  w.terminate();
+  const d = document.createElement("canvas");
+  const dctx = d.getContext("2d");
+  dctx.fillStyle = "#f00"; dctx.lineWidth = 5; dctx.fillRect(0, 0, 10, 10);
+  d.width = 100;
+  ok("setting the width clears the canvas and resets the state", d.width === 100 && d.height === 150 && dctx.fillStyle === "#000000" && dctx.getImageData(0, 0, 1, 1).data[3] === 0 && dctx.lineWidth === 1, `${d.width} ${dctx.fillStyle}`);
+  d.setAttribute("height", "40");
+  await sleep(20);
+  ok("so does setAttribute", dctx.getImageData(0, 0, 100, 40).data.length === 100 * 40 * 4, "");
+}
+run().then(() => console.log("done"), (e) => { console.log("FAIL exception " + (e && e.stack || e)); console.log("done"); });
+</script>

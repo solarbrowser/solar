@@ -1164,10 +1164,7 @@ const char* const kStubScript = R"JS(
       define(this, "width", width); define(this, "height", height); define(this, "data", data || new Uint8ClampedArray(width * height * 4)); define(this, "colorSpace", "srgb");
     }
   });
-  defineGlobal("Path2D", class Path2D {
-    addPath() {} closePath() {} moveTo() {} lineTo() {} bezierCurveTo() {} quadraticCurveTo() {} arc() {} arcTo() {} ellipse() {} rect() {} roundRect() {}
-  });
-  defineGlobal("CanvasRenderingContext2D", class CanvasRenderingContext2D { constructor() { illegal(); } });
+  // (Path2D and CanvasRenderingContext2D, with the rest of canvas, are src/web-api/js/canvas.js's, where the window program has the drawing; without it there is no context.)
   if (typeof HTMLCanvasElement === "function") {
     ensure(HTMLCanvasElement.prototype, "getContext", function getContext() { return null; });
     ensure(HTMLCanvasElement.prototype, "toDataURL", function toDataURL() { return "data:,"; });

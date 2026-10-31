@@ -195,13 +195,23 @@ struct DrawVideo {
   bool controls = false;  // the element has the controls attribute: they are drawn over the picture
 };
 
+// A canvas element: the picture the page has drawn on it so far (the surface is asked for it each time the list is drawn), in its content box as object-fit says.
+class CanvasSurface;
+struct DrawCanvas {
+  std::shared_ptr<CanvasSurface> surface;
+  RoundedRect clip;
+  ObjectFit fit = ObjectFit::Fill;
+  Length x{0, 50, false}, y{0, 50, false};
+  bool pixelated = false;
+};
+
 // What is drawn between PushMask and PopMask is drawn on its own, then cut to the image of the mask (its alpha), and put in the page.
 struct PushMask {};
 struct PopMask {
   std::vector<ImageLayer> layers;  // added together: what any of them shows is shown
 };
 
-using Item = std::variant<FillRoundedRect, DrawBorder, DrawGlyphs, PushClip, PopClip, PushLayer, PopLayer, PushTransform, PopTransform, DrawImageLayer, DrawImage, DrawVideo, PushMask, PopMask, DrawBoxShadow, DrawOutline>;
+using Item = std::variant<FillRoundedRect, DrawBorder, DrawGlyphs, PushClip, PopClip, PushLayer, PopLayer, PushTransform, PopTransform, DrawImageLayer, DrawImage, DrawVideo, DrawCanvas, PushMask, PopMask, DrawBoxShadow, DrawOutline>;
 
 struct DisplayList {
   std::vector<Item> items;

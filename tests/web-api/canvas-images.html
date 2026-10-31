@@ -1,0 +1,110 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Canvas and images</title>
+<canvas id="c" width="200" height="100"></canvas>
+<script>
+// Needs tests/web-api/wsserver.py (which serves media/tiny.png and media/tiny.jpg).
+const ok = (name, condition, detail) => console.log((condition ? "ok   " : "FAIL ") + name + (condition ? "" : "  " + detail));
+const wait = (target, type, ms = 5000) => new Promise((resolve, reject) => { const t = setTimeout(() => reject(new Error("timeout waiting for " + type)), ms); target.addEventListener(type, (e) => { clearTimeout(t); resolve(e); }, { once: true }); });
+async function run() {
+  const ctx = document.getElementById("c").getContext("2d");
+  const px = (x, y) => Array.from(ctx.getImageData(x, y, 1, 1).data);
+  const near = (a, b, tol = 4) => a.every((v, i) => Math.abs(v - b[i]) <= tol);
+
+  const img = new Image();
+  ok("a new image is complete and empty", img.complete === true && img.naturalWidth === 0 && img.src === "", `${img.complete} ${img.naturalWidth}`);
+  const loaded = wait(img, "load");
+  img.src = "media/tiny.png";
+  ok("while it loads, it is not complete", img.complete === false, img.complete);
+  await loaded;
+  ok("load: complete, with its size", img.complete && img.naturalWidth === 16 && img.naturalHeight === 8 && img.currentSrc.endsWith("/media/tiny.png"), `${img.naturalWidth}x${img.naturalHeight}`);
+  ctx.drawImage(img, 10, 10);
+  ok("drawImage of an image", near(px(12, 12), [255, 0, 0, 255]) && px(30, 12)[3] === 0, JSON.stringify(px(12, 12)));
+  ctx.drawImage(img, 0, 0, 8, 4, 100, 10, 32, 16);
+  ok("drawImage with rectangles (scaled up)", near(px(110, 20), [255, 0, 0, 255]) && near(px(130, 24), [255, 0, 0, 255]) && px(140, 20)[3] === 0, JSON.stringify([px(110, 20), px(140, 20)]));
+  const pattern = ctx.createPattern(img, "repeat");
+  ctx.fillStyle = pattern; ctx.fillRect(0, 50, 64, 16);
+  ok("createPattern of an image", near(px(2, 52), [255, 0, 0, 255]) && near(px(40, 60), [255, 0, 0, 255]), JSON.stringify(px(40, 60)));
+
+  const jpg = new Image();
+  const jl = wait(jpg, "load");
+  jpg.src = "media/tiny.jpg";
+  await jl;
+  ok("a JPEG", jpg.naturalWidth === 64 && jpg.naturalHeight === 48, `${jpg.naturalWidth}x${jpg.naturalHeight}`);
+  ctx.drawImage(jpg, 120, 50, 64, 48);
+  ok("a JPEG is drawn", px(150, 70)[3] === 255, JSON.stringify(px(150, 70)));
+
+  const bad = new Image();
+  const failed = wait(bad, "error");
+  bad.src = "media/nothing.png";
+  await failed;
+  ok("a missing file: error, complete, no size, and drawing it is InvalidStateError", bad.complete && bad.naturalWidth === 0, `${bad.complete} ${bad.naturalWidth}`);
+  let e = null; try { ctx.drawImage(bad, 0, 0); } catch (x) { e = x; }
+  ok("drawImage of a broken image throws InvalidStateError", e && e.name === "InvalidStateError", String(e));
+  const notImage = new Image();
+  const failed2 = wait(notImage, "error");
+  notImage.src = "wsserver.py";
+  await failed2;
+  ok("a file that is not a picture is an error", notImage.naturalWidth === 0, notImage.naturalWidth);
+
+  // drawing an image that is not loaded yet draws nothing
+  const slow = new Image(); slow.src = "media/tiny.png?again";
+  ctx.drawImage(slow, 150, 5);
+  ok("an image that is not there yet draws nothing", px(155, 8)[3] === 0, JSON.stringify(px(155, 8)));
+  await slow.decode();
+  ok("decode() resolves when it is", slow.complete && slow.naturalWidth === 16, "");
+  e = null; try { await bad.decode(); } catch (x) { e = x; }
+  ok("decode() of a broken one rejects (EncodingError)", e && e.name === "EncodingError", String(e));
+
+  // a data address, and a round trip: a canvas as a PNG, loaded as an image
+  const out = document.createElement("canvas"); out.width = 4; out.height = 4;
+  const octx = out.getContext("2d");
+  octx.fillStyle = "#00f"; octx.fillRect(0, 0, 4, 4);
+  const round = new Image();
+  const rl = wait(round, "load");
+  round.src = out.toDataURL();
+  await rl;
+  ok("a data address: the canvas's PNG loads as an image", round.naturalWidth === 4 && round.naturalHeight === 4, `${round.naturalWidth}`);
+  ctx.drawImage(round, 190, 90);
+  ok("and draws", near(px(192, 92), [0, 0, 255, 255]), JSON.stringify(px(192, 92)));
+
+  // a blob
+  const blob = await new Promise((r) => out.toBlob(r));
+  const viaBlob = await createImageBitmap(blob);
+  ok("createImageBitmap of a Blob", viaBlob.width === 4 && viaBlob.height === 4, `${viaBlob.width}`);
+  const fromImg = await createImageBitmap(img);
+  ok("createImageBitmap of an image", fromImg.width === 16 && fromImg.height === 8, `${fromImg.width}`);
+  const viaUrl = new Image();
+  const ul = wait(viaUrl, "load");
+  viaUrl.src = URL.createObjectURL(blob);
+  await ul;
+  ok("an object URL", viaUrl.naturalWidth === 4, viaUrl.naturalWidth);
+
+  // a video: the picture it shows now
+  const v = document.createElement("video");
+  v.muted = true; v.src = "media/test.mp4";
+  while (v.readyState < 3) await new Promise((r) => setTimeout(r, 50));
+  v.currentTime = 2;
+  await wait(v, "seeked");
+  await new Promise((r) => setTimeout(r, 100));
+  const vc = document.createElement("canvas"); vc.width = 64; vc.height = 36;
+  const vx = vc.getContext("2d");
+  vx.drawImage(v, 0, 0, 64, 36);
+  const vp = Array.from(vx.getImageData(5, 18, 1, 1).data);
+  ok("drawImage of a video draws its picture (the colour bars: red at the left)", vp[3] === 255 && vp[0] > 200 && vp[1] < 60, JSON.stringify(vp));
+  const vb = await createImageBitmap(v);
+  ok("createImageBitmap of a video", vb.width === 320 && vb.height === 180, `${vb.width}`);
+
+  // an image in the markup is known when script asks
+  const m = document.createElement("div");
+  m.innerHTML = '<img id="mk" src="media/tiny.png">';
+  document.body.appendChild(m);
+  const mk = document.getElementById("mk");
+  await mk.decode();
+  ok("an image of the markup: naturalWidth and decode()", mk.naturalWidth === 16 && mk.complete, `${mk.naturalWidth}`);
+  const mkCanvas = document.createElement("canvas"); mkCanvas.width = 16; mkCanvas.height = 8;
+  mkCanvas.getContext("2d").drawImage(mk, 0, 0);
+  ok("drawImage of it", Array.from(mkCanvas.getContext("2d").getImageData(1, 1, 1, 1).data)[0] > 240, "");
+}
+run().then(() => console.log("done"), (e) => { console.log("FAIL exception " + (e && e.stack || e)); console.log("done"); });
+</script>

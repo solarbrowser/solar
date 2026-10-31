@@ -16,4 +16,8 @@ namespace solar::dom {
 inline std::atomic<int> g_mediaAttached{0};
 inline void (*g_mediaDetach)(const void* element) = nullptr;
 
+// The same for the surface of a canvas element (src/paint/CanvasRegistry.cpp).
+inline std::atomic<int> g_canvasAttached{0};
+inline void (*g_canvasDetach)(const void* element) = nullptr;
+
 }  // namespace solar::dom

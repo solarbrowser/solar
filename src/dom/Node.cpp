@@ -323,6 +323,7 @@ Node::Node() { ++g_liveNodes; }
 Node::~Node() {
   --g_liveNodes;
   if (g_mediaAttached.load(std::memory_order_relaxed) > 0 && g_mediaDetach) g_mediaDetach(this);
+  if (g_canvasAttached.load(std::memory_order_relaxed) > 0 && g_canvasDetach) g_canvasDetach(this);
   if (controlDirty) {
     std::vector<Element*>& controls = DirtyControls();
     controls.erase(std::remove_if(controls.begin(), controls.end(), [this](Element* e) { return static_cast<Node*>(e) == this; }), controls.end());

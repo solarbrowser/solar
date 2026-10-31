@@ -28,6 +28,7 @@
 #include "solar/dom/Range.h"
 #include "solar/layout/Layout.h"
 #include "solar/paint/Paint.h"
+#include "solar/paint/Canvas.h"
 #include "solar/html/Frames.h"
 #include "solar/html/Xml.h"
 
@@ -669,6 +670,7 @@ class Painter {
     if (leftEdge && rightEdge) {
       PaintImageOf(box, borderBox, props);
       PaintVideoOf(box, borderBox, props);
+      PaintCanvasOf(box, borderBox, props);
     }
     if (leftEdge && rightEdge && box.formControl) PaintControl(box, borderBox);
   }
@@ -1099,6 +1101,35 @@ class Painter {
       out.push_back(std::move(layer));
     }
     return out;
+  }
+
+  // The picture of a canvas: what the page has drawn on it, in the content box.
+  void PaintCanvasOf(const Box& box, const RectF& borderBox, const PaintProps& props) {
+    if (!box.replaced || box.kind != Box::Kind::Block) return;
+    dom::Element* element = box.element();
+    if (!element || !element->IsHtml("canvas")) return;
+    DrawCanvas item;
+    item.surface = CanvasOf(element);
+    if (!item.surface) return;
+    layout::Edges insets;
+    insets.top = box.border.top + box.padding.top;
+    insets.right = box.border.right + box.padding.right;
+    insets.bottom = box.border.bottom + box.padding.bottom;
+    insets.left = box.border.left + box.padding.left;
+    const RectF content{borderBox.x + F(insets.left), borderBox.y + F(insets.top), std::max(0.0f, borderBox.width - F(insets.Horizontal())), std::max(0.0f, borderBox.height - F(insets.Vertical()))};
+    item.clip = Rounded(box, content, props, 1, &insets);
+    std::string pseudo;
+    css::StyleReader reader(ctx_, element, pseudo);
+    const std::string fit = reader.Get("object-fit");
+    item.fit = fit == "contain" ? ObjectFit::Contain : fit == "cover" ? ObjectFit::Cover : fit == "none" ? ObjectFit::None : fit == "scale-down" ? ObjectFit::ScaleDown : ObjectFit::Fill;
+    const std::vector<std::string> position = SplitWords(reader.Get("object-position"));
+    if (position.size() == 2) {
+      ParseLength(position[0], item.x);
+      ParseLength(position[1], item.y);
+    }
+    const std::string rendering = reader.Get("image-rendering");
+    item.pixelated = rendering == "pixelated" || rendering == "crisp-edges";
+    list_->items.push_back(std::move(item));
   }
 
   // The picture of a video: the player's current one, in the content box.

@@ -30,7 +30,7 @@ DOM_SOURCES = $(wildcard src/dom/*.cpp)
 DOM_OBJECTS = $(DOM_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
 
 # Painting: the display list of a document, and (with Skia and SDL3, for solar-gui) its drawing in a window.
-PAINT_SOURCES = src/paint/Color.cpp src/paint/Paint.cpp
+PAINT_SOURCES = src/paint/Color.cpp src/paint/Paint.cpp src/paint/CanvasRegistry.cpp
 PAINT_OBJECTS = $(PAINT_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
 SKIA_DIR = third_party/skia
 # (Skia is built with OpenGL and Vulkan: gn gen out/StaticVk with the args of out/Static and skia_use_vulkan = true. GPU_TEST_UTILS is defined by that build and changes
@@ -116,7 +116,7 @@ $(GEN_DIR)/WebApiScript.cpp: $(WEB_API_JS) $(BUILD_DIR)/EmbedScripts
 
 # (And the global scope of a worker, in src/web-api/worker-js, with the APIs of the page's that a worker has as well: the ones that need nothing of the scope come
 # before it, the ones that need navigator after.)
-WEB_API_WORKER_JS = $(sort src/web-api/js/websocket.js src/web-api/js/eventsource.js src/web-api/js/cache.js src/web-api/js/crypto.js src/web-api/js/compression.js src/web-api/js/permissions.js src/web-api/js/push.js) $(sort $(wildcard src/web-api/worker-js/*.js)) src/web-api/js/locks.js src/web-api/js/storage.js
+WEB_API_WORKER_JS = $(sort src/web-api/js/websocket.js src/web-api/js/eventsource.js src/web-api/js/cache.js src/web-api/js/crypto.js src/web-api/js/compression.js src/web-api/js/permissions.js src/web-api/js/push.js src/web-api/js/canvas.js) $(sort $(wildcard src/web-api/worker-js/*.js)) src/web-api/js/locks.js src/web-api/js/storage.js
 $(GEN_DIR)/WebApiWorkerScript.cpp: $(WEB_API_WORKER_JS) $(BUILD_DIR)/EmbedScripts
 	@mkdir -p $(GEN_DIR)
 	@echo "[EMBED] $@"
@@ -200,9 +200,9 @@ quanta:
 $(QUANTA_LIBS): | quanta
 
 # The browser: a page in a window (src/gui), and solar-cli, the command line for what is under it (addresses, fetches), which the tests and tools use.
-$(OBJ_DIR)/src/paint/SkiaPainter.o $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/gui/GpuSurface.o $(OBJ_DIR)/src/gui/VulkanSurface.o $(OBJ_DIR)/src/gui/SdlAudio.o: CXXFLAGS += $(SKIA_CFLAGS) $(SDL_CFLAGS)
+$(OBJ_DIR)/src/paint/SkiaPainter.o $(OBJ_DIR)/src/paint/Canvas.o $(OBJ_DIR)/src/paint/CanvasNatives.o $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/gui/GpuSurface.o $(OBJ_DIR)/src/gui/VulkanSurface.o $(OBJ_DIR)/src/gui/SdlAudio.o: CXXFLAGS += $(SKIA_CFLAGS) $(SDL_CFLAGS)
 
-solar: $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/gui/SdlAudio.o $(OBJ_DIR)/src/gui/GpuSurface.o $(OBJ_DIR)/src/gui/VulkanSurface.o $(OBJ_DIR)/src/paint/SkiaPainter.o $(PAINT_OBJECTS) $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
+solar: $(OBJ_DIR)/src/paint/Canvas.o $(OBJ_DIR)/src/paint/CanvasNatives.o $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/gui/SdlAudio.o $(OBJ_DIR)/src/gui/GpuSurface.o $(OBJ_DIR)/src/gui/VulkanSurface.o $(OBJ_DIR)/src/paint/SkiaPainter.o $(PAINT_OBJECTS) $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS) $(SKIA_LIBS) $(SDL_LIBS)
 
