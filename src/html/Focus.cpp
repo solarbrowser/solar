@@ -29,13 +29,11 @@ bool ParseTabIndex(const dom::Element* element, long& value) {
   std::string text = attribute->value;
   const size_t first = text.find_first_not_of(" \t\n\f\r");
   if (first == std::string::npos) return false;
-  text = text.substr(first, text.find_last_not_of(" \t\n\f\r") - first + 1);
+  // The rules for parsing integers: white space, a sign, digits; what follows them does not matter.
+  text = text.substr(first);
   size_t i = 0;
   if (text[0] == '-' || text[0] == '+') ++i;
-  if (i >= text.size()) return false;
-  for (size_t j = i; j < text.size(); ++j) {
-    if (text[j] < '0' || text[j] > '9') return false;
-  }
+  if (i >= text.size() || text[i] < '0' || text[i] > '9') return false;
   value = std::strtol(text.c_str(), nullptr, 10);
   return true;
 }

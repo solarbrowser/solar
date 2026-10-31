@@ -19,6 +19,14 @@
     throw new AssertionError(description ? description + ': ' + message : message);
   }
 
+  // assert_any(assert_func, actual, expected_array, ...args): passes when the assertion holds for one of the expected values.
+  globalThis.assert_any = (assertFunc, actual, expectedArray, ...args) => {
+    let last = null;
+    for (const expected of expectedArray) {
+      try { assertFunc(actual, expected, ...args); return; } catch (e) { last = e; }
+    }
+    throw last || new Error('assert_any: no expected value');
+  };
   globalThis.assert_equals = (actual, expected, description) => {
     if (!Object.is(actual, expected)) fail('expected ' + describe(expected) + ' but got ' + describe(actual), description);
   };
