@@ -8,6 +8,7 @@
 #include <unordered_set>
 #include <functional>
 #include "solar/css/Style.h"
+#include "solar/css/Presentational.h"
 #include "solar/css/Animation.h"
 #include "solar/css/Fonts.h"
 #include "solar/css/Logical.h"
@@ -1714,6 +1715,15 @@ void BuildUntimed(dom::Element* element, ElementStyle& style, const std::string&
         ++gatherer.ruleSerial;
         gatherer.Offer(style.storage.back()[0], true, false, -1000000, Specificity{});  // (below every layer)
       }
+    }
+  }
+  // The other presentational hints (bgcolor, align, cellpadding, the size of a font...): the same, of no weight.
+  if (pseudo.empty() && element->IsHtml()) {
+    std::vector<DeclarationEntry> hints = PresentationalHints(element);
+    if (!hints.empty()) {
+      style.storage.push_back(std::move(hints));
+      ++gatherer.ruleSerial;
+      for (const DeclarationEntry& entry : style.storage.back()) gatherer.Offer(entry, true, false, -1000000, Specificity{});
     }
   }
   // The tree the element is in: a shadow tree's elements are styled by that tree's sheets (and the document's own are not for
