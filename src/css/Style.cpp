@@ -67,6 +67,9 @@ article, aside, h1, h2, h3, h4, h5, h6, hgroup, nav, section, dir, dd, dl, dt, m
 [hidden], area, base, basefont, datalist, head, link, meta, noembed, noframes, noscript, param, rp, script, style, template, title { display: none; }
 li { display: list-item; text-align: match-parent; }
 center { text-align: center; }
+legend { padding-inline-start: 2px; padding-inline-end: 2px; }
+input, select, button, textarea, meter, progress { appearance: auto; }
+input[type=hidden i], input[type=file i], input[type=image i] { appearance: none; }
 input:not([type=image i], [type=range i], [type=checkbox i], [type=radio i]) { overflow: clip !important; overflow-clip-margin: 0 !important; }
 table { display: table; } caption { display: table-caption; } colgroup, colgroup[hidden] { display: table-column-group; } col, col[hidden] { display: table-column; }
 thead, thead[hidden] { display: table-header-group; } tbody, tbody[hidden] { display: table-row-group; } tfoot, tfoot[hidden] { display: table-footer-group; }

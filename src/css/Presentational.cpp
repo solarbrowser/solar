@@ -11,6 +11,9 @@
 #include <cstdlib>
 #include <string>
 
+#include "solar/url/Parser.h"
+#include "solar/url/Serializer.h"
+
 namespace solar::css {
 
 namespace {
@@ -183,7 +186,15 @@ std::vector<DeclarationEntry> PresentationalHints(const dom::Element* element) {
   if (tag == "font") color("color", "color");
   if (tag == "hr") color("color", "border-color");
   if (tag == "body" || table || cell || tag == "thead" || tag == "tbody" || tag == "tfoot" || row) {
-    if (const std::string* v = Attr(element, "background")) if (!v->empty()) h.Add("background-image", "url(\"" + *v + "\")");
+    if (const std::string* v = Attr(element, "background")) if (!v->empty()) {
+      // The address is made absolute, against the base address of the document.
+      std::string address = *v;
+      if (element->nodeDocument) {
+        const std::optional<url::Url> base = url::Parse(dom::DocumentBaseUri(element->nodeDocument));
+        if (base) if (const std::optional<url::Url> resolved = url::Parse(*v, &*base)) address = url::Serialize(*resolved);
+      }
+      h.Add("background-image", "url(\"" + address + "\")");
+    }
   }
 
   // Fonts.
