@@ -1,0 +1,97 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Web Crypto</title>
+<script>
+const ok = (name, condition, detail) => console.log((condition ? "ok   " : "FAIL ") + name + (condition ? "" : "  " + detail));
+const hex = (buffer) => Array.from(new Uint8Array(buffer), (b) => b.toString(16).padStart(2, "0")).join("");
+const fromHex = (text) => new Uint8Array(text.match(/../g).map((h) => parseInt(h, 16)));
+const enc = (s) => new TextEncoder().encode(s);
+const rejects = async (promise) => { try { await promise; return null; } catch (e) { return e; } };
+async function run() {
+  const s = crypto.subtle;
+  ok("subtle exists", s instanceof SubtleCrypto && typeof CryptoKey === "function", String(s));
+  ok("getRandomValues", crypto.getRandomValues(new Uint8Array(16)).some((b) => b !== 0), "");
+  ok("randomUUID", /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(crypto.randomUUID()), crypto.randomUUID());
+  let e = null; try { crypto.getRandomValues(new Float32Array(1)); } catch (x) { e = x; }
+  ok("getRandomValues of floats is a TypeMismatchError", e && e.name === "TypeMismatchError", String(e));
+
+  ok("SHA-256 of abc", hex(await s.digest("SHA-256", enc("abc"))) === "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "");
+  ok("SHA-1 of abc", hex(await s.digest({ name: "sha-1" }, enc("abc"))) === "a9993e364706816aba3e25717850c26c9cd0d89d", "");
+  ok("SHA-512 length", (await s.digest("SHA-512", new Uint8Array(0))).byteLength === 64, "");
+  e = await rejects(s.digest("MD5", enc("x")));
+  ok("MD5 is NotSupportedError", e && e.name === "NotSupportedError", String(e));
+
+  // HMAC (RFC 4231 test case 1)
+  const hk = await s.importKey("raw", fromHex("0b".repeat(20)), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+  ok("HMAC key", hk.type === "secret" && hk.extractable === false && hk.algorithm.name === "HMAC" && hk.algorithm.hash.name === "SHA-256" && hk.usages.join() === "sign,verify", JSON.stringify(hk.algorithm));
+  const sig = await s.sign("HMAC", hk, enc("Hi There"));
+  ok("HMAC-SHA256 vector", hex(sig) === "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7", hex(sig));
+  ok("HMAC verify", (await s.verify("HMAC", hk, sig, enc("Hi There"))) === true && (await s.verify("HMAC", hk, sig, enc("Hi there"))) === false, "");
+  e = await rejects(s.exportKey("raw", hk));
+  ok("a non-extractable key does not export", e && e.name === "InvalidAccessError", String(e));
+  e = await rejects(s.encrypt({ name: "AES-GCM", iv: new Uint8Array(12) }, hk, enc("x")));
+  ok("the wrong algorithm for a key is InvalidAccessError", e && e.name === "InvalidAccessError", String(e));
+
+  // AES-GCM
+  const ak = await s.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+  ok("generated AES key", ak.algorithm.length === 256 && ak.extractable && (await s.exportKey("raw", ak)).byteLength === 32, "");
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await s.encrypt({ name: "AES-GCM", iv, additionalData: enc("aad") }, ak, enc("secret message"));
+  ok("GCM ciphertext is message plus a 16-byte tag", ct.byteLength === 14 + 16, ct.byteLength);
+  ok("GCM round trip", new TextDecoder().decode(await s.decrypt({ name: "AES-GCM", iv, additionalData: enc("aad") }, ak, ct)) === "secret message", "");
+  e = await rejects(s.decrypt({ name: "AES-GCM", iv, additionalData: enc("other") }, ak, ct));
+  ok("GCM with other additional data is OperationError", e && e.name === "OperationError", String(e));
+  const tampered = new Uint8Array(ct.slice(0)); tampered[0] ^= 1;
+  e = await rejects(s.decrypt({ name: "AES-GCM", iv, additionalData: enc("aad") }, ak, tampered));
+  ok("a tampered ciphertext is OperationError", e && e.name === "OperationError", String(e));
+  // known GCM vector (NIST test case 2: zero key, zero iv, one zero block)
+  const zk = await s.importKey("raw", new Uint8Array(16), "AES-GCM", false, ["encrypt"]);
+  ok("GCM vector", hex(await s.encrypt({ name: "AES-GCM", iv: new Uint8Array(12) }, zk, new Uint8Array(16))) === "0388dace60b6a392f328c2b971b2fe78ab6e47d42cec13bdf53a67b21257bddf", "");
+
+  // AES-CBC and CTR
+  const ck = await s.importKey("raw", fromHex("2b7e151628aed2a6abf7158809cf4f3c"), "AES-CBC", true, ["encrypt", "decrypt"]);
+  const cbc = await s.encrypt({ name: "AES-CBC", iv: fromHex("000102030405060708090a0b0c0d0e0f") }, ck, fromHex("6bc1bee22e409f96e93d7e117393172a"));
+  ok("CBC vector (first block, then padding block)", hex(cbc).startsWith("7649abac8119b246cee98e9b12e9197d") && cbc.byteLength === 32, hex(cbc));
+  ok("CBC round trip", hex(await s.decrypt({ name: "AES-CBC", iv: fromHex("000102030405060708090a0b0c0d0e0f") }, ck, cbc)) === "6bc1bee22e409f96e93d7e117393172a", "");
+  const tk = await s.importKey("raw", fromHex("2b7e151628aed2a6abf7158809cf4f3c"), "AES-CTR", false, ["encrypt"]);
+  ok("CTR vector", hex(await s.encrypt({ name: "AES-CTR", counter: fromHex("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"), length: 64 }, tk, fromHex("6bc1bee22e409f96e93d7e117393172a"))) === "874d6191b620e3261bef6864990db6ce", "");
+
+  // PBKDF2 (RFC 6070), HKDF (RFC 5869 test 1)
+  const pk = await s.importKey("raw", enc("password"), "PBKDF2", false, ["deriveBits", "deriveKey"]);
+  ok("PBKDF2 vector", hex(await s.deriveBits({ name: "PBKDF2", hash: "SHA-1", salt: enc("salt"), iterations: 2 }, pk, 160)) === "ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957", "");
+  const dk = await s.deriveKey({ name: "PBKDF2", hash: "SHA-256", salt: enc("salt"), iterations: 1000 }, pk, { name: "AES-GCM", length: 128 }, true, ["encrypt", "decrypt"]);
+  ok("deriveKey makes an AES key", dk.algorithm.name === "AES-GCM" && dk.algorithm.length === 128 && (await s.exportKey("raw", dk)).byteLength === 16, "");
+  const hkk = await s.importKey("raw", fromHex("0b".repeat(22)), "HKDF", false, ["deriveBits"]);
+  ok("HKDF vector", hex(await s.deriveBits({ name: "HKDF", hash: "SHA-256", salt: fromHex("000102030405060708090a0b0c"), info: fromHex("f0f1f2f3f4f5f6f7f8f9") }, hkk, 336)) === "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865", "");
+  e = await rejects(s.importKey("raw", enc("password"), "PBKDF2", true, ["deriveBits"]));
+  ok("an extractable PBKDF2 key is a SyntaxError", e && e.name === "SyntaxError", String(e));
+
+  // JWK, wrap/unwrap
+  const jwk = await s.exportKey("jwk", ak);
+  ok("jwk export", jwk.kty === "oct" && jwk.alg === "A256GCM" && jwk.ext === true && typeof jwk.k === "string" && jwk.key_ops.join() === "encrypt,decrypt", JSON.stringify(jwk));
+  const again = await s.importKey("jwk", jwk, "AES-GCM", true, ["decrypt"]);
+  ok("jwk round trip decrypts", new TextDecoder().decode(await s.decrypt({ name: "AES-GCM", iv, additionalData: enc("aad") }, again, ct)) === "secret message", "");
+  const kw = await s.importKey("raw", new Uint8Array(32).fill(5), "AES-KW", false, ["wrapKey", "unwrapKey"]);
+  const wrapped = await s.wrapKey("raw", ak, kw, "AES-KW");
+  ok("AES-KW wraps 32 bytes into 40", wrapped.byteLength === 40, wrapped.byteLength);
+  const unwrapped = await s.unwrapKey("raw", wrapped, kw, "AES-KW", "AES-GCM", true, ["decrypt"]);
+  ok("unwrapKey gives the key back", hex(await s.exportKey("raw", unwrapped)) === hex(await s.exportKey("raw", ak)), "");
+  const hmacKey = await s.generateKey({ name: "HMAC", hash: "SHA-256" }, true, ["sign"]);
+  ok("generated HMAC key length", hmacKey.algorithm.length === 512, hmacKey.algorithm.length);
+  e = null; try { new CryptoKey(); } catch (x) { e = x; }
+  ok("new CryptoKey() is illegal", e instanceof TypeError, String(e));
+  e = await rejects(s.generateKey({ name: "AES-GCM", length: 100 }, true, ["encrypt"]));
+  ok("AES length 100 is OperationError", e && e.name === "OperationError", String(e));
+  e = await rejects(s.generateKey({ name: "AES-GCM", length: 128 }, true, ["sign"]));
+  ok("a usage the algorithm lacks is a SyntaxError", e && e.name === "SyntaxError", String(e));
+
+  // in a worker
+  const worker = new Worker(URL.createObjectURL(new Blob([`
+    crypto.subtle.digest("SHA-256", new TextEncoder().encode("abc")).then((d) => postMessage({ n: d.byteLength, uuid: crypto.randomUUID().length, key: typeof CryptoKey }));
+  `], { type: "text/javascript" })));
+  const w = await new Promise((r) => { worker.onmessage = (m) => r(m.data); });
+  ok("a worker has crypto.subtle", w.n === 32 && w.uuid === 36 && w.key === "function", JSON.stringify(w));
+  worker.terminate();
+}
+run().then(() => console.log("done"), (e) => { console.log("FAIL exception " + (e && e.stack || e)); console.log("done"); });
+</script>
