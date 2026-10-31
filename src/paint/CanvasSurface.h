@@ -123,6 +123,9 @@ class CanvasSurface {
   std::vector<uint8_t> GetImageData(int x, int y, int w, int h);
   void PutImageData(const uint8_t* rgba, int w, int h, int dx, int dy, int sx, int sy, int sw, int sh);
 
+  // The surface becomes the picture (replacing what it had), turned over if `flip` (a WebGL drawing buffer has its first row at the bottom).
+  void SetContents(const sk_sp<SkImage>& image, bool flip);
+
   // ---- The picture ----
   // The page's thread: the surface as it is now becomes what the window shows.
   void Publish();

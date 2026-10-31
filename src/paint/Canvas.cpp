@@ -683,6 +683,22 @@ void CanvasSurface::PutImageData(const uint8_t* rgba, int w, int h, int dx, int 
   Mark();
 }
 
+void CanvasSurface::SetContents(const sk_sp<SkImage>& image, bool flip) {
+  if (!canvas_ || !image) return;
+  canvas_->save();
+  canvas_->resetMatrix();
+  canvas_->clear(SK_ColorTRANSPARENT);
+  if (flip) {
+    canvas_->translate(0, static_cast<float>(height_));
+    canvas_->scale(1, -1);
+  }
+  SkPaint paint;
+  paint.setBlendMode(SkBlendMode::kSrc);
+  canvas_->drawImage(image, 0, 0, SkSamplingOptions(), &paint);
+  canvas_->restore();
+  Mark();
+}
+
 void CanvasSurface::Publish() {
   sk_sp<SkImage> image = surface_ ? surface_->makeImageSnapshot() : nullptr;
   {

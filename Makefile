@@ -200,9 +200,9 @@ quanta:
 $(QUANTA_LIBS): | quanta
 
 # The browser: a page in a window (src/gui), and solar-cli, the command line for what is under it (addresses, fetches), which the tests and tools use.
-$(OBJ_DIR)/src/paint/SkiaPainter.o $(OBJ_DIR)/src/paint/Canvas.o $(OBJ_DIR)/src/paint/CanvasNatives.o $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/gui/GpuSurface.o $(OBJ_DIR)/src/gui/VulkanSurface.o $(OBJ_DIR)/src/gui/SdlAudio.o: CXXFLAGS += $(SKIA_CFLAGS) $(SDL_CFLAGS)
+$(OBJ_DIR)/src/paint/SkiaPainter.o $(OBJ_DIR)/src/paint/Canvas.o $(OBJ_DIR)/src/paint/CanvasNatives.o $(OBJ_DIR)/src/paint/WebGl.o $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/gui/GpuSurface.o $(OBJ_DIR)/src/gui/VulkanSurface.o $(OBJ_DIR)/src/gui/SdlAudio.o: CXXFLAGS += $(SKIA_CFLAGS) $(SDL_CFLAGS)
 
-solar: $(OBJ_DIR)/src/paint/Canvas.o $(OBJ_DIR)/src/paint/CanvasNatives.o $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/gui/SdlAudio.o $(OBJ_DIR)/src/gui/GpuSurface.o $(OBJ_DIR)/src/gui/VulkanSurface.o $(OBJ_DIR)/src/paint/SkiaPainter.o $(PAINT_OBJECTS) $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
+solar: $(OBJ_DIR)/src/paint/Canvas.o $(OBJ_DIR)/src/paint/CanvasNatives.o $(OBJ_DIR)/src/paint/WebGl.o $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/gui/SdlAudio.o $(OBJ_DIR)/src/gui/GpuSurface.o $(OBJ_DIR)/src/gui/VulkanSurface.o $(OBJ_DIR)/src/paint/SkiaPainter.o $(PAINT_OBJECTS) $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS) $(SKIA_LIBS) $(SDL_LIBS)
 

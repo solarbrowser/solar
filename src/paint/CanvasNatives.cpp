@@ -12,6 +12,7 @@
 #include <memory>
 #include <set>
 
+#include "CanvasNatives.h"
 #include "CanvasSurface.h"
 #include "include/codec/SkCodec.h"
 #include "include/core/SkData.h"
@@ -38,59 +39,11 @@ namespace {
 
 char g_key;
 
-struct Natives {
-  Natives(Context& c, web::FetchHost& h) : ctx(&c), host(&h) {}
-  Context* ctx;
-  web::FetchHost* host;
-  std::map<uint32_t, std::shared_ptr<CanvasSurface>> surfaces;
-  std::map<uint32_t, sk_sp<SkImage>> images;
-  std::map<uint32_t, std::vector<dom::Element*>> elements;
-  std::set<uint32_t> queued;
-  uint32_t next = 1;
-  std::shared_ptr<bool> alive = std::make_shared<bool>(true);
-
-  // What was drawn is shown a moment later: one task for all of it.
-  void Touch(uint32_t id) {
-    const auto found = surfaces.find(id);
-    if (found == surfaces.end() || !found->second->dirty || queued.count(id)) return;
-    queued.insert(id);
-    host->config().loop->Post([this, id, alive = alive] {
-      if (!*alive) return;
-      queued.erase(id);
-      const auto surface = surfaces.find(id);
-      if (surface == surfaces.end()) return;
-      surface->second->Publish();
-      const auto attached = elements.find(id);
-      if (attached == elements.end()) return;
-      for (dom::Element* element : attached->second) {
-        dom::NoteDamage(element, dom::kDamageAttributes);
-        dom::NoteTreeChangeAt(element);
-      }
-    });
-  }
-  void Release() {
-    *alive = false;
-    for (auto& [id, list] : elements) for (dom::Element* element : list) DetachCanvas(element);
-    elements.clear();
-    surfaces.clear();
-    images.clear();
-  }
-};
-
 struct Guard {
   explicit Guard(std::shared_ptr<Natives> n) : natives(std::move(n)) {}
   ~Guard() { natives->Release(); }
   std::shared_ptr<Natives> natives;
 };
-
-Natives* NativesOf(Context& ctx) {
-  web::FetchHost* host = web::HostOf(ctx);
-  if (!host) return nullptr;
-  if (auto found = host->Extension(&g_key)) return static_cast<Guard*>(found.get())->natives.get();
-  auto guard = std::make_shared<Guard>(std::make_shared<Natives>(ctx, *host));
-  host->SetExtension(&g_key, guard);
-  return guard->natives.get();
-}
 
 CanvasSurface* SurfaceOf(Natives& n, Context& ctx, const Value& id) {
   const auto found = n.surfaces.find(qe::ToUint32(ctx, id));
@@ -620,6 +573,15 @@ Value Encode(Context& ctx, Value, qe::Args args, Value) {
 }
 
 }  // namespace
+
+Natives* NativesOf(Context& ctx) {
+  web::FetchHost* host = web::HostOf(ctx);
+  if (!host) return nullptr;
+  if (auto found = host->Extension(&g_key)) return static_cast<Guard*>(found.get())->natives.get();
+  auto guard = std::make_shared<Guard>(std::make_shared<Natives>(ctx, *host));
+  host->SetExtension(&g_key, guard);
+  return guard->natives.get();
+}
 
 }  // namespace solar::paint
 

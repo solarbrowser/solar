@@ -1,0 +1,130 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>WebGL</title>
+<style>body { margin: 8px; background: #ddd; } canvas { background: #fff; display: inline-block; margin-right: 8px; }</style>
+<canvas id="a" width="200" height="200"></canvas><canvas id="b" width="200" height="200"></canvas>
+<script>
+const ok = (name, condition, detail) => console.log((condition ? "ok   " : "FAIL ") + name + (condition ? "" : "  " + detail));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const near = (a, b, tol = 4) => a.every((v, i) => Math.abs(v - b[i]) <= tol);
+function program(gl, vs, fs) {
+  const p = gl.createProgram();
+  for (const [type, src] of [[gl.VERTEX_SHADER, vs], [gl.FRAGMENT_SHADER, fs]]) {
+    const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+    gl.attachShader(p, s);
+  }
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  return p;
+}
+const px = (gl, x, y) => { const d = new Uint8Array(4); gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, d); return Array.from(d); };
+async function run() {
+  const a = document.getElementById("a");
+  const gl = a.getContext("webgl");
+  ok("a context", gl instanceof WebGLRenderingContext && gl.canvas === a && a.getContext("webgl") === gl && a.getContext("2d") === null && a.getContext("webgl2") === null, String(gl));
+  ok("size and attributes", gl.drawingBufferWidth === 200 && gl.drawingBufferHeight === 200 && gl.getContextAttributes().alpha === true && gl.getContextAttributes().antialias === true, "");
+  ok("constants", gl.TRIANGLES === 4 && WebGLRenderingContext.COLOR_BUFFER_BIT === 0x4000 && gl.UNPACK_FLIP_Y_WEBGL === 0x9240, "");
+  ok("getParameter", gl.getParameter(gl.VERSION).startsWith("WebGL 1.0") && gl.getParameter(gl.MAX_TEXTURE_SIZE) >= 2048 && gl.getParameter(gl.VIEWPORT) instanceof Int32Array &&
+    gl.getParameter(gl.VIEWPORT).join() === "0,0,200,200" && gl.getParameter(gl.BLEND) === false, gl.getParameter(gl.VERSION));
+  console.log("renderer: " + gl.getExtension("WEBGL_debug_renderer_info") && gl.getParameter(0x9246));
+
+  gl.clearColor(0, 0, 1, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  ok("clear", near(px(gl, 100, 100), [0, 0, 255, 255]) && gl.getError() === 0, JSON.stringify(px(gl, 100, 100)));
+
+  const p = program(gl, "attribute vec2 pos; attribute vec3 col; varying vec3 v; void main(){ v = col; gl_Position = vec4(pos, 0.0, 1.0); }",
+    "precision mediump float; varying vec3 v; uniform float k; void main(){ gl_FragColor = vec4(v * k, 1.0); }");
+  gl.useProgram(p);
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, 0, 0, 1, -1, 0, 1, 0, 0, 1, 0, 0, 1]), gl.STATIC_DRAW);
+  const pos = gl.getAttribLocation(p, "pos"), col = gl.getAttribLocation(p, "col");
+  gl.enableVertexAttribArray(pos); gl.vertexAttribPointer(pos, 2, gl.FLOAT, false, 20, 0);
+  gl.enableVertexAttribArray(col); gl.vertexAttribPointer(col, 3, gl.FLOAT, false, 20, 8);
+  const k = gl.getUniformLocation(p, "k");
+  ok("locations", pos >= 0 && col >= 0 && k !== null && gl.getUniformLocation(p, "nope") === null && gl.getActiveUniform(p, 0).name === "k", `${pos} ${col}`);
+  gl.uniform1f(k, 1);
+  ok("getUniform", gl.getUniform(p, k) === 1, "");
+  gl.clearColor(1, 1, 1, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  // a point near the lower left of the triangle is mostly red, near the lower right green, near the top blue
+  const bottom = px(gl, 100, 100), corner = px(gl, 4, 4), outside = px(gl, 197, 197);
+  ok("inside and outside", bottom[3] === 255 && !near(bottom, [255, 255, 255, 255]) && near(outside, [255, 255, 255, 255]) && corner[0] > 200 && corner[1] < 40, JSON.stringify([bottom, corner, outside]));
+  ok("no error", gl.getError() === 0, gl.getError());
+
+  // a texture from ImageData and from a canvas, with the flip
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 2, 2, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255]));
+  const fb = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
+  ok("framebuffer complete", gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE, gl.checkFramebufferStatus(gl.FRAMEBUFFER));
+  ok("a texture's texels", near(px(gl, 0, 0), [255, 0, 0, 255]) && near(px(gl, 1, 0), [0, 255, 0, 255]) && near(px(gl, 0, 1), [0, 0, 255, 255]), "");
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  const source = document.createElement("canvas"); source.width = 2; source.height = 1;
+  const s2 = source.getContext("2d"); s2.fillStyle = "#f00"; s2.fillRect(0, 0, 1, 1); s2.fillStyle = "#00f"; s2.fillRect(1, 0, 1, 1);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  ok("texImage2D from a canvas", near(px(gl, 0, 0), [255, 0, 0, 255]) && near(px(gl, 1, 0), [0, 0, 255, 255]) && gl.getError() === 0, JSON.stringify([px(gl, 0, 0), px(gl, 1, 0)]));
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+
+  // the extensions and the errors
+  ok("extensions", gl.getSupportedExtensions().includes("OES_vertex_array_object") && gl.getExtension("OES_vertex_array_object") !== null && gl.getExtension("NOPE") === null &&
+    gl.getExtension("oes_vertex_array_object") === gl.getExtension("OES_vertex_array_object"), String(gl.getSupportedExtensions()));
+  const vao = gl.getExtension("OES_vertex_array_object");
+  const v = vao.createVertexArrayOES(); vao.bindVertexArrayOES(v);
+  ok("a vertex array", vao.isVertexArrayOES(v) && gl.getParameter(vao.VERTEX_ARRAY_BINDING_OES) === v, "");
+  vao.bindVertexArrayOES(null);
+  gl.enable(0x1234);
+  ok("an error", gl.getError() === gl.INVALID_ENUM && gl.getError() === 0, "");
+  ok("toDataURL", a.toDataURL().startsWith("data:image/png;base64,") && a.toDataURL().length > 200, a.toDataURL().length);
+
+  // the 2D canvas can draw a WebGL canvas
+  const c2 = document.createElement("canvas"); c2.width = 200; c2.height = 200;
+  const x2 = c2.getContext("2d"); x2.drawImage(a, 0, 0);
+  const d = x2.getImageData(100, 100, 1, 1).data;
+  ok("drawImage of a webgl canvas", d[3] === 255 && !near(Array.from(d), [255, 255, 255, 255]), Array.from(d));
+
+  // WebGL 2
+  const b = document.getElementById("b");
+  const g2 = b.getContext("webgl2", { antialias: false });
+  ok("webgl2", g2 instanceof WebGL2RenderingContext && g2 instanceof WebGLRenderingContext && g2.getParameter(g2.VERSION).startsWith("WebGL 2.0") && g2.getParameter(g2.MAX_3D_TEXTURE_SIZE) > 0, String(g2));
+  const p2 = program(g2, "#version 300 es\nin vec2 pos; void main(){ gl_Position = vec4(pos, 0.0, 1.0); }",
+    "#version 300 es\nprecision mediump float; uniform vec4 color; out vec4 o; void main(){ o = color; }");
+  g2.useProgram(p2);
+  const va = g2.createVertexArray(); g2.bindVertexArray(va);
+  const bf = g2.createBuffer(); g2.bindBuffer(g2.ARRAY_BUFFER, bf);
+  g2.bufferData(g2.ARRAY_BUFFER, new Float32Array([-0.8, -0.8, 0.8, -0.8, 0, 0.8]), g2.STATIC_DRAW);
+  g2.enableVertexAttribArray(0); g2.vertexAttribPointer(0, 2, g2.FLOAT, false, 0, 0);
+  g2.uniform4fv(g2.getUniformLocation(p2, "color"), [1, 0.5, 0, 1]);
+  g2.clearColor(0.9, 0.9, 0.9, 1); g2.clear(g2.COLOR_BUFFER_BIT);
+  g2.drawArraysInstanced(g2.TRIANGLES, 0, 3, 2);
+  ok("webgl2 draw", near(px(g2, 100, 60), [255, 128, 0, 255], 3) && near(px(g2, 3, 190), [230, 230, 230, 255], 3) && g2.getError() === 0, JSON.stringify(px(g2, 100, 60)));
+  const q = g2.createSampler(); g2.samplerParameteri(q, g2.TEXTURE_MIN_FILTER, g2.NEAREST);
+  const sync = g2.fenceSync(g2.SYNC_GPU_COMMANDS_COMPLETE, 0); g2.flush();
+  ok("sampler and sync", g2.isSampler(q) && g2.isSync(sync) && g2.clientWaitSync(sync, g2.SYNC_FLUSH_COMMANDS_BIT, 1e9) !== g2.WAIT_FAILED, "");
+
+  // loss
+  const lost = new Promise((r) => a.addEventListener("webglcontextlost", (e) => { e.preventDefault(); r(); }, { once: true }));
+  const restored = new Promise((r) => a.addEventListener("webglcontextrestored", r, { once: true }));
+  const ext = gl.getExtension("WEBGL_lose_context");
+  ext.loseContext();
+  await lost;
+  ok("lost", gl.isContextLost() && gl.getError() === 0 && gl.createBuffer() === null, "");
+  ext.restoreContext();
+  await restored;
+  gl.clearColor(0, 1, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+  ok("restored", !gl.isContextLost() && near(px(gl, 5, 5), [0, 255, 0, 255]), JSON.stringify(px(gl, 5, 5)));
+  // what stays on the screen
+  gl.clearColor(0.2, 0.4, 0.8, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.useProgram(p); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  console.log("done");
+}
+run().catch((e) => console.log("FAIL exception " + e + "\n" + e.stack));
+</script>

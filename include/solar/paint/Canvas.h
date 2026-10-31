@@ -29,5 +29,8 @@ namespace solar::webapi {
 // Defines in a realm the natives that CanvasRenderingContext2D (src/web-api/js/canvas.js) draws with: __solarCanvasCreate, __solarCv, __solarCvStr and the rest (Canvas
 // natives in src/paint/CanvasNatives.cpp). Only the window program has them.
 void InstallCanvasNatives(Quanta::Embed::Realm& realm);
+// Defines the natives WebGL (src/web-api/js/webgl.js) is made on: __solarGlCreate, __solarGlOps, __solarGl and the rest (src/paint/WebGl.cpp). The libraries of OpenGL ES are opened when
+// the first context is made: where there are none, no context is made.
+void InstallWebGlNatives(Quanta::Embed::Realm& realm);
 
 }  // namespace solar::webapi

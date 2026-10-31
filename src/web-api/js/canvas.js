@@ -239,6 +239,8 @@
     }
     if (source instanceof HTMLCanvas || (typeof OffscreenCanvas === "function" && source instanceof OffscreenCanvas)) {
       if (source.width === 0 || source.height === 0) throw fail("InvalidStateError", `Failed to execute '${method}' on 'CanvasRenderingContext2D': The image argument is a canvas element with a width or height of 0.`);
+      const gl = glContexts.get(source);
+      if (gl) gl._present();
       const surface = canvasSurfaces.get(source);
       if (surface === undefined) return { id: -1, w: source.width, h: source.height, temporary: false, blank: true };
       const made = N.ImageFromCanvas(surface);
@@ -544,10 +546,43 @@
     return context;
   };
   const resized = (canvas) => {
+    const gl = glContexts.get(canvas);
+    if (gl) { gl._resize(canvas.width, canvas.height); return; }
     const context = contexts.get(canvas);
     if (!context) return;
     N.CanvasResize(context._surface, canvas.width, canvas.height);
     context._reset(context._surface);
+  };
+  // WebGL (src/web-api/js/webgl.js) gives the factory of its contexts here, and takes what it needs of the canvas.
+  const glContexts = new WeakMap();  // canvas -> its WebGL context
+  let glFactory = null;
+  const pixelsOf = (source, method) => {
+    if (typeof ImageData === "function" && source instanceof ImageData) return { width: source.width, height: source.height, data: new Uint8Array(source.data.buffer, source.data.byteOffset, source.data.length) };
+    const picture = pictureOf(source, method);
+    if (!picture) return null;
+    if (picture.id < 0) return { width: picture.w, height: picture.h, data: new Uint8Array(picture.w * picture.h * 4) };
+    const surface = N.CanvasCreate(picture.w, picture.h);
+    N.CvDrawImage(surface, picture.id, 0, 0, picture.w, picture.h, 0, 0, picture.w, picture.h);
+    const bytes = N.CvGetImageData(surface, 0, 0, picture.w, picture.h);
+    N.CanvasFree(surface);
+    if (picture.temporary) N.ImageFree(picture.id);
+    return bytes ? { width: picture.w, height: picture.h, data: new Uint8Array(bytes) } : null;
+  };
+  Object.defineProperty(globalThis, "__solarCanvasInternals", { configurable: true, enumerable: false, value: {
+    setWebGl(factory) { glFactory = factory; }, attach: N.CanvasAttach, pixelsOf, surfaces: canvasSurfaces, isCanvas: (v) => v instanceof HTMLCanvas || (typeof OffscreenCanvas === "function" && v instanceof OffscreenCanvas),
+  } });
+  const getAnyContext = (canvas, type, attributes, w, h) => {
+    type = String(type);
+    if (type === "2d") return glContexts.has(canvas) ? null : (contexts.get(canvas) || makeContext(canvas, w, h));
+    if ((type === "webgl" || type === "webgl2" || type === "experimental-webgl") && glFactory) {
+      if (contexts.has(canvas)) return null;
+      const existing = glContexts.get(canvas);
+      if (existing) return existing._kind === (type === "webgl2" ? 2 : 1) ? existing : null;
+      const made = glFactory(canvas, type === "webgl2" ? 2 : 1, attributes || {}, w, h);
+      if (made) glContexts.set(canvas, made);
+      return made;
+    }
+    return null;
   };
   const canvasProto = HTMLCanvas.prototype;
   const dimension = (name, fallback) => ({
@@ -559,8 +594,7 @@
   Object.defineProperty(canvasProto, "height", dimension("height", 150));
   define(canvasProto, "getContext", function getContext(type, attributes) {
     if (arguments.length === 0) throw new TypeError("Failed to execute 'getContext' on 'HTMLCanvasElement': 1 argument required, but only 0 present.");
-    if (String(type) !== "2d") return null;
-    return contexts.get(this) || makeContext(this, this.width, this.height);
+    return getAnyContext(this, type, attributes, this.width, this.height);
   });
   const encode = (isImage, id, type, quality) => {
     const mime = ["image/png", "image/jpeg", "image/webp"].includes(String(type).toLowerCase()) ? String(type).toLowerCase() : "image/png";
@@ -575,13 +609,17 @@
   };
   define(canvasProto, "toDataURL", function toDataURL(type = "image/png", quality) {
     if (this.width === 0 || this.height === 0) return "data:,";
-    const context = contexts.get(this) || makeContext(this, this.width, this.height);
-    const made = encode(false, context._surface, type, quality);
+    const gl = glContexts.get(this);
+    if (gl) gl._present();
+    const surface = gl ? gl._surface : (contexts.get(this) || makeContext(this, this.width, this.height))._surface;
+    const made = encode(false, surface, type, quality);
     return made ? dataUrl(made) : "data:,";
   });
   define(canvasProto, "toBlob", function toBlob(callback, type = "image/png", quality) {
     if (typeof callback !== "function") throw new TypeError("Failed to execute 'toBlob' on 'HTMLCanvasElement': The callback provided as parameter 1 is not a function.");
-    const context = this.width && this.height ? (contexts.get(this) || makeContext(this, this.width, this.height)) : null;
+    const gl = glContexts.get(this);
+    if (gl) gl._present();
+    const context = gl ? { _surface: gl._surface } : this.width && this.height ? (contexts.get(this) || makeContext(this, this.width, this.height)) : null;
     const made = context ? encode(false, context._surface, type, quality) : null;
     setTimeout(() => callback(made ? new Blob([made.bytes], { type: made.mime }) : null), 0);
   });
@@ -599,7 +637,7 @@
     set width(v) { this.#w = Math.max(0, Math.trunc(num(v)) || 0); resized(this); }
     get height() { return this.#h; }
     set height(v) { this.#h = Math.max(0, Math.trunc(num(v)) || 0); resized(this); }
-    getContext(type) { if (String(type) !== "2d") return null; return contexts.get(this) || makeContext(this, this.#w, this.#h); }
+    getContext(type, attributes) { return getAnyContext(this, type, attributes, this.#w, this.#h); }
     convertToBlob(options = {}) {
       return new Promise((resolve, reject) => {
         if (!this.#w || !this.#h) { reject(fail("IndexSizeError", "The canvas has a width or height of 0.")); return; }
@@ -682,7 +720,7 @@
   // The width and height of a canvas that were changed with setAttribute or the markup: its surface follows.
   if (typeof MutationObserver === "function" && typeof document !== "undefined" && HTMLCanvas !== undefined && typeof HTMLCanvasElement === "function") {
     new MutationObserver((records) => {
-      for (const r of records) if (r.target instanceof HTMLCanvas && contexts.has(r.target)) resized(r.target);
+      for (const r of records) if (r.target instanceof HTMLCanvas && (contexts.has(r.target) || glContexts.has(r.target))) resized(r.target);
     }).observe(document, { attributes: true, subtree: true, attributeFilter: ["width", "height"] });
   }
 })();

@@ -246,6 +246,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
       solar::webapi::InstallCompressionNatives(realm);
       solar::webapi::InstallMediaNatives(realm);
       solar::webapi::InstallCanvasNatives(realm);
+      solar::webapi::InstallWebGlNatives(realm);
       solar::webapi::InstallImageLoadNatives(realm);
       solar::web::FetchHost::Config config;
       config.loop = &loop_;
