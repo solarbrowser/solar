@@ -69,9 +69,12 @@
 #include "solar/web/Messaging.h"
 #include "solar/url/Origin.h"
 #include "solar/web-api/CacheStore.h"
+#include "solar/gui/SdlAudio.h"
+#include "solar/media/Player.h"
 #include "solar/web-api/Compression.h"
 #include "solar/web-api/Crypto.h"
 #include "solar/web-api/IndexedDb.h"
+#include "solar/web-api/Media.h"
 #include "solar/web-api/WebSocket.h"
 #include "solar/web-api/Worker.h"
 #include "solar/web/TimerHost.h"
@@ -238,6 +241,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
       solar::webapi::InstallCryptoNatives(realm);
       solar::webapi::InstallCacheStoreNatives(realm);
       solar::webapi::InstallCompressionNatives(realm);
+      solar::webapi::InstallMediaNatives(realm);
       solar::web::FetchHost::Config config;
       config.loop = &loop_;
       config.client = &client_;
@@ -970,7 +974,7 @@ void RunWindow(Shared& shared, SDL_Window* window, SDL_Renderer* renderer, solar
   };
   geometry();
   while (running && !shared.quit.load()) {
-    const bool animating = gliding || (std::chrono::duration<double>(Clock::now() - scrollActive).count() < 1.5 && frame.maxY > 0.5);
+    const bool animating = solar::media::PlayingCount() > 0 || gliding || (std::chrono::duration<double>(Clock::now() - scrollActive).count() < 1.5 && frame.maxY > 0.5);
     SDL_Event event;
     bool any = SDL_WaitEventTimeout(&event, dirty || animating ? 0 : 50);
     while (any) {
@@ -1204,6 +1208,7 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
     return 1;
   }
+  solar::gui::InstallSdlAudio();
   // (SOLAR_GUI_SIZE=2560x1600: the window made this size, for timing what a big one costs.)
   int windowW = 1280, windowH = 800;
   if (const char* given = std::getenv("SOLAR_GUI_SIZE")) std::sscanf(given, "%dx%d", &windowW, &windowH);

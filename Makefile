@@ -76,10 +76,22 @@ NET_LIBS = $(OPENSSL_LIBS) $(COMPRESSION_LIBS) $(HTTP2_LIBS) -lws2_32 -lmswsock
 else
 NET_LIBS = $(OPENSSL_LIBS) $(COMPRESSION_LIBS) $(HTTP2_LIBS)
 endif
-CXXFLAGS += $(OPENSSL_CFLAGS) $(COMPRESSION_CFLAGS) $(HTTP2_CFLAGS)
+# Media (src/media): FFmpeg's libraries, found by pkg-config, linked dynamically. Windows and macOS builds ship the shared libraries of one fixed FFmpeg version
+# next to the program (docs/media.md).
+FFMPEG_PACKAGES = libavformat libavcodec libswscale libswresample libavutil
+FFMPEG_CFLAGS = $(shell pkg-config --cflags $(FFMPEG_PACKAGES) 2>/dev/null)
+FFMPEG_LIBS = $(shell pkg-config --libs $(FFMPEG_PACKAGES) 2>/dev/null)
+# (The libraries are opened when the first media is played (src/media/Ffmpeg.cpp): only their headers are needed to build.)
+ifeq ($(PLATFORM),linux)
+NET_LIBS += -ldl
+endif
+CXXFLAGS += $(OPENSSL_CFLAGS) $(COMPRESSION_CFLAGS) $(HTTP2_CFLAGS) $(FFMPEG_CFLAGS)
+
+MEDIA_SOURCES = $(wildcard src/media/*.cpp)
+MEDIA_OBJECTS = $(MEDIA_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
 
 WEB_SOURCES = $(wildcard src/web/*.cpp) $(wildcard src/web-api/*.cpp)
-WEB_OBJECTS = $(WEB_SOURCES:%.cpp=$(OBJ_DIR)/%.o) $(OBJ_DIR)/$(GEN_DIR)/WebApiScript.o $(OBJ_DIR)/$(GEN_DIR)/WebApiWorkerScript.o $(OBJ_DIR)/$(GEN_DIR)/StreamsScript.o $(OBJ_DIR)/$(GEN_DIR)/UiEventsScript.o $(OBJ_DIR)/$(GEN_DIR)/XhrScript.o $(OBJ_DIR)/$(GEN_DIR)/TypedOmScript.o $(OBJ_DIR)/$(GEN_DIR)/FontLoadingScript.o $(OBJ_DIR)/$(GEN_DIR)/LayoutScript.o $(OBJ_DIR)/$(GEN_DIR)/AnimationsScript.o
+WEB_OBJECTS = $(WEB_SOURCES:%.cpp=$(OBJ_DIR)/%.o) $(MEDIA_OBJECTS) $(OBJ_DIR)/$(GEN_DIR)/WebApiScript.o $(OBJ_DIR)/$(GEN_DIR)/WebApiWorkerScript.o $(OBJ_DIR)/$(GEN_DIR)/StreamsScript.o $(OBJ_DIR)/$(GEN_DIR)/UiEventsScript.o $(OBJ_DIR)/$(GEN_DIR)/XhrScript.o $(OBJ_DIR)/$(GEN_DIR)/TypedOmScript.o $(OBJ_DIR)/$(GEN_DIR)/FontLoadingScript.o $(OBJ_DIR)/$(GEN_DIR)/LayoutScript.o $(OBJ_DIR)/$(GEN_DIR)/AnimationsScript.o
 
 # The scripts in src/web/js are compiled into the program as C++ sources made from them.
 GEN_DIR = build/gen
@@ -188,9 +200,9 @@ quanta:
 $(QUANTA_LIBS): | quanta
 
 # The browser: a page in a window (src/gui), and solar-cli, the command line for what is under it (addresses, fetches), which the tests and tools use.
-$(OBJ_DIR)/src/paint/SkiaPainter.o $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/gui/GpuSurface.o $(OBJ_DIR)/src/gui/VulkanSurface.o: CXXFLAGS += $(SKIA_CFLAGS) $(SDL_CFLAGS)
+$(OBJ_DIR)/src/paint/SkiaPainter.o $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/gui/GpuSurface.o $(OBJ_DIR)/src/gui/VulkanSurface.o $(OBJ_DIR)/src/gui/SdlAudio.o: CXXFLAGS += $(SKIA_CFLAGS) $(SDL_CFLAGS)
 
-solar: $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/gui/GpuSurface.o $(OBJ_DIR)/src/gui/VulkanSurface.o $(OBJ_DIR)/src/paint/SkiaPainter.o $(PAINT_OBJECTS) $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
+solar: $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/gui/SdlAudio.o $(OBJ_DIR)/src/gui/GpuSurface.o $(OBJ_DIR)/src/gui/VulkanSurface.o $(OBJ_DIR)/src/paint/SkiaPainter.o $(PAINT_OBJECTS) $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS) $(SKIA_LIBS) $(SDL_LIBS)
 

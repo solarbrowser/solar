@@ -347,6 +347,67 @@ struct SkiaPainter::Impl {
     canvas.restore();
   }
 
+  // The current picture of a video, as an image (made again only when the player has moved on).
+  struct VideoPicture {
+    uint64_t serial = 0;
+    sk_sp<SkImage> image;
+  };
+  std::unordered_map<const media::Player*, VideoPicture> videoPictures;
+
+  void DrawVideoItem(SkCanvas& canvas, const DrawVideo& item) {
+    const SkRRect clip = ToSk(item.clip);
+    const SkRect box = clip.getBounds();
+    if (box.width() <= 0 || box.height() <= 0) return;
+    std::shared_ptr<const media::VideoFrame> frame = item.player ? item.player->Frame() : nullptr;
+    if (!frame || frame->width <= 0 || frame->height <= 0) {
+      if (item.poster) {
+        DrawImage poster;
+        poster.image = item.poster;
+        poster.clip = item.clip;
+        poster.fit = item.fit;
+        poster.x = item.x;
+        poster.y = item.y;
+        DrawElementImage(canvas, poster);
+      }
+      return;
+    }
+    VideoPicture& picture = videoPictures[item.player.get()];
+    if (!picture.image || picture.serial != frame->serial) {
+      const SkImageInfo info = SkImageInfo::Make(frame->width, frame->height, kBGRA_8888_SkColorType, kOpaque_SkAlphaType);
+      auto* keep = new std::shared_ptr<const media::VideoFrame>(frame);
+      sk_sp<SkData> data = SkData::MakeWithProc(frame->bgra.data(), frame->bgra.size(), [](const void*, void* context) { delete static_cast<std::shared_ptr<const media::VideoFrame>*>(context); }, keep);
+      picture.image = SkImages::RasterFromData(info, data, static_cast<size_t>(frame->width) * 4);
+      picture.serial = frame->serial;
+    }
+    if (!picture.image) return;
+    const float iw = static_cast<float>(frame->width), ih = static_cast<float>(frame->height);
+    // (The picture is shown as wide as it is meant to be: the displayed size of the video, not the pixel count.)
+    float dw = iw, dh = ih;
+    const media::PlayerState state = item.player->State();
+    if (state.videoWidth > 0 && state.videoHeight > 0) {
+      dw = static_cast<float>(state.videoWidth);
+      dh = static_cast<float>(state.videoHeight);
+    }
+    float w = box.width(), h = box.height();
+    const float contain = std::min(box.width() / dw, box.height() / dh), cover = std::max(box.width() / dw, box.height() / dh);
+    switch (item.fit) {
+      case ObjectFit::Contain: w = dw * contain; h = dh * contain; break;
+      case ObjectFit::Cover: w = dw * cover; h = dh * cover; break;
+      case ObjectFit::None: w = dw; h = dh; break;
+      case ObjectFit::ScaleDown: w = dw * std::min(1.0f, contain); h = dh * std::min(1.0f, contain); break;
+      default: break;
+    }
+    const float x = box.left() + item.x.Of(box.width() - w), y = box.top() + item.y.Of(box.height() - h);
+    canvas.save();
+    if (clip.isRect()) canvas.clipRect(box, true);
+    else canvas.clipRRect(clip, true);
+    SkPaint black;
+    black.setColor(SK_ColorBLACK);
+    canvas.drawRect(box, black);
+    canvas.drawImageRect(picture.image, SkRect::MakeXYWH(x, y, w, h), SkSamplingOptions(SkFilterMode::kLinear), nullptr);
+    canvas.restore();
+  }
+
   void DrawElementImage(SkCanvas& canvas, const DrawImage& item) {
     if (!item.image || !item.image->bytes) return;
     Decoded& decoded = DecodedOf(item.image);
@@ -618,6 +679,8 @@ void SkiaPainter::Draw(const DisplayList& list, SkCanvas& canvas, double scrollX
       impl_->DrawLayer(canvas, layers->layer);
     } else if (const auto* image = std::get_if<DrawImage>(&item)) {
       impl_->DrawElementImage(canvas, *image);
+    } else if (const auto* video = std::get_if<DrawVideo>(&item)) {
+      impl_->DrawVideoItem(canvas, *video);
     } else if (std::holds_alternative<PushMask>(item)) {
       canvas.saveLayer(nullptr, nullptr);
     } else if (const auto* mask = std::get_if<PopMask>(&item)) {

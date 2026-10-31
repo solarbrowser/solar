@@ -7,6 +7,7 @@
 // The box tree: boxes for elements and text (https://www.w3.org/TR/CSS22/visuren.html#box-gen), with the anonymous boxes the model needs.
 #include <cstdlib>
 #include "solar/dom/Node.h"
+#include "solar/media/Player.h"
 #include <algorithm>
 #include <chrono>
 #include <functional>
@@ -148,6 +149,20 @@ bool ReplacedSize(dom::Element* element, const std::string& base, Box& box) {
     box.naturalWidth = 300;
     box.naturalHeight = 150;
     box.naturalRatio = name == "video" ? 0 : 2;
+    if (name == "video") {
+      if (const dom::Attr* poster = element->FindAttribute("poster")) {
+        if (!poster->Value().empty()) box.imageUrl = AbsoluteAddress(poster->Value(), base);
+      }
+      // A video that has its first pictures is as large as they are.
+      if (auto player = media::PlayerOf(element)) {
+        const media::PlayerState state = player->State();
+        if (state.videoWidth > 0 && state.videoHeight > 0) {
+          box.naturalWidth = state.videoWidth;
+          box.naturalHeight = state.videoHeight;
+          box.naturalRatio = static_cast<double>(state.videoWidth) / state.videoHeight;
+        }
+      }
+    }
     return true;
   }
   return false;

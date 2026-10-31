@@ -1,0 +1,148 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Media</title>
+<style>body { margin: 8px; background: #eee; } video { display: block; }</style>
+<video id="v" muted></video>
+<script>
+// Needs tests/web-api/wsserver.py (which serves the files in media/). With SDL_AUDIODRIVER=dummy there is no sound but the clock runs.
+const ok = (name, condition, detail) => console.log((condition ? "ok   " : "FAIL ") + name + (condition ? "" : "  " + detail));
+const wait = (target, type, ms = 8000) => new Promise((resolve, reject) => { const t = setTimeout(() => reject(new Error("timeout waiting for " + type)), ms); target.addEventListener(type, (e) => { clearTimeout(t); resolve(e); }, { once: true }); });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function run() {
+  const v = document.getElementById("v");
+  ok("elements", v instanceof HTMLVideoElement && v instanceof HTMLMediaElement && typeof Audio === "function", "");
+  ok("canPlayType", v.canPlayType("video/mp4") !== "" && v.canPlayType('video/mp4; codecs="avc1.42E01E, mp4a.40.2"') === "probably" && v.canPlayType("video/webm") !== "" && v.canPlayType("video/x-nonsense") === "" && v.canPlayType('video/mp4; codecs="nothing"') === "", [v.canPlayType("video/mp4"), v.canPlayType("video/webm"), v.canPlayType('video/mp4; codecs="avc1.42E01E, mp4a.40.2"')].join());
+  ok("starts empty", v.readyState === 0 && v.networkState === 0 && v.paused && v.currentSrc === "" && isNaN(v.duration) && v.error === null && v.videoWidth === 0, "");
+
+  const events = [];
+  for (const name of ["loadstart", "durationchange", "loadedmetadata", "loadeddata", "canplay", "canplaythrough", "play", "playing", "pause", "seeking", "seeked", "ended", "waiting", "emptied", "ratechange", "volumechange", "error"]) v.addEventListener(name, () => events.push(name));
+
+  const meta = wait(v, "loadedmetadata");
+  v.src = "media/test.mp4";
+  ok("src sets the load going", v.networkState === 2 || v.networkState === 1, v.networkState);
+  await meta;
+  ok("loadedmetadata: size, duration, readyState", v.videoWidth === 320 && v.videoHeight === 180 && Math.abs(v.duration - 6) < 0.2 && v.readyState >= 1 && v.currentSrc.endsWith("/media/test.mp4"), `${v.videoWidth}x${v.videoHeight} ${v.duration} ${v.readyState} ${v.currentSrc}`);
+  await wait(v, "canplay");
+  ok("canplay: readyState >= 3 and the events came in order", v.readyState >= 3 && events.indexOf("loadstart") < events.indexOf("loadedmetadata") && events.indexOf("loadedmetadata") < events.indexOf("canplay"), events.join());
+  ok("durationchange before loadedmetadata", events.indexOf("durationchange") >= 0 && events.indexOf("durationchange") < events.indexOf("loadedmetadata"), events.join());
+  await sleep(100);
+  const box = v.getBoundingClientRect();
+  ok("the element is as large as the video (layout)", Math.round(box.width) === 320 && Math.round(box.height) === 180, box.width + "x" + box.height);
+
+  // play
+  const started = performance.now();
+  await v.play();
+  ok("play() resolves; not paused; play and playing events", !v.paused && events.includes("play") && events.includes("playing"), events.join());
+  await sleep(1200);
+  const t1 = v.currentTime;
+  ok("the clock runs (about real time)", t1 > 0.8 && t1 < 2.2, t1);
+  ok("buffered covers it", v.buffered.length === 1 && v.buffered.end(0) >= t1, v.buffered.length);
+  v.pause();
+  await sleep(0);
+  ok("pause: paused, pause event", v.paused && events.includes("pause"), events.join());
+  const frozen = v.currentTime;
+  await sleep(400);
+  ok("paused time does not move", Math.abs(v.currentTime - frozen) < 0.05, frozen + " " + v.currentTime);
+
+  // seek
+  const seeked = wait(v, "seeked");
+  v.currentTime = 4;
+  ok("currentTime is the target while seeking", v.currentTime === 4 && v.seeking, `${v.currentTime} ${v.seeking}`);
+  await seeked;
+  ok("seeked: at the target", Math.abs(v.currentTime - 4) < 0.1 && !v.seeking && events.includes("seeking"), v.currentTime);
+  await sleep(300);
+
+  // rate, volume, muted
+  v.playbackRate = 2;
+  await sleep(0);
+  ok("playbackRate", v.playbackRate === 2 && events.includes("ratechange"), "");
+  let e = null; try { v.volume = 1.5; } catch (x) { e = x; }
+  ok("volume out of range is IndexSizeError", e && e.name === "IndexSizeError", String(e));
+  v.volume = 0.5; v.muted = false;
+  await sleep(0);
+  ok("volume and muted", v.volume === 0.5 && v.muted === false && events.includes("volumechange"), "");
+  v.muted = true;
+
+  // to the end
+  const ended = wait(v, "ended", 6000);
+  v.currentTime = 5;
+  await v.play();
+  await ended;
+  ok("ended: ended, paused, events", v.ended && v.paused && events.includes("ended"), `${v.ended} ${v.paused}`);
+  ok("currentTime at the end", Math.abs(v.currentTime - v.duration) < 0.3, v.currentTime + " vs " + v.duration);
+  v.playbackRate = 1;
+  // play again from the start
+  await v.play();
+  await sleep(300);
+  ok("play() after the end starts again", !v.ended && v.currentTime < 1.5, v.currentTime);
+  v.pause();
+
+  // loop
+  v.loop = true;
+  v.currentTime = 5.5;
+  await v.play();
+  await sleep(1500);
+  ok("loop: it went round and still plays", !v.paused && !v.ended && v.currentTime < 5, v.currentTime);
+  v.pause(); v.loop = false;
+
+  // a new source empties the old
+  events.length = 0;
+  const m2 = wait(v, "loadedmetadata");
+  v.src = "media/test.webm";
+  await m2;
+  ok("a new src: emptied, then loaded again", events.includes("emptied") && v.videoWidth === 256 && v.videoHeight === 144 && Math.abs(v.duration - 4) < 0.2 && v.paused, events.join() + " " + v.videoWidth);
+
+  // errors
+  const bad = document.createElement("video");
+  const errored = wait(bad, "error");
+  bad.src = "media/nothing.mp4";
+  await errored;
+  ok("a missing file is an error (network or not supported)", bad.error !== null && (bad.error.code === 2 || bad.error.code === 4) && bad.networkState === 3 || bad.networkState === 1, bad.error && bad.error.code);
+  const junk = document.createElement("video");
+  const errored2 = wait(junk, "error");
+  junk.src = "wsserver.py";
+  await errored2;
+  ok("something that is not media is MEDIA_ERR_SRC_NOT_SUPPORTED", junk.error && junk.error.code === 4, junk.error && junk.error.code);
+  e = null; try { await junk.play(); } catch (x) { e = x; }
+  ok("play() on it rejects NotSupportedError", e && e.name === "NotSupportedError", String(e));
+
+  // <source> selection
+  const withSources = document.createElement("video");
+  withSources.innerHTML = '<source src="media/test.xyz" type="video/x-nonsense"><source src="media/test.webm" type="video/webm"><source src="media/test.mp4" type="video/mp4">';
+  document.body.appendChild(withSources);
+  await wait(withSources, "loadedmetadata");
+  ok("the first playable <source> is chosen", withSources.currentSrc.endsWith("/media/test.webm"), withSources.currentSrc);
+  withSources.remove();
+
+  // audio
+  const a = new Audio("media/test.wav");
+  await wait(a, "canplay");
+  ok("Audio(): duration, no video size", Math.abs(a.duration - 3) < 0.2 && a.videoWidth === undefined, a.duration);
+  await a.play();
+  await sleep(700);
+  ok("audio plays", a.currentTime > 0.4 && !a.paused, a.currentTime);
+  a.pause();
+  const o = new Audio();
+  o.src = "media/test.ogg";
+  await wait(o, "loadedmetadata");
+  ok("ogg/vorbis", Math.abs(o.duration - 3) < 0.2, o.duration);
+  const hasNone = new Audio("media/test.mp4");
+  await wait(hasNone, "loadedmetadata");
+  ok("an mp4 as audio plays too", hasNone.duration > 5, hasNone.duration);
+
+  // a video in the markup (the parser makes it) and a poster
+  const inMarkup = document.createElement("div");
+  inMarkup.innerHTML = '<video id="m" src="media/test.mp4" preload="auto" style="width:160px"></video>';
+  document.body.appendChild(inMarkup);
+  await wait(inMarkup.firstChild, "loadedmetadata");
+  await sleep(100);
+  const mb = inMarkup.firstChild.getBoundingClientRect();
+  ok("a video made from markup loads by itself; CSS width and the ratio", Math.round(mb.width) === 160 && Math.round(mb.height) === 90, mb.width + "x" + mb.height + " video " + inMarkup.firstChild.videoWidth + "x" + inMarkup.firstChild.videoHeight + " rs " + inMarkup.firstChild.readyState + " src " + inMarkup.firstChild.currentSrc);
+  // leave the first video showing a frame for the screenshot
+  v.src = "media/test.mp4";
+  await wait(v, "canplay");
+  v.currentTime = 2;
+  await wait(v, "seeked");
+}
+run().then(() => console.log("done"), (e) => { console.log("FAIL exception " + (e && e.stack || e)); console.log("done"); });
+</script>

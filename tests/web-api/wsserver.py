@@ -129,7 +129,8 @@ def serve(c):
         name = os.path.join(ROOT, path.lstrip("/").split("?")[0])
         if os.path.isfile(name):
             body = open(name, "rb").read()
-            kind = b"text/javascript" if name.endswith(".js") else b"text/html; charset=utf-8"
+            types = {".js": b"text/javascript", ".mp4": b"video/mp4", ".webm": b"video/webm", ".ogg": b"audio/ogg", ".wav": b"audio/wav", ".mp3": b"audio/mpeg", ".css": b"text/css"}
+            kind = types.get(os.path.splitext(name)[1], b"text/html; charset=utf-8")
             c.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: " + kind + b"\r\nContent-Length: " + str(len(body)).encode() + b"\r\nConnection: close\r\n\r\n" + body)
         else:
             c.sendall(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")

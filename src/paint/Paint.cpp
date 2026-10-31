@@ -666,7 +666,10 @@ class Painter {
     if (!rightEdge) widths.right = 0;
     if (!native && (widths.top > 0 || widths.right > 0 || widths.bottom > 0 || widths.left > 0)) PaintBorder(box, props, physical, borderBox, widths);
     if (leftEdge && rightEdge) PaintFocusRing(box, props, borderBox);
-    if (leftEdge && rightEdge) PaintImageOf(box, borderBox, props);
+    if (leftEdge && rightEdge) {
+      PaintImageOf(box, borderBox, props);
+      PaintVideoOf(box, borderBox, props);
+    }
     if (leftEdge && rightEdge && box.formControl) PaintControl(box, borderBox);
   }
 
@@ -1098,10 +1101,39 @@ class Painter {
     return out;
   }
 
+  // The picture of a video: the player's current one, in the content box.
+  void PaintVideoOf(const Box& box, const RectF& borderBox, const PaintProps& props) {
+    if (!box.replaced || box.kind != Box::Kind::Block) return;
+    dom::Element* element = box.element();
+    if (!element || !element->IsHtml("video")) return;
+    DrawVideo item;
+    item.player = media::PlayerOf(element);
+    if (!box.imageUrl.empty()) item.poster = ImageFor(box.imageUrl);  // (the poster attribute, made absolute by layout)
+    if (!item.player && !item.poster) return;
+    layout::Edges insets;
+    insets.top = box.border.top + box.padding.top;
+    insets.right = box.border.right + box.padding.right;
+    insets.bottom = box.border.bottom + box.padding.bottom;
+    insets.left = box.border.left + box.padding.left;
+    const RectF content{borderBox.x + F(insets.left), borderBox.y + F(insets.top), std::max(0.0f, borderBox.width - F(insets.Horizontal())), std::max(0.0f, borderBox.height - F(insets.Vertical()))};
+    item.clip = Rounded(box, content, props, 1, &insets);
+    std::string pseudo;
+    css::StyleReader reader(ctx_, element, pseudo);
+    const std::string fit = reader.Get("object-fit");
+    item.fit = fit == "fill" ? ObjectFit::Fill : fit == "cover" ? ObjectFit::Cover : fit == "none" ? ObjectFit::None : fit == "scale-down" ? ObjectFit::ScaleDown : ObjectFit::Contain;
+    const std::vector<std::string> position = SplitWords(reader.Get("object-position"));
+    if (position.size() == 2) {
+      ParseLength(position[0], item.x);
+      ParseLength(position[1], item.y);
+    }
+    list_->items.push_back(std::move(item));
+  }
+
   // The picture of an img (and the like): in its content box.
   void PaintImageOf(const Box& box, const RectF& borderBox, const PaintProps& props) {
     if (std::getenv("SOLAR_PAINT_DEBUG") && box.element() && box.element()->IsHtml("img")) std::fprintf(stderr, "paint img box replaced=%d kind=%d url=[%s] size %gx%g\n", box.replaced, (int)box.kind, box.imageUrl.c_str(), box.width, box.height);
     if (!box.replaced || box.kind != Box::Kind::Block) return;
+    if (box.element() && box.element()->IsHtml("video")) return;  // (a video has its own, below)
     ImageRef image;
     if (box.imageUrl.empty()) {
       // An svg in the markup is drawn as the picture of its own source (with the color it is given, for currentColor).

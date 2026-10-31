@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include "solar/media/Player.h"
+
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -183,13 +185,22 @@ struct DrawImage {
   bool pixelated = false;
 };
 
+// The picture of a video element (src/media): the player is asked for its current picture each time the list is drawn, so the list does not change as the video plays.
+struct DrawVideo {
+  std::shared_ptr<media::Player> player;
+  RoundedRect clip;  // the content box
+  ObjectFit fit = ObjectFit::Contain;
+  Length x{0, 50, false}, y{0, 50, false};
+  ImageRef poster;  // shown until there is a picture
+};
+
 // What is drawn between PushMask and PopMask is drawn on its own, then cut to the image of the mask (its alpha), and put in the page.
 struct PushMask {};
 struct PopMask {
   std::vector<ImageLayer> layers;  // added together: what any of them shows is shown
 };
 
-using Item = std::variant<FillRoundedRect, DrawBorder, DrawGlyphs, PushClip, PopClip, PushLayer, PopLayer, PushTransform, PopTransform, DrawImageLayer, DrawImage, PushMask, PopMask, DrawBoxShadow, DrawOutline>;
+using Item = std::variant<FillRoundedRect, DrawBorder, DrawGlyphs, PushClip, PopClip, PushLayer, PopLayer, PushTransform, PopTransform, DrawImageLayer, DrawImage, DrawVideo, PushMask, PopMask, DrawBoxShadow, DrawOutline>;
 
 struct DisplayList {
   std::vector<Item> items;
