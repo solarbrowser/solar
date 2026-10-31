@@ -6,3 +6,6 @@
 	url = https://github.com/google/skia
 	branch = chrome/m157
 	shallow = true
+[submodule "third_party/angle"]
+	path = third_party/angle
+	url = https://github.com/google/angle
