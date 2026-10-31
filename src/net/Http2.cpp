@@ -205,14 +205,10 @@ void Http2Session::Reset(int32_t id) {
 }
 
 void Http2Session::Forget(Http2Stream* stream) {
-  bool any = false;
+  // (Only the pointer is taken away: the stream goes on to its end, and what it brings is dropped.)
   for (auto& [id, state] : streams_) {
-    if (state->sink != stream) continue;
-    state->sink = nullptr;
-    nghttp2_submit_rst_stream(session_, NGHTTP2_FLAG_NONE, id, NGHTTP2_CANCEL);
-    any = true;
+    if (state->sink == stream) state->sink = nullptr;
   }
-  if (any && !receiving_) Flush();
 }
 
 void Http2Session::Shutdown() {
