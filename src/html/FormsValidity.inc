@@ -393,4 +393,119 @@ const char* const kValidityScript = R"JS(
   for (const proto of [I, T, S]) {
     define(proto, "autocomplete", function () { const v = this.getAttribute("autocomplete"); return v === null ? "" : autofillOf(v); }, function (v) { this.setAttribute("autocomplete", String(v)); });
   }
+
+  // ---- The options of a select: live collections ----
+  const makeClass = (name, parent) => {
+    const C = ({ [name]: class extends (parent || Object) { constructor() { throw new TypeError("Illegal constructor"); } } })[name];
+    return C;
+  };
+  const HTMLOptionsCollectionC = makeClass("HTMLOptionsCollection", typeof HTMLCollection === "function" ? HTMLCollection : null);
+  Object.defineProperty(HTMLOptionsCollectionC.prototype, Symbol.toStringTag, { value: "HTMLOptionsCollection", configurable: true });
+  Object.defineProperty(globalThis, "HTMLOptionsCollection", { value: HTMLOptionsCollectionC, writable: true, configurable: true, enumerable: false });
+  const collectionCache = new WeakMap();
+  const liveCollection = (select, kind) => {
+    let perSelect = collectionCache.get(select);
+    if (!perSelect) { perSelect = {}; collectionCache.set(select, perSelect); }
+    if (perSelect[kind]) return perSelect[kind];
+    const items = () => (kind === "options" ? optionsOf(select) : (resetSelection(select), optionsOf(select).filter((o) => o.selected)));
+    const proto = kind === "options" ? HTMLOptionsCollectionC.prototype : (typeof HTMLCollection === "function" ? HTMLCollection.prototype : Object.prototype);
+    const target = Object.create(proto);
+    const own = {
+      item: function item(i) { return items()[Number(i) >>> 0] || null; },
+      namedItem: function namedItem(n) { n = String(n); return items().find((o) => o.id === n || o.getAttribute("name") === n) || null; },
+      [Symbol.iterator]: function () { return items()[Symbol.iterator](); },
+    };
+    const index = (k) => (typeof k === "string" && /^(0|[1-9]\d*)$/.test(k) && Number(k) < 4294967295 ? Number(k) : -1);
+    const proxy = new Proxy(target, {
+      get(t, k, r) {
+        if (k === "length") return items().length;
+        const i = index(k);
+        if (i >= 0) return items()[i];
+        if (Object.prototype.hasOwnProperty.call(own, k)) return own[k];
+        if (kind === "options") {
+          if (k === "add") return addOption;
+          if (k === "remove") return removeOption;
+          if (k === "selectedIndex") return select.selectedIndex;
+        }
+        return Reflect.get(t, k, proxy);
+      },
+      set(t, k, v) {
+        if (kind === "options") {
+          if (k === "length") { select.length = v; return true; }
+          if (k === "selectedIndex") { select.selectedIndex = v; return true; }
+          const i = index(k);
+          if (i >= 0) { setOptionAt(select, i, v); return true; }
+        }
+        return Reflect.set(t, k, v);
+      },
+      has(t, k) { const i = index(k); return i >= 0 ? i < items().length : k === "length" || Object.prototype.hasOwnProperty.call(own, k) || Reflect.has(t, k); },
+      ownKeys() { return [...items().map((_, i) => String(i)), "length"]; },
+      getOwnPropertyDescriptor(t, k) { const i = index(k); if (i >= 0 && i < items().length) return { value: items()[i], writable: kind === "options", enumerable: true, configurable: true }; if (k === "length") return { value: items().length, writable: true, enumerable: false, configurable: false }; return Reflect.getOwnPropertyDescriptor(t, k); },
+      getPrototypeOf() { return proto; },
+    });
+    const addOption = function add(element, before) { select.add(element, before); };
+    const removeOption = function remove(i) { select.remove(i); };
+    perSelect[kind] = proxy;
+    return proxy;
+  };
+  const setOptionAt = (select, i, value) => {
+    const list = optionsOf(select);
+    if (value === null || value === undefined) { if (list[i]) list[i].remove(); return; }
+    if (!(value instanceof HTMLOptionElement)) throw new TypeError("Failed to set an indexed property on 'HTMLOptionsCollection': The provided value is not an option.");
+    if (i > 100000) return;
+    if (i >= list.length) { while (optionsOf(select).length < i) select.appendChild(document.createElement("option")); select.appendChild(value); }
+    else if (list[i] !== value) { list[i].parentNode.replaceChild(value, list[i]); }
+  };
+  define(S, "options", function () { return liveCollection(this, "options"); });
+  define(S, "selectedOptions", function () { return liveCollection(this, "selected"); });
+  define(S, "length", function () { return optionsOf(this).length; }, function (v) {
+    v = unsignedLong(v);
+    const list = optionsOf(this);
+    if (v > 100000) return;
+    if (v > list.length) { for (let i = list.length; i < v; i++) this.appendChild(document.createElement("option")); }
+    else for (let i = list.length - 1; i >= v; i--) list[i].remove();
+  });
+  method(S, "add", function (element, before) {
+    if (arguments.length < 1) throw new TypeError("Failed to execute 'add' on 'HTMLSelectElement': 1 argument required, but only 0 present.");
+    if (!(element instanceof HTMLOptionElement) && !(element instanceof HTMLOptGroupElement)) throw new TypeError("Failed to execute 'add' on 'HTMLSelectElement': The provided value is not of type '(HTMLOptionElement or HTMLOptGroupElement)'.");
+    for (let p = this; p; p = p.parentNode) if (p === element) throw new DOMException("The new child element contains the parent.", "HierarchyRequestError");
+    let ref = null;
+    if (before !== undefined && before !== null) {
+      if (typeof before === "number" || typeof before === "string" || !(before instanceof Element)) { const n = Number(before); ref = Number.isFinite(n) ? optionsOf(this)[Math.trunc(n)] || null : optionsOf(this)[0] || null; if (typeof before !== "number" && !Number.isFinite(n)) ref = optionsOf(this)[0] || null; }
+      else {
+        ref = before;
+        let child = false;
+        for (let p = ref.parentNode; p; p = p.parentNode) if (p === this) { child = true; break; }
+        if (!child) throw new DOMException("The node before which the new node is to be inserted is not a descendant of this select element.", "NotFoundError");
+      }
+    }
+    if (element === ref) return;
+    (ref && ref.parentNode ? ref.parentNode : this).insertBefore(element, ref);
+  });
+  method(S, "remove", function (i) { if (arguments.length === 0) return Element.prototype.remove.call(this); const o = optionsOf(this)[Number(i) >>> 0]; if (o) o.remove(); });
+
+  // ---- labels of the elements that can have them, maxlength that is never less than -1, option text that does not look into scripts ----
+  for (const C of [HTMLOutputElement, HTMLMeterElement, HTMLProgressElement]) if (C && !Object.getOwnPropertyDescriptor(C.prototype, "labels")) define(C.prototype, "labels", function () { return labelsOf(this); });
+  for (const proto of [I, T]) {
+    for (const [prop, attr] of [["maxLength", "maxlength"], ["minLength", "minlength"]]) {
+      define(proto, prop, function () { const n = parseInt(this.getAttribute(attr), 10); return Number.isFinite(n) && n >= 0 ? n : -1; }, function (v) {
+        v = Number(v) | 0;
+        if (v < 0) throw new DOMException("The value provided (" + v + ") is not a valid non-negative length.", "IndexSizeError");
+        this.setAttribute(attr, String(v));
+      });
+    }
+  }
+  const optionText = (o) => {
+    let text = "";
+    const walk = (n) => {
+      for (let c = n.firstChild; c; c = c.nextSibling) {
+        if (c.nodeType === 3) text += c.data;
+        else if (c.nodeType === 1 && !(c instanceof HTMLScriptElement) && !(c.namespaceURI === "http://www.w3.org/2000/svg" && c.localName === "script")) walk(c);
+      }
+    };
+    walk(o);
+    return text.replace(/[\t\n\f\r ]+/g, " ").replace(/^ | $/g, "");
+  };
+  define(O, "text", function () { return optionText(this); }, function (v) { this.textContent = String(v); });
+  define(O, "value", function () { const v = this.getAttributeNode("value"); return v && v.namespaceURI === null ? v.value : optionText(this); }, function (v) { this.setAttribute("value", String(v)); });
 )JS";
