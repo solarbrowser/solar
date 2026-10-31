@@ -7,6 +7,7 @@ first version with broad web support:  february 2027
 
 ## Screenshots
 
+![Minecraft](docs/screenshots/classicminecraft.png)
 ![Acid3](docs/screenshots/acid3.png)
 ![Arch Linux](docs/screenshots/archlinux.png)
 ![GitHub](docs/screenshots/github.jpg)
