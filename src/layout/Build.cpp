@@ -65,6 +65,181 @@ bool OnlyCollapsibleSpace(const Box& text) {
 }
 
 // The elements that are replaced by something that is not in the document, and what is known of the size of that.
+// ---- Which picture an img has: srcset, sizes and picture (https://html.spec.whatwg.org/multipage/images.html#updating-the-image-data) ----
+struct SrcCandidate {
+  std::string url;
+  double width = -1, density = -1;  // from a w or an x descriptor; -1: none
+};
+
+// Parsing a srcset attribute.
+std::vector<SrcCandidate> ParseSrcset(const std::string& input) {
+  std::vector<SrcCandidate> out;
+  size_t pos = 0;
+  const size_t n = input.size();
+  while (true) {
+    while (pos < n && (IsHtmlSpace(input[pos]) || input[pos] == ',')) ++pos;
+    if (pos >= n) return out;
+    size_t start = pos;
+    while (pos < n && !IsHtmlSpace(input[pos])) ++pos;
+    std::string url = input.substr(start, pos - start);
+    std::vector<std::string> descriptors;
+    if (!url.empty() && url.back() == ',') {
+      while (!url.empty() && url.back() == ',') url.pop_back();
+    } else {
+      std::string current;
+      bool inParens = false, after = false;
+      while (true) {
+        if (!after) while (pos < n && IsHtmlSpace(input[pos])) { if (!current.empty() && !inParens) { descriptors.push_back(current); current.clear(); } ++pos; }
+        if (pos >= n) { if (!current.empty()) descriptors.push_back(current); break; }
+        const char c = input[pos];
+        if (inParens) { current += c; if (c == ')') inParens = false; }
+        else if (c == ',') { ++pos; if (!current.empty()) descriptors.push_back(current); break; }
+        else if (c == '(') { current += c; inParens = true; }
+        else current += c;
+        ++pos;
+      }
+    }
+    if (url.empty()) continue;
+    SrcCandidate candidate;
+    candidate.url = url;
+    bool error = false;
+    double height = -1;
+    for (const std::string& d : descriptors) {
+      const char last = d.back();
+      const std::string value = d.substr(0, d.size() - 1);
+      char* end = nullptr;
+      const double number = value.empty() ? 0 : std::strtod(value.c_str(), &end);
+      const bool numeric = !value.empty() && end && *end == '\0' && value.find_first_not_of("0123456789.eE+-") == std::string::npos;
+      if (last == 'w' && numeric && value.find_first_not_of("0123456789") == std::string::npos) {
+        if (candidate.width >= 0 || candidate.density >= 0 || number == 0) error = true;
+        else candidate.width = number;
+      } else if (last == 'x' && numeric && value[0] != '+') {
+        if (candidate.width >= 0 || candidate.density >= 0 || height >= 0 || number < 0) error = true;
+        else candidate.density = number;
+      } else if (last == 'h' && numeric && value.find_first_not_of("0123456789") == std::string::npos) {
+        if (candidate.density >= 0 || height >= 0) error = true;
+        else height = number;
+      } else {
+        error = true;
+      }
+    }
+    if (height >= 0 && candidate.width < 0) error = true;
+    if (!error) out.push_back(candidate);
+  }
+}
+
+// A length of the sizes attribute in pixels, or a negative number if it is not one this understands (a calc() is not).
+double SizesLength(const std::string& text, const css::MediaEnvironment& environment) {
+  std::string t = text;
+  while (!t.empty() && IsHtmlSpace(t.back())) t.pop_back();
+  size_t i = 0;
+  while (i < t.size() && IsHtmlSpace(t[i])) ++i;
+  t = t.substr(i);
+  char* end = nullptr;
+  const double number = std::strtod(t.c_str(), &end);
+  if (!end || end == t.c_str() || t[0] == '-' || t[0] == '+') return -1;
+  const std::string unit(end);
+  if (unit == "px") return number;
+  if (unit == "vw") return number * environment.width / 100;
+  if (unit == "vh") return number * environment.height / 100;
+  if (unit == "vmin") return number * std::min(environment.width, environment.height) / 100;
+  if (unit == "vmax") return number * std::max(environment.width, environment.height) / 100;
+  if (unit == "em" || unit == "rem") return number * 16;
+  if (unit.empty() && number == 0) return 0;
+  return -1;
+}
+
+double SourceSize(const std::string& sizes, const css::MediaEnvironment& environment) {
+  size_t at = 0;
+  const std::string& text = sizes;
+  while (at <= text.size()) {
+    int depth = 0;
+    size_t end = at;
+    for (; end < text.size(); ++end) {
+      if (text[end] == '(') ++depth;
+      else if (text[end] == ')') --depth;
+      else if (text[end] == ',' && depth == 0) break;
+    }
+    std::string entry = text.substr(at, end - at);
+    at = end + 1;
+    while (!entry.empty() && IsHtmlSpace(entry.back())) entry.pop_back();
+    size_t first = 0;
+    while (first < entry.size() && IsHtmlSpace(entry[first])) ++first;
+    entry = entry.substr(first);
+    if (entry.empty()) continue;
+    // The length is the last word; what is before is the media condition.
+    size_t cut = entry.size();
+    int d = 0;
+    while (cut > 0) {
+      const char c = entry[cut - 1];
+      if (c == ')') ++d;
+      else if (c == '(') --d;
+      else if (IsHtmlSpace(c) && d == 0) break;
+      --cut;
+    }
+    const double length = SizesLength(entry.substr(cut), environment);
+    if (length < 0) continue;
+    std::string condition = entry.substr(0, cut);
+    while (!condition.empty() && IsHtmlSpace(condition.back())) condition.pop_back();
+    if (condition.empty() || css::MediaQueryMatches(condition.front() == '(' ? condition : "(" + condition + ")", environment)) return length;
+  }
+  return environment.width;
+}
+
+// The address (as written) of the picture: by the width and the density of the candidates, the first one that has the density of the screen or more, else the last.
+std::string PickCandidate(std::vector<SrcCandidate> candidates, const std::string& sizes, bool hasSizes, const css::MediaEnvironment& environment) {
+  if (candidates.empty()) return "";
+  const double size = hasSizes ? SourceSize(sizes, environment) : environment.width;
+  std::vector<std::pair<std::string, double>> list;
+  for (const SrcCandidate& c : candidates) {
+    const double density = c.width >= 0 ? (size > 0 ? c.width / size : 0) : c.density < 0 ? 1 : c.density;
+    bool seen = false;
+    for (const auto& u : list) if (u.second == density) seen = true;
+    if (!seen) list.emplace_back(c.url, density);
+  }
+  for (const auto& u : list) if (u.second >= environment.resolution) return u.first;
+  return list.back().first;
+}
+
+std::string ChooseImageSource(const dom::Element* element) {
+  const css::MediaEnvironment environment = css::EnvironmentFor(element->nodeDocument);
+  auto attr = [](const dom::Element* e, const char* name, std::string& out) {
+    if (const dom::Attr* a = e->FindAttribute(name)) { out = a->Value(); return true; }
+    return false;
+  };
+  const dom::Node* parent = dom::ParentOf(element);
+  if (parent && parent->IsElement() && static_cast<const dom::Element*>(parent)->localName == "picture") {
+    for (const dom::Node* child = dom::FirstChildOf(parent); child && child != element; child = child->nextSibling) {
+      if (!child->IsElement()) continue;
+      const dom::Element* source = static_cast<const dom::Element*>(child);
+      if (source->localName != "source") continue;
+      std::string srcset, type, media, sizes;
+      if (!attr(source, "srcset", srcset)) continue;
+      if (attr(source, "type", type)) {
+        std::string lowered;
+        for (char c : type) lowered += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        lowered = lowered.substr(0, lowered.find(';'));
+        while (!lowered.empty() && IsHtmlSpace(lowered.back())) lowered.pop_back();
+        size_t f = 0;
+        while (f < lowered.size() && IsHtmlSpace(lowered[f])) ++f;
+        lowered = lowered.substr(f);
+        if (!lowered.empty() && lowered != "image/png" && lowered != "image/jpeg" && lowered != "image/gif" && lowered != "image/webp" && lowered != "image/avif" && lowered != "image/svg+xml" && lowered != "image/bmp" && lowered != "image/x-icon" && lowered != "image/apng") continue;
+      }
+      if (attr(source, "media", media) && !media.empty() && !css::MediaQueryMatches(media, environment)) continue;
+      const bool hasSizes = attr(source, "sizes", sizes);
+      const std::string picked = PickCandidate(ParseSrcset(srcset), sizes, hasSizes, environment);
+      if (!picked.empty()) return picked;
+    }
+  }
+  std::string src, srcset, sizes;
+  attr(element, "src", src);
+  attr(element, "srcset", srcset);
+  const bool hasSizes = attr(element, "sizes", sizes);
+  std::vector<SrcCandidate> candidates = ParseSrcset(srcset);
+  if (!src.empty()) candidates.push_back({src, -1, -1});
+  return PickCandidate(std::move(candidates), sizes, hasSizes, environment);
+}
+
 bool ReplacedSize(dom::Element* element, const std::string& base, Box& box) {
   const std::string& name = element->localName;
   const bool html = element->IsHtml();
@@ -106,18 +281,7 @@ bool ReplacedSize(dom::Element* element, const std::string& base, Box& box) {
   if (name == "img" || (name == "input" && element->FindAttribute("type") && element->FindAttribute("type")->Value() == "image")) {
     box.attrWidth = attribute("width");
     box.attrHeight = attribute("height");
-    std::string src;
-    if (const dom::Attr* a = element->FindAttribute("src")) src = a->Value();
-    // The first candidate of srcset stands in when there is no src.
-    if (src.empty()) {
-      if (const dom::Attr* set = element->FindAttribute("srcset")) {
-        size_t i = 0;
-        while (i < set->Value().size() && std::isspace(static_cast<unsigned char>(set->Value()[i]))) ++i;
-        size_t e = i;
-        while (e < set->Value().size() && !std::isspace(static_cast<unsigned char>(set->Value()[e])) && set->Value()[e] != ',') ++e;
-        src = set->Value().substr(i, e - i);
-      }
-    }
+    const std::string src = name == "img" ? ChooseImageSource(element) : (element->FindAttribute("src") ? element->FindAttribute("src")->Value() : std::string());
     double w = -1, h = -1, ratio = 0;
     if (!src.empty()) box.imageUrl = AbsoluteAddress(src, base);
     if (!src.empty() && box.attrWidth > 0 && box.attrHeight > 0) {
