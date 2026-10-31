@@ -4,6 +4,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+#include <string>
+
 #include "solar/html/HtmlBindings.h"
 
 // Form controls and forms (https://html.spec.whatwg.org/#forms): the value and checkedness of inputs, textareas, selects and options,
@@ -12,6 +14,8 @@
 namespace solar::html {
 
 namespace {
+
+#include "FormsValidity.inc"
 
 const char* const kFormScript = R"JS(
 (function () {
@@ -99,18 +103,7 @@ const char* const kFormScript = R"JS(
   define(I, "src", function () { const v = this.getAttribute("src"); return v === null ? "" : new URL(v, this.baseURI).href; }, function (v) { this.setAttribute("src", String(v)); });
   define(I, "defaultValue", function () { return this.getAttribute("value") || ""; }, function (v) { this.setAttribute("value", String(v)); });
   define(I, "files", function () { return typeOf(this) === "file" ? [] : null; });
-  const sanitize = (e, v) => {
-    const t = typeOf(e);
-    if (textTypes.includes(t) && t !== "number" && !/^(date|month|week|time|datetime-local)$/.test(t)) {
-      v = String(v).replace(/\r\n?|\n/g, " ");
-      if (t === "email" && !e.hasAttribute("multiple")) v = v.trim();
-      if (t === "url" || t === "tel") v = v.trim();
-    }
-    if (t === "number") { v = String(v).trim(); if (!/^-?(\d+|\d*\.\d+)([eE][-+]?\d+)?$/.test(v)) v = ""; }
-    if (t === "range") { const n = parseFloat(v); const lo = parseFloat(e.min) || 0, hi = e.hasAttribute("max") ? parseFloat(e.max) : 100; v = Number.isFinite(n) ? String(Math.min(hi, Math.max(lo, n))) : String((lo + hi) / 2); }
-    if (t === "color") v = /^#[0-9a-f]{6}$/i.test(v) ? v.toLowerCase() : "#000000";
-    return v;
-  };
+  const sanitize = (e, v) => sanitizeFull(e, v);
   define(I, "value", function () {
     const t = typeOf(this), s = stateOf(this);
     if (t === "checkbox" || t === "radio") { const v = this.getAttribute("value"); return v === null ? "on" : v; }
@@ -595,6 +588,14 @@ const char* const kFormScript = R"JS(
 }  // namespace
 
 // Defined here so JsHtml.cpp can evaluate it without knowing its size.
-const char* FormScript() { return kFormScript; }
+const char* FormScript() {
+  static const std::string full = [] {
+    std::string script = kFormScript;
+    const std::string marker = "  delete globalThis.__solarSetHelper;";
+    script.insert(script.find(marker), kValidityScript);
+    return script;
+  }();
+  return full.c_str();
+}
 
 }  // namespace solar::html
