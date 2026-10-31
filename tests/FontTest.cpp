@@ -24,7 +24,7 @@ bool Near(double a, double b) { return std::fabs(a - b) < 1e-6; }
 }  // namespace
 
 int main() {
-  std::ifstream file("tests/wpt/fonts/Ahem.ttf", std::ios::binary);
+  std::ifstream file("tests/wpt-solar/fonts/Ahem.ttf", std::ios::binary);
   const std::string data((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
   Check(!data.empty(), "Ahem.ttf is there");
   const auto face = solar::font::Face::Open(data);

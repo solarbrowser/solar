@@ -334,7 +334,6 @@ int main(int argc, char** argv) {
   }
 
   // Ahem, the font the layout tests are written for, is installed as if the machine had it.
-  solar::font::Database::System().AddDirectory("tests/wpt/fonts");
   solar::font::Database::System().AddDirectory("tests/wpt-solar/fonts");
 
   std::string resources = LoadResources("tests/data");

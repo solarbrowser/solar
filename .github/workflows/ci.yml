@@ -15,9 +15,10 @@ jobs:
   linux:
     runs-on: ubuntu-24.04
     steps:
+      # (Not ANGLE: it is only built by hand, for the program's WebGL on Windows and macOS.)
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
+      - name: Fetch the submodules the tests use
+        run: git submodule update --init --depth 1 third_party/quanta third_party/skia tests/wpt
 
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y clang lld llvm make pkg-config liburing-dev libssl-dev zlib1g-dev libbrotli-dev libzstd-dev libnghttp2-dev libharfbuzz-dev
