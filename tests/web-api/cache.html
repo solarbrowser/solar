@@ -1,0 +1,39 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Cache</title>
+<script>
+const ok = (name, condition, detail) => console.log((condition ? "ok   " : "FAIL ") + name + (condition ? "" : "  " + detail));
+async function run() {
+  ok("caches", caches instanceof CacheStorage && typeof Cache === "function", String(caches));
+  ok("no cache yet", (await caches.has("v1")) === false && (await caches.keys()).length === 0, "");
+  const c = await caches.open("v1");
+  ok("open makes a Cache", c instanceof Cache && (await caches.has("v1")) && (await caches.open("v1")) === c, "");
+  await c.put("/a.txt", new Response("hello", { status: 200, statusText: "OK", headers: { "content-type": "text/plain", "x-n": "1" } }));
+  const hit = await c.match("/a.txt");
+  ok("match gives a Response with the body and head", hit instanceof Response && (await hit.text()) === "hello" && hit.headers.get("x-n") === "1" && hit.status === 200, "");
+  const again = await c.match(new Request("/a.txt"));
+  ok("match again gives a fresh body", (await again.text()) === "hello", "");
+  ok("a miss is undefined", (await c.match("/nope")) === undefined, "");
+  await c.put("/a.txt?q=1", new Response("with query"));
+  ok("the query matters, unless ignoreSearch", (await (await c.match("/a.txt?q=1")).text()) === "with query" && (await (await c.match("/a.txt?q=2")) === undefined) && (await c.matchAll("/a.txt?q=2", { ignoreSearch: true })).length === 2, "");
+  const keys = await c.keys();
+  ok("keys are Requests, in order", keys.length === 2 && keys[0] instanceof Request && keys[0].url.endsWith("/a.txt"), keys.map((k) => k.url).join());
+  await c.put("/a.txt", new Response("replaced"));
+  ok("put replaces", (await (await c.match("/a.txt")).text()) === "replaced" && (await c.keys()).length === 2, "");
+  ok("delete says whether it did", (await c.delete("/a.txt")) === true && (await c.delete("/a.txt")) === false, "");
+  let e = null; try { await c.put(new Request("/p", { method: "POST" }), new Response("x")); } catch (x) { e = x; }
+  ok("a POST cannot be put", e instanceof TypeError, String(e));
+  e = null; try { await c.put("/v", new Response("x", { headers: { vary: "*" } })); } catch (x) { e = x; }
+  ok("Vary: * cannot be put", e instanceof TypeError, String(e));
+  await c.put("/v2", new Response("en", { headers: { vary: "accept-language" } }));
+  ok("vary: another header value is a miss unless ignoreVary", (await c.match(new Request("/v2", { headers: { "accept-language": "de" } }))) === undefined && (await c.match(new Request("/v2", { headers: { "accept-language": "de" } }), { ignoreVary: true })) !== undefined, "");
+  const d = await caches.open("v2");
+  await d.put("/only-in-v2", new Response("two"));
+  ok("caches.match looks in all", (await (await caches.match("/only-in-v2")).text()) === "two" && (await caches.match("/only-in-v2", { cacheName: "v1" })) === undefined, "");
+  ok("keys of the storage", (await caches.keys()).join() === "v1,v2" && (await caches.delete("v1")) === true && (await caches.keys()).join() === "v2", "");
+  // addAll through fetch (the page itself)
+  await d.add(location.href);
+  ok("add fetches and keeps", (await (await d.match(location.href)).text()).includes("<title>Cache</title>"), "");
+}
+run().then(() => console.log("done"), (e) => { console.log("FAIL exception " + (e && e.stack || e)); console.log("done"); });
+</script>
