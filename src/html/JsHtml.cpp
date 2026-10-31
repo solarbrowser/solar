@@ -1225,8 +1225,34 @@ const char* const kStubScript = R"JS(
     ensure(navigator, "vibrate", function vibrate() { return false; });
     ensure(navigator, "share", function share() { return Promise.reject(new DOMException("Share canceled", "AbortError")); });
     ensure(navigator, "canShare", function canShare() { return false; });
-    if (!("plugins" in navigator)) Object.defineProperty(navigator, "plugins", { value: Object.assign([], { item: () => null, namedItem: () => null, refresh() {} }), enumerable: true, configurable: true });
-    if (!("mimeTypes" in navigator)) Object.defineProperty(navigator, "mimeTypes", { value: Object.assign([], { item: () => null, namedItem: () => null }), enumerable: true, configurable: true });
+    // The plugins and mime types of a browser that has a PDF viewer (https://html.spec.whatwg.org/multipage/system-state.html#pdf-viewing-support): five viewers, each with the two types.
+    {
+      const make = (name, proto, fn) => { const C = ({ [name]: class { constructor() { throw new TypeError("Illegal constructor"); } } })[name]; Object.defineProperty(C.prototype, Symbol.toStringTag, { value: name, configurable: true }); Object.defineProperty(globalThis, name, { value: C, writable: true, configurable: true }); return C; };
+      const Plugin = make("Plugin"), MimeType = make("MimeType"), PluginArray = make("PluginArray"), MimeTypeArray = make("MimeTypeArray");
+      const viewers = ["PDF Viewer", "Chrome PDF Viewer", "Chromium PDF Viewer", "Microsoft Edge PDF Viewer", "WebKit built-in PDF"];
+      const types = [["application/pdf", "Portable Document Format", "pdf"], ["text/pdf", "Portable Document Format", "pdf"]];
+      const mimeTypes = types.map(([type, description, suffixes]) => { const m = Object.create(MimeType.prototype); Object.defineProperties(m, { type: { value: type, enumerable: true }, description: { value: description, enumerable: true }, suffixes: { value: suffixes, enumerable: true } }); return m; });
+      const plugins = viewers.map((name) => {
+        const p = Object.create(Plugin.prototype);
+        Object.defineProperties(p, { name: { value: name, enumerable: true }, filename: { value: "internal-pdf-viewer", enumerable: true }, description: { value: "Portable Document Format", enumerable: true }, length: { value: mimeTypes.length, enumerable: true } });
+        mimeTypes.forEach((m, i) => Object.defineProperty(p, i, { value: m, enumerable: true }));
+        return p;
+      });
+      for (const m of mimeTypes) Object.defineProperty(m, "enabledPlugin", { value: plugins[0], enumerable: true });
+      Object.defineProperties(Plugin.prototype, { item: { value: function item(i) { return this[i] || null; }, writable: true, configurable: true }, namedItem: { value: function namedItem(n) { for (let i = 0; i < this.length; i++) if (this[i].type === n) return this[i]; return null; }, writable: true, configurable: true } });
+      const list = (C, items, key) => {
+        const a = Object.create(C.prototype);
+        Object.defineProperty(a, "length", { value: items.length, enumerable: true });
+        items.forEach((x, i) => Object.defineProperty(a, i, { value: x, enumerable: true }));
+        Object.defineProperties(C.prototype, { item: { value: function item(i) { return this[i] || null; }, writable: true, configurable: true }, namedItem: { value: function namedItem(n) { for (let i = 0; i < this.length; i++) if (this[i][key] === n) return this[i]; return null; }, writable: true, configurable: true }, [Symbol.iterator]: { value: function () { return Array.prototype[Symbol.iterator].call(this); }, writable: true, configurable: true } });
+        return a;
+      };
+      Object.defineProperty(PluginArray.prototype, "refresh", { value: function refresh() {}, writable: true, configurable: true });
+      if (!("plugins" in navigator)) Object.defineProperty(navigator, "plugins", { value: list(PluginArray, plugins, "name"), enumerable: true, configurable: true });
+      if (!("mimeTypes" in navigator)) Object.defineProperty(navigator, "mimeTypes", { value: list(MimeTypeArray, mimeTypes, "type"), enumerable: true, configurable: true });
+      if (!("pdfViewerEnabled" in navigator)) Object.defineProperty(navigator, "pdfViewerEnabled", { value: true, enumerable: true, configurable: true });
+    }
+    ensure(navigator, "getGamepads", function getGamepads() { return [null, null, null, null]; });
     if (!("geolocation" in navigator)) {
       const denied = () => ({ code: 1, message: "User denied Geolocation", PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
       Object.defineProperty(navigator, "geolocation", { value: {

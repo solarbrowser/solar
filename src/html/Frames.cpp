@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <regex>
 
 #include "solar/dom/CustomElements.h"
 #include "solar/dom/NodeBindingsInternal.h"
@@ -267,6 +268,20 @@ bool RunScript(Quanta::Embed::Realm& realm, dom::Document* document, dom::Elemen
     }
     code = std::move(*loaded);
     filename = address;
+    // (SOLAR_PATCH_RE and SOLAR_PATCH_TO: a regular expression and its replacement are applied to the scripts of the pages, for finding what a script does that is made to be unreadable.)
+    if (const char* re = std::getenv("SOLAR_PATCH_RE")) {
+      try {
+        code = std::regex_replace(code, std::regex(re), std::getenv("SOLAR_PATCH_TO") ? std::getenv("SOLAR_PATCH_TO") : "");
+      } catch (const std::exception&) {}
+    }
+    // (SOLAR_DUMP_SCRIPTS=directory: the scripts that run are kept there, for looking at a column an error names.)
+    if (const char* dump = std::getenv("SOLAR_DUMP_SCRIPTS")) {
+      static int counter = 0;
+      if (FILE* out = std::fopen((std::string(dump) + "/script-" + std::to_string(counter++) + ".js").c_str(), "wb")) {
+        std::fwrite(code.data(), 1, code.size(), out);
+        std::fclose(out);
+      }
+    }
   } else {
     if (!ScriptAllowed(realm.GetContext(), document, script, nullptr)) return true;
     code = script->DescendantText();
@@ -787,6 +802,17 @@ bool LoadPageIn(Quanta::Embed::Realm& realm, dom::Document* document, const std:
   Context& ctx = realm.GetContext();
   document->readyState = "loading";
   bool ok = true;
+  // (SOLAR_PRELOAD=file: a script that is run in each page before its own, for looking at what a page does.)
+  if (const char* preload = std::getenv("SOLAR_PRELOAD")) {
+    if (FILE* in = std::fopen(preload, "rb")) {
+      std::string code;
+      char chunk[4096];
+      size_t n;
+      while ((n = std::fread(chunk, 1, sizeof chunk, in)) > 0) code.append(chunk, n);
+      std::fclose(in);
+      realm.Evaluate(code, "preload.js");
+    }
+  }
   // Module scripts (and classic ones that defer) the parser meets wait until it is done, in order, unless they are async.
   std::vector<dom::Element*> deferred;
   Quanta::Embed::ValueList keep;
