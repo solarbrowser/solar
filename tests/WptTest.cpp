@@ -41,6 +41,7 @@
 #ifdef SOLAR_WPT_CANVAS
 #include "solar/paint/Canvas.h"
 #include "solar/web-api/ImageLoad.h"
+#include "solar/web-api/Media.h"
 #endif
 
 namespace {
@@ -168,6 +169,7 @@ class TestEnvironment : public solar::html::FrameEnvironment {
       solar::webapi::InstallCanvasNatives(realm);
       solar::webapi::InstallWebGlNatives(realm);
       solar::webapi::InstallImageLoadNatives(realm);
+      solar::webapi::InstallMediaNatives(realm);
 #endif
       solar::web::FetchHost::Config config;
       config.loop = &loop_;
