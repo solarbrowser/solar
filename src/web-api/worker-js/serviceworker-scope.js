@@ -212,14 +212,29 @@
     }
   }
   tag(WindowClient, "WindowClient");
-  const makeClient = (record) => new WindowClient(clientToken, record.desc, record.port);
+  const makeClient = (record) => (record.desc.type === "window" || !record.desc.type ? new WindowClient(clientToken, record.desc, record.port) : new Client(clientToken, record.desc, record.port));
+  // What a page is now (its focus changes without telling): asked of the page, with what was last known if it does not answer in time.
+  const refresh = (record) => new Promise((resolve) => {
+    const id = nextCall++;
+    const timer = setTimeout(() => { if (calls.delete(id)) resolve(record); }, 500);
+    calls.set(id, { resolve: (desc) => { clearTimeout(timer); if (desc && typeof desc === "object") record.desc = desc; resolve(record); }, reject: () => { clearTimeout(timer); resolve(record); } });
+    try { record.port.postMessage({ t: "describe", id }); } catch (e) { clearTimeout(timer); calls.delete(id); resolve(record); }
+  });
+  const workerClients = new Map();  // id -> { desc, port }: the workers that pages have made, which are clients as the pages are
   class Clients {
     constructor() { illegal(); }
-    get(id) { return Promise.resolve(Array.from(clientList.values()).filter((c) => c.desc.id === String(id)).map(makeClient)[0]); }
+    get(id) {
+      const record = [...clientList.values(), ...workerClients.values()].find((c) => c.desc.id === String(id));
+      if (!record) return Promise.resolve(undefined);
+      return (record.desc.type === "window" ? refresh(record) : Promise.resolve(record)).then(makeClient);
+    }
     matchAll(options) {
       const type = options && options.type !== undefined ? String(options.type) : "window";
       const uncontrolled = !!(options && options.includeUncontrolled);
-      return Promise.resolve(type === "window" || type === "all" ? Array.from(clientList.values()).filter((c) => uncontrolled || c.desc.controlled).map(makeClient) : []);
+      return Promise.all([...clientList.values()].map(refresh)).then((windows) => {
+        const all = [...windows, ...workerClients.values()].filter((c) => (uncontrolled || c.desc.controlled) && (type === "all" || (c.desc.type || "window") === type));
+        return all.map(makeClient);
+      });
     }
     openWindow(url) { return ask({ t: "open-window", url: String(url) }).then((d) => (d ? makeClient({ desc: d, port: primary().port }) : null), () => null); }
     claim() {
@@ -499,7 +514,8 @@
     const port = record.port;
     switch (m.t) {
       case "hello": record.desc = m.client; clientList.set(port, record); break;
-      case "bye": clientList.delete(port); try { port.close(); } catch (x) { /* (gone) */ } lastActivity = Date.now(); break;
+      case "client": if (m.op === "add") workerClients.set(m.client.id, { desc: m.client, port }); else workerClients.delete(m.client.id); break;
+      case "bye": for (const [id, c] of workerClients) if (c.port === port) workerClients.delete(id); clientList.delete(port); try { port.close(); } catch (x) { /* (gone) */ } lastActivity = Date.now(); break;
       case "state": ServiceWorker.set(self_, m.state); break;
       case "lifecycle":
         busy(lifecycle(m.step)).then(() => port.postMessage({ t: "done", step: m.step, ok: true }), (error) => {

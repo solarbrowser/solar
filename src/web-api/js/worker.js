@@ -58,6 +58,11 @@
         return !this.dispatchEvent(event);
       };
       this.#id = create(url.href);
+      // (A worker is a client of the service worker that serves the page that made it.)
+      if (this.#id >= 0 && typeof globalThis.__solarSwWorkerClient === "function") {
+        const client = given.__solarClient;
+        try { globalThis.__solarSwWorkerClient(client ? client.url : url.href, client ? client.kind : "worker"); } catch (e) { /* (no service worker) */ }
+      }
       if (this.#id < 0) {
         setTimeout(() => fail("Workers are not available."), 0);
         return;
@@ -134,7 +139,7 @@
             ${module ? `import(${JSON.stringify(url.href)}).then(() => { ready = true; for (const p of waiting.splice(0)) connect(p); }, (error) => { throw error; });` : `importScripts(${JSON.stringify(url.href)});`}
           })();`;
         const blob = new Blob([source], { type: "text/javascript" });
-        worker = new Worker(URL.createObjectURL(blob), { type: module ? "module" : "classic", name });
+        worker = new Worker(URL.createObjectURL(blob), { type: module ? "module" : "classic", name, __solarClient: { url: url.href, kind: "sharedworker" } });
         shared.set(key, worker);
       }
       worker.addEventListener("error", (e) => this.dispatchEvent(new ErrorEvent("error", { message: e.message, filename: e.filename, lineno: e.lineno, colno: e.colno, cancelable: true })));

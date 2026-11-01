@@ -8,10 +8,11 @@
   const create = globalThis.__solarWorkerCreate, start = globalThis.__solarWorkerStart, terminate = globalThis.__solarWorkerTerminate;
   const kvRead = globalThis.__solarKvRead, kvWrite = globalThis.__solarKvWrite;
   const tellControlled = globalThis.__solarSwControlled, resourceDone = globalThis.__solarSwResourceDone;
+  const isNested = globalThis.__solarNested;
   const mark = globalThis.__solarSwMark, adopt = globalThis.__solarSwAdopt, attach = globalThis.__solarWorkerAttach;
   const pushManager = globalThis.__solarPushManager;
   delete globalThis.__solarKvRead; delete globalThis.__solarKvWrite; delete globalThis.__solarSwControlled; delete globalThis.__solarSwResourceDone;
-  delete globalThis.__solarSwMark; delete globalThis.__solarSwAdopt; delete globalThis.__solarWorkerAttach; delete globalThis.__solarPushManager;
+  delete globalThis.__solarNested; delete globalThis.__solarSwMark; delete globalThis.__solarSwAdopt; delete globalThis.__solarWorkerAttach; delete globalThis.__solarPushManager;
   if (typeof create !== "function" || typeof MessageChannel !== "function" || typeof document === "undefined" || typeof fetch !== "function") return;
   const nativeFetch = globalThis.fetch;
   const secure = typeof isSecureContext === "boolean" ? isSecureContext : true;
@@ -61,10 +62,26 @@
   tag(ServiceWorker, "ServiceWorker");
   handler(ServiceWorker.prototype, ["statechange", "error"]);
   hide("ServiceWorker", ServiceWorker);
-  const clientDescriptor = () => ({ id: clientIdOf(), url: location.href, type: "window", frameType: window.top === window ? "top-level" : "nested", visibilityState: document.visibilityState, focused: typeof document.hasFocus === "function" ? document.hasFocus() : true });
+  const creationURL = location.href;  // (what a client's url is: the address the document was created for, not the one pushState has made of it)
+  const clientDescriptor = () => ({ id: clientIdOf(), url: creationURL, type: "window", frameType: (isNested ? isNested() : window.top !== window) ? "nested" : "top-level", visibilityState: document.visibilityState, focused: typeof document.hasFocus === "function" ? document.hasFocus() : true });
 
   // Tells the worker who this page is, and whether the worker controls it (a client that is not controlled is not listed by clients.matchAll unless asked for).
   const announce = (w) => { try { if (w && w.port && !w.gone) w.port.postMessage({ t: "hello", client: { ...clientDescriptor(), controlled: controller === w } }); } catch (e) { /* (gone) */ } };
+
+  // The workers this page makes are clients of the workers that serve it, as the page is: Worker and SharedWorker say so through this.
+  Object.defineProperty(globalThis, "__solarSwWorkerClient", {
+    value(url, kind) {
+      const id = crypto.randomUUID();
+      const scope = controller && controller.reg ? controller.reg.scope : null;
+      for (const r of registrations) {
+        const w = r.active;
+        if (!w || !w.port || w.gone) continue;
+        try { w.port.postMessage({ t: "client", op: "add", client: { id, url, type: kind, frameType: "none", visibilityState: "hidden", focused: false, controlled: url.startsWith("blob:") || url.startsWith("data:") ? w === controller : matching(url) === r } }); } catch (e) { /* (gone) */ }
+      }
+      return id;
+    },
+    writable: true, configurable: true, enumerable: false,
+  });
 
   // ---- Workers: made, told their state, asked ----
   const setState = (w, state) => {
@@ -209,6 +226,7 @@
       case "rpc-result": { const f = w.rpcs.get(m.id); if (f) { w.rpcs.delete(m.id); if (m.error) f.reject(new DOMException(m.error, "InvalidStateError")); else f.resolve(m.value); } break; }
       case "claimed": if (reg.active === w && location.href.startsWith(reg.scope)) setController(w); break;
       case "clients": reply(m.id, [clientDescriptor()]); break;
+      case "describe": reply(m.id, { ...clientDescriptor(), controlled: controller === w }); break;
       case "claim":
         if (reg.active === w && location.href.startsWith(reg.scope)) { setController(w); reply(m.id, undefined); } else reply(m.id, undefined, "The service worker is not active.");
         break;

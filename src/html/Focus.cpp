@@ -262,9 +262,18 @@ Value GetActiveElementShadow(Context& ctx, Value t, qe::Args, Value) {
   return self ? ActiveElementOf(ctx, self) : qe::Undefined();
 }
 
+// A document has the focus when it is the top one, or the frame that its parent has the focus in, and so up.
+bool DocumentHasFocus(const dom::Document* document) {
+  if (!document || !document->window) return false;
+  const dom::Element* frame = document->frameElement;
+  if (!frame) return true;
+  const dom::Document* parent = frame->nodeDocument;
+  return parent && parent->focusedElement == frame && DocumentHasFocus(parent);
+}
+
 Value HasFocus(Context& ctx, Value t, qe::Args, Value) {
   dom::Document* self = dom::ThisDocument(ctx, t);
-  return self ? qe::FromBool(self->window != nullptr) : qe::Undefined();
+  return self ? qe::FromBool(DocumentHasFocus(self)) : qe::Undefined();
 }
 
 }  // namespace

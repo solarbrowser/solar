@@ -1126,6 +1126,12 @@ Value FrameElement(Context& ctx, Value, qe::Args, Value) {
   return qe::FromObject(iframe);
 }
 
+// __solarNested(): whether this document is made for a frame (it is, from the moment it exists, though it is in its parent only once loaded).
+Value IsNested(Context& ctx, Value, qe::Args, Value) {
+  dom::Document* document = DocumentOfRealm(ctx);
+  return qe::FromBool(document && document->frameElement);
+}
+
 // __solarLoadText(url): what the program's loader has at the address, as text, or nothing.
 Value LoadText(Context& ctx, Value, qe::Args args, Value) {
   if (args.empty() || !g_environment) return qe::Undefined();
@@ -1351,6 +1357,7 @@ void DefineFrameNatives(Context& ctx) {
   qe::DefineGlobalFunction(ctx, "postMessage", PostMessage, 1);
   qe::DefineGlobalFunction(ctx, "__solarParent", ParentWindow, 0);
   qe::DefineGlobalFunction(ctx, "__solarFrameElement", FrameElement, 0);
+  qe::DefineGlobalFunction(ctx, "__solarNested", IsNested, 0);
   qe::DefineGlobalFunction(ctx, "__solarChildCount", ChildCount, 0);
   qe::DefineGlobalFunction(ctx, "__solarChildWindow", ChildWindow, 1);
   qe::DefineGlobalFunction(ctx, "__solarLoadText", LoadText, 1);
