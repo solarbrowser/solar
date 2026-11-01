@@ -1075,6 +1075,7 @@ tests/wpt/xhr/abort-during-navigation.window.js
 tests/wpt/xhr/abort-event-order.htm
 tests/wpt/xhr/access-control-basic-post-success-no-content-type.htm
 tests/wpt/xhr/access-control-basic-preflight-denied.htm
+tests/wpt/xhr/access-control-expose-headers-on-redirect.html
 tests/wpt/xhr/access-control-preflight-credential-async.htm
 tests/wpt/xhr/access-control-preflight-credential-sync.htm
 tests/wpt/xhr/access-control-preflight-headers-async.htm
@@ -1087,6 +1088,7 @@ tests/wpt/xhr/access-control-preflight-request-invalid-status-501.htm
 tests/wpt/xhr/access-control-preflight-request-must-not-contain-cookie.htm
 tests/wpt/xhr/access-control-response-with-body-sync.htm
 tests/wpt/xhr/access-control-response-with-body.htm
+tests/wpt/xhr/access-control-response-with-exposed-headers.htm
 tests/wpt/xhr/data-uri.htm
 tests/wpt/xhr/firing-events-http-content-length.html
 tests/wpt/xhr/formdata/append-formelement.html

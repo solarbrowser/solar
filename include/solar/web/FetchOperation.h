@@ -55,6 +55,13 @@ struct FetchOperation : net::FetchHandler {
   std::vector<std::string> unsafeHeaders;
   std::string preflightUrl;
   void StartMain();
+  // The integrity metadata of the request: its response is held back until the body is whole and has been checked.
+  std::string integrity;
+  bool integrityBuffering = false, integrityReleased = false;
+  bool orbBuffering = false;  // the body is held for the check of Opaque Response Blocking
+  net::HttpResponseHead integrityHead;
+  url::Url integrityFinalUrl;
+  std::string integrityBytes;
   // The request is not a simple one: wherever it goes as a cors request it asks first, a redirect's target included.
   bool nonSimple = false;
   net::FetchHeaders requestHeaders;  // (the request's own, as the preflight of a redirect's target names them)

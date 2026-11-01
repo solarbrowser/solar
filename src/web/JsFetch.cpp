@@ -17,6 +17,8 @@
 #include "solar/web/FetchHost.h"
 #include "solar/web/MimeType.h"
 #include "solar/web/FetchOperation.h"
+#include "solar/web/Integrity.h"
+#include "solar/web/Orb.h"
 
 namespace solar::web {
 
@@ -176,6 +178,36 @@ void FetchOperation::OnResponseHead(const net::HttpResponseHead& head, const url
     return;
   }
 
+  // A response to a no-cors request that is from another origin is checked by Opaque Response Blocking before the page has it.
+  if (mode == RequestMode::NoCors && crossOrigin && !integrityReleased && integrity.empty()) {
+    const auto header = [&](const char* name) { return head.Header(name).value_or(std::string_view()); };
+    std::string nosniffValue(header("x-content-type-options"));
+    for (char& c : nosniffValue) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const OrbVerdict verdict = OrbCheckHead(head.status, header("content-type"), nosniffValue.starts_with("nosniff"), header("content-range"));
+    if (verdict == OrbVerdict::Block) {
+      FailWith(MakeTypeError(ctx, "Failed to fetch: the response was blocked (ORB)"), "the response was blocked (ORB)");
+      handle.Cancel();
+      return;
+    }
+    if (verdict == OrbVerdict::NeedBody) {
+      integrityBuffering = orbBuffering = true;
+      integrityHead = head;
+      integrityFinalUrl = finalUrl;
+      return;
+    }
+  }
+  if (!integrity.empty() && !integrityReleased) {
+    // An opaque response cannot be checked; any other waits for its whole body.
+    if (mode == RequestMode::NoCors && crossOrigin) {
+      FailWith(MakeTypeError(ctx, "Failed to fetch: the integrity of an opaque response cannot be checked"), "integrity of an opaque response");
+      handle.Cancel();
+      return;
+    }
+    integrityBuffering = true;
+    integrityHead = head;
+    integrityFinalUrl = finalUrl;
+    return;
+  }
   JsResponse* r = NewResponse(ctx);
   url::Url withoutFragment = finalUrl;
   withoutFragment.fragment.reset();
@@ -219,6 +251,10 @@ void FetchOperation::OnResponseHead(const net::HttpResponseHead& head, const url
 
 void FetchOperation::OnBody(std::span<const uint8_t> data) {
   if (preflighting) return;
+  if (integrityBuffering) {
+    integrityBytes.append(reinterpret_cast<const char*>(data.data()), data.size());
+    return;
+  }
   if (body && !body->failure) {
     body->bytes.append(reinterpret_cast<const char*>(data.data()), data.size());
     if (!body->watchers.empty()) {
@@ -237,6 +273,24 @@ void FetchOperation::OnEnd() {
     preflighting = false;
     if (!settled) StartMain();
     return;
+  }
+  if (integrityBuffering) {
+    integrityBuffering = false;
+    if (orbBuffering) {
+      orbBuffering = false;
+      if (OrbBodyIsBlocked(integrityBytes)) {
+        FailWith(MakeTypeError(host.context(), "Failed to fetch: the response was blocked (ORB)"), "the response was blocked (ORB)");
+        Done();
+        return;
+      }
+    } else if (!IntegrityMatches(integrity, integrityBytes)) {
+      FailWith(MakeTypeError(host.context(), "Failed to fetch: the body does not match the integrity metadata"), "the body does not match the integrity metadata");
+      Done();
+      return;
+    }
+    integrityReleased = true;
+    OnResponseHead(integrityHead, integrityFinalUrl);
+    if (body && !body->failure) body->bytes = std::move(integrityBytes);
   }
   if (body && !body->failure) {
     body->complete = true;
@@ -515,7 +569,6 @@ Value Fetch(Context& ctx, Value, qe::Args args, Value newTarget) {
     return capability.promise;
   }
   if (request->url.scheme != "http" && request->url.scheme != "https") return reject(MakeTypeError(ctx, "Failed to fetch: unsupported scheme " + request->url.scheme));
-  if (!request->integrity.empty()) return reject(MakeTypeError(ctx, "Failed to fetch: integrity metadata is not supported yet"));
 
   const url::Url& page = host->config().pageUrl;
   auto operation = std::make_unique<FetchOperation>(*host);
@@ -573,6 +626,7 @@ Value Fetch(Context& ctx, Value, qe::Args args, Value newTarget) {
   }
 
   op->method = request->method;
+  op->integrity = request->integrity;
   host->Adopt(std::move(operation));
 
   // From here on the request needs its bytes, which a stream gives only once it has ended.

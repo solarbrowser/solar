@@ -402,7 +402,7 @@ void ServeWpt(int client) {
   std::string path = UrlDecode(q == std::string::npos ? target : target.substr(0, q));
   path = path.substr(0, path.find('#'));
   auto reply = [&](int status, const std::string& reason, const std::string& type, const std::string& body, const std::string& extra, bool headOnly) {
-    std::string out = "HTTP/1.1 " + std::to_string(status) + " " + reason + "\r\nContent-Type: " + type + "\r\nContent-Length: " + std::to_string(body.size()) + "\r\nConnection: close\r\n" + extra + "\r\n";
+    std::string out = "HTTP/1.1 " + std::to_string(status) + " " + reason + "\r\n" + (type == "\x01none" ? std::string() : "Content-Type: " + type + "\r\n") + ((extra.rfind("Content-Length:", 0) == std::string::npos && extra.find("\r\nContent-Length:") == std::string::npos) ? "Content-Length: " + std::to_string(body.size()) + "\r\n" : std::string()) + "Connection: close\r\n" + extra + "\r\n";
     if (!headOnly) out += body;
     TestServer::SendAll(client, out);
   };
@@ -466,7 +466,63 @@ void ServeWpt(int client) {
       extra.find("Access-Control-Allow-Origin:") != extra.rfind("Access-Control-Allow-Origin:")) {
     extra.erase(extra.find("Access-Control-Allow-Origin: *\r\n"), std::string("Access-Control-Allow-Origin: *\r\n").size());
   }
-  reply(200, "OK", type, contents, extra, method == "HEAD");
+  // The pipes of the address (?pipe=header(name,value)|status(code)|slice(start,end)), the part of wptserve's that the tests use.
+  int status = 200;
+  std::string reason = "OK";
+  if (const size_t pipeAt = query.find("pipe="); pipeAt != std::string::npos) {
+    std::string pipes = UrlDecode(query.substr(pipeAt + 5, query.find('&', pipeAt) == std::string::npos ? std::string::npos : query.find('&', pipeAt) - pipeAt - 5));
+    // (Pipes that follow each other with no | between them are taken apart, and the arguments are trimmed.)
+    for (size_t i = 0; i + 1 < pipes.size(); ++i) {
+      if (pipes[i] == ')' && std::isalpha(static_cast<unsigned char>(pipes[i + 1]))) pipes.insert(i + 1, "|");
+    }
+    size_t from = 0;
+    while (from <= pipes.size()) {
+      size_t bar = pipes.find('|', from);
+      if (bar == std::string::npos) bar = pipes.size();
+      const std::string step = pipes.substr(from, bar - from);
+      from = bar + 1;
+      const size_t open = step.find('(');
+      if (open == std::string::npos || step.back() != ')') continue;
+      const std::string name = step.substr(0, open);
+      std::vector<std::string> args;
+      std::string current;
+      for (size_t i = open + 1; i + 1 < step.size(); ++i) {
+        if (step[i] == '\\' && i + 2 < step.size() && step[i + 1] == ',') { current.push_back(','); ++i; }
+        else if (step[i] == ',') { args.push_back(current); current.clear(); }
+        else current.push_back(step[i]);
+      }
+      args.push_back(current);
+      for (std::string& arg : args) {
+        while (!arg.empty() && arg.front() == ' ') arg.erase(arg.begin());
+        while (!arg.empty() && arg.back() == ' ') arg.pop_back();
+      }
+      if (name == "status" && !args.empty()) {
+        status = std::atoi(args[0].c_str());
+        reason = args.size() > 1 ? args[1] : (status == 206 ? "Partial Content" : status == 404 ? "Not Found" : status == 302 ? "Found" : status == 204 ? "No Content" : "OK");
+      } else if (name == "header" && args.size() >= 2) {
+        std::string lowerName = args[0];
+        for (char& c : lowerName) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (lowerName == "content-type") { type = args[1].empty() ? "\x01none" : args[1]; continue; }
+        // (the header is replaced; one with no value is taken away)
+        std::string kept;
+        std::istringstream lines(extra);
+        std::string line;
+        while (std::getline(lines, line)) {
+          if (!line.empty() && line.back() == '\r') line.pop_back();
+          std::string lowerLine = line.substr(0, line.find(':'));
+          for (char& c : lowerLine) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+          if (lowerLine != lowerName) kept += line + "\r\n";
+        }
+        extra = kept;
+        if (!args[1].empty()) extra += args[0] + ": " + args[1] + "\r\n";
+      } else if (name == "slice" && args.size() >= 2) {
+        const size_t start = args[0] == "null" ? 0 : static_cast<size_t>(std::atoll(args[0].c_str()));
+        const size_t end = args[1] == "null" ? contents.size() : std::min<size_t>(contents.size(), static_cast<size_t>(std::atoll(args[1].c_str())));
+        contents = start < end ? contents.substr(start, end - start) : std::string();
+      }
+    }
+  }
+  reply(status, reason, type, contents, extra, method == "HEAD");
 }
 
 // Names of the test's hosts go to the server on the loopback interface; the port the page says is the server's.

@@ -63,6 +63,9 @@ tests/wpt/fetch/api/basic/stream-safe-creation.any.js
 tests/wpt/fetch/api/basic/text-utf8.any.js
 tests/wpt/fetch/api/body/formdata.any.js
 tests/wpt/fetch/api/body/mime-type.any.js
+tests/wpt/fetch/api/cors/cors-cookies.any.js
+tests/wpt/fetch/api/cors/cors-expose-star.sub.any.js
+tests/wpt/fetch/api/cors/cors-filtering.sub.any.js
 tests/wpt/fetch/api/cors/cors-multiple-origins.sub.any.js
 tests/wpt/fetch/api/cors/cors-preflight-cache-tainted.any.js
 tests/wpt/fetch/api/cors/cors-preflight-cache.any.js
@@ -153,6 +156,7 @@ tests/wpt/fetch/http-cache/cache-mode.any.js
 tests/wpt/fetch/http-cache/freshness.any.js
 tests/wpt/fetch/http-cache/status.any.js
 tests/wpt/fetch/http-cache/vary.any.js
+tests/wpt/fetch/orb/tentative/content-range.sub.any.js
 tests/wpt/fetch/range/blob.any.js
 tests/wpt/fetch/range/data.any.js
 tests/wpt/streams/piping/abort.any.js
@@ -268,6 +272,7 @@ tests/wpt/xhr/access-control-preflight-request-allow-headers-returns-star.any.js
 tests/wpt/xhr/access-control-preflight-request-header-returns-origin.any.js
 tests/wpt/xhr/blob-range.any.js
 tests/wpt/xhr/content-type-unmodified.any.js
+tests/wpt/xhr/cors-expose-star.sub.any.js
 tests/wpt/xhr/cors-upload.any.js
 tests/wpt/xhr/event-abort.any.js
 tests/wpt/xhr/event-error.sub.any.js
