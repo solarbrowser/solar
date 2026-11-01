@@ -31,6 +31,9 @@ def to_bytes(value):
     return str(value).encode("utf-8")
 
 
+_missing = object()
+
+
 class MultiDict(dict):
     """The parameters of a query or a form: a name has a list of values (bytes)."""
 
@@ -48,19 +51,19 @@ class MultiDict(dict):
     def __contains__(self, key):
         return super().__contains__(self._key(key))
 
-    def first(self, key, default=None):
+    def first(self, key, default=_missing):
         values = super().get(self._key(key))
         if values:
             return values[0]
-        if default is not None:
+        if default is not _missing:
             return default
         raise KeyError(key)
 
-    def last(self, key, default=None):
+    def last(self, key, default=_missing):
         values = super().get(self._key(key))
         if values:
             return values[-1]
-        if default is not None:
+        if default is not _missing:
             return default
         raise KeyError(key)
 
@@ -75,13 +78,13 @@ class MultiDict(dict):
         return self.get_list(key)
 
     def items(self):
-        return [(key, values[0]) for key, values in super().items()]
+        return [(key, list(values)) for key, values in super().items()]
 
     def keys(self):
         return list(super().keys())
 
     def values(self):
-        return [values[0] for values in super().values()]
+        return [list(values) for values in super().values()]
 
 
 class RequestHeaders(object):

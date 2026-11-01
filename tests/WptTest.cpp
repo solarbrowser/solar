@@ -433,7 +433,7 @@ void ServeWpt(int client) {
     return;
   }
   if (method != "GET" && method != "HEAD") { reply(405, "Method Not Allowed", "text/plain", "", "", true); return; }
-  if (path.find("..") != std::string::npos || !std::filesystem::is_regular_file(file)) { reply(404, "Not Found", "text/plain", "not found", "", method == "HEAD"); return; }
+  if (path.find("..") != std::string::npos || !std::filesystem::is_regular_file(file)) { if (std::getenv("WPT_PY_DEBUG")) std::fprintf(stderr, "404 %s %s\n", method.c_str(), path.c_str()); reply(404, "Not Found", "text/plain", "not found", "", method == "HEAD"); return; }
   std::string contents;
   ReadFile(file, contents);
   if (file.find(".sub.") != std::string::npos) contents = TestEnvironment::Substitute(contents, query);
@@ -498,7 +498,10 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
       // A path from the root is from tests/wpt; any other is from the test's own directory.
       const std::string given = line.substr(tag.size());
       const std::string wanted = given.starts_with("/") ? "tests/wpt" + given : (std::filesystem::path(path).parent_path() / given).string();
-      if (ReadFile(wanted, script)) prelude += script + "\n";
+      if (ReadFile(wanted, script)) {
+        if (wanted.find(".sub.") != std::string::npos) script = TestEnvironment::Substitute(script, "");
+        prelude += script + "\n";
+      }
     }
   }
 
@@ -548,6 +551,10 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
     });
   }
   qe::EvaluateResult result = realm.Evaluate(std::string(std::getenv("WPT_ALL") ? "globalThis.__allFailures = true;\n" : "") + skips + resources + harness, "harness.js");
+  // A script that is not of a page (.any.js) has an address all the same, which is where its tests are served from.
+  if (result.ok && !isHtml && !isWindowScript) {
+    result = realm.Evaluate("Object.defineProperty(globalThis, 'location', { value: new URL(" + JsString("http://web-platform.test:8000/" + PageUrlPath(path)) + "), writable: true, configurable: true });", "location.js");
+  }
   if (result.ok && !prelude.empty()) result = realm.Evaluate(prelude, "prelude.js");
   if (result.ok && isWindowScript) {
     const std::string address = "http://web-platform.test:8000/" + PageUrlPath(path);
