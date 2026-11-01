@@ -5,6 +5,7 @@
  */
 
 #include "solar/css/Calc.h"
+#include "solar/css/Values.h"
 
 #include <algorithm>
 #include <cmath>
@@ -569,6 +570,11 @@ class TreeParser {
     // var(), env(), attr() and the like: only known later.
     out.kind = CalcNode::Kind::Opaque;
     out.opaque = v;
+    if (name == "anchor" || name == "anchor-size") {
+      // Its arguments in their canonical form (a fallback of 0 is 0px).
+      ValueMatch match;
+      if (MatchSyntax(name == "anchor" ? "<anchor()>" : "<anchor-size()>", ComponentValues{v}, match) && match.normalized.size() == 1) out.opaque = match.normalized[0];
+    }
     return true;
   }
 
@@ -954,6 +960,11 @@ std::optional<ComponentValue> NormalizeMathFunction(const ComponentValue& functi
   }
   result.name = "calc";
   Emit(root, result.children, false);
+  // calc() of an anchor() or an anchor-size() alone is that function.
+  if (result.children.size() == 1 && result.children[0].kind == ComponentValue::Kind::Function) {
+    const std::string inner = Lower(result.children[0].name);
+    if (inner == "anchor" || inner == "anchor-size") return result.children[0];
+  }
   return result;
 }
 

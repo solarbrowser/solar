@@ -427,6 +427,10 @@ bool IsMathFunction(const std::string& lowerName) {
 
 std::optional<NumType> TypeOfMath(const ComponentValue& function);
 
+}  // namespace
+bool MatchSyntax(std::string_view syntax, const ComponentValues& values, ValueMatch& out, const ComputeContext* compute);
+namespace {
+
 // The type of one operand: a number, percentage or dimension token, a keyword constant, a parenthesized sum, a math function.
 std::optional<NumType> TypeOfOperand(const ComponentValue& v) {
   if (v.kind == ComponentValue::Kind::Token) {
@@ -446,7 +450,16 @@ std::optional<NumType> TypeOfOperand(const ComponentValue& v) {
       default: return std::nullopt;
     }
   }
-  if (v.kind == ComponentValue::Kind::Function) return IsMathFunction(Lower(v.name)) ? TypeOfMath(v) : std::nullopt;
+  if (v.kind == ComponentValue::Kind::Function) {
+    const std::string name = Lower(v.name);
+    // anchor() and anchor-size() are lengths (or percentages) that only layout knows, once there is an anchor.
+    if (name == "anchor" || name == "anchor-size") {
+      ValueMatch match;
+      if (!MatchSyntax(name == "anchor" ? "<anchor()>" : "<anchor-size()>", ComponentValues{v}, match)) return std::nullopt;
+      return NumType{Cat::Length, true};
+    }
+    return IsMathFunction(name) ? TypeOfMath(v) : std::nullopt;
+  }
   if (v.IsBlock(T::LeftParen)) {
     ComponentValue wrapper;
     wrapper.kind = ComponentValue::Kind::Function;
@@ -654,6 +667,8 @@ std::optional<NumType> TypeOfMath(const ComponentValue& function) {
 }
 
 std::optional<NumType> TypeOfComponent(const ComponentValue& v) {
+  // A parenthesis of its own is a value only inside a calculation.
+  if (v.kind == ComponentValue::Kind::Block) return std::nullopt;
   if (v.kind == ComponentValue::Kind::Function) return IsMathFunction(Lower(v.name)) ? TypeOfMath(v) : std::nullopt;
   return TypeOfOperand(v);
 }
@@ -1948,6 +1963,26 @@ bool CanonicalFontValue(const std::string& name, ValueMatch& out, bool computed)
 void SetValueBaseUrl(const std::string& base) { g_valueBase = base; }
 const std::string& ValueBaseUrl() { return g_valueBase; }
 
+namespace {
+bool ContainsFunctionNamed(const ComponentValues& values, const char* name) {
+  for (const ComponentValue& v : values) {
+    if (v.kind == ComponentValue::Kind::Function && Lower(v.name) == name) return true;
+    if (v.kind != ComponentValue::Kind::Token && ContainsFunctionNamed(v.children, name)) return true;
+  }
+  return false;
+}
+bool IsInsetPropertyName(const std::string& name) {
+  static const std::set<std::string> names = {"top", "right", "bottom", "left", "inset-block-start", "inset-block-end", "inset-inline-start", "inset-inline-end", "inset", "inset-block", "inset-inline"};
+  return names.count(name) > 0;
+}
+bool IsAnchorSizeProperty(const std::string& name) {
+  static const std::set<std::string> names = {"width", "height", "min-width", "min-height", "max-width", "max-height", "block-size", "inline-size", "min-block-size", "min-inline-size",
+                                              "max-block-size", "max-inline-size", "margin-top", "margin-right", "margin-bottom", "margin-left", "margin-block-start",
+                                              "margin-block-end", "margin-inline-start", "margin-inline-end", "margin", "margin-block", "margin-inline"};
+  return names.count(name) > 0 || IsInsetPropertyName(name);
+}
+}  // namespace
+
 bool MatchPropertyValue(const PropertyDefinition& property, const ComponentValues& values, ValueMatch& out, const ComputeContext* compute) {
   static const std::set<std::string> keepOrder = {"image-resolution", "hanging-punctuation", "word-space-transform"};
   g_keepWrittenOrder = keepOrder.count(property.name) > 0;
@@ -1956,6 +1991,9 @@ bool MatchPropertyValue(const PropertyDefinition& property, const ComponentValue
   g_keepWrittenOrder = false;
   g_numberZero = false;
   if (!matched) return false;
+  // anchor() stands in the properties that place a box (top, inset-inline-start...) and nowhere else; anchor-size() in them, in sizes and in margins.
+  if (!IsInsetPropertyName(property.name) && ContainsFunctionNamed(out.normalized, "anchor")) return false;
+  if (!IsAnchorSizeProperty(property.name) && ContainsFunctionNamed(out.normalized, "anchor-size")) return false;
   CanonicalGradients(out.normalized, compute != nullptr);
   if (!CanonicalFontValue(property.name, out, compute != nullptr)) return false;
   if (std::string(property.name) == "display") CanonicalDisplay(out);
