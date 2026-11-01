@@ -233,7 +233,7 @@ class TestEnvironment : public solar::html::FrameEnvironment {
       solar::web::FetchHost::Config config;
       config.loop = &loop_;
       config.client = &client_;
-      config.pageUrl = *solar::url::Parse("http://web-platform.test:8000/fetch/api/");
+      config.pageUrl = *solar::url::Parse(pageUrl_.empty() ? "http://web-platform.test:8000/fetch/api/" : pageUrl_);
       config.afterScript = [this] { events_.AfterScript(); };
       bundle->host = std::make_unique<solar::web::FetchHost>(realm.GetContext(), config);
     });
@@ -266,6 +266,9 @@ class TestEnvironment : public solar::html::FrameEnvironment {
     return FrameEnvironment::ContentType(url);
   }
   std::map<std::string, std::string> handlerTypes_;
+  // The address of the page being run, for what the realm's scripts resolve against.
+  void SetPageUrl(const std::string& url) { pageUrl_ = url; }
+  std::string pageUrl_;
 
   // What the WPT server does to a file with .sub. in its name: {{GET[name]}} is the parameter of the query, {{host}}, {{ports[http][0]}} and {{location[...]}} the server's.
   static std::string Substitute(const std::string& text, const std::string& rest) {
@@ -522,6 +525,7 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
                                          [&] { return timers.NextDelayMs(); }});
   TestEnvironment environment(*isolate, *loop, client, events);
   solar::html::SetFrameEnvironment(&environment);
+  environment.SetPageUrl("http://web-platform.test:8000/" + PageUrlPath(path));
   qe::Realm& realm = *environment.CreateRealm();
   qe::DefineGlobalFunction(realm.GetContext(), "gc", CollectGarbage, 0);
 
