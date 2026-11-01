@@ -676,7 +676,14 @@
   // fetch_tests_from_worker(worker): the tests that a worker runs (with the testharness it imported) are reported here as the tests of this page, as its messages
   // tell of them: {type: "result", test: {name, status, message}} for each, and "complete" at the end. A promise is returned that is done when the worker is.
   const STATUS_PASS = 0, STATUS_PRECONDITION_FAILED = 4;
-  globalThis.fetch_tests_from_worker = (worker) => {
+  globalThis.fetch_tests_from_worker = (given) => {
+    // Where the messages come from: a dedicated worker or a port as it is, a shared worker through its port, a service worker through the container of the page, once it is asked to connect.
+    let worker = given;
+    if (typeof SharedWorker === 'function' && given instanceof SharedWorker) worker = given.port;
+    else if (typeof ServiceWorker === 'function' && given instanceof ServiceWorker) {
+      worker = navigator.serviceWorker;
+      given.postMessage({ type: 'connect' });
+    }
     const entry = { name: 'tests from a worker' };
     let finish;
     const done = new Promise((resolve) => { finish = resolve; });

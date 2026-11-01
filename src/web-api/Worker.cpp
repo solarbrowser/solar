@@ -174,6 +174,16 @@ Value Close(Context& ctx, Value, qe::Args, Value) {
   return qe::Undefined();
 }
 
+// __solarWorkerRun(text, url): a classic script run in the realm as a script is, so that its top-level let, const and class are the realm's (importScripts); what it throws
+// is thrown to the caller.
+Value RunScript(Context& ctx, Value, qe::Args args, Value) {
+  qe::Realm* realm = qe::Realm::FromContext(ctx);
+  if (!realm || args.size() < 2) return qe::Undefined();
+  const qe::EvaluateResult result = realm->Evaluate(qe::ToWtf8(ctx, args[0]), qe::ToWtf8(ctx, args[1]));
+  if (!result.ok) ctx.throw_exception(result.exception);
+  return qe::Undefined();
+}
+
 // __solarWorkerLoad(url): the text of a script, for importScripts (which waits for it).
 Value Load(Context& ctx, Value, qe::Args args, Value) {
   if (args.empty()) return qe::Undefined();
@@ -480,6 +490,7 @@ void InstallWorkerScope(qe::Realm& realm) {
   Context& ctx = realm.GetContext();
   qe::DefineGlobalFunction(ctx, "__solarWorkerClose", Close, 0);
   qe::DefineGlobalFunction(ctx, "__solarWorkerLoad", Load, 1);
+  qe::DefineGlobalFunction(ctx, "__solarWorkerRun", RunScript, 2);
 }
 
 }  // namespace solar::webapi

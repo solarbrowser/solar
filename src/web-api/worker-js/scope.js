@@ -8,10 +8,12 @@
   const info = JSON.parse(global.__solarWorkerInfoText);
   const close = global.__solarWorkerClose;
   const load = global.__solarWorkerLoad;
+  const run = global.__solarWorkerRun;
   delete global.__solarWorkerPort;
   delete global.__solarWorkerInfoText;
   delete global.__solarWorkerClose;
   delete global.__solarWorkerLoad;
+  delete global.__solarWorkerRun;
   const define = (name, value, enumerable = false) => Object.defineProperty(global, name, { value, writable: true, configurable: true, enumerable });
   const origin = info.origin === "null" ? "null" : info.origin;
   const started = Date.now();
@@ -159,7 +161,7 @@
       try { href = new URL(String(given), info.url).href; } catch (e) { throw new DOMException(`Failed to execute 'importScripts' on 'WorkerGlobalScope': The URL '${given}' is invalid.`, "SyntaxError"); }
       const text = load(href);
       if (text === undefined) throw new DOMException(`Failed to execute 'importScripts' on 'WorkerGlobalScope': The script at '${href}' failed to load.`, "NetworkError");
-      (0, eval)(text + "\n//# sourceURL=" + href);
+      run(text, href);
     }
   }, true);
 

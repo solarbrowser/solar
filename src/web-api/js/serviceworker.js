@@ -184,7 +184,8 @@
   const install = async (reg, w, source) => {
     reg.installing = w;
     setState(w, "installing");
-    reg.object.dispatchEvent(new Event("updatefound"));
+    // (After register() has answered: a page listens for it once it has the registration.)
+    setTimeout(() => reg.object.dispatchEvent(new Event("updatefound")), 0);
     const done = await step(w, "install");
     if (reg.installing === w) reg.installing = null;
     if (!done.ok || w.gone) { retire(w); return; }
@@ -216,6 +217,8 @@
     }
     persist();
     checkReady();
+    // The other pages this registration controlled have a new worker: they are told.
+    try { const channel = new BroadcastChannel("solar-sw-claim:" + origin); channel.postMessage({ t: "activated", scope: reg.scope }); channel.close(); } catch (e) { /* (no channel) */ }
   };
   const unregisterRecord = (reg) => {
     const at = registrations.indexOf(reg);
@@ -498,11 +501,43 @@
         if (w.failed) { retire(w); } else { reg.active = w; if (claimedScope) setController(w); else { controller = w; if (tellControlled) tellControlled(true); announce(w); } }
       }
     };
+    // A page that a registration controls, when the registration has a new active worker (it activated in another page): the page goes on with that one.
+    const replaceActive = (scope) => {
+      const text = kvRead(origin, KEY);
+      if (!text) return;
+      let kept = [];
+      try { kept = JSON.parse(text); } catch (e) { kept = []; }
+      for (const k of kept) {
+        if (registrations.some((r) => r.scope === k.scope)) continue;
+        const added = newRecord(k.scope, k.updateViaCache);
+        if (k.pending) continue;
+        added.activeSource = k.source;
+        added.stored = { scriptURL: k.scriptURL, source: k.source };
+      }
+      const best = matching(location.href);
+      if (!best || best.scope !== scope || !best.active || controller !== best.active) return;
+      const k = kept.find((x) => x.scope === scope);
+      if (!k || k.pending || (best.active.url === k.scriptURL && best.activeSource === k.source)) return;
+      const old = best.active;
+      const running = adopt(origin, location.href);
+      const w = spawn(best, k.scriptURL, k.source, "activated", running >= 0 ? running : undefined);
+      if (w.failed) return;
+      best.active = w;
+      best.activeSource = k.source;
+      setController(w);
+      // (The old worker is not ended here: it is the other page's to end, and may be serving others.)
+      old.gone = true;
+      try { old.port.postMessage({ t: "bye" }); old.port.close(); } catch (e) { /* (gone) */ }
+    };
     adoptKept();
     // A worker that claims the pages of its scope tells them all, the ones that are open as well.
     try {
       const claims = new BroadcastChannel("solar-sw-claim:" + origin);
-      claims.onmessage = (e) => { if (e.data && e.data.t === "claim" && location.href.startsWith(e.data.scope)) adoptKept(e.data.scope); };
+      claims.onmessage = (e) => {
+        if (!e.data) return;
+        if (e.data.t === "claim" && location.href.startsWith(e.data.scope)) adoptKept(e.data.scope);
+        else if (e.data.t === "activated" && location.href.startsWith(e.data.scope)) replaceActive(e.data.scope);
+      };
       // (Held by the window: a channel nothing refers to is collected, and with it the way a claim reaches this page.)
       Object.defineProperty(globalThis, Symbol.for("solar.swClaims"), { value: claims, configurable: true });
     } catch (e) { /* (no channel) */ }
