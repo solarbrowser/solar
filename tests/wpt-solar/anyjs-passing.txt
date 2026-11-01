@@ -95,6 +95,7 @@ tests/wpt/fetch/api/headers/headers-structure.any.js
 tests/wpt/fetch/api/redirect/redirect-back-to-original-origin.any.js
 tests/wpt/fetch/api/redirect/redirect-count.any.js
 tests/wpt/fetch/api/redirect/redirect-empty-location.any.js
+tests/wpt/fetch/api/redirect/redirect-keepalive.https.any.js
 tests/wpt/fetch/api/redirect/redirect-location.any.js
 tests/wpt/fetch/api/redirect/redirect-method.any.js
 tests/wpt/fetch/api/redirect/redirect-origin.any.js

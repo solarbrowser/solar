@@ -13,7 +13,11 @@
 #include <vector>
 
 #ifdef __linux__
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
+#include <unistd.h>
 #endif
 
 #ifdef _WIN32
@@ -39,9 +43,13 @@
 #include "solar/web/Messaging.h"
 #include "solar/web/DomBindings.h"
 #include "solar/net/HttpClient.h"
+#include "solar/url/Origin.h"
 #include "solar/url/Parser.h"
+#include "solar/url/Serializer.h"
 #include "solar/web/FetchBindings.h"
 #include "solar/web/FetchHost.h"
+#include "solar/web/MimeType.h"
+#include "solar/web/Orb.h"
 #include "solar/web/JsEventLoop.h"
 #include "solar/web/TimerHost.h"
 #include "solar/web/UrlBindings.h"
@@ -150,6 +158,59 @@ struct RealmBundle {
   }
 };
 
+// The port the test server listens on (set in main), for what the pages load from the names and ports it answers to.
+int g_serverPort = 0;
+
+// One request to the test server, waited for: the status, the Content-Type and the body of the answer. For the loader of the pages
+// (a script from another origin, a frame with a pipe in its address), which asks the server as the network would.
+struct ServerAnswer {
+  bool ok = false;
+  int status = 0;
+  std::string contentType, body;
+  bool noSniff = false;
+};
+
+ServerAnswer AskServer(const std::string& host, const std::string& target) {
+  ServerAnswer answer;
+#ifdef __linux__
+  const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0 || g_serverPort == 0) return answer;
+  sockaddr_in address{};
+  address.sin_family = AF_INET;
+  address.sin_port = htons(static_cast<uint16_t>(g_serverPort));
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  if (::connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof address) != 0) { ::close(fd); return answer; }
+  const std::string request = "GET " + target + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n";
+  ::send(fd, request.data(), request.size(), 0);
+  std::string raw;
+  char buffer[65536];
+  ssize_t got;
+  while ((got = ::recv(fd, buffer, sizeof buffer, 0)) > 0) raw.append(buffer, static_cast<size_t>(got));
+  ::close(fd);
+  const size_t blank = raw.find("\r\n\r\n");
+  if (blank == std::string::npos) return answer;
+  answer.status = std::atoi(raw.c_str() + raw.find(' ') + 1);
+  std::istringstream lines(raw.substr(0, blank));
+  std::string line;
+  while (std::getline(lines, line)) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    std::string lower = line;
+    for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (lower.starts_with("x-content-type-options:") && lower.find("nosniff") != std::string::npos) answer.noSniff = true;
+    if (lower.starts_with("content-type:")) {
+      answer.contentType = line.substr(13);
+      while (!answer.contentType.empty() && answer.contentType.front() == ' ') answer.contentType.erase(answer.contentType.begin());
+    }
+  }
+  answer.body = raw.substr(blank + 4);
+  answer.ok = true;
+#else
+  (void)host;
+  (void)target;
+#endif
+  return answer;
+}
+
 // What pages and frames get from the test run: realms of one isolate, and the files of the tests as the web.
 // What a handler in Python (tools/wptpy.py) answered.
 struct PyAnswer {
@@ -249,6 +310,22 @@ class TestEnvironment : public solar::html::FrameEnvironment {
 
   std::optional<std::string> Load(const std::string& url) override {
     const std::string origin = "http://web-platform.test:8000/";
+    // Another origin of the test server (a name of its own, another port), or an address with a pipe, is asked of the server itself.
+    if (const auto parsed = solar::url::Parse(url); parsed && parsed->scheme == "http" && parsed->host) {
+      const std::string host = *parsed->host;
+      const bool served = host == "web-platform.test" || host.ends_with(".web-platform.test") || host == "not-web-platform.test" || host.ends_with(".not-web-platform.test");
+      const uint16_t port = parsed->port.value_or(80);
+      const bool piped = url.find("pipe=") != std::string::npos;
+      if (served && (port == 80 || (port >= 8000 && port <= 8010)) && (!url.starts_with(origin) || piped)) {
+        std::string target = solar::url::SerializePath(*parsed);
+        if (parsed->query) target += "?" + *parsed->query;
+        const ServerAnswer answer = AskServer(host + ":" + std::to_string(port), target);
+        if (!answer.ok || answer.status >= 400) return std::nullopt;
+        serverTypes_[url] = answer.contentType;
+        serverNoSniff_[url] = answer.noSniff;
+        return answer.body;
+      }
+    }
     if (!url.starts_with(origin)) return std::nullopt;
     std::string path = url.substr(origin.size());
     const std::string rest = path.substr(path.find_first_of("?#") == std::string::npos ? path.size() : path.find_first_of("?#"));
@@ -265,13 +342,35 @@ class TestEnvironment : public solar::html::FrameEnvironment {
     return contents;
   }
 
+  // Opaque Response Blocking of what a page took with no CORS from another origin than its own: what it blocks has no text.
+  std::optional<std::string> LoadNoCors(const std::string& url, bool styleSheet) override {
+    std::optional<std::string> text = Load(url);
+    if (!text) return text;
+    const auto parsed = solar::url::Parse(url);
+    const auto page = solar::url::Parse(pageUrl_.empty() ? "http://web-platform.test:8000/" : pageUrl_);
+    if (!parsed || !page || solar::url::SerializeOrigin(*parsed) == solar::url::SerializeOrigin(*page)) return text;
+    const auto found = serverTypes_.find(url);
+    if (found == serverTypes_.end()) return text;
+    // (A style sheet of another origin is one only if it says it is.)
+    if (styleSheet) {
+      const auto mime = solar::web::ParseMimeType(found->second);
+      if (!mime || mime->type != "text" || mime->subtype != "css") return std::string();
+    }
+    const auto nosniff = serverNoSniff_.find(url);
+    const solar::web::OrbVerdict verdict = solar::web::OrbCheckHead(200, found->second, nosniff != serverNoSniff_.end() && nosniff->second, "");
+    if (verdict == solar::web::OrbVerdict::Block || (verdict == solar::web::OrbVerdict::NeedBody && solar::web::OrbBodyIsBlocked(*text))) return std::string();
+    return text;
+  }
+
   // What a handler in Python said its answer is.
   std::string ContentType(const std::string& url) override {
+    if (const auto served = serverTypes_.find(url); served != serverTypes_.end() && !served->second.empty()) return served->second;
     const auto found = handlerTypes_.find(url);
     if (found != handlerTypes_.end()) return found->second.substr(0, found->second.find(';')) == "text/html" || found->second.find("xml") != std::string::npos || found->second.find("svg") != std::string::npos ? found->second : "text/html";
     return FrameEnvironment::ContentType(url);
   }
-  std::map<std::string, std::string> handlerTypes_;
+  std::map<std::string, std::string> handlerTypes_, serverTypes_;
+  std::map<std::string, bool> serverNoSniff_;
   // The address of the page being run, for what the realm's scripts resolve against.
   void SetPageUrl(const std::string& url) { pageUrl_ = url; }
   std::string pageUrl_;
@@ -589,6 +688,7 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
   // Where an error came from, down to the line and column of each call in its stack.
   isolate->SetSourcePositionTracking(true);
   solar::test::TestServer server(ServeWpt);
+  g_serverPort = server.port();
   auto loop = solar::net::Loop::Create();
   solar::net::HttpClientOptions clientOptions;
   clientOptions.resolver = solar::net::MakeSystemResolver(*loop, WptResolverOptions(server.port()));

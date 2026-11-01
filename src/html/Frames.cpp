@@ -106,6 +106,12 @@ std::optional<std::string> LoadResource(const std::string& url) {
   return g_environment ? g_environment->Load(url) : std::nullopt;
 }
 
+// A script or a style sheet: a subresource with no CORS.
+std::optional<std::string> LoadNoCorsResource(const std::string& url, bool styleSheet = false) {
+  if (url.starts_with("blob:") || url.starts_with("data:") || !g_environment) return LoadResource(url);
+  return g_environment->LoadNoCors(url, styleSheet);
+}
+
 void PrefetchResource(const std::string& url) {
   if (g_environment && (url.starts_with("http://") || url.starts_with("https://"))) g_environment->Prefetch(url);
 }
@@ -119,7 +125,7 @@ bool LoadingStyleSheet() { return g_sheetLoads > 0; }
 // The text of a style sheet: it is a resource whose wait the page must not be shown through (it is not drawn before its rules are known).
 std::optional<std::string> LoadSheetResource(const std::string& url) {
   ++g_sheetLoads;
-  std::optional<std::string> text = LoadResource(url);
+  std::optional<std::string> text = LoadNoCorsResource(url, true);
   --g_sheetLoads;
   return text;
 }
@@ -262,7 +268,7 @@ bool RunScript(Quanta::Embed::Realm& realm, dom::Document* document, dom::Elemen
     const std::string address = Resolve(source->value, BaseOf(document));
     if (g_environment && g_environment->SkipScript(address)) return true;
     if (!ScriptAllowed(realm.GetContext(), document, script, &address)) return true;
-    std::optional<std::string> loaded = LoadResource(address);  // (a data: or blob: address is read here, not asked of the environment)
+    std::optional<std::string> loaded = LoadNoCorsResource(address);  // (a data: or blob: address is read here, not asked of the environment)
     if (!loaded) {
       if (g_environment) g_environment->ScriptFailed("cannot load script " + source->value);
       FireEvent(realm.GetContext(), script, "error");

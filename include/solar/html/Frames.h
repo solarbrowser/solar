@@ -32,6 +32,9 @@ class FrameEnvironment {
 
   // The text of the resource at an absolute URL, or nothing if there is none to be had.
   virtual std::optional<std::string> Load(const std::string& url) = 0;
+  // The same for a script or a style sheet, which a page asks for with no CORS: a response from another origin that Opaque Response
+  // Blocking blocks comes back with no text.
+  virtual std::optional<std::string> LoadNoCors(const std::string& url, bool /*styleSheet*/) { return Load(url); }
 
   // What the resource at the URL is, as the Content-Type header would say: text/html, or an XML type.
   virtual std::string ContentType(const std::string& url) {

@@ -549,7 +549,9 @@ tests/wpt/fetch/corb/script-html-correctly-labeled.tentative.sub.html
 tests/wpt/fetch/corb/script-resource-with-json-parser-breaker.tentative.sub.html
 tests/wpt/fetch/corb/style-css-mislabeled-as-html-nosniff.sub.html
 tests/wpt/fetch/corb/style-css-mislabeled-as-html.sub.html
+tests/wpt/fetch/corb/style-css-with-json-parser-breaker.sub.html
 tests/wpt/fetch/corb/style-html-correctly-labeled.sub.html
+tests/wpt/fetch/cross-origin-resource-policy/iframe-loads.html
 tests/wpt/fetch/data-urls/navigate.window.js
 tests/wpt/fetch/fetch-later/non-secure.window.js
 tests/wpt/html/dom/documents/dom-tree-accessors/Document.getElementsByClassName-null-undef.html
