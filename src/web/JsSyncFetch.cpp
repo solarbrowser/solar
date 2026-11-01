@@ -12,6 +12,8 @@
 #include "solar/net/HttpClient.h"
 #include "solar/net/Loop.h"
 #include "solar/url/Parser.h"
+#include "solar/url/Serializer.h"
+#include "solar/web/BlobUrls.h"
 #include "solar/web/FetchBindingsInternal.h"
 #include "solar/web/FetchHost.h"
 
@@ -55,6 +57,34 @@ Value SyncFetch(Context& ctx, Value, qe::Args args, Value) {
   if (qe::HasException(ctx)) return qe::Null();
   const auto parsed = url::Parse(address);
   if (!parsed) return qe::Null();
+  if (parsed->scheme == "blob") {
+    // What a blob address names is here already; a request for a range of it is answered with that part.
+    url::Url bare = *parsed;
+    bare.fragment.reset();
+    const auto entry = web::LookupBlobUrl(url::Serialize(bare));
+    if (!entry || method != "GET") return qe::Null();
+    std::string bytes = *entry->data, contentRange;
+    int status = 200;
+    const uint32_t length = qe::ToUint32(ctx, qe::Get(ctx, args[2], "length"));
+    for (uint32_t i = 0; i + 1 < length; i += 2) {
+      std::string name = qe::ToWtf8(ctx, qe::Get(ctx, args[2], std::to_string(i).c_str()));
+      for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      if (name != "range") continue;
+      if (!SliceBlobRange(FromIsomorphic(qe::ToWtf8(ctx, qe::Get(ctx, args[2], std::to_string(i + 1).c_str()))), bytes, contentRange)) return qe::Null();
+      status = 206;
+    }
+    Value out = qe::NewArray(ctx);
+    qe::ArrayPush(ctx, out, qe::FromUint32(static_cast<uint32_t>(status)));
+    qe::ArrayPush(ctx, out, qe::FromUtf8(ctx, status == 206 ? "Partial Content" : "OK"));
+    Value headers = qe::NewArray(ctx);
+    const auto add = [&](const char* name, const std::string& value) { qe::ArrayPush(ctx, headers, qe::FromUtf8(ctx, name)); qe::ArrayPush(ctx, headers, qe::FromUtf8(ctx, value)); };
+    add("Content-Type", entry->type);
+    add("Content-Length", std::to_string(bytes.size()));
+    if (!contentRange.empty()) add("Content-Range", contentRange);
+    qe::ArrayPush(ctx, out, headers);
+    qe::ArrayPush(ctx, out, qe::NewUint8Array(ctx, {reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size()}));
+    return out;
+  }
   net::FetchOptions options;
   options.method = method;
   options.initiator = host->config().pageUrl;

@@ -154,6 +154,7 @@ struct RealmBundle {
 // What a handler in Python (tools/wptpy.py) answered.
 struct PyAnswer {
   bool ok = false;
+  bool raw = false;  // body is the whole response, to be sent as it is
   int status = 500;
   std::string reason, contentType = "text/plain", headers, body;
 };
@@ -176,6 +177,11 @@ PyAnswer RunPythonHandler(const std::string& file, const std::string& method, co
     PCLOSE(pipe);
   }
   std::filesystem::remove(requestFile);
+  if (answer.starts_with("RAW\n")) {
+    result.ok = result.raw = true;
+    result.body = answer.substr(4);
+    return result;
+  }
   const size_t statusEnd = answer.find('\n');
   const size_t blank = answer.find("\n\n");
   if (statusEnd == std::string::npos || blank == std::string::npos) return result;
@@ -427,6 +433,7 @@ void ServeWpt(int client) {
     }
     const PyAnswer answer = RunPythonHandler(file, method, "http://" + host + target, head.substr(lineEnd + 2, head.size() >= lineEnd + 6 ? head.size() - lineEnd - 6 : 0), body);
     if (!answer.ok) { reply(500, "Internal Server Error", "text/plain", "handler failed", "", method == "HEAD"); return; }
+    if (answer.raw) { TestServer::SendAll(client, answer.body); return; }
     std::string headers = answer.headers;
     if (headers.find("Access-Control-Allow-Origin") == std::string::npos && headers.find("access-control-allow-origin") == std::string::npos) headers += "Access-Control-Allow-Origin: *\r\n";
     reply(answer.status, answer.reason, answer.contentType, answer.body, headers, method == "HEAD");

@@ -14,6 +14,7 @@
 #include "solar/web/BlobUrls.h"
 #include "solar/web/FetchBindingsInternal.h"
 #include "solar/web/FetchHost.h"
+#include "solar/web/MimeType.h"
 #include "solar/web/FetchOperation.h"
 
 namespace solar::web {
@@ -233,6 +234,59 @@ void CancelOperation(FetchOperation& operation) {
 
 namespace {
 
+// The Range header of a request for a blob: "bytes=" and either or both ends (Fetch Standard, "parse a single range header value"). False where it is none.
+bool ParseSingleRange(const std::string& text, std::optional<uint64_t>& start, std::optional<uint64_t>& end) {
+  size_t i = 0;
+  const auto space = [&] { while (i < text.size() && (text[i] == ' ' || text[i] == '\t')) ++i; };
+  const auto number = [&](std::optional<uint64_t>& out) {
+    if (i >= text.size() || text[i] < '0' || text[i] > '9') return;
+    uint64_t value = 0;
+    while (i < text.size() && text[i] >= '0' && text[i] <= '9') {
+      const uint64_t digit = static_cast<uint64_t>(text[i] - '0');
+      value = value > (UINT64_MAX - digit) / 10 ? UINT64_MAX : value * 10 + digit;
+      ++i;
+    }
+    out = value;
+  };
+  if (text.compare(0, 5, "bytes") != 0) return false;
+  i = 5;
+  space();
+  if (i >= text.size() || text[i] != '=') return false;
+  ++i;
+  space();
+  number(start);
+  space();
+  if (i >= text.size() || text[i] != '-') return false;
+  ++i;
+  space();
+  number(end);
+  space();
+  if (i != text.size() || (!start && !end)) return false;
+  return !(start && end && *start > *end);
+}
+
+}  // namespace
+
+bool SliceBlobRange(const std::string& range, std::string& bytes, std::string& contentRange) {
+  std::optional<uint64_t> start, end;
+  if (!ParseSingleRange(range, start, end)) return false;
+  const uint64_t size = bytes.size();
+  uint64_t from, to;
+  if (!start) {
+    from = *end >= size ? 0 : size - *end;
+    to = size ? size - 1 : 0;
+  } else {
+    from = *start;
+    to = !end || *end >= size ? (size ? size - 1 : 0) : *end;
+  }
+  if (from >= size) return false;
+  contentRange = "bytes " + std::to_string(from) + "-" + std::to_string(to) + "/" + std::to_string(size);
+  bytes = bytes.substr(from, to - from + 1);
+  return true;
+}
+
+namespace {
+
 int HexDigit(char c) {
   if (c >= '0' && c <= '9') return c - '0';
   if (c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -291,18 +345,28 @@ bool DecodeDataUrl(const std::string& address, std::string& bytes, std::string& 
   if (comma == std::string::npos) return false;
   std::string mime = rest.substr(0, comma);
   const std::string payload = PercentDecode(std::string_view(rest).substr(comma + 1));
-  // (spaces at the ends of the type go; a trailing ;base64 is the encoding)
-  while (!mime.empty() && mime.back() == ' ') mime.pop_back();
+  // (white space at the ends of the type goes; a trailing ;base64 is the encoding, with only spaces before the word)
+  const auto isWhitespace = [](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r'; };
+  while (!mime.empty() && isWhitespace(mime.back())) mime.pop_back();
+  size_t lead = 0;
+  while (lead < mime.size() && isWhitespace(mime[lead])) ++lead;
+  mime.erase(0, lead);
   bool base64 = false;
-  std::string lower = mime;
-  for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  if (lower.size() >= 7 && lower.compare(lower.size() - 7, 7, ";base64") == 0) {
-    base64 = true;
-    mime.resize(mime.size() - 7);
-    while (!mime.empty() && mime.back() == ' ') mime.pop_back();
+  if (mime.size() >= 6) {
+    std::string tail = mime.substr(mime.size() - 6);
+    for (char& c : tail) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (tail == "base64") {
+      size_t end = mime.size() - 6;
+      while (end > 0 && mime[end - 1] == ' ') --end;
+      if (end > 0 && mime[end - 1] == ';') {
+        base64 = true;
+        mime.resize(end - 1);
+      }
+    }
   }
-  if (mime.empty() || mime[0] == ';') mime = "text/plain" + std::string(mime.empty() ? ";charset=US-ASCII" : mime);
-  type = mime;
+  if (mime.starts_with(";")) mime = "text/plain" + mime;
+  if (const auto record = ParseMimeType(mime)) type = SerializeMimeType(*record);
+  else type = "text/plain;charset=US-ASCII";
   bytes.clear();
   if (base64) return DecodeBase64(payload, bytes);
   bytes = payload;
@@ -334,7 +398,7 @@ Value Fetch(Context& ctx, Value, qe::Args args, Value newTarget) {
   if (request->signal->aborted) return reject(request->signal->reason);
   // A blob and a data address are not the network's: what they name is here already.
   if (request->url.scheme == "blob" || request->url.scheme == "data") {
-    if (request->method != "GET") return reject(MakeTypeError(ctx, "Failed to fetch: a " + request->url.scheme + " address answers GET only"));
+    if (request->url.scheme == "blob" && request->method != "GET") return reject(MakeTypeError(ctx, "Failed to fetch: a blob address answers GET only"));
     url::Url withoutFragment = request->url;
     withoutFragment.fragment.reset();
     const std::string address = url::Serialize(withoutFragment);
@@ -356,8 +420,18 @@ Value Fetch(Context& ctx, Value, qe::Args args, Value newTarget) {
     r->statusText = "OK";
     r->url = address;
     std::vector<std::pair<std::string, std::string>> list;
-    if (!type.empty()) list.emplace_back("Content-Type", type);
-    list.emplace_back("Content-Length", std::to_string(bytes.size()));
+    std::string contentRange;
+    // A blob answers a request for a range of it with that part.
+    if (request->url.scheme == "blob") {
+      if (const auto range = request->headers->headers.Get("Range")) {
+        if (!SliceBlobRange(*range, bytes, contentRange)) return reject(MakeTypeError(ctx, "Failed to fetch: the Range of a blob request is not valid"));
+        r->status = 206;
+        r->statusText = "Partial Content";
+      }
+    }
+    if (!type.empty() || request->url.scheme == "blob") list.emplace_back("Content-Type", type);
+    if (request->url.scheme == "blob") list.emplace_back("Content-Length", std::to_string(bytes.size()));
+    if (!contentRange.empty()) list.emplace_back("Content-Range", contentRange);
     r->headers = NewResponseHeaders(ctx, list);
     auto buffer = std::make_shared<BodyBuffer>();
     buffer->complete = true;

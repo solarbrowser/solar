@@ -299,6 +299,7 @@ class Response(object):
         self.writer = Writer(self)
         self.explicit_flush = False
         self.close_connection = False
+        self.add_required_headers = True
 
     def set_cookie(self, name, value, path="/", domain=None, max_age=None, expires=None, secure=False, httponly=False, samesite=None):
         parts = ["%s=%s" % (to_bytes(name).decode("latin-1"), to_bytes(value).decode("latin-1"))]
@@ -385,6 +386,10 @@ def main():
         response.headers = ResponseHeaders()
         response.headers.set(b"Content-Type", b"text/plain")
         response.content = traceback.format_exc()
+    if not response.add_required_headers and response.writer._chunks:
+        # (A handler that writes the whole response itself: the server sends it as it is.)
+        sys.stdout.buffer.write(b"RAW\n" + b"".join(response.writer._chunks))
+        return
     status = response.status
     reason = ""
     if isinstance(status, (tuple, list)):

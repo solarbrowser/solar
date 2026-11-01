@@ -88,8 +88,7 @@ bool IsTokenChar(char c) {
 std::string RefuseHeader(const std::string& name, const std::string& value) {
   if (name.empty() || !std::all_of(name.begin(), name.end(), IsTokenChar)) return "invalid header name";
   for (char c : value) {
-    const unsigned char u = static_cast<unsigned char>(c);
-    if ((u < 0x20 && u != '\t') || u == 0x7F) return "invalid header value";
+    if (c == '\0' || c == '\r' || c == '\n') return "invalid header value";
   }
   for (const char* forbidden : {"host", "content-length", "transfer-encoding", "connection", "upgrade", "accept-encoding", "keep-alive", "te",
                                 "trailer", "proxy-connection", "cookie", "cookie2"}) {

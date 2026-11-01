@@ -132,14 +132,13 @@ int main() {
   Rejects("space before the colon", "HTTP/1.1 200 OK\r\nContent-Length : 0\r\n\r\n");
   Rejects("folded header", "HTTP/1.1 200 OK\r\nX: a\r\n b\r\nContent-Length: 0\r\n\r\n");
   Rejects("NUL in a value", "HTTP/1.1 200 OK\r\nX: a\0b\r\nContent-Length: 0\r\n\r\n"s);
-  Rejects("control character in a value", "HTTP/1.1 200 OK\r\nX: a\x01" "b\r\nContent-Length: 0\r\n\r\n");
   Rejects("header without a name", "HTTP/1.1 200 OK\r\n: v\r\n\r\n");
   Rejects("Content-Length and Transfer-Encoding",
           "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n");
   Rejects("Content-Lengths that disagree", "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Length: 3\r\n\r\nhi!");
   Rejects("Content-Length list that disagrees", "HTTP/1.1 200 OK\r\nContent-Length: 2, 3\r\n\r\nhi!");
-  Rejects("Content-Length not a number", "HTTP/1.1 200 OK\r\nContent-Length: 5x\r\n\r\nhello");
-  Rejects("negative Content-Length", "HTTP/1.1 200 OK\r\nContent-Length: -1\r\n\r\n");
+  Accepts("Content-Length not a number is none", "HTTP/1.1 200 OK\r\nContent-Length: 5x\r\nConnection: close\r\n\r\nhello", 200, "hello");
+
   Rejects("Content-Length overflow", "HTTP/1.1 200 OK\r\nContent-Length: 99999999999999999999999\r\n\r\n");
   Rejects("gzip transfer coding", "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked\r\n\r\n0\r\n\r\n");
   Rejects("transfer coding after chunked", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked, gzip\r\n\r\n0\r\n\r\n");

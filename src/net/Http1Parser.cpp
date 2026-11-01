@@ -55,11 +55,10 @@ std::vector<std::string_view> SplitCommas(std::string_view s) {
   return parts;
 }
 
-// A header value may hold HTAB and printable bytes; any other control byte is refused.
+// A header value may hold any byte but NUL, CR and LF (the Fetch Standard's "header value" and what a browser takes).
 bool ValidFieldValue(std::string_view value) {
   for (char c : value) {
-    unsigned char u = static_cast<unsigned char>(c);
-    if ((u < 0x20 && u != '\t') || u == 0x7F) return false;
+    if (c == '\0' || c == '\r' || c == '\n') return false;
   }
   return true;
 }
@@ -137,6 +136,26 @@ std::optional<std::string> Http1ResponseParser::ParseHead(std::string_view head)
   return std::nullopt;
 }
 
+// What makes the framing of a response an error, found before the head is given to the sink: a body with two codings of its length, or
+// values of Content-Length that differ.
+std::optional<std::string> Http1ResponseParser::CheckFraming() const {
+  const int status = response_.status;
+  if (headRequest_ || status == 204 || status == 304) return std::nullopt;
+  bool hasTransferEncoding = false;
+  std::vector<std::string_view> contentLengths;
+  for (const auto& [name, value] : response_.headers) {
+    if (EqualsIgnoreCase(name, "transfer-encoding")) hasTransferEncoding = true;
+    else if (EqualsIgnoreCase(name, "content-length")) {
+      for (std::string_view part : SplitCommas(value)) contentLengths.push_back(part);
+    }
+  }
+  if (hasTransferEncoding && !contentLengths.empty()) return "both Transfer-Encoding and Content-Length";
+  for (std::string_view part : contentLengths) {
+    if (part != contentLengths.front()) return "Content-Length values disagree";
+  }
+  return std::nullopt;
+}
+
 // Decides how the body is delimited (RFC 9112 section 6.3) once the head is known.
 std::optional<std::string> Http1ResponseParser::ChooseFraming() {
   const int status = response_.status;
@@ -169,25 +188,24 @@ std::optional<std::string> Http1ResponseParser::ChooseFraming() {
     return std::nullopt;
   }
 
+  // The values of Content-Length that are one and the same count as one; a number is the length, and one that is not a number is none
+  // (the body then runs to the end of the connection), as a browser takes them. Values that differ are an error (CheckFraming).
   if (!contentLengths.empty()) {
-    std::optional<uint64_t> length;
-    for (std::string_view part : contentLengths) {
-      if (part.empty() || !std::all_of(part.begin(), part.end(), IsDigit)) return Fail("invalid Content-Length");
+    std::string_view part = contentLengths.front();
+    if (!part.empty() && std::all_of(part.begin(), part.end(), IsDigit)) {
       uint64_t value = 0;
       for (char c : part) {
         if (value > (std::numeric_limits<uint64_t>::max() - (c - '0')) / 10) return Fail("Content-Length overflows");
         value = value * 10 + (c - '0');
       }
-      if (length && *length != value) return Fail("Content-Length values disagree");
-      length = value;
+      remaining_ = value;
+      if (remaining_ == 0) {
+        Complete();
+      } else {
+        state_ = State::FixedBody;
+      }
+      return std::nullopt;
     }
-    remaining_ = *length;
-    if (remaining_ == 0) {
-      Complete();
-    } else {
-      state_ = State::FixedBody;
-    }
-    return std::nullopt;
   }
 
   state_ = State::UntilClose;
@@ -230,6 +248,7 @@ std::optional<std::string> Http1ResponseParser::Feed(std::span<const uint8_t> da
           response_ = HttpResponseHead{};
           break;
         }
+        if (auto error = CheckFraming()) return Fail(*error);
         sink_.OnHead(response_);
         if (auto error = ChooseFraming()) return error;
         break;

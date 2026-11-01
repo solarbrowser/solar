@@ -200,7 +200,7 @@
         fire(self, "loadend", { lengthComputable: true, loaded: bytes.length, total: bytes.length });
       }
     };
-    if (!s.async && syncFetch && /^https?:/i.test(s.url)) {
+    if (!s.async && syncFetch && /^(https?|blob):/i.test(s.url)) {
       // A synchronous request is waited for where it is sent.
       let body = null;
       if (s.body !== null) {
@@ -223,7 +223,7 @@
       finish(answer[0], answer[1], headers, bytes, decodeText(bytes, finalMime({ responseHeaders: headers, overrideMime: s.overrideMime }), false, s.responseType !== ""));
       return;
     }
-    const local = (s.method === "GET" || s.method === "HEAD") && (!s.async || !/^https?:/i.test(s.url)) ? load(s.url) : undefined;
+    const local = (s.method === "GET" || s.method === "HEAD") && (!s.async || !/^(https?|blob):/i.test(s.url)) ? load(s.url) : undefined;
     if (local !== undefined) {
       const headers = new Headers({ "content-type": contentTypeOf(s.url) });
       finish(200, "OK", headers, s.method === "HEAD" ? new Uint8Array(0) : encoder.encode(local), s.method === "HEAD" ? "" : local);
@@ -242,7 +242,7 @@
       return response;
     });
     send(init).then(async (response) => {
-      const bytes = new Uint8Array(await response.arrayBuffer());
+      const bytes = s.method === "HEAD" ? new Uint8Array(0) : new Uint8Array(await response.arrayBuffer());
       finish(response.status, response.statusText, response.headers, bytes, decodeText(bytes, finalMime({ responseHeaders: response.headers, overrideMime: s.overrideMime }), false, s.responseType !== ""));
     }, () => { if (s.id === id && s.sendFlag) fail(self, "error"); });
   }

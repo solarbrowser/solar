@@ -62,6 +62,7 @@ class Http1ResponseParser {
   enum class State { Head, FixedBody, ChunkSize, ChunkData, ChunkDataEnd, Trailers, UntilClose, Done, Failed };
 
   std::optional<std::string> ParseHead(std::string_view head);
+  std::optional<std::string> CheckFraming() const;
   std::optional<std::string> ChooseFraming();
   std::optional<std::string> Fail(std::string message);
   void Complete();
