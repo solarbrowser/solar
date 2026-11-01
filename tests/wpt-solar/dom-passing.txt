@@ -1168,6 +1168,7 @@ tests/wpt/workers/Worker_ErrorEvent_bubbles_cancelable.htm
 tests/wpt/workers/Worker_ErrorEvent_filename.htm
 tests/wpt/workers/Worker_ErrorEvent_message.htm
 tests/wpt/workers/Worker_basic.htm
+tests/wpt/workers/Worker_cross_origin_security_err.htm
 tests/wpt/workers/Worker_dispatchEvent_ErrorEvent.htm
 tests/wpt/workers/constructors/SharedWorker/SharedWorker-constructor.html
 tests/wpt/workers/constructors/SharedWorker/dummy-name.html
@@ -1180,6 +1181,7 @@ tests/wpt/workers/constructors/SharedWorker/null-arguments.html
 tests/wpt/workers/constructors/SharedWorker/port-onmessage.html
 tests/wpt/workers/constructors/SharedWorker/port-properties.html
 tests/wpt/workers/constructors/SharedWorker/port-readonly.html
+tests/wpt/workers/constructors/SharedWorker/same-origin.html
 tests/wpt/workers/constructors/SharedWorker/undefined-arguments.html
 tests/wpt/workers/constructors/SharedWorker/unexpected-global-properties.html
 tests/wpt/workers/constructors/SharedWorker/unresolvable-url.html
@@ -1188,6 +1190,7 @@ tests/wpt/workers/constructors/Worker/constructor-utf16-bom.html
 tests/wpt/workers/constructors/Worker/ctor-1.html
 tests/wpt/workers/constructors/Worker/ctor-null.html
 tests/wpt/workers/constructors/Worker/ctor-undefined.html
+tests/wpt/workers/constructors/Worker/same-origin.html
 tests/wpt/workers/constructors/Worker/terminate.html
 tests/wpt/workers/constructors/Worker/use-base-url.html
 tests/wpt/workers/examples/fetch_tests_from_worker.html
@@ -1222,7 +1225,9 @@ tests/wpt/workers/interfaces/WorkerUtils/navigator/005.html
 tests/wpt/workers/interfaces/WorkerUtils/navigator/006.html
 tests/wpt/workers/interfaces/WorkerUtils/navigator/007.html
 tests/wpt/workers/interfaces/WorkerUtils/navigator/language.html
+tests/wpt/workers/modules/dedicated-worker-import-failure.html
 tests/wpt/workers/modules/dedicated-worker-import-meta.html
+tests/wpt/workers/modules/shared-worker-import-meta.html
 tests/wpt/workers/multi-globals/url-parsing.html
 tests/wpt/workers/postMessage_clone_port.htm
 tests/wpt/workers/postMessage_clone_port_error.htm

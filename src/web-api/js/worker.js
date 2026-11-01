@@ -38,7 +38,9 @@
         throw new DOMException(`Failed to construct 'Worker': Script at '${scriptURL}' is not a valid URL.`, "SyntaxError");
       }
       if (url.protocol !== "blob:" && url.protocol !== "data:" && url.origin !== location.origin) {
-        throw new DOMException(`Failed to construct 'Worker': Script at '${url.href}' cannot be accessed from origin '${location.origin}'.`, "SecurityError");
+        // (A script of another origin is a worker that fails to load: an error event, not an exception.)
+        setTimeout(() => this.dispatchEvent(new ErrorEvent("error", { message: `Script at '${url.href}' cannot be accessed from origin '${location.origin}'.`, filename: url.href, cancelable: true })), 0);
+        return;
       }
       const given = typeof options === "object" && options !== null ? options : {};
       const name = given.name === undefined ? "" : String(given.name);
@@ -67,7 +69,9 @@
         const event = typeof ErrorEvent === "function" ? new ErrorEvent("error", init) : Object.assign(new Event("error", { cancelable: true }), init);
         return !this.dispatchEvent(event);
       };
-      this.#id = create(url.href);
+      // (A shared worker is a dedicated worker with a wrapper made as a blob: what it is, for its scripts, is the address it was asked for.)
+      const effective = given.__solarClient ? new URL(given.__solarClient.url) : url;
+      this.#id = create(effective.href);
       // (A worker is a client of the service worker that serves the page that made it.)
       let swClient = "";
       if (this.#id >= 0 && typeof globalThis.__solarSwWorkerClient === "function") {
@@ -83,9 +87,9 @@
       }
       const id = this.#id;
       const info = JSON.stringify({
-        url: url.href, name, type, userAgent: navigator.userAgent, language: navigator.language, languages: Array.from(navigator.languages || [navigator.language]),
+        url: effective.href, name, type, userAgent: navigator.userAgent, language: navigator.language, languages: Array.from(navigator.languages || [navigator.language]),
         platform: navigator.platform, hardwareConcurrency: navigator.hardwareConcurrency, onLine: navigator.onLine, appVersion: navigator.appVersion,
-        origin: url.protocol === "blob:" || url.protocol === "data:" ? location.origin : url.origin, swClient,
+        origin: effective.protocol === "blob:" || effective.protocol === "data:" ? location.origin : effective.origin, swClient,
       });
       // The script is asked for, and the worker starts when it has come; what the page posts meanwhile waits in the port.
       // (A blob, a data address and a file are not the network's: the program has them.)
@@ -131,7 +135,9 @@
         throw new DOMException(`Failed to construct 'SharedWorker': Script at '${scriptURL}' is not a valid URL.`, "SyntaxError");
       }
       if (url.protocol !== "blob:" && url.protocol !== "data:" && url.origin !== location.origin) {
-        throw new DOMException(`Failed to construct 'SharedWorker': Script at '${url.href}' cannot be accessed from origin '${location.origin}'.`, "SecurityError");
+        this.#port = new MessageChannel().port1;
+        setTimeout(() => this.dispatchEvent(new ErrorEvent("error", { message: `Script at '${url.href}' cannot be accessed from origin '${location.origin}'.`, filename: url.href, cancelable: true })), 0);
+        return;
       }
       const given = typeof options === "string" ? { name: options } : typeof options === "object" && options !== null ? options : {};
       const name = given.name === undefined ? "" : String(given.name);
@@ -141,6 +147,18 @@
       if (!worker) {
         const source = `
           Object.defineProperty(self, "name", { value: ${JSON.stringify(name)}, configurable: true });
+          // (This is a shared worker's scope, not a dedicated one's: scripts ask which they are in.)
+          (() => {
+            try {
+              const Dedicated = self.DedicatedWorkerGlobalScope;
+              const parent = Dedicated ? Object.getPrototypeOf(Dedicated.prototype) : Object.prototype;
+              const Shared = function SharedWorkerGlobalScope() { throw new TypeError("Illegal constructor"); };
+              Shared.prototype = Object.create(parent, { constructor: { value: Shared, writable: true, configurable: true }, [Symbol.toStringTag]: { value: "SharedWorkerGlobalScope", configurable: true } });
+              Object.setPrototypeOf(self, Shared.prototype);
+              Object.defineProperty(self, "SharedWorkerGlobalScope", { value: Shared, writable: true, configurable: true });
+              delete self.DedicatedWorkerGlobalScope;
+            } catch (e) { /* (the scope stays what it was) */ }
+          })();
           (() => {
             let h = null, ready = ${module ? "false" : "true"}; const waiting = [];
             Object.defineProperty(self, "onconnect", { get() { return h; }, set(f) { h = typeof f === "function" ? f : null; }, configurable: true, enumerable: true });
