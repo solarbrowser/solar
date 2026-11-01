@@ -36,9 +36,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: third_party/quanta/build
-          key: quanta-${{ runner.os }}-${{ steps.quanta.outputs.revision }}
+          key: quanta-${{ runner.os }}-noicu-${{ steps.quanta.outputs.revision }}
 
-      - run: make -j"$(nproc)" test
+      # (Without Intl: it is built on ICU4X, a submodule of Quanta's that this job does not fetch, and a Rust library; the tests here need neither.)
+      - run: make -j"$(nproc)" ICU4X=0 test
 
       # Quanta's makefile keeps the compiler's messages in a file, not in the log.
       - name: What Quanta's compiler said
