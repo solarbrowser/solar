@@ -789,6 +789,7 @@ void InsertImpl(Node* node, Node* parent, Node* child, bool suppress) {
       Document* oldDocument = n->nodeDocument;
       SetDocumentOfTree(n, document);
       CustomAfterAdopt(n, oldDocument);
+      if (g_adopted) g_adopted(n);
     }
     Link(n, parent, child);
     if (HasShadowTrees()) ShadowAfterInsert(n, parent);
@@ -822,6 +823,7 @@ void Adopt(Node* node, Document* document) {
     Document* oldDocument = node->nodeDocument;
     SetDocumentOfTree(node, document);
     CustomAfterAdopt(node, oldDocument);
+    if (g_adopted) g_adopted(node);
   }
 }
 

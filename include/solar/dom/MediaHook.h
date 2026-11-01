@@ -23,6 +23,9 @@ inline void (*g_canvasDetach)(const void* element) = nullptr;
 // What a form control shows (its value, its placeholder) is in the page's script: layout asks for it to be read into the control before it needs the sizes (src/html/Interaction.cpp sets this).
 struct Document;
 inline void (*g_refreshControls)(Document* document) = nullptr;
+// A tree that came into a document from another (adopted): what the document's window keeps of an element (the on<event> content attributes) is made for it.
+struct Node;
+inline void (*g_adopted)(Node* node) = nullptr;
 
 // Whether an element is :valid (0), :invalid (1), :in-range (2) or :out-of-range (3): the constraints are checked by the page's script (src/html/FormsValidity.inc), which style asks through this.
 struct Element;

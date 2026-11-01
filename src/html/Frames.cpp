@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <fstream>
+#include "solar/dom/MediaHook.h"
 #include "solar/html/Frames.h"
 #include "solar/html/Encodings.h"
 
@@ -624,6 +625,23 @@ void ContentHandlerChanged(dom::Element* element, const std::string& name) {
   if (qe::HasException(ctx)) ctx.clear_exception();
 }
 
+// A tree adopted from another document (a clone of what is in a template): its on<event> attributes are handlers of this document's window now.
+void TreeAdopted(dom::Node* root) {
+  const std::function<void(dom::Node*)> visit = [&](dom::Node* node) {
+    if (node->IsElement()) {
+      dom::Element* element = static_cast<dom::Element*>(node);
+      const std::vector<dom::Attr*> attributes = element->attributes;
+      for (const dom::Attr* attribute : attributes) {
+        if (!attribute->namespaceUri.empty()) continue;
+        const std::string name = attribute->localName;
+        if (name.size() > 2 && name.starts_with("on")) ContentHandlerChanged(element, name);
+      }
+    }
+    for (dom::Node* child = node->firstChild; child; child = child->nextSibling) visit(child);
+  };
+  visit(root);
+}
+
 void AttributeChanged(dom::Element* element, const std::string& name) {
   if (name.size() > 2 && name.starts_with("on")) ContentHandlerChanged(element, name);
   if (name == "style") css::StyleAttributeChanged(element);
@@ -879,6 +897,7 @@ void InstallFrameHooks() {
   hooks.attributeChanged = AttributeChanged;
   hooks.childrenChanged = ChildrenChanged;
   dom::SetTreeHooks(hooks);
+  dom::g_adopted = &TreeAdopted;
 }
 
 // ---- document.open, write and close ----
