@@ -673,7 +673,49 @@
     return Promise.resolve({ json: () => Promise.resolve(globalThis.__resources[name]) });
   };
 
+  // fetch_tests_from_worker(worker): the tests that a worker runs (with the testharness it imported) are reported here as the tests of this page, as its messages
+  // tell of them: {type: "result", test: {name, status, message}} for each, and "complete" at the end. A promise is returned that is done when the worker is.
+  const STATUS_PASS = 0, STATUS_PRECONDITION_FAILED = 4;
+  globalThis.fetch_tests_from_worker = (worker) => {
+    const entry = { name: 'tests from a worker' };
+    let finish;
+    const done = new Promise((resolve) => { finish = resolve; });
+    pending.push(done);
+    const seen = new Set();
+    const record = (test) => {
+      if (!test || seen.has(test.index === undefined ? test.name : test.index)) return;
+      seen.add(test.index === undefined ? test.name : test.index);
+      results.push(test.status === STATUS_PASS || test.status === STATUS_PRECONDITION_FAILED ? { name: test.name, ok: true } : { name: test.name, ok: false, message: String(test.message === undefined || test.message === null ? 'status ' + test.status : test.message) });
+    };
+    const handler = (event) => {
+      const data = event && event.data;
+      if (!data || typeof data !== 'object') return;
+      if (data.type === 'result') record(data.test);
+      else if (data.type === 'complete') {
+        for (const test of data.tests || []) record(test);
+        if (data.status && data.status.status !== undefined && data.status.status !== 0 && data.status.message) results.push({ name: 'harness of a worker', ok: false, message: String(data.status.message) });
+        worker.removeEventListener('message', handler);
+        unfinished.delete(entry);
+        finish();
+      }
+    };
+    unfinished.add(entry);
+    worker.addEventListener('message', handler);
+    if (typeof worker.start === 'function') worker.start();
+    return done;
+  };
+
+  // The callbacks of the real harness: the one for completion is called with the tests that have ended and the status, when the run ends.
+  const completionCallbacks = [];
+  globalThis.add_completion_callback = (callback) => { completionCallbacks.push(callback); };
+  globalThis.add_result_callback = () => {};
+  globalThis.add_start_callback = () => {};
+  globalThis.add_test_state_callback = () => {};
+
   globalThis.__wptFinish = () => {
+    for (const callback of completionCallbacks) {
+      try { callback(results.map((r, index) => ({ name: r.name, index, status: r.ok ? 0 : 1, message: r.message || null })), { status: 0, message: null, OK: 0 }); } catch (e) { /* a callback of the page */ }
+    }
     for (const entry of unfinished) results.push({ name: entry.name, ok: false, message: 'the test never finished' });
     const failures = results.filter((r) => !r.ok);
     for (const r of failures.slice(0, globalThis.__allFailures ? 100000 : 15)) console.log('  FAIL ' + r.name + ': ' + r.message);

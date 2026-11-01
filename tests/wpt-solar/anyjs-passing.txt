@@ -162,6 +162,7 @@ tests/wpt/fetch/http-cache/vary.any.js
 tests/wpt/fetch/orb/tentative/content-range.sub.any.js
 tests/wpt/fetch/range/blob.any.js
 tests/wpt/fetch/range/data.any.js
+tests/wpt/service-workers/cache-storage/cache-storage-keys.https.any.js
 tests/wpt/streams/piping/abort.any.js
 tests/wpt/streams/piping/close-propagation-backward.any.js
 tests/wpt/streams/piping/close-propagation-forward.any.js
@@ -249,6 +250,14 @@ tests/wpt/url/urlsearchparams-set.any.js
 tests/wpt/url/urlsearchparams-size.any.js
 tests/wpt/url/urlsearchparams-sort.any.js
 tests/wpt/url/urlsearchparams-stringifier.any.js
+tests/wpt/workers/Worker-base64.any.js
+tests/wpt/workers/Worker-custom-event.any.js
+tests/wpt/workers/Worker-formdata.any.js
+tests/wpt/workers/Worker-replace-event-handler.any.js
+tests/wpt/workers/Worker-replace-global-constructor.any.js
+tests/wpt/workers/WorkerNavigator-hardware-concurrency.any.js
+tests/wpt/workers/interfaces/WorkerGlobalScope/location/returns-same-object.any.js
+tests/wpt/workers/semantics/multiple-workers/exposure.any.js
 tests/wpt/xhr/XMLHttpRequest-withCredentials.any.js
 tests/wpt/xhr/abort-after-receive.any.js
 tests/wpt/xhr/abort-after-send.any.js
