@@ -461,6 +461,11 @@ void ServeWpt(int client) {
       else extra += name + ": " + value + "\r\n";
     }
   }
+  // (A sidecar that says who may read the file says it instead of the default.)
+  if (extra.find("Access-Control-Allow-Origin: *\r\n") != extra.rfind("Access-Control-Allow-Origin: *\r\n") ||
+      extra.find("Access-Control-Allow-Origin:") != extra.rfind("Access-Control-Allow-Origin:")) {
+    extra.erase(extra.find("Access-Control-Allow-Origin: *\r\n"), std::string("Access-Control-Allow-Origin: *\r\n").size());
+  }
   reply(200, "OK", type, contents, extra, method == "HEAD");
 }
 

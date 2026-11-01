@@ -97,8 +97,9 @@ class MultiDict(dict):
         return [list(values) for values in super().values()]
 
 
-class RequestHeaders(object):
+class RequestHeaders(dict):
     def __init__(self, pairs):
+        super().__init__()
         self._pairs = [(to_bytes(k), to_bytes(v)) for k, v in pairs]
 
     def _find(self, key):

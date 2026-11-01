@@ -104,12 +104,6 @@ bool FetchOperation::OnRedirect(const net::HttpResponseHead& redirect, const url
     FailWith(MakeTypeError(host.context(), "Failed to fetch: a redirect to an address with credentials"), "a redirect to an address with credentials");
     return false;
   }
-  if (preflightNeeded) {
-    // The permission was asked for the address that was fetched, not for where it now points.
-    FailWith(MakeTypeError(host.context(), "Failed to fetch: a request that needs a CORS preflight was redirected"), "a request that needs a CORS preflight was redirected");
-    return false;
-  }
-
   // Having gone from one origin to another, and then on to a third, the request's origin is unknown.
   if (url::SerializeOrigin(next) != url::SerializeOrigin(currentUrl) && url::SerializeOrigin(currentUrl) != pageOrigin) taintedOrigin = true;
   if (mode == RequestMode::Cors && nextCrossOrigin) corsTainted = true;
@@ -144,6 +138,17 @@ bool FetchOperation::OnRedirect(const net::HttpResponseHead& redirect, const url
   }
   if (corsTainted || taintedOrigin || (next_method != "GET" && next_method != "HEAD")) headers.emplace_back("Origin", taintedOrigin ? "null" : pageOrigin);
   method = next_method;
+  if (nonSimple && corsTainted && mode == RequestMode::Cors) {
+    // The target is asked first, as the request is: this hop ends here, and the next begins with the preflight.
+    redirectForPreflight = true;
+    redirectTarget = next;
+    redirectOptions = mainOptions;
+    redirectOptions.method = next_method;
+    redirectOptions.headers = headers;
+    if (next_method == "GET" || next_method == "HEAD") redirectOptions.body.reset();
+    unsafeHeaders = net::CorsUnsafeRequestHeaderNames(requestHeaders);
+    return false;
+  }
   return true;
 }
 
@@ -242,7 +247,44 @@ void FetchOperation::OnEnd() {
   Done();
 }
 
+void FetchOperation::StartPreflightedHop(const url::Url& target, net::FetchOptions options) {
+  requestUrl = target;
+  url::Url withoutFragment = target;
+  withoutFragment.fragment.reset();
+  preflightUrl = url::Serialize(withoutFragment);
+  const bool includeCredentials = credentials == RequestCredentials::Include;
+  if (host.preflights().Allows(pageOrigin, preflightUrl, includeCredentials, method, unsafeHeaders)) {
+    handle = host.config().client->Fetch(target, *this, std::move(options));
+    return;
+  }
+  net::FetchOptions preflight;
+  preflight.method = "OPTIONS";
+  preflight.headers.emplace_back("Origin", taintedOrigin ? "null" : pageOrigin);
+  preflight.headers.emplace_back("Access-Control-Request-Method", method);
+  if (!unsafeHeaders.empty()) {
+    std::string names;
+    for (const std::string& name : unsafeHeaders) names += (names.empty() ? "" : ",") + name;
+    preflight.headers.emplace_back("Access-Control-Request-Headers", names);
+  }
+  for (const auto& [name, value] : options.headers) {
+    if (EqualsIgnoreCase(name, "referer")) preflight.headers.emplace_back(name, value);
+  }
+  preflight.redirect = net::RedirectMode::Error;
+  preflight.cache = net::CacheMode::NoStore;
+  preflight.useCookies = false;
+  preflight.timeout = options.timeout;
+  preflight.initiator = options.initiator;
+  mainOptions = std::move(options);
+  preflighting = true;
+  handle = host.config().client->Fetch(target, *this, std::move(preflight));
+}
+
 void FetchOperation::OnError(std::string_view message) {
+  if (redirectForPreflight && !settled) {
+    redirectForPreflight = false;
+    StartPreflightedHop(redirectTarget, std::move(redirectOptions));
+    return;
+  }
   if (!abortedByScript && !finished) {
     const std::string text = std::string("Failed to fetch (") + (preflighting ? "CORS preflight: " : "") + std::string(message) + ")";
     FailWith(MakeTypeError(host.context(), text), text);
@@ -488,6 +530,8 @@ Value Fetch(Context& ctx, Value, qe::Args args, Value newTarget) {
 
   if (op->crossOrigin && request->mode == RequestMode::SameOrigin) return reject(MakeTypeError(ctx, "Failed to fetch: a same-origin request to another origin"));
   if (op->crossOrigin && request->mode == RequestMode::Cors) op->corsTainted = true;
+  // A no-cors request to another origin has its redirects followed or it is an error.
+  if (op->crossOrigin && request->mode == RequestMode::NoCors && request->redirect != net::RedirectMode::Follow) return reject(MakeTypeError(ctx, "Failed to fetch: a no-cors request to another origin must follow redirects"));
 
   net::FetchOptions options;
   options.method = request->method;
@@ -536,6 +580,9 @@ Value Fetch(Context& ctx, Value, qe::Args args, Value newTarget) {
     options.body = std::move(bodyBytes);
 
     // A cors request that is not simple asks the server first, unless it has been told lately that it may.
+    op->mainOptions = options;
+    op->requestHeaders = request->headers->headers;
+    op->nonSimple = request->mode == RequestMode::Cors && net::NeedsPreflight(request->method, request->headers->headers);
     if (op->corsTainted && net::NeedsPreflight(request->method, request->headers->headers)) {
       op->preflightNeeded = true;
       op->unsafeHeaders = net::CorsUnsafeRequestHeaderNames(request->headers->headers);

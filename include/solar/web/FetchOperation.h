@@ -55,6 +55,14 @@ struct FetchOperation : net::FetchHandler {
   std::vector<std::string> unsafeHeaders;
   std::string preflightUrl;
   void StartMain();
+  // The request is not a simple one: wherever it goes as a cors request it asks first, a redirect's target included.
+  bool nonSimple = false;
+  net::FetchHeaders requestHeaders;  // (the request's own, as the preflight of a redirect's target names them)
+  // A redirect whose target has to be asked first: the hop ends there, and the next one starts with the preflight.
+  bool redirectForPreflight = false;
+  url::Url redirectTarget;
+  net::FetchOptions redirectOptions;
+  void StartPreflightedHop(const url::Url& target, net::FetchOptions options);
 
   // What has happened.
   bool settled = false;   // the promise has been resolved or rejected

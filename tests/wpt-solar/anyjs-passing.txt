@@ -64,13 +64,16 @@ tests/wpt/fetch/api/basic/text-utf8.any.js
 tests/wpt/fetch/api/body/formdata.any.js
 tests/wpt/fetch/api/body/mime-type.any.js
 tests/wpt/fetch/api/cors/cors-multiple-origins.sub.any.js
+tests/wpt/fetch/api/cors/cors-preflight-cache-tainted.any.js
 tests/wpt/fetch/api/cors/cors-preflight-cache.any.js
 tests/wpt/fetch/api/cors/cors-preflight-not-cors-safelisted.any.js
+tests/wpt/fetch/api/cors/cors-preflight-redirect.any.js
 tests/wpt/fetch/api/cors/cors-preflight-star.any.js
 tests/wpt/fetch/api/cors/cors-preflight-status.any.js
 tests/wpt/fetch/api/cors/cors-preflight-unterminated-body.any.js
 tests/wpt/fetch/api/cors/cors-preflight.any.js
 tests/wpt/fetch/api/cors/cors-redirect-credentials.any.js
+tests/wpt/fetch/api/cors/cors-redirect-preflight.any.js
 tests/wpt/fetch/api/cors/cors-redirect.any.js
 tests/wpt/fetch/api/crashtests/huge-fetch.any.js
 tests/wpt/fetch/api/credentials/authentication-basic.any.js
@@ -86,6 +89,7 @@ tests/wpt/fetch/api/headers/headers-no-cors.any.js
 tests/wpt/fetch/api/headers/headers-normalize.any.js
 tests/wpt/fetch/api/headers/headers-record.any.js
 tests/wpt/fetch/api/headers/headers-structure.any.js
+tests/wpt/fetch/api/redirect/redirect-back-to-original-origin.any.js
 tests/wpt/fetch/api/redirect/redirect-count.any.js
 tests/wpt/fetch/api/redirect/redirect-empty-location.any.js
 tests/wpt/fetch/api/redirect/redirect-location.any.js
