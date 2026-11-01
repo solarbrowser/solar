@@ -1,0 +1,32 @@
+<!doctype html>
+<meta charset="utf-8">
+<body>
+<script>
+// The window is a Window (its prototype is set once Window.prototype exists), and its index properties are like Chrome's:
+// only the index of a child window is not defined by a script.
+var results = [];
+function check(name, actual, expected) { results.push((actual === expected ? "ok   " : "FAIL ") + name + (actual === expected ? "" : ": " + actual + " (wanted " + expected + ")")); }
+check("window instanceof Window", window instanceof Window, true);
+check("toString.call(window)", Object.prototype.toString.call(window), "[object Window]");
+check("String(window)", String(window), "[object Window]");
+check("key of window", Object.keys({ [window]: 1 })[0], "[object Window]");
+check("defineProperty(window, 0) with no frames", Reflect.defineProperty(window, 0, { value: 1, configurable: true }), true);
+check("window[0]", window[0], 1);
+check("delete window[0]", delete window[0], true);
+var frame = document.createElement("iframe");
+document.body.appendChild(frame);
+check("defineProperty(window, 0) with a frame", Reflect.defineProperty(window, 0, { value: 1, configurable: true }), false);
+check("defineProperty(window, 1) after the frame", Reflect.defineProperty(window, 1, { value: 2, configurable: true }), true);
+check("delete window[0] with a frame", delete window[0], false);
+frame.remove();
+// String() of a String object follows its toString, not the string it holds.
+var wrapper = new String("window");
+Object.setPrototypeOf(wrapper, Window.prototype);
+check("String(wrapper with Window.prototype)", String(wrapper), "[object Window]");
+check("key of wrapper", Object.keys({ [wrapper]: 1 })[0], "[object Window]");
+check("String(new String('x'))", String(new String("x")), "x");
+check("String(new Number(5))", String(new Number(5)), "5");
+check("String(overridden Number)", String(Object.assign(new Number(3), { toString() { return "n"; } })), "n");
+console.log(results.join("\n"));
+</script>
+</body>

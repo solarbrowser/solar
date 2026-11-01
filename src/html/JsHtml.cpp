@@ -1570,6 +1570,11 @@ void InstallWindowOn(Host& host, dom::Document* document, Quanta::Embed::Realm* 
   // The window is a Window, which has a named properties object in its prototype chain, between Window.prototype and
   // EventTarget.prototype, for window[name].
   SetUpWindowInterface(ctx);
+  // The proxy took the prototype of the global when it was made, before it was a Window: it follows it now, for
+  // window instanceof Window and Object.prototype.toString.call(window).
+  if constexpr (std::is_same_v<Host, qe::Realm>) {
+    if (document && qe::IsObject(qe::FromObject(document->globalObject))) qe::SetWindowProxyTarget(qe::FromObject(document->globalObject), host);
+  }
   host.Evaluate(kWindowScript, "window.js");
   host.Evaluate(kEventHandlerScript, "handlers.js");
   { const auto platform = host.Evaluate(kPlatformScript, "platform.js"); if (!platform.ok) std::fprintf(stderr, "platform.js: %s\n", platform.error.c_str()); }

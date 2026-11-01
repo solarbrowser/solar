@@ -269,9 +269,13 @@ bool RunScript(Quanta::Embed::Realm& realm, dom::Document* document, dom::Elemen
     code = std::move(*loaded);
     filename = address;
     // (SOLAR_PATCH_RE and SOLAR_PATCH_TO: a regular expression and its replacement are applied to the scripts of the pages, for finding what a script does that is made to be unreadable.)
-    if (const char* re = std::getenv("SOLAR_PATCH_RE")) {
+    // (SOLAR_PATCH_RE2 and SOLAR_PATCH_TO2, and so on up to 4: more of them, applied in order.)
+    for (const char* suffix : {"", "2", "3", "4"}) {
+      const char* re = std::getenv((std::string("SOLAR_PATCH_RE") + suffix).c_str());
+      if (!re) continue;
+      const char* to = std::getenv((std::string("SOLAR_PATCH_TO") + suffix).c_str());
       try {
-        code = std::regex_replace(code, std::regex(re), std::getenv("SOLAR_PATCH_TO") ? std::getenv("SOLAR_PATCH_TO") : "");
+        code = std::regex_replace(code, std::regex(re), to ? to : "");
       } catch (const std::exception&) {}
     }
     // (SOLAR_DUMP_SCRIPTS=directory: the scripts that run are kept there, for looking at a column an error names.)
