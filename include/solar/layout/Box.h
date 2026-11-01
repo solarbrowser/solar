@@ -150,6 +150,7 @@ struct Box {
   // Block containers with inline content: the lines, in the container's border box.
   std::vector<Line> lines;
   std::shared_ptr<const BoxStyle> firstLineStyle;  // the style of its ::first-line, when it has one
+  std::shared_ptr<const BoxStyle> anchoredStyle;   // a positioned box with anchors: its style with their lengths worked out, as it was placed
   std::vector<FirstLineEdit> firstLineEdits;
   bool hasInlineContent = false;  // the children are all inline-level
   SubgridTracks subgrid[2];  // set by the grid this box is an item of, for the axes it is a subgrid in: [0] rows, [1] columns

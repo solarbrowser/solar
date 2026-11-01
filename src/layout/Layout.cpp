@@ -512,6 +512,21 @@ bool UsedValue(Tree& tree, dom::Element* element, const std::string& property, s
   if (!box) box = boxes[0];
   const bool isInline = box->kind != Box::Kind::Block;  // a non-replaced inline: width and height are not used values
   static const char* const sides[4] = {"top", "right", "bottom", "left"};
+  // A min or max size that was an anchor-size() with no anchor is the size it falls back to, or the initial one.
+  if (box->anchoredStyle && (property == "min-width" || property == "min-height" || property == "max-width" || property == "max-height")) {
+    const BoxStyle& given = box->style->Physical();
+    const BoxStyle& resolved = box->anchoredStyle->Physical();
+    const Length& was = property == "min-width" ? given.minWidth : property == "min-height" ? given.minHeight : property == "max-width" ? given.maxWidth : given.maxHeight;
+    const Length& now = property == "min-width" ? resolved.minWidth : property == "min-height" ? resolved.minHeight : property == "max-width" ? resolved.maxWidth : resolved.maxHeight;
+    if (was.IsAnchor()) {
+      const bool isMax = property.rfind("max-", 0) == 0;
+      if (now.kind == Length::Kind::Px) out = Px(now.value);
+      else if (now.kind == Length::Kind::Percent) out = Num(now.value) + "%";
+      else if (now.kind == Length::Kind::None || (isMax && now.IsAuto())) out = "none";
+      else out = "0px";
+      return true;
+    }
+  }
   for (int i = 0; i < 4; ++i) {
     const std::string side = sides[i];
     if (property == "margin-" + side) {
@@ -637,7 +652,7 @@ bool ResolvedHook(Quanta::Context& ctx, dom::Element* element, const std::string
   // A logical property is the physical one of the element's writing mode and direction.
   const std::string physical = css::PhysicalOf(given, {css::ComputedValue(ctx, element, "writing-mode"), css::ComputedValue(ctx, element, "direction")});
   if (!physical.empty()) property = physical;
-  static const char* const names[] = {"width", "height", "min-width", "min-height", "margin-top", "margin-right", "margin-bottom", "margin-left", "padding-top",
+  static const char* const names[] = {"width", "height", "min-width", "min-height", "max-width", "max-height", "margin-top", "margin-right", "margin-bottom", "margin-left", "padding-top",
                                       "padding-right", "padding-bottom", "padding-left", "top", "right", "bottom", "left", "transform", "grid-template-columns", "grid-template-rows", "line-height"};
   bool relevant = false;
   for (const char* n : names) if (property == n) relevant = true;

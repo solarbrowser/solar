@@ -1190,7 +1190,7 @@ double AbsoluteInset(const Box& box, int side, double viewportWidth, double view
     break;
   }
   (void)holder;
-  const Length& given = box.style->Physical().inset[side];
+  const Length& given = (box.anchoredStyle ? box.anchoredStyle->Physical() : box.style->Physical()).inset[side];
   const double basis = side % 2 == 0 ? ch : cw;
   if (!given.IsAuto()) {
     const double v = ResolveSize(given, basis);
@@ -1332,6 +1332,7 @@ void PlaceOneAt(LayoutContext& lc, Box& a);
 // does not fit in the containing block the insets leave, with the next of its position-try-fallbacks that does.
 void PlaceOne(LayoutContext& lc, Box& a) {
   if (!NeedsAnchors(*a.style)) {
+    a.anchoredStyle = nullptr;
     PlaceOneAt(lc, a);
     return;
   }
@@ -1352,6 +1353,7 @@ void PlaceOne(LayoutContext& lc, Box& a) {
     lc.areaKnown = result.area;
     lc.areaX = result.areaX; lc.areaY = result.areaY; lc.areaWidth = result.areaWidth; lc.areaHeight = result.areaHeight;
     PlaceOneAt(lc, a);
+    a.anchoredStyle = result.style;
     if (!options.empty()) {
       // The margin box must be inside the containing block (the area, when there is one) less the insets.
       double x = result.area ? result.areaX : cb.x, y = result.area ? result.areaY : cb.y, w = result.area ? result.areaWidth : cb.width, h = result.area ? result.areaHeight : cb.height;
@@ -1562,7 +1564,8 @@ void PlaceOneAt(LayoutContext& lc, Box& a) {
       // Centered on the anchor, which is in the containing block's frame.
       double ax, ay, aw, ah;
       PhysicalToFrame(mode, cw, ch, Rect{lc.anchorX - cbPhys.x, lc.anchorY - cbPhys.y, lc.anchorWidth, lc.anchorHeight}, ax, ay, aw, ah);
-      L = ax + aw / 2 - (W + extrasH + ml + mr) / 2;
+      const double outer = W + extrasH + ml + mr;
+      L = std::max(i0, std::min(ax + aw / 2 - outer / 2, i1 - outer));  // (kept in the room the insets leave, as far as it goes)
     }
   }
 
@@ -1620,7 +1623,8 @@ void PlaceOneAt(LayoutContext& lc, Box& a) {
     if (blockSelf.kind == Align::Kind::AnchorCenter && lc.anchorKnown) {
       double ax, ay, aw, ah;
       PhysicalToFrame(mode, cw, ch, Rect{lc.anchorX - cbPhys.x, lc.anchorY - cbPhys.y, lc.anchorWidth, lc.anchorHeight}, ax, ay, aw, ah);
-      T = ay + ah / 2 - (H + extrasV + mt + mb) / 2;
+      const double outer = H + extrasV + mt + mb;
+      T = std::max(i0, std::min(ay + ah / 2 - outer / 2, i1 - outer));
     }
   }
   lc.forceWidth = W;

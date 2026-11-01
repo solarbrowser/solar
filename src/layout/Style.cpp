@@ -316,6 +316,18 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
         start = comma + 1;
       }
     }
+    const std::string scope = get("anchor-scope");
+    if (!scope.empty() && scope != "none") {
+      size_t start = 0;
+      while (start <= scope.size()) {
+        size_t comma = scope.find(',', start);
+        std::string one = scope.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+        const size_t b = one.find_first_not_of(' '), e = one.find_last_not_of(' ');
+        if (b != std::string::npos) s.anchorScope.push_back(one.substr(b, e - b + 1));
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+      }
+    }
     const std::string anchor = get("position-anchor");
     if (!anchor.empty()) s.positionAnchor = anchor;
     const std::string area = get("position-area");

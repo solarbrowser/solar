@@ -51,7 +51,7 @@ const Box* FindAnchor(Env& env, const std::string& name) {
       reached = true;
       return;  // (nor the element's own boxes)
     }
-    if (box.kind == Box::Kind::Block && box.style && box.style->display != Display::None && std::find(box.style->anchorNames.begin(), box.style->anchorNames.end(), name) != box.style->anchorNames.end()) {
+    if (box.kind == Box::Kind::Block && !(box.anonymous && box.pseudo.empty()) && box.style && box.style->display != Display::None && std::find(box.style->anchorNames.begin(), box.style->anchorNames.end(), name) != box.style->anchorNames.end()) {
       // It is one in the containing block of the element, and, when it is positioned itself, one that comes before it in the tree (those are placed first).
       bool inside = holder == env.lc.tree.root.get();
       for (const Box* p = box.parent; p && !inside; p = p->parent) inside = p == holder;
@@ -75,7 +75,47 @@ const Box* FindAnchor(Env& env, const std::string& name) {
         sameTree = anchorTree == queryTree || above(anchorTree, queryTree);
         if (!sameTree && box.element() && box.element()->FindAttribute("", "part")) sameTree = above(queryTree, anchorTree);
       }
-      if (inside && sameTree && (reached == false || !box.style->IsOutOfFlow())) found = &box;
+      // (anchor-scope: a name an element scopes is seen from inside it only, by queries inside it; an element with display: contents has no box, and scopes all the same.)
+      bool scoped = true;
+      if (anchorNode && env.element.node) {
+        const auto scopesOf = [&](const dom::Node* n) {
+          std::vector<std::pair<const dom::Node*, std::vector<std::string>>> chain;
+          for (const dom::Node* p = n; p; ) {
+            if (p->IsElement()) {
+              const dom::Element* e = static_cast<const dom::Element*>(p);
+              const auto boxes = env.lc.tree.boxesOf.find(p);
+              std::shared_ptr<const BoxStyle> style = boxes != env.lc.tree.boxesOf.end() && !boxes->second.empty() ? boxes->second.front()->style : nullptr;
+              if (!style) style = ReadStyle(env.lc.ctx, const_cast<dom::Element*>(e));
+              if (style && !style->anchorScope.empty()) chain.push_back({p, style->anchorScope});
+            }
+            const dom::Node* parent = dom::ParentOf(p);
+            if (!parent && p->IsFragment() && static_cast<const dom::DocumentFragment*>(p)->isShadowRoot) parent = static_cast<const dom::DocumentFragment*>(p)->host;
+            p = parent;
+          }
+          return chain;
+        };
+        const auto within = [](const dom::Node* inner, const dom::Node* outer) {
+          for (const dom::Node* p = inner; p;) {
+            if (p == outer) return true;
+            const dom::Node* parent = dom::ParentOf(p);
+            if (!parent && p->IsFragment() && static_cast<const dom::DocumentFragment*>(p)->isShadowRoot) parent = static_cast<const dom::DocumentFragment*>(p)->host;
+            p = parent;
+          }
+          return false;
+        };
+        // (`all` is of the names of the tree it is written in: one that the outer tree gives a part of a shadow tree does not take the names the shadow tree has.)
+        const auto covers = [&](const dom::Node* scopeNode, const std::vector<std::string>& names) {
+          const bool all = std::find(names.begin(), names.end(), "all") != names.end() && !(scopeNode->IsElement() && static_cast<const dom::Element*>(scopeNode)->FindAttribute("", "part"));
+          return all || std::find(names.begin(), names.end(), name) != names.end();
+        };
+        for (const auto& [scopeNode, names] : scopesOf(anchorNode)) {
+          if (covers(scopeNode, names) && !within(env.element.node, scopeNode)) scoped = false;
+        }
+        for (const auto& [scopeNode, names] : scopesOf(env.element.node)) {
+          if (covers(scopeNode, names) && !within(anchorNode, scopeNode)) scoped = false;
+        }
+      }
+      if (inside && sameTree && scoped && (reached == false || !box.style->IsOutOfFlow())) found = &box;
     }
     for (const auto& child : box.children) visit(*child);
   };
@@ -198,7 +238,10 @@ std::optional<double> AnchorFunction(Env& env, const std::vector<std::string>& p
     const Length given = ParseLengthText(*amount);
     const double along = given.Resolve(length, std::nan(""));
     if (std::isnan(along)) return std::nullopt;
-    position = start + along;
+    // 0% is the start of the axis in the writing mode of the containing block.
+    const Box* holder = ContainingBox(env);
+    const int edge = StartEdge(holder->Mode(), holder->style->direction, horizontal);
+    position = edge == 0 ? start + along : start + length - along;
   }
   return farSide ? cbSize - position : position;
 }
@@ -728,14 +771,6 @@ AnchorResult ResolveAnchorStyle(LayoutContext& lc, const Box& element, double cb
     if (!option->area.empty()) physical->positionArea = option->area;
     for (const std::string& tactic : option->tactics) ApplyTactic(env, *physical, tactic);
   }
-  for (int side = 0; side < 4; ++side) Resolve(env, physical->inset[side], side, side % 2, side % 2 == 0 ? cbHeight : cbWidth, false);
-  for (int side = 0; side < 4; ++side) Resolve(env, physical->margin[side], -1, side % 2, cbWidth, false);
-  Resolve(env, physical->width, -1, 1, cbWidth, false);
-  Resolve(env, physical->height, -1, 0, cbHeight, false);
-  Resolve(env, physical->minWidth, -1, 1, cbWidth, false);
-  Resolve(env, physical->minHeight, -1, 0, cbHeight, false);
-  Resolve(env, physical->maxWidth, -1, 1, cbWidth, true);
-  Resolve(env, physical->maxHeight, -1, 0, cbHeight, true);
   // The default anchor, and the area around it.
   const Box* anchor = AnchorNamed(env, "");
   if (anchor) {
@@ -767,6 +802,41 @@ AnchorResult ResolveAnchorStyle(LayoutContext& lc, const Box& element, double cb
         const auto isNormal = [](const Align& a) { return a.kind == Align::Kind::Normal || a.kind == Align::Kind::Auto; };
         if (isNormal(horizontalSelf)) horizontalSelf.kind = AreaAlignment(regions->hs, regions->he, true);
         if (isNormal(verticalSelf)) verticalSelf.kind = AreaAlignment(regions->vs, regions->ve, false);
+      }
+    }
+  }
+  // What is measured from the anchor is measured in the area, when there is one.
+  const double basisW = result.area ? result.areaWidth : cbWidth, basisH = result.area ? result.areaHeight : cbHeight;
+  if (result.area) {
+    env.cx = result.areaX;
+    env.cy = result.areaY;
+    env.cw = result.areaWidth;
+    env.ch = result.areaHeight;
+  }
+  for (int side = 0; side < 4; ++side) Resolve(env, physical->inset[side], side, side % 2, side % 2 == 0 ? basisH : basisW, false);
+  for (int side = 0; side < 4; ++side) Resolve(env, physical->margin[side], -1, side % 2, basisW, false);
+  Resolve(env, physical->width, -1, 1, basisW, false);
+  Resolve(env, physical->height, -1, 0, basisH, false);
+  Resolve(env, physical->minWidth, -1, 1, basisW, false);
+  Resolve(env, physical->minHeight, -1, 0, basisH, false);
+  Resolve(env, physical->maxWidth, -1, 1, basisW, true);
+  Resolve(env, physical->maxHeight, -1, 0, basisH, true);
+  // Centered on the anchor, an inset that is auto is 0: the room is the containing block's.
+  if (anchor) {
+    const bool cbHorizontal = !IsVertical(ContainingBox(env)->Mode());
+    const bool horizontalCenter = (cbHorizontal ? physical->justifySelf : physical->alignSelf).kind == Align::Kind::AnchorCenter;
+    const bool verticalCenter = (cbHorizontal ? physical->alignSelf : physical->justifySelf).kind == Align::Kind::AnchorCenter;
+    const bool horizontalArea = result.area, verticalArea = result.area;
+    if (horizontalCenter || horizontalArea) {
+      for (int side : {1, 3}) {
+        if (physical->inset[side].IsAuto()) physical->inset[side] = Length::Px(0);
+        if (physical->margin[side].IsAuto()) physical->margin[side] = Length::Px(0);
+      }
+    }
+    if (verticalCenter || verticalArea) {
+      for (int side : {0, 2}) {
+        if (physical->inset[side].IsAuto()) physical->inset[side] = Length::Px(0);
+        if (physical->margin[side].IsAuto()) physical->margin[side] = Length::Px(0);
       }
     }
   }
