@@ -533,8 +533,12 @@ tests/wpt/fetch/api/basic/url-parsing.sub.html
 tests/wpt/fetch/api/policies/referrer-no-referrer.html
 tests/wpt/fetch/api/policies/referrer-origin-when-cross-origin.html
 tests/wpt/fetch/api/policies/referrer-unsafe-url.html
+tests/wpt/fetch/api/request/request-clone.sub.html
+tests/wpt/fetch/api/request/request-init-001.sub.html
+tests/wpt/fetch/api/request/request-init-003.sub.html
 tests/wpt/fetch/api/request/url-encoding.html
 tests/wpt/fetch/api/response/response-body-read-task-handling.html
+tests/wpt/fetch/api/response/response-body-stashed-chunk.html
 tests/wpt/fetch/api/response/response-consume.html
 tests/wpt/fetch/compression-dictionary/dictionary-fetch-with-link-element-invalid-url.tentative.https.html
 tests/wpt/fetch/content-disposition/multiple-content-disposition.tentative.h2.window.js
@@ -1010,7 +1014,6 @@ tests/wpt/webmessaging/message-channels/historical.any.js
 tests/wpt/webmessaging/message-channels/implied-start.any.js
 tests/wpt/webmessaging/message-channels/no-start.any.js
 tests/wpt/webmessaging/multi-globals/messageport-incumbent.html
-tests/wpt/webmessaging/postMessage_crosssite.sub.htm
 tests/wpt/webmessaging/postMessage_invalid_targetOrigin.htm
 tests/wpt/webmessaging/postMessage_solidus_sorigin.htm
 tests/wpt/webmessaging/with-options/broken-origin.html
@@ -1085,6 +1088,7 @@ tests/wpt/xhr/access-control-preflight-request-must-not-contain-cookie.htm
 tests/wpt/xhr/access-control-response-with-body-sync.htm
 tests/wpt/xhr/access-control-response-with-body.htm
 tests/wpt/xhr/data-uri.htm
+tests/wpt/xhr/firing-events-http-content-length.html
 tests/wpt/xhr/formdata/append-formelement.html
 tests/wpt/xhr/formdata/constructor-submitter.html
 tests/wpt/xhr/formdata/delete-formelement.html
@@ -1162,6 +1166,7 @@ tests/wpt/xhr/send-entity-body-empty.htm
 tests/wpt/xhr/send-entity-body-get-head-async.htm
 tests/wpt/xhr/send-entity-body-get-head.htm
 tests/wpt/xhr/send-entity-body-none.htm
+tests/wpt/xhr/send-network-error-async-events.sub.htm
 tests/wpt/xhr/send-network-error-sync-events.sub.htm
 tests/wpt/xhr/send-no-response-event-loadend.htm
 tests/wpt/xhr/send-no-response-event-loadstart.htm

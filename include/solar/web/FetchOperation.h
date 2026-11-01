@@ -48,6 +48,10 @@ struct FetchOperation : net::FetchHandler {
   bool preflightNeeded = false;  // it asked, or an earlier preflight allowed it: a redirect cannot be followed
   net::FetchOptions mainOptions;
   std::string method;
+  // What the Referer of a request is made from, so that a redirect (and the Referrer-Policy it brings) can make it again.
+  std::string referrerPolicy;
+  bool sendsReferrer = false;
+  url::Url referrerSource;
   std::vector<std::string> unsafeHeaders;
   std::string preflightUrl;
   void StartMain();

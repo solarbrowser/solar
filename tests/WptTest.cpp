@@ -467,9 +467,11 @@ void ServeWpt(int client) {
 // Names of the test's hosts go to the server on the loopback interface; the port the page says is the server's.
 solar::net::SystemResolverOptions WptResolverOptions(uint16_t port) {
   solar::net::SystemResolverOptions options;
-  options.lookup = [port](const std::string& host, uint16_t, solar::net::SocketAddress::Family family) {
+  options.lookup = [port](const std::string& host, uint16_t requested, solar::net::SocketAddress::Family family) {
     solar::net::ResolveResult result;
-    if (host == "web-platform.test" || host.ends_with(".web-platform.test") || host == "not-web-platform.test" || host.ends_with(".not-web-platform.test")) {
+    // (The ports of the test server, 8000 and the next ones, are all this one; any other, port 1 say, is nothing listening.)
+    const bool served = requested == 0 || requested == 80 || (requested >= 8000 && requested <= 8010);
+    if (served && (host == "web-platform.test" || host.ends_with(".web-platform.test") || host == "not-web-platform.test" || host.ends_with(".not-web-platform.test"))) {
       if (family == solar::net::SocketAddress::Family::IPv4) {
         solar::net::SocketAddress address;
         address.family = family;
@@ -493,6 +495,7 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
     return false;
   }
   std::string name = std::filesystem::path(path).filename();
+  if (name.find(".sub.") != std::string::npos) source = TestEnvironment::Substitute(source, "");
 
   // "// META: script=file" asks for another file to run first, relative to this one.
   std::string prelude;

@@ -180,8 +180,9 @@ class ResponseHeaders(object):
 class Stash(object):
     """What handlers keep between requests: in a file of the temporary directory, shared by the processes of the run."""
 
-    def __init__(self, directory):
+    def __init__(self, directory, default_path=None):
         self._path = os.path.join(directory, "stash.pickle")
+        self._default_path = default_path
 
     def _with(self, change):
         lock = open(self._path + ".lock", "a+")
@@ -201,11 +202,15 @@ class Stash(object):
             lock.close()
 
     def put(self, key, value, path=None):
+        path = self._default_path if path is None else path
+
         def change(data):
             data[(path, key)] = value
         self._with(change)
 
     def take(self, key, path=None):
+        path = self._default_path if path is None else path
+
         def change(data):
             return data.pop((path, key), None)
         return self._with(change)
@@ -301,6 +306,12 @@ class Response(object):
         self.close_connection = False
         self.add_required_headers = True
 
+    def write_status_headers(self):
+        self.writer.wrote_headers = True
+
+    def write(self, data):
+        self.writer.write_content(data)
+
     def set_cookie(self, name, value, path="/", domain=None, max_age=None, expires=None, secure=False, httponly=False, samesite=None):
         parts = ["%s=%s" % (to_bytes(name).decode("latin-1"), to_bytes(value).decode("latin-1"))]
         if path:
@@ -353,7 +364,7 @@ def main():
     host = urllib.parse.urlsplit(url)
     config = type("Config", (), {"domains": {"": "web-platform.test"}, "ports": {"http": [host.port or 80]}, "server_host": host.hostname, "browser_host": host.hostname,
                                  "browser_host_name": host.hostname})()
-    stash = Stash(os.environ.get("WPT_STASH_DIR", tempfile.gettempdir()))
+    stash = Stash(os.environ.get("WPT_STASH_DIR", tempfile.gettempdir()), urllib.parse.urlsplit(url).path)
     request = Request(method, url, headers, body, stash, config)
     response = Response()
     sys.path.insert(0, os.path.dirname(os.path.abspath(handler_path)))

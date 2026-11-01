@@ -10,6 +10,7 @@
 #include "solar/net/Cors.h"
 #include "solar/net/FetchHeaders.h"
 #include "solar/url/Origin.h"
+#include "solar/url/Parser.h"
 #include "solar/url/Serializer.h"
 #include "solar/web/BlobUrls.h"
 #include "solar/web/FetchBindingsInternal.h"
@@ -119,6 +120,28 @@ bool FetchOperation::OnRedirect(const net::HttpResponseHead& redirect, const url
   // (301 and 302 turn a POST into a GET, 303 turns anything but a HEAD into one; 307 and 308 keep the method.)
   std::string next_method = method;
   if (((redirect.status == 301 || redirect.status == 302) && method == "POST") || (redirect.status == 303 && method != "GET" && method != "HEAD")) next_method = "GET";
+  // The Referrer-Policy of the redirect response is the policy from here on (the last of its tokens that is one), and the Referer is made again.
+  if (const auto policyHeader = redirect.Header("referrer-policy")) {
+    std::string value(*policyHeader), token;
+    value.push_back(',');
+    for (char c : value) {
+      if (c != ',') { if (c != ' ' && c != '\t') token.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c)))); continue; }
+      for (const char* known : {"no-referrer", "no-referrer-when-downgrade", "same-origin", "origin", "strict-origin", "origin-when-cross-origin", "strict-origin-when-cross-origin", "unsafe-url"}) {
+        if (token == known) referrerPolicy = token;
+      }
+      token.clear();
+    }
+  }
+  std::erase_if(headers, [](const auto& header) { return EqualsIgnoreCase(header.first, "referer"); });
+  if (sendsReferrer) {
+    // (What is sent is what the request's referrer is from then on: a policy cannot give back what an earlier one took away.)
+    if (const auto referer = RefererFor(referrerPolicy, referrerSource, next)) {
+      headers.emplace_back("Referer", *referer);
+      if (const auto parsed = url::Parse(*referer)) referrerSource = *parsed;
+    } else {
+      sendsReferrer = false;
+    }
+  }
   if (corsTainted || taintedOrigin || (next_method != "GET" && next_method != "HEAD")) headers.emplace_back("Origin", taintedOrigin ? "null" : pageOrigin);
   method = next_method;
   return true;
@@ -474,9 +497,15 @@ Value Fetch(Context& ctx, Value, qe::Args args, Value newTarget) {
   options.timeout = std::chrono::hours(24);
   options.useCookies = request->credentials == RequestCredentials::Include || (request->credentials == RequestCredentials::SameOrigin && !op->crossOrigin);
   options.initiator = page;
+  op->referrerPolicy = request->referrerPolicy;
+  op->sendsReferrer = !request->referrer.empty();
+  op->referrerSource = page;
   if (const auto referer = RefererFor(request->referrer.empty() ? "no-referrer" : request->referrerPolicy, page, request->url);
       referer && !request->referrer.empty()) {
     options.headers.emplace_back("Referer", *referer);
+    if (const auto parsed = url::Parse(*referer)) op->referrerSource = *parsed;
+  } else {
+    op->sendsReferrer = false;
   }
   // Origin goes with a cross-origin request, and with any request that is not a GET or a HEAD.
   if (op->corsTainted || (request->method != "GET" && request->method != "HEAD")) {

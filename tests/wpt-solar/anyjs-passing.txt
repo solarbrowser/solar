@@ -56,6 +56,7 @@ tests/wpt/fetch/api/basic/historical.any.js
 tests/wpt/fetch/api/basic/request-forbidden-headers.any.js
 tests/wpt/fetch/api/basic/request-head.any.js
 tests/wpt/fetch/api/basic/request-headers-nonascii.any.js
+tests/wpt/fetch/api/basic/response-url.sub.any.js
 tests/wpt/fetch/api/basic/scheme-about.any.js
 tests/wpt/fetch/api/basic/scheme-others.sub.any.js
 tests/wpt/fetch/api/basic/stream-safe-creation.any.js
@@ -67,8 +68,10 @@ tests/wpt/fetch/api/cors/cors-preflight-cache.any.js
 tests/wpt/fetch/api/cors/cors-preflight-not-cors-safelisted.any.js
 tests/wpt/fetch/api/cors/cors-preflight-star.any.js
 tests/wpt/fetch/api/cors/cors-preflight-status.any.js
+tests/wpt/fetch/api/cors/cors-preflight-unterminated-body.any.js
 tests/wpt/fetch/api/cors/cors-preflight.any.js
 tests/wpt/fetch/api/cors/cors-redirect-credentials.any.js
+tests/wpt/fetch/api/cors/cors-redirect.any.js
 tests/wpt/fetch/api/crashtests/huge-fetch.any.js
 tests/wpt/fetch/api/credentials/authentication-basic.any.js
 tests/wpt/fetch/api/headers/header-setcookie.any.js
@@ -88,6 +91,8 @@ tests/wpt/fetch/api/redirect/redirect-empty-location.any.js
 tests/wpt/fetch/api/redirect/redirect-location.any.js
 tests/wpt/fetch/api/redirect/redirect-method.any.js
 tests/wpt/fetch/api/redirect/redirect-origin.any.js
+tests/wpt/fetch/api/redirect/redirect-referrer-override.any.js
+tests/wpt/fetch/api/redirect/redirect-referrer.any.js
 tests/wpt/fetch/api/redirect/redirect-schemes.any.js
 tests/wpt/fetch/api/redirect/redirect-to-dataurl.any.js
 tests/wpt/fetch/api/request/forbidden-method.any.js
@@ -261,6 +266,7 @@ tests/wpt/xhr/blob-range.any.js
 tests/wpt/xhr/content-type-unmodified.any.js
 tests/wpt/xhr/cors-upload.any.js
 tests/wpt/xhr/event-abort.any.js
+tests/wpt/xhr/event-error.sub.any.js
 tests/wpt/xhr/event-load.any.js
 tests/wpt/xhr/event-loadend.any.js
 tests/wpt/xhr/event-loadstart.any.js
@@ -278,6 +284,7 @@ tests/wpt/xhr/formdata/set-blob.any.js
 tests/wpt/xhr/formdata/set.any.js
 tests/wpt/xhr/over-1-meg.any.js
 tests/wpt/xhr/overridemimetype-done-state.any.js
+tests/wpt/xhr/response-body-errors.any.js
 tests/wpt/xhr/responsetype.any.js
 tests/wpt/xhr/send-data-arraybuffer.any.js
 tests/wpt/xhr/send-data-arraybufferview.any.js
