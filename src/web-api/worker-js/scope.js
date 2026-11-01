@@ -95,6 +95,15 @@
   if (info.swClient && !info.serviceWorker && typeof global.fetch === "function") {
     const nativeFetch = global.fetch;
     let nextSwCall = 1;
+    // The page is asked (it asks the service worker that serves this worker); the answer comes back over the port.
+    const askUp = (request) => new Promise((resolve) => {
+      const id = nextSwCall++;
+      swCalls.set(id, resolve);
+      port.postMessage({ __solarSwFetch: id, request });
+    });
+    // The workers this one makes are served the same way, through this one (the page knows this worker as their client).
+    Object.defineProperty(global, "__solarSwWorkerClient", { value: () => ({ id: info.swClient, controlled: true }), configurable: true, writable: true, enumerable: false });
+    Object.defineProperty(global, "__solarSwWorkerFetch", { value: (clientId, request) => askUp(request), configurable: true, writable: true, enumerable: false });
     const wrapped = ({ fetch(input, init) {
       return (async () => {
         const request = new Request(input, init);
@@ -103,11 +112,7 @@
         const signal = request.signal;
         if (signal && signal.aborted) throw signal.reason !== undefined ? signal.reason : new DOMException("The user aborted a request.", "AbortError");
         const body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.clone().arrayBuffer();
-        const id = nextSwCall++;
-        const result = await new Promise((resolve) => {
-          swCalls.set(id, resolve);
-          port.postMessage({ __solarSwFetch: id, request: { url: request.url, method: request.method, headers: Array.from(request.headers.entries()), body, mode: request.mode, credentials: request.credentials, cache: request.cache, redirect: request.redirect, referrer: request.referrer === "about:client" ? info.url : request.referrer, referrerPolicy: request.referrerPolicy || "strict-origin-when-cross-origin" } });
-        });
+        const result = await askUp({ url: request.url, method: request.method, headers: Array.from(request.headers.entries()), body, mode: request.mode, credentials: request.credentials, cache: request.cache, redirect: request.redirect, referrer: request.referrer === "about:client" ? info.url : request.referrer, referrerPolicy: request.referrerPolicy || "strict-origin-when-cross-origin" });
         if (result.kind === "fallback") return nativeFetch.call(global, input, init);
         if (result.kind === "error") throw new TypeError("Failed to fetch");
         const d = result.response;

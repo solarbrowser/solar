@@ -159,6 +159,8 @@
     for (const r of registrations) {
       if (r.active) list.push({ scope: r.scope, scriptURL: r.active.url, source: r.activeSource, updateViaCache: r.updateViaCache });
       else if (r.stored) list.push({ scope: r.scope, scriptURL: r.stored.scriptURL, source: r.stored.source, updateViaCache: r.updateViaCache });
+      // (A registration whose worker is not active yet is there all the same: it keeps a page from being claimed by a shorter scope.)
+      else if (r.installing || r.waiting) list.push({ scope: r.scope, pending: true, updateViaCache: r.updateViaCache });
     }
     kvWrite(origin, KEY, JSON.stringify(list));
   };
@@ -369,6 +371,7 @@
         }
         if (reg.installing) retire(reg.installing);
         install(reg, w, source);
+        persist();
         return reg.object;
       })();
     }
@@ -478,14 +481,17 @@
       for (const k of kept) {
         if (registrations.some((r) => r.scope === k.scope)) continue;
         const reg = newRecord(k.scope, k.updateViaCache);
+        if (k.pending) continue;
         reg.activeSource = k.source;
         reg.stored = { scriptURL: k.scriptURL, source: k.source };
       }
-      const reg = claimedScope ? registrations.find((r) => r.scope === claimedScope && location.href.startsWith(r.scope)) : matching(location.href);
+      // (A page is claimed by the registration whose scope matches its address the most: a longer one that is there keeps it.)
+      const best = matching(location.href);
+      const reg = claimedScope ? (best && best.scope === claimedScope ? best : null) : best;
       if (reg && (!reg.active || claimedScope)) {
         if (reg.active && controller === reg.active) return;
         const k = kept.find((x) => x.scope === reg.scope);
-        if (!k) return;
+        if (!k || k.pending) return;
         // The worker may be there already (kept since an earlier page, or started for the navigation that made this page): then it is that one this page is served by.
         const running = adopt(origin, location.href);
         const w = spawn(reg, k.scriptURL, k.source, "activated", running >= 0 ? running : undefined);
@@ -497,6 +503,8 @@
     try {
       const claims = new BroadcastChannel("solar-sw-claim:" + origin);
       claims.onmessage = (e) => { if (e.data && e.data.t === "claim" && location.href.startsWith(e.data.scope)) adoptKept(e.data.scope); };
+      // (Held by the window: a channel nothing refers to is collected, and with it the way a claim reaches this page.)
+      Object.defineProperty(globalThis, Symbol.for("solar.swClaims"), { value: claims, configurable: true });
     } catch (e) { /* (no channel) */ }
     Object.defineProperty(Navigator.prototype, "serviceWorker", { get() { return containerObject; }, enumerable: true, configurable: true });
   }

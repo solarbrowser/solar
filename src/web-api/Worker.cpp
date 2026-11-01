@@ -59,6 +59,8 @@ void Release(uint32_t id) {
     if (at == Workers().end()) return;
     qe::Realm* realm = at->second.realm;
     Workers().erase(at);
+    // (The workers this one made go with it.)
+    if (realm) webapi::ReleaseOwnedWorkers(realm);
     if (g_host && realm) g_host->ReleaseWorkerRealm(realm);
   };
   if (owner) owner->EnqueueTask("worker", release);

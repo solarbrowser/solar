@@ -10,7 +10,9 @@
   delete globalThis.__solarWorkerStart;
   delete globalThis.__solarWorkerTerminate;
   delete globalThis.__solarWorkerSource;
-  if (typeof create !== "function" || typeof MessageChannel !== "function") return;
+  // A service worker makes no workers; a dedicated or shared worker makes dedicated ones (and no shared one: a shared worker is the page's to ask for).
+  const inWorker = typeof document === "undefined";
+  if (typeof create !== "function" || typeof MessageChannel !== "function" || globalThis.__solarSwInfo) return;
 
   const handler = (proto, names) => {
     for (const name of names) {
@@ -34,7 +36,7 @@
       super();
       if (arguments.length === 0) throw new TypeError("Failed to construct 'Worker': 1 argument required, but only 0 present.");
       let url;
-      try { url = new URL(String(scriptURL), document.baseURI); } catch (e) {
+      try { url = new URL(String(scriptURL), inWorker ? location.href : document.baseURI); } catch (e) {
         throw new DOMException(`Failed to construct 'Worker': Script at '${scriptURL}' is not a valid URL.`, "SyntaxError");
       }
       if (url.protocol !== "blob:" && url.protocol !== "data:" && url.origin !== location.origin) {
@@ -131,7 +133,7 @@
       super();
       if (arguments.length === 0) throw new TypeError("Failed to construct 'SharedWorker': 1 argument required, but only 0 present.");
       let url;
-      try { url = new URL(String(scriptURL), document.baseURI); } catch (e) {
+      try { url = new URL(String(scriptURL), inWorker ? location.href : document.baseURI); } catch (e) {
         throw new DOMException(`Failed to construct 'SharedWorker': Script at '${scriptURL}' is not a valid URL.`, "SyntaxError");
       }
       if (url.protocol !== "blob:" && url.protocol !== "data:" && url.origin !== location.origin) {
@@ -183,5 +185,5 @@
   }
   handler(SharedWorker.prototype, ["error"]);
   Object.defineProperty(SharedWorker.prototype, Symbol.toStringTag, { value: "SharedWorker", configurable: true });
-  Object.defineProperty(globalThis, "SharedWorker", { value: SharedWorker, writable: true, configurable: true, enumerable: false });
+  if (!inWorker) Object.defineProperty(globalThis, "SharedWorker", { value: SharedWorker, writable: true, configurable: true, enumerable: false });
 })();
