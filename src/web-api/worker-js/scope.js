@@ -90,11 +90,46 @@
     if (Object.prototype.hasOwnProperty.call(global, name)) { try { delete global[name]; } catch (e) { /* (kept) */ } }
   }
 
+  // ---- fetch, for a worker that a service worker serves: the page asks the service worker, with this worker as the client ----
+  const swCalls = new Map();
+  if (info.swClient && !info.serviceWorker && typeof global.fetch === "function") {
+    const nativeFetch = global.fetch;
+    let nextSwCall = 1;
+    const wrapped = ({ fetch(input, init) {
+      return (async () => {
+        const request = new Request(input, init);
+        const url = new URL(request.url);
+        if (url.protocol !== "http:" && url.protocol !== "https:") return nativeFetch.call(global, input, init);
+        const signal = request.signal;
+        if (signal && signal.aborted) throw signal.reason !== undefined ? signal.reason : new DOMException("The user aborted a request.", "AbortError");
+        const body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.clone().arrayBuffer();
+        const id = nextSwCall++;
+        const result = await new Promise((resolve) => {
+          swCalls.set(id, resolve);
+          port.postMessage({ __solarSwFetch: id, request: { url: request.url, method: request.method, headers: Array.from(request.headers.entries()), body, mode: request.mode, credentials: request.credentials, cache: request.cache, redirect: request.redirect, referrer: request.referrer === "about:client" ? info.url : request.referrer, referrerPolicy: request.referrerPolicy || "strict-origin-when-cross-origin" } });
+        });
+        if (result.kind === "fallback") return nativeFetch.call(global, input, init);
+        if (result.kind === "error") throw new TypeError("Failed to fetch");
+        const d = result.response;
+        const response = new Response(d.status === 204 || d.status === 205 || d.status === 304 ? null : d.body, { status: d.status, statusText: d.statusText, headers: d.headers });
+        try {
+          Object.defineProperty(response, "url", { value: d.url || request.url, configurable: true });
+          Object.defineProperty(response, "type", { value: url.origin === origin ? "basic" : "cors", configurable: true });
+          if (d.redirected) Object.defineProperty(response, "redirected", { value: true, configurable: true });
+        } catch (e) { /* (read-only here) */ }
+        return response;
+      })();
+    } }).fetch;
+    Object.defineProperty(global, "fetch", { ...Object.getOwnPropertyDescriptor(global, "fetch"), value: wrapped });
+  }
+
   // ---- Talking to the page ----
   // (A service worker's port is its own: serviceworker-scope.js, which comes after this, takes it.)
   if (!info.serviceWorker) { delete global.__solarKvRead; delete global.__solarKvWrite; }
   if (info.serviceWorker) { global.__solarSwInfo = info; global.__solarSwTarget = target; global.__solarSwStop = close; }
   else port.onmessage = (e) => {
+    // The answers of the page to the requests this worker's fetch sent it, for the service worker that serves the worker (see below).
+    if (e.data && typeof e.data === "object" && e.data.__solarSwReply !== undefined) { const call = swCalls.get(e.data.__solarSwReply); if (call) { swCalls.delete(e.data.__solarSwReply); call(e.data.result); } return; }
     const event = new MessageEvent("message", { data: e.data, ports: [...e.ports], origin: "", lastEventId: "", source: null });
     Object.defineProperty(event, "target", { value: global, configurable: true });
     target.dispatchEvent(event);

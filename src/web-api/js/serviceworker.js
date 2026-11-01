@@ -68,6 +68,7 @@
   // Tells the worker who this page is, and whether the worker controls it (a client that is not controlled is not listed by clients.matchAll unless asked for).
   const announce = (w) => { try { if (w && w.port && !w.gone) w.port.postMessage({ t: "hello", client: { ...clientDescriptor(), controlled: controller === w } }); } catch (e) { /* (gone) */ } };
 
+  const workerClientsServed = new Map();  // client id -> the address of the worker
   // The workers this page makes are clients of the workers that serve it, as the page is: Worker and SharedWorker say so through this.
   Object.defineProperty(globalThis, "__solarSwWorkerClient", {
     value(url, kind) {
@@ -78,7 +79,24 @@
         if (!w || !w.port || w.gone) continue;
         try { w.port.postMessage({ t: "client", op: "add", client: { id, url, type: kind, frameType: "none", visibilityState: "hidden", focused: false, controlled: url.startsWith("blob:") || url.startsWith("data:") ? w === controller : matching(url) === r } }); } catch (e) { /* (gone) */ }
       }
-      return id;
+      workerClientsServed.set(id, url);
+      return { id, controlled: true };
+    },
+    writable: true, configurable: true, enumerable: false,
+  });
+  // A request of a worker that is served (its fetch asks the page, because the worker has no port to the service worker): the service worker is asked with the worker as the client.
+  Object.defineProperty(globalThis, "__solarSwWorkerFetch", {
+    value(clientId, request) {
+      // (Which worker serves it is asked now: the page may have been claimed since the worker was made.)
+      const url = workerClientsServed.get(clientId);
+      const serving = url === undefined ? null : registrations.find((r) => r.active && r.active.port && !r.active.gone && (url.startsWith("blob:") || url.startsWith("data:") ? r.active === controller : matching(url) === r));
+      const w = serving ? serving.active : null;
+      if (!w) return Promise.resolve({ kind: "fallback" });
+      return new Promise((resolve, reject) => {
+        const id = nextFetch++;
+        w.fetches.set(id, { resolve, reject });
+        w.port.postMessage({ t: "fetch", id, clientId, request });
+      }).catch(() => ({ kind: "error" }));
     },
     writable: true, configurable: true, enumerable: false,
   });

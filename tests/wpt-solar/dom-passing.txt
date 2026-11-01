@@ -769,6 +769,8 @@ tests/wpt/service-workers/service-worker/active.https.html
 tests/wpt/service-workers/service-worker/claim-fetch.https.html
 tests/wpt/service-workers/service-worker/claim-not-using-registration.https.html
 tests/wpt/service-workers/service-worker/client-id.https.html
+tests/wpt/service-workers/service-worker/client-url-of-blob-url-worker.https.html
+tests/wpt/service-workers/service-worker/clients-get-client-types.https.html
 tests/wpt/service-workers/service-worker/clients-matchall-blob-url-worker.https.html
 tests/wpt/service-workers/service-worker/clients-matchall-client-types.https.html
 tests/wpt/service-workers/service-worker/clients-matchall.https.html

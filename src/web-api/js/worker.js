@@ -44,9 +44,19 @@
       const name = given.name === undefined ? "" : String(given.name);
       const type = given.type === "module" ? "module" : "classic";
       const channel = new MessageChannel();
+      let swClientIdValue = "";
+      const swClientId = () => swClientIdValue;
       this.#port = channel.port1;
+      const serviceWorkerFetch = typeof globalThis.__solarSwWorkerFetch === "function" ? globalThis.__solarSwWorkerFetch : null;
       channel.port1.onmessage = (e) => {
         if (this.#done) return;
+        // The worker's fetch, for the service worker that serves it.
+        if (e.data && typeof e.data === "object" && e.data.__solarSwFetch !== undefined) {
+          const call = e.data.__solarSwFetch;
+          const answer = serviceWorkerFetch ? serviceWorkerFetch(swClientId(), e.data.request) : Promise.resolve({ kind: "fallback" });
+          answer.then((result) => { if (!this.#done) channel.port1.postMessage({ __solarSwReply: call, result }, result && result.response && result.response.body instanceof ArrayBuffer ? [result.response.body] : []); });
+          return;
+        }
         this.dispatchEvent(new MessageEvent("message", { data: e.data, ports: [...e.ports], origin: "", lastEventId: "" }));
       };
       channel.port1.onmessageerror = () => { if (!this.#done) this.dispatchEvent(new MessageEvent("messageerror", {})); };
@@ -59,9 +69,13 @@
       };
       this.#id = create(url.href);
       // (A worker is a client of the service worker that serves the page that made it.)
+      let swClient = "";
       if (this.#id >= 0 && typeof globalThis.__solarSwWorkerClient === "function") {
         const client = given.__solarClient;
-        try { globalThis.__solarSwWorkerClient(client ? client.url : url.href, client ? client.kind : "worker"); } catch (e) { /* (no service worker) */ }
+        try {
+          const made = globalThis.__solarSwWorkerClient(client ? client.url : url.href, client ? client.kind : "worker");
+          if (made && made.controlled) swClient = swClientIdValue = made.id;
+        } catch (e) { /* (no service worker) */ }
       }
       if (this.#id < 0) {
         setTimeout(() => fail("Workers are not available."), 0);
@@ -71,7 +85,7 @@
       const info = JSON.stringify({
         url: url.href, name, type, userAgent: navigator.userAgent, language: navigator.language, languages: Array.from(navigator.languages || [navigator.language]),
         platform: navigator.platform, hardwareConcurrency: navigator.hardwareConcurrency, onLine: navigator.onLine, appVersion: navigator.appVersion,
-        origin: url.protocol === "blob:" || url.protocol === "data:" ? location.origin : url.origin,
+        origin: url.protocol === "blob:" || url.protocol === "data:" ? location.origin : url.origin, swClient,
       });
       // The script is asked for, and the worker starts when it has come; what the page posts meanwhile waits in the port.
       // (A blob, a data address and a file are not the network's: the program has them.)
