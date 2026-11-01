@@ -825,6 +825,23 @@ const char* const kWindowScript = R"JS(
   };
   Image.prototype = globalThis.HTMLImageElement.prototype;
   defineGlobal("Image", Image);
+  // The documents of HTML are HTMLDocuments (the one of new Document(), of XML, is a Document).
+  {
+    const HTMLDocument = ({ HTMLDocument: class { constructor() { throw new TypeError("Illegal constructor"); } } }).HTMLDocument;
+    Object.setPrototypeOf(HTMLDocument, Document);
+    Object.setPrototypeOf(HTMLDocument.prototype, Document.prototype);
+    Object.defineProperty(HTMLDocument.prototype, Symbol.toStringTag, { value: "HTMLDocument", configurable: true });
+    defineGlobal("HTMLDocument", HTMLDocument);
+    const make = (doc) => { if (doc && doc.contentType === "text/html" && Object.getPrototypeOf(doc) === Document.prototype) Object.setPrototypeOf(doc, HTMLDocument.prototype); return doc; };
+    make(getDocument());
+    const wrap = (proto, name) => {
+      const original = proto && proto[name];
+      if (typeof original !== "function") return;
+      Object.defineProperty(proto, name, { value: { [name](...args) { return make(original.apply(this, args)); } }[name], writable: true, configurable: true, enumerable: true });
+    };
+    wrap(globalThis.DOMImplementation && DOMImplementation.prototype, "createHTMLDocument");
+    wrap(globalThis.DOMParser && DOMParser.prototype, "parseFromString");
+  }
   const Audio = function Audio(src) {
     const element = getDocument().createElement("audio");
     element.setAttribute("preload", "auto");

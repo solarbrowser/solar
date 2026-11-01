@@ -27,6 +27,22 @@ check("key of wrapper", Object.keys({ [wrapper]: 1 })[0], "[object Window]");
 check("String(new String('x'))", String(new String("x")), "x");
 check("String(new Number(5))", String(new Number(5)), "5");
 check("String(overridden Number)", String(Object.assign(new Number(3), { toString() { return "n"; } })), "n");
+// A function that makes a primitive makes it when it is called with an object as this.
+check("String.call(window, 'w')", typeof String.call(window, "w"), "string");
+check("Number.call({}, '5')", Number.call({}, "5"), 5);
+check("Boolean.call({}, 1)", Boolean.call({}, 1), true);
+check("Reflect.apply(String, window, ['q'])", Reflect.apply(String, window, ["q"]), "q");
+// A catch parameter may be a word that is a keyword only elsewhere.
+var names = [];
+try { throw 1; } catch (of) { names.push(of); }
+try { throw 2; } catch (async) { names.push(async); }
+try { throw 3; } catch (from) { names.push(from); }
+check("catch (of), (async), (from)", names.join(), "1,2,3");
+// The documents of HTML are HTMLDocuments, and navigator.gpu and RTCPeerConnection are there.
+check("toString.call(document)", Object.prototype.toString.call(document), "[object HTMLDocument]");
+check("document instanceof HTMLDocument", document instanceof HTMLDocument, true);
+check("typeof RTCPeerConnection", typeof RTCPeerConnection, "function");
+check("typeof navigator.gpu", typeof navigator.gpu, "object");
 console.log(results.join("\n"));
 </script>
 </body>
