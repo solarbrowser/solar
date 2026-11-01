@@ -228,6 +228,8 @@ void DefineRequestClass(Quanta::Context& ctx);
 void DefineFetchFunction(Quanta::Context& ctx);
 // __solarSyncFetch: a request that is waited for, for XMLHttpRequest's synchronous send().
 void DefineSyncFetch(Quanta::Context& ctx);
+// The entries of a form, as the window's script gives them: an array of [name, value or File] pairs; an exception is pending when it throws.
+Quanta::Value CallFormEntries(Quanta::Context& ctx, const Quanta::Value& form, const Quanta::Value& submitter);
 // Ends what is in flight for an operation that the host is going away with.
 struct FetchOperation;
 void CancelOperation(FetchOperation& operation);

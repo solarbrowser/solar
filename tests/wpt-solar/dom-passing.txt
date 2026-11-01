@@ -1064,6 +1064,12 @@ tests/wpt/xhr/access-control-preflight-request-invalid-status-501.htm
 tests/wpt/xhr/access-control-preflight-request-must-not-contain-cookie.htm
 tests/wpt/xhr/access-control-response-with-body-sync.htm
 tests/wpt/xhr/access-control-response-with-body.htm
+tests/wpt/xhr/formdata/append-formelement.html
+tests/wpt/xhr/formdata/constructor-submitter.html
+tests/wpt/xhr/formdata/delete-formelement.html
+tests/wpt/xhr/formdata/get-formelement.html
+tests/wpt/xhr/formdata/has-formelement.html
+tests/wpt/xhr/formdata/set-formelement.html
 tests/wpt/xhr/getallresponseheaders-cookies.htm
 tests/wpt/xhr/getallresponseheaders-status.htm
 tests/wpt/xhr/getresponseheader-case-insensitive.htm
@@ -1087,6 +1093,7 @@ tests/wpt/xhr/open-method-insecure.htm
 tests/wpt/xhr/open-method-responsetype-set-sync.htm
 tests/wpt/xhr/open-open-send.htm
 tests/wpt/xhr/open-open-sync-send.htm
+tests/wpt/xhr/open-parameters-toString.htm
 tests/wpt/xhr/open-send-during-abort.htm
 tests/wpt/xhr/open-send-open.htm
 tests/wpt/xhr/open-sync-open-send.htm
@@ -1120,7 +1127,13 @@ tests/wpt/xhr/responsexml-invalid-type.html
 tests/wpt/xhr/responsexml-non-document-types.htm
 tests/wpt/xhr/send-accept.htm
 tests/wpt/xhr/send-authentication-basic-cors.htm
+tests/wpt/xhr/send-authentication-basic-setrequestheader-and-arguments.htm
+tests/wpt/xhr/send-authentication-basic-setrequestheader-existing-session.htm
+tests/wpt/xhr/send-authentication-basic-setrequestheader.htm
+tests/wpt/xhr/send-authentication-basic.htm
+tests/wpt/xhr/send-authentication-competing-names-passwords.htm
 tests/wpt/xhr/send-conditional.htm
+tests/wpt/xhr/send-content-type-charset.htm
 tests/wpt/xhr/send-data-blob.htm
 tests/wpt/xhr/send-document-lone-surrogate.html
 tests/wpt/xhr/send-entity-body-document-bogus.htm

@@ -218,10 +218,10 @@ const char* const kFormScript = R"JS(
   define(L, "form", function () { const c = this.control; return c ? c.form : null; });
 
   // ---- form ----
-  const controlsOf = (form) => {
+  const controlsOf = (form, withImages) => {
     const root = form.getRootNode();
     const all = root.querySelectorAll ? Array.from(root.querySelectorAll("input, button, select, textarea, fieldset, output, object")) : [];
-    return all.filter((e) => formOf(e) === form && !(e instanceof HTMLInputElement && typeOf(e) === "image"));
+    return all.filter((e) => formOf(e) === form && (withImages || !(e instanceof HTMLInputElement && typeOf(e) === "image")));
   };
   for (const [prop, attr] of [["acceptCharset", "accept-charset"], ["name", "name"], ["target", "target"], ["rel", "rel"]]) str(F, prop, attr);
   define(F, "action", function () { const v = this.getAttribute("action"); return v === null || v === "" ? this.ownerDocument.URL : new URL(v, this.baseURI).href; }, function (v) { this.setAttribute("action", String(v)); });
@@ -234,23 +234,43 @@ const char* const kFormScript = R"JS(
   define(F, "length", function () { return controlsOf(this).length; });
   method(F, "checkValidity", function () { return true; });
   method(F, "reportValidity", function () { return true; });
-  const entriesOf = (form, submitter) => {
+  const entriesOf = (form, submitter, withFiles) => {
     const entries = [];
-    for (const e of controlsOf(form)) {
+    for (const e of controlsOf(form, true)) {
       const name = e.getAttribute("name");
       if (disabledNow(e) || e instanceof HTMLFieldSetElement || e instanceof HTMLOutputElement || e instanceof HTMLObjectElement) continue;
+      if (e === submitter && e instanceof HTMLInputElement && typeOf(e) === "image") { entries.push([name ? name + ".x" : "x", "0"], [name ? name + ".y" : "y", "0"]); continue; }
       if (e instanceof HTMLButtonElement || (e instanceof HTMLInputElement && /^(submit|image|reset|button)$/.test(typeOf(e)))) { if (e === submitter && name && !(e instanceof HTMLInputElement && typeOf(e) === "button") && typeOf(e) !== "reset") entries.push([name, e.value]); continue; }
       if (!name) continue;
       if (e instanceof HTMLInputElement) {
         const t = typeOf(e);
         if ((t === "checkbox" || t === "radio")) { if (e.checked) entries.push([name, e.value]); continue; }
-        if (t === "file") continue;
+        if (t === "file") {
+          if (!withFiles) continue;
+          const files = e.files;
+          if (files && files.length) for (const f of files) entries.push([name, f]);
+          else entries.push([name, new File([], "", { type: "application/octet-stream" })]);
+          continue;
+        }
         entries.push([name, e.value]);
       } else if (e instanceof HTMLSelectElement) { for (const o of optionsOf(e)) if (o.selected && !o.hasAttribute("disabled")) entries.push([name, o.value]); }
       else if (e instanceof HTMLTextAreaElement) entries.push([name, e.value.replace(/\r?\n/g, "\r\n")]);
     }
     return entries;
   };
+  // FormData(form, submitter): the entry list of the form, for the constructor in the fetch module.
+  if (typeof globalThis.__solarRegisterForm === "function") {
+    const register = globalThis.__solarRegisterForm;
+    delete globalThis.__solarRegisterForm;
+    register(function (form, submitter) {
+      if (!(form instanceof HTMLFormElement)) throw new TypeError("Failed to construct 'FormData': parameter 1 is not of type 'HTMLFormElement'.");
+      if (submitter !== undefined && submitter !== null) {
+        if (!(submitter instanceof HTMLElement) || !((submitter instanceof HTMLButtonElement && submitter.type === "submit") || (submitter instanceof HTMLInputElement && /^(submit|image)$/.test(typeOf(submitter))))) throw new TypeError("Failed to construct 'FormData': The specified element is not a submit button.");
+        if (submitter.form !== form) throw new DOMException("The specified element is not owned by this form element.", "NotFoundError");
+      }
+      return entriesOf(form, submitter || null, true);
+    });
+  }
   const encode = (s) => encodeURIComponent(s).replace(/%20/g, "+").replace(/[!'()~]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
   const submit = (form, submitter) => {
     const method = submitter && submitter.hasAttribute("formmethod") ? submitter.formMethod : form.method;

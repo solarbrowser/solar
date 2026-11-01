@@ -89,14 +89,26 @@ Value Construct(Context& ctx, Value, qe::Args args, Value newTarget) {
     qe::ThrowTypeError(ctx, "Failed to construct 'FormData': Please use the 'new' operator, this DOM object constructor cannot be called as a function.");
     return qe::Undefined();
   }
+  Value entries = qe::Undefined();
   if (!args.empty() && !qe::IsUndefined(args[0])) {
-    qe::ThrowTypeError(ctx, "Failed to construct 'FormData': there are no form elements to read from yet.");
-    return qe::Undefined();
+    entries = CallFormEntries(ctx, args[0], args.size() > 1 ? args[1] : qe::Undefined());
+    if (qe::HasException(ctx)) return qe::Undefined();
   }
   Object* prototype = qe::PrototypeFromNewTarget(ctx, newTarget);
   if (qe::HasException(ctx)) return qe::Undefined();
   JsFormData* form = NewFormData(ctx);
   if (prototype) form->initialize_prototype(prototype);
+  if (qe::IsObject(entries)) {
+    const uint32_t count = qe::ToUint32(ctx, qe::Get(ctx, entries, "length"));
+    for (uint32_t i = 0; i < count; ++i) {
+      Value pair = qe::Get(ctx, entries, std::to_string(i).c_str());
+      Value pairArgs[2] = {qe::Get(ctx, pair, "0"), qe::Get(ctx, pair, "1")};
+      FormDataEntry entry;
+      if (!ReadEntry(ctx, qe::Args(pairArgs, 2), "append", entry)) return qe::Undefined();
+      form->entries.push_back(entry);
+      if (entry.file) form->NoteWrite(qe::FromObject(entry.file));
+    }
+  }
   return qe::FromObject(form);
 }
 

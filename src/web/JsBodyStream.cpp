@@ -61,6 +61,13 @@ Value Register(Context& ctx, Value, qe::Args args, Value) {
   return qe::Undefined();
 }
 
+// __solarRegisterForm(function): what FormData(form) asks for the entries of a form (the forms are the window's, in script).
+Value RegisterForm(Context& ctx, Value, qe::Args args, Value) {
+  Object* holder = static_cast<Object*>(qe::GetRealmData(ctx, &g_helpersKey));
+  if (holder && !args.empty() && qe::IsCallable(args[0])) qe::Set(ctx, qe::FromObject(holder), "formEntries", args[0]);
+  return qe::Undefined();
+}
+
 enum BodyState { kWait = 0, kData = 1, kDone = 2, kFailed = 3 };
 
 // __solarBodyState(owner, offset): what a stream that has read `offset` bytes of the body can do next.
@@ -154,6 +161,7 @@ void DefineBodyStreamFunctions(Context& ctx) {
   qe::ClassRef holder = qe::DefineClass(ctx, "SolarBodyHelpers", HolderConstructor, 0);
   qe::SetRealmData(ctx, &g_helpersKey, holder.prototype);
   qe::DefineGlobalFunction(ctx, "__solarRegisterBody", Register, 1);
+  qe::DefineGlobalFunction(ctx, "__solarRegisterForm", RegisterForm, 1);
   qe::DefineGlobalFunction(ctx, "__solarBodyState", State, 2);
   qe::DefineGlobalFunction(ctx, "__solarBodyTake", Take, 2);
   qe::DefineGlobalFunction(ctx, "__solarBodyError", Error, 1);
@@ -161,6 +169,16 @@ void DefineBodyStreamFunctions(Context& ctx) {
   qe::DefineGlobalFunction(ctx, "__solarBodyFilled", Filled, 2);
   qe::DefineGlobalFunction(ctx, "__solarBodyFailed", Failed, 2);
   qe::DefineGlobalFunction(ctx, "__solarBlobChunk", BlobChunk, 2);
+}
+
+Value CallFormEntries(Context& ctx, const Value& form, const Value& submitter) {
+  Value function = Helper(ctx, "formEntries");
+  if (!qe::IsCallable(function)) {
+    qe::ThrowTypeError(ctx, "Failed to construct 'FormData': there are no form elements to read from in this realm.");
+    return qe::Undefined();
+  }
+  Value argv[2] = {form, submitter};
+  return qe::Call(ctx, function, qe::Undefined(), qe::Args(argv, 2));
 }
 
 bool IsReadableStream(Context& ctx, const Value& value) {

@@ -96,6 +96,15 @@
     return decoder.decode(bytes);
   };
 
+  // A text body is sent in UTF-8, so a charset its Content-Type names is made that.
+  const utf8Charset = (s) => {
+    const mime = parseMime(s.headers.get("content-type"));
+    if (mime && mime.params.has("charset") && mime.params.get("charset").toLowerCase() !== "utf-8") {
+      mime.params.set("charset", "UTF-8");
+      s.headers.set("content-type", serializeMime(mime));
+    }
+  };
+
   const UNSENT = 0, OPENED = 1, HEADERS_RECEIVED = 2, LOADING = 3, DONE = 4;
   const internal = new WeakMap();
   const handlerStore = new WeakMap();
@@ -203,7 +212,10 @@
       }
       const pairs = [];
       for (const [name, value] of s.headers) pairs.push((s.names && s.names.get(name)) || (name === "content-type" ? "Content-Type" : name), value);
-      const answer = syncFetch(s.method, s.url, pairs, body);
+      let answer = syncFetch(s.method, s.url, pairs, body);
+      if (answer !== null && answer[0] === 401 && s.auth !== null && !crossOrigin(s.url) && !s.headers.has("authorization") && answer[2].some((v, i) => i % 2 === 0 && v.toLowerCase() === "www-authenticate" && /^\s*basic/i.test(answer[2][i + 1]))) {
+        answer = syncFetch(s.method, s.url, ["Authorization", "Basic " + btoa(s.auth), ...pairs], body);
+      }
       if (answer === null) { fail(self, "error"); return; }
       const headers = new Headers();
       for (let i = 0; i + 1 < answer[2].length; i += 2) { try { headers.append(answer[2][i], answer[2][i + 1]); } catch (e) { /* not a header */ } }
@@ -220,7 +232,16 @@
     if (!s.async) { fail(self, "error"); return; }
     const init = { method: s.method, headers: s.headers, credentials: s.withCredentials ? "include" : "same-origin" };
     if (s.body !== null) init.body = s.body;
-    fetch(s.url, init).then(async (response) => {
+    const send = (init) => fetch(s.url, init).then((response) => {
+      // The credentials of the request are sent when the server asks for them, as Basic.
+      if (response.status === 401 && s.auth !== null && !crossOrigin(s.url) && !s.headers.has("authorization") && /^\s*basic/i.test(response.headers.get("www-authenticate") || "")) {
+        const headers = new Headers(s.headers);
+        headers.set("authorization", "Basic " + btoa(s.auth));
+        return fetch(s.url, { ...init, headers });
+      }
+      return response;
+    });
+    send(init).then(async (response) => {
       const bytes = new Uint8Array(await response.arrayBuffer());
       finish(response.status, response.statusText, response.headers, bytes, decodeText(bytes, finalMime({ responseHeaders: response.headers, overrideMime: s.overrideMime }), false, s.responseType !== ""));
     }, () => { if (s.id === id && s.sendFlag) fail(self, "error"); });
@@ -278,6 +299,11 @@
       if (arguments.length > 2 && !async && globalThis.document && (s.timeout !== 0 || s.withCredentials || s.responseType !== "")) {
         throw new DOMException("Synchronous requests must not set timeout, withCredentials or responseType.", "InvalidAccessError");
       }
+      if (arguments.length > 3 && username !== null && username !== undefined) parsed.username = String(username);
+      if (arguments.length > 4 && password !== null && password !== undefined) parsed.password = String(password);
+      // The credentials of the address are sent as a Basic authorization (before a challenge, which is the one thing here that is not the standard's), and are not part of the address.
+      s.auth = parsed.username !== "" || parsed.password !== "" ? unescape(encodeURIComponent(decodeURIComponent(parsed.username) + ":" + decodeURIComponent(parsed.password))) : null;
+      parsed.username = ""; parsed.password = "";
       s.id++;
       if (s.timer) { clearTimeout(s.timer); s.timer = null; }
       s.method = method; s.url = parsed.href; s.async = Boolean(async); s.headers = new Headers(); s.names = null; s.body = null;
@@ -314,12 +340,14 @@
         if (typeof body === "string") {
           payload = body;
           if (!s.headers.has("content-type")) s.headers.set("content-type", "text/plain;charset=UTF-8");
+          else utf8Charset(s);
         } else if (body instanceof URLSearchParams) {
           payload = body.toString();
           if (!s.headers.has("content-type")) s.headers.set("content-type", "application/x-www-form-urlencoded;charset=UTF-8");
         } else if (typeof Document === "function" && body instanceof Document) {
           payload = new XMLSerializer().serializeToString(body);
           if (!s.headers.has("content-type")) s.headers.set("content-type", body.contentType === "text/html" ? "text/html;charset=UTF-8" : "application/xml;charset=UTF-8");
+          else utf8Charset(s);
         } else {
           payload = body;
         }
