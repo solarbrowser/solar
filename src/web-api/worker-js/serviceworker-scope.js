@@ -218,7 +218,8 @@
     get(id) { return Promise.resolve(Array.from(clientList.values()).filter((c) => c.desc.id === String(id)).map(makeClient)[0]); }
     matchAll(options) {
       const type = options && options.type !== undefined ? String(options.type) : "window";
-      return Promise.resolve(type === "window" || type === "all" ? Array.from(clientList.values()).map(makeClient) : []);
+      const uncontrolled = !!(options && options.includeUncontrolled);
+      return Promise.resolve(type === "window" || type === "all" ? Array.from(clientList.values()).filter((c) => uncontrolled || c.desc.controlled).map(makeClient) : []);
     }
     openWindow(url) { return ask({ t: "open-window", url: String(url) }).then((d) => (d ? makeClient({ desc: d, port: primary().port }) : null), () => null); }
     claim() {

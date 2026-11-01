@@ -63,6 +63,9 @@
   hide("ServiceWorker", ServiceWorker);
   const clientDescriptor = () => ({ id: clientIdOf(), url: location.href, type: "window", frameType: window.top === window ? "top-level" : "nested", visibilityState: document.visibilityState, focused: typeof document.hasFocus === "function" ? document.hasFocus() : true });
 
+  // Tells the worker who this page is, and whether the worker controls it (a client that is not controlled is not listed by clients.matchAll unless asked for).
+  const announce = (w) => { try { if (w && w.port && !w.gone) w.port.postMessage({ t: "hello", client: { ...clientDescriptor(), controlled: controller === w } }); } catch (e) { /* (gone) */ } };
+
   // ---- Workers: made, told their state, asked ----
   const setState = (w, state) => {
     w.state = state;
@@ -94,7 +97,10 @@
     w.port = channel.port1;
     w.port.onmessage = (e) => fromWorker(w, e);
     if (!attach(id, channel.port2)) { w.failed = "the worker could not be reached"; return w; }
-    w.port.postMessage({ t: "hello", client: clientDescriptor() });
+    announce(w);
+    // (A frame is not yet in its parent when its scripts first run: what it is is told again once it is.)
+    setTimeout(() => announce(w), 0);
+    addEventListener("pagehide", () => { try { w.port.postMessage({ t: "bye" }); } catch (e) { /* (gone) */ } });
     return w;
   };
   const retire = (w) => {
@@ -129,7 +135,10 @@
   };
   const setController = (w) => {
     if (controller === w) return;
+    const old = controller;
     controller = w;
+    announce(old);
+    announce(w);
     if (tellControlled) tellControlled(!!w);
     containerObject.dispatchEvent(new Event("controllerchange"));
   };
@@ -444,7 +453,7 @@
         // The worker may be there already (kept since an earlier page, or started for the navigation that made this page): then it is that one this page is served by.
         const running = adopt(origin, location.href);
         const w = spawn(reg, k.scriptURL, k.source, "activated", running >= 0 ? running : undefined);
-        if (w.failed) { retire(w); } else { reg.active = w; if (claimedScope) setController(w); else { controller = w; if (tellControlled) tellControlled(true); } }
+        if (w.failed) { retire(w); } else { reg.active = w; if (claimedScope) setController(w); else { controller = w; if (tellControlled) tellControlled(true); announce(w); } }
       }
     };
     adoptKept();

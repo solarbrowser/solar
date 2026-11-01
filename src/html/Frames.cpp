@@ -461,6 +461,12 @@ void CreateContext(dom::Element* iframe) {
 
 void DiscardContext(dom::Element* iframe) {
   if (!iframe->contentDocument) return;
+  // The document is going: its window is told (a service worker is told by the page that it is no client of it any more).
+  if (iframe->contentDocument->context) {
+    if (Quanta::Embed::Realm* realm = Quanta::Embed::Realm::FromContext(*iframe->contentDocument->context)) {
+      RunAs(*realm, [&] { realm->Evaluate("dispatchEvent(new Event('pagehide'));", "pagehide"); });
+    }
+  }
   if (iframe->contentDocument->url.starts_with("about:")) iframe->contentDocument->inheritedBase = BaseOf(iframe->contentDocument);
   iframe->contentDocument->frameElement = nullptr;
   iframe->contentDocument = nullptr;
