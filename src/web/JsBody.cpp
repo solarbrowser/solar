@@ -172,7 +172,7 @@ Value ConsumeBody(Context& ctx, JsBodyOwner* owner, BodyKind kind, const std::st
         [host, resolveShared, rejectShared, kind, mimeType](std::string bytes) {
           BodyBuffer read;
           read.bytes = std::move(bytes);
-          Settle(host, host->context(), *resolveShared, *rejectShared, read, kind, mimeType);
+          host->InRealm([&] { Settle(host, host->context(), *resolveShared, *rejectShared, read, kind, mimeType); });
         },
         [host, rejectShared](const Value& reason) {
           Value error = reason;
@@ -200,7 +200,7 @@ Value ConsumeBody(Context& ctx, JsBodyOwner* owner, BodyKind kind, const std::st
   // Still arriving: the promise settles when it has, from the network's callback.
   auto resolveShared = std::make_shared<qe::Persistent>(std::move(resolve));
   auto rejectShared = std::make_shared<qe::Persistent>(std::move(reject));
-  buffer->waiting.push_back([host, buffer, resolveShared, rejectShared, kind, mimeType] { Settle(host, host->context(), *resolveShared, *rejectShared, *buffer, kind, mimeType); });
+  buffer->waiting.push_back([host, buffer, resolveShared, rejectShared, kind, mimeType] { host->InRealm([&] { Settle(host, host->context(), *resolveShared, *rejectShared, *buffer, kind, mimeType); }); });
   return capability.promise;
 }
 

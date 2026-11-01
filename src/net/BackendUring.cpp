@@ -155,10 +155,15 @@ class UringBackend final : public Backend {
     if (waited == -ETIME || waited == -EINTR) return true;
     if (waited < 0) return false;
 
-    io_uring_cqe* batch[kCompletionBatch];
-    const unsigned count = io_uring_peek_batch_cqe(&ring_, batch, kCompletionBatch);
-    for (unsigned i = 0; i < count; ++i) Handle(*batch[i]);
-    io_uring_cq_advance(&ring_, count);
+    // One completion at a time, taken off the ring before it is handled: what a handler does can come back into the loop (a request that is waited for
+    // inside a call of script), and that must find the ring as this left it, with what is still to come and nothing that was handled.
+    for (unsigned handled = 0; handled < kCompletionBatch; ++handled) {
+      io_uring_cqe* next = nullptr;
+      if (io_uring_peek_cqe(&ring_, &next) != 0 || !next) break;
+      const io_uring_cqe copy = *next;
+      io_uring_cq_advance(&ring_, 1);
+      Handle(copy);
+    }
     return true;
   }
 

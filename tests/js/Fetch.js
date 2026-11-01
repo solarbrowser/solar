@@ -332,8 +332,8 @@ promise_test(async () => {
 
 promise_test(async () => {
   const outcome = await fetch(OTHER + '/redirect/307/echo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then(() => 'resolved', (e) => e);
-  assert_true(outcome instanceof TypeError, 'a request that had to ask cannot be redirected');
-}, 'a preflighted request is not followed through a redirect');
+  assert_true(!(outcome instanceof TypeError), 'a request that had to ask is followed through a redirect, its target asked in turn: ' + outcome);
+}, 'a preflighted request is followed through a redirect after the target has been asked');
 
 promise_test(async () => {
   const before = Number(await (await fetch(OTHER + '/preflight-count')).text());
