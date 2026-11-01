@@ -540,7 +540,7 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
   const bool isHtml = name.ends_with(".html") || name.ends_with(".xhtml") || name.ends_with(".svg") || name.ends_with(".htm");
   // A .window.js is a script of a page, which has a window and a document as any page does.
   // (The CSS ones declare themselves for window and worker, and the window is what they get.)
-  const bool isWindowScript = name.ends_with(".window.js") || (name.ends_with(".any.js") && path.find("/wpt/css/") != std::string::npos);
+  const bool isWindowScript = name.ends_with(".window.js") || (name.ends_with(".any.js") && (path.find("/wpt/css/") != std::string::npos || path.find("/wpt/xhr/") != std::string::npos || path.find("/wpt/fetch/") != std::string::npos || path.find("/wpt/websockets/") != std::string::npos));
   solar::dom::Document* document = nullptr;
   if (isHtml || isWindowScript) {
     // A page: it has a window and a document of its own, which its scripts run in.
