@@ -1056,6 +1056,8 @@ std::optional<std::string> SerializeShorthand(const PropertyDefinition& shorthan
   // it is the initial value of what it stands for).
   const bool allSame = std::all_of(input.values.begin(), input.values.end(), [&](const std::string& v) { return v == input.values[0]; });
   if (allSame && IsKeywordValue(input.values[0])) return input.values[0];
+  // The order of the options is left out when it is normal (none is a value of the fallbacks, not a keyword of the whole).
+  if (std::string(shorthand.name) == "position-try" && n == 2) return input.values[0] == "normal" ? input.values[1] : input.values[0] + " " + input.values[1];
   for (const std::string& value : input.values) {
     if (IsKeywordValue(value) && value != "initial") return std::nullopt;
   }
@@ -1182,7 +1184,7 @@ std::optional<std::string> SerializeShorthand(const PropertyDefinition& shorthan
                                                               {"collapse nowrap", "nowrap"}, {"break-spaces wrap", "break-spaces"}};
     const auto found = names.find(collapse + " " + wrap);
     candidate = found != names.end() ? found->second : (wrap == "wrap" ? collapse : collapse + " " + wrap);
-  } else if (name == "gap" || name == "grid-gap") {
+  } else if (name == "gap" || name == "grid-gap" || name == "place-content" || name == "place-items" || name == "place-self") {
     if (n != 2) return std::nullopt;
     candidate = input.values[0] == input.values[1] ? input.values[0] : input.values[0] + " " + input.values[1];
   } else if (name == "grid-row" || name == "grid-column") {

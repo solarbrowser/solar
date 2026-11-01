@@ -36,7 +36,7 @@ namespace {
 enum Proto {
   kSheet, kDeclarations, kMediaList, kRuleList, kStyleSheetList, kRuleBase, kStyleRule, kImportRule, kMediaRule, kFontFaceRule, kPageRule,
   kKeyframesRule, kKeyframeRule, kNamespaceRule, kCounterStyleRule, kSupportsRule, kLayerBlockRule, kLayerStatementRule, kPropertyRule,
-  kContainerRule, kScopeRule, kStartingStyleRule, kNestedDeclarationsRule, kFontPaletteValuesRule, kProtoCount
+  kContainerRule, kScopeRule, kStartingStyleRule, kNestedDeclarationsRule, kFontPaletteValuesRule, kPositionTryRule, kPositionTryDescriptors, kProtoCount
 };
 
 char g_keys[kProtoCount];
@@ -63,6 +63,7 @@ Proto ProtoOfKind(RuleKind kind) {
     case RuleKind::StartingStyle: return kStartingStyleRule;
     case RuleKind::NestedDeclarations: return kNestedDeclarationsRule;
     case RuleKind::FontPaletteValues: return kFontPaletteValuesRule;
+    case RuleKind::PositionTry: return kPositionTryRule;
   }
   return kRuleBase;
 }
@@ -89,6 +90,7 @@ CssRule* NewRule(Context& ctx, RuleKind kind) {
   return rule;
 }
 CssDeclarations* NewDeclarations(Context& ctx) { return Make<CssDeclarations>(ctx, kDeclarations); }
+CssDeclarations* NewPositionTryDeclarations(Context& ctx) { return Make<CssDeclarations>(ctx, kPositionTryDescriptors); }
 MediaList* NewMediaList(Context& ctx) { return Make<MediaList>(ctx, kMediaList); }
 CssRuleList* NewRuleList(Context& ctx) { return Make<CssRuleList>(ctx, kRuleList); }
 
@@ -152,6 +154,7 @@ bool CssDeclarations::IndexedGetter(Context& ctx, CssDeclarations& self, uint32_
 bool CssDeclarations::NamedGetter(Context& ctx, CssDeclarations& self, const std::string& name, Value& out) {
   const std::string property = PropertyForIdlName(name);
   if (property.empty()) return false;
+  if (self.parentRule && self.parentRule->kind == RuleKind::PositionTry && !IsPositionTryProperty(property)) return false;
   out = qe::FromWtf8(ctx, self.ValueOf(property));
   return true;
 }
@@ -159,6 +162,7 @@ bool CssDeclarations::NamedGetter(Context& ctx, CssDeclarations& self, const std
 void CssDeclarations::NamedSetter(Context& ctx, CssDeclarations& self, const std::string& name, const Value& value) {
   const std::string property = PropertyForIdlName(name);
   if (property.empty()) return;
+  if (self.parentRule && self.parentRule->kind == RuleKind::PositionTry && !IsPositionTryProperty(property)) return;
   dom::ReactionsScope reactions(ctx);
   const std::string text = value.is_null() ? "" : qe::ToWtf8(ctx, value);  // [LegacyNullToEmptyString]
   if (qe::HasException(ctx)) return;
@@ -662,6 +666,7 @@ Value RulePrefix(Context& ctx, Value t, qe::Args, Value) {
 
 Value RuleName(Context& ctx, Value t, qe::Args, Value) {
   CssRule* self = This<CssRule>(ctx, t);
+  if (self && self->kind == RuleKind::PositionTry) return qe::FromWtf8(ctx, SerializeIdentifier(self->name));  // the name as an identifier is written
   return self ? qe::FromWtf8(ctx, self->name) : qe::Undefined();
 }
 
@@ -1423,6 +1428,11 @@ void DefineCssomClasses(Context& ctx) {
   qe::DefineMethod(d, "setProperty", dom::Reactions<DeclSetProperty>, 2);
   qe::DefineMethod(d, "removeProperty", dom::Reactions<DeclRemoveProperty>, 1);
   qe::DefineGlobal(ctx, "CSSStyleDeclaration", declaration.constructor);
+  // CSSPositionTryDescriptors: the block of a @position-try rule, which has the members of a style declaration.
+  qe::ClassRef tryDescriptors = qe::DefineClass(ctx, "CSSPositionTryDescriptors", IllegalConstructor, 0, declaration.prototype);
+  qe::SetRealmData(ctx, &g_keys[kPositionTryDescriptors], tryDescriptors.prototype);
+  qe::DefineGlobal(ctx, "CSSPositionTryDescriptors", tryDescriptors.constructor);
+  qe::SetPrototypeOf(ctx, qe::FromObject(tryDescriptors.constructor), qe::FromObject(declaration.constructor));
   qe::DefineGlobalFunction(ctx, "getComputedStyle", GetComputedStyle, 1);
 
   DefineMediaQueryList(ctx);
@@ -1556,6 +1566,9 @@ void DefineCssomClasses(Context& ctx) {
   qe::DefineAccessor(palette, "fontFamily", PaletteFontFamily, nullptr);
   qe::DefineAccessor(palette, "basePalette", PaletteBasePalette, nullptr);
   qe::DefineAccessor(palette, "overrideColors", PaletteOverrideColors, nullptr);
+  Object* positionTry = DefineRule(ctx, kPositionTryRule, "CSSPositionTryRule", ruleBase);
+  qe::DefineAccessor(positionTry, "name", RuleName, nullptr);
+  qe::DefineAccessor(positionTry, "style", RuleStyle, RuleSetStyle);
   Object* layerStatement = DefineRule(ctx, kLayerStatementRule, "CSSLayerStatementRule", ruleBase);
   qe::DefineAccessor(layerStatement, "nameList", LayerNameList, nullptr);
 
@@ -1566,7 +1579,7 @@ void DefineCssomClasses(Context& ctx) {
       {"CSSLayerBlockRule", "CSSGroupingRule"}, {"CSSScopeRule", "CSSGroupingRule"}, {"CSSStartingStyleRule", "CSSGroupingRule"}, {"CSSPageRule", "CSSGroupingRule"},
       {"CSSNestedDeclarations", "CSSRule"}, {"CSSImportRule", "CSSRule"}, {"CSSNamespaceRule", "CSSRule"}, {"CSSFontFaceRule", "CSSRule"},
       {"CSSKeyframesRule", "CSSRule"}, {"CSSKeyframeRule", "CSSRule"}, {"CSSCounterStyleRule", "CSSRule"}, {"CSSPropertyRule", "CSSRule"},
-      {"CSSLayerStatementRule", "CSSRule"}, {"CSSFontPaletteValuesRule", "CSSRule"}};
+      {"CSSLayerStatementRule", "CSSRule"}, {"CSSFontPaletteValuesRule", "CSSRule"}, {"CSSPositionTryRule", "CSSRule"}};
   const Value global = qe::FromObject(ctx.get_global_object());
   for (const auto& [child, parent] : inherits) qe::SetPrototypeOf(ctx, qe::Get(ctx, global, child), qe::Get(ctx, global, parent));
 

@@ -137,6 +137,16 @@ std::vector<DeclarationEntry> ParseDeclarationList(std::string_view text) {
   return items;
 }
 
+bool IsPositionTryProperty(const std::string& name) {
+  // Insets, margins, sizes, self-alignment, the anchor and the area.
+  static const std::set<std::string> allowed = {
+      "margin", "margin-top", "margin-right", "margin-bottom", "margin-left", "margin-block", "margin-block-start", "margin-block-end", "margin-inline", "margin-inline-start",
+      "margin-inline-end", "inset", "top", "left", "right", "bottom", "inset-block", "inset-block-start", "inset-block-end", "inset-inline", "inset-inline-start", "inset-inline-end",
+      "width", "height", "block-size", "inline-size", "min-width", "min-height", "min-block-size", "min-inline-size", "max-width", "max-height", "max-block-size", "max-inline-size",
+      "justify-self", "align-self", "place-self", "position-anchor", "position-area"};
+  return allowed.count(name) > 0;
+}
+
 bool CssDeclarations::IsDescriptorBlock() const { return parentRule && (parentRule->kind == RuleKind::FontFace || parentRule->kind == RuleKind::FontPaletteValues || parentRule->kind == RuleKind::CounterStyle); }
 
 namespace {
@@ -173,6 +183,11 @@ bool CssDeclarations::Apply(const std::string& name, const std::string& text, bo
     if (!value) return false;
     AddOrReplace(items, {*descriptor, *value, false, "", ""});
     return true;
+  }
+  if (parentRule && parentRule->kind == RuleKind::PositionTry) {
+    // A @position-try rule takes what places a box, and not as important.
+    const PropertyDefinition* definition = FindProperty(name);
+    if (important || !definition || !IsPositionTryProperty(definition->name)) return false;
   }
   return ApplyDeclaration(items, name, text, important);
 }
@@ -757,6 +772,10 @@ std::string CssRule::CssText() const {
       const std::string body = style ? style->Serialize() : "";
       return "@font-palette-values " + SerializeIdentifier(name) + " {" + (body.empty() ? " }" : " " + body + " }");
     }
+    case RuleKind::PositionTry: {
+      const std::string body = style ? style->Serialize() : "";
+      return "@position-try " + SerializeIdentifier(name) + " {" + (body.empty() ? " }" : " " + body + " }");
+    }
     case RuleKind::Page: {
       std::string body = style ? style->Serialize() : "";
       return "@page " + (selectorText.empty() ? "" : selectorText + " ") + "{" + (body.empty() ? " }" : " " + body + " }");
@@ -836,7 +855,7 @@ bool ResolveNamespacesImpl(SelectorList& list, const CssStyleSheet* sheet) {
 CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRule* parent);
 
 CssDeclarations* DeclarationsFrom(Context& ctx, const std::vector<BlockItem>& items, CssRule* owner) {
-  CssDeclarations* declarations = NewDeclarations(ctx);
+  CssDeclarations* declarations = owner && owner->kind == RuleKind::PositionTry ? NewPositionTryDeclarations(ctx) : NewDeclarations(ctx);
   declarations->parentRule = owner;
   for (const BlockItem& item : items) {
     if (!item.isDeclaration) continue;
@@ -1193,6 +1212,13 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
     const ComponentValues prelude = Trimmed(syntax.prelude);
     if (!syntax.hasBlock || prelude.size() != 1 || !prelude[0].IsIdent() || !prelude[0].token.value.starts_with("--")) return nullptr;
     rule = NewRule(ctx, RuleKind::FontPaletteValues);
+    rule->name = prelude[0].token.value;
+    rule->style = DeclarationsFrom(ctx, ParseBlockContents(syntax.block), rule);
+  } else if (name == "position-try") {
+    // @position-try <dashed-ident> { the declarations that place a box }: the others are dropped.
+    const ComponentValues prelude = Trimmed(syntax.prelude);
+    if (!syntax.hasBlock || prelude.size() != 1 || !prelude[0].IsIdent() || !prelude[0].token.value.starts_with("--") || prelude[0].token.value.size() < 3) return nullptr;
+    rule = NewRule(ctx, RuleKind::PositionTry);
     rule->name = prelude[0].token.value;
     rule->style = DeclarationsFrom(ctx, ParseBlockContents(syntax.block), rule);
   } else if (name == "counter-style") {

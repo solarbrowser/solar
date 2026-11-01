@@ -1517,6 +1517,128 @@ void CanonicalTrackList(ValueMatch& match) {
 }
 
 // The shortest way display is written (css-display-3, "Short display").
+// position-area: the keywords of its two axes in the order the standard serializes them (the horizontal one first, the block one first),
+// a keyword written twice as one, span-all beside a keyword left out, center put on the side of its axis; and, computed, the logical
+// keywords of a block and an inline axis (or a self one) in their short forms.
+std::string PositionAreaText(const std::vector<std::string>& words, bool computed) {
+  if (words.size() != 2) {
+    std::string joined;
+    for (const std::string& w : words) joined += (joined.empty() ? "" : " ") + w;
+    return joined;
+  }
+  enum Axis { H, V, B, I, SB, SI, A, SA, C, S };
+  const auto axisOf = [](const std::string& w) {
+    if (w == "center") return C;
+    if (w == "span-all") return S;
+    std::string k = w;
+    const bool span = k.rfind("span-", 0) == 0;
+    if (span) k = k.substr(5);
+    const bool self = k.rfind("self-", 0) == 0;
+    if (self) k = k.substr(5);
+    if (k == "left" || k == "right" || k == "x-start" || k == "x-end") return H;
+    if (k == "top" || k == "bottom" || k == "y-start" || k == "y-end") return V;
+    if (k == "block-start" || k == "block-end") return self ? SB : B;
+    if (k == "inline-start" || k == "inline-end") return self ? SI : I;
+    if (k == "start" || k == "end") return self ? SA : A;
+    return H;
+  };
+  const auto shortOf = [](const std::string& w) {
+    std::string r = w;
+    const size_t at = r.find("-block-");
+    if (at != std::string::npos) r.erase(at, 6);
+    else if (const size_t in = r.find("-inline-"); in != std::string::npos) r.erase(in, 7);
+    else if (r.rfind("block-", 0) == 0) r.erase(0, 6);
+    else if (r.rfind("inline-", 0) == 0) r.erase(0, 7);
+    return r;
+  };
+  std::string a = words[0], b = words[1];
+  Axis ca = axisOf(a), cb = axisOf(b);
+  std::string result;
+  const auto set = [&](const std::string& x, const std::string& y) { result = y.empty() ? x : x + " " + y; };
+  if (a == b) {
+    set(a, "");
+  } else if (ca == S || cb == S) {
+    const std::string& other = ca == S ? b : a;
+    const Axis co = ca == S ? cb : ca;
+    if (co == C) set(a, b);
+    else if (co == A || co == SA) {
+      if (computed) {
+        // start, span-self-end...: the block-start or the inline-end it stands for, by where it is written.
+        const bool end = other.size() >= 3 && other.compare(other.size() - 3, 3, "end") == 0;
+        const std::string prefix = other.substr(0, other.size() - (end ? 3 : 5));
+        set(prefix + (ca == S ? "inline-" : "block-") + (end ? "end" : "start"), "");
+      }
+      else set(a, b);
+    } else set(other, "");
+  } else if (ca == C || cb == C) {
+    const std::string& other = ca == C ? b : a;
+    const Axis co = ca == C ? cb : ca;
+    if (co == A || co == SA) set(a, b);
+    else if (co == H || co == B || co == SB) set(computed && co != H ? shortOf(other) : other, "center");
+    else set("center", computed && (co == I || co == SI) ? shortOf(other) : other);
+  } else {
+    const auto rank = [](Axis x) { return x == H || x == B || x == SB ? 0 : x == V || x == I || x == SI ? 1 : 2; };
+    if (rank(ca) == 1 && rank(cb) == 0) {
+      std::swap(a, b);
+      std::swap(ca, cb);
+    }
+    if (computed && (ca == B || ca == SB) && (cb == I || cb == SI)) {
+      const std::string x = shortOf(a), y = shortOf(b);
+      set(x, x == y ? "" : y);
+    } else {
+      set(a, b);
+    }
+  }
+  return result;
+}
+
+void SetWords(ValueMatch& match, const std::string& text) {
+  match.normalized.clear();
+  for (const ComponentValue& v : ParseComponentValues(text)) {
+    if (!v.IsWhitespace()) match.normalized.push_back(v);
+  }
+  match.assigned.clear();
+}
+
+void CanonicalPositionArea(ValueMatch& match, bool computed) {
+  std::vector<std::string> words;
+  for (const ComponentValue& v : match.normalized) {
+    if (v.IsWhitespace()) continue;
+    if (!v.IsIdent()) return;
+    words.push_back(Lower(v.token.value));
+  }
+  if (words.size() != 2) return;
+  SetWords(match, PositionAreaText(words, computed));
+}
+
+// position-try-fallbacks: the list of options, each a name first and then the tactics in the order written, or a position-area in its canonical form.
+void CanonicalTryFallbacks(ValueMatch& match, bool computed) {
+  std::vector<std::vector<std::string>> parts(1);
+  for (const ComponentValue& v : match.normalized) {
+    if (v.IsWhitespace()) continue;
+    if (v.IsToken(T::Comma)) {
+      parts.emplace_back();
+      continue;
+    }
+    if (!v.IsIdent()) return;
+    parts.back().push_back(v.token.value.rfind("--", 0) == 0 ? v.token.value : Lower(v.token.value));
+  }
+  std::string text;
+  for (size_t p = 0; p < parts.size(); ++p) {
+    std::vector<std::string>& words = parts[p];
+    const bool tactic = !words.empty() && std::all_of(words.begin(), words.end(), [](const std::string& w) { return w.rfind("--", 0) == 0 || w.rfind("flip-", 0) == 0; });
+    std::string option;
+    if (tactic) {
+      std::stable_partition(words.begin(), words.end(), [](const std::string& w) { return w.rfind("--", 0) == 0; });
+      for (const std::string& w : words) option += (option.empty() ? "" : " ") + w;
+    } else {
+      option = PositionAreaText(words, computed);
+    }
+    text += (p ? ", " : "") + option;
+  }
+  SetWords(match, text);
+}
+
 void CanonicalDisplay(ValueMatch& match) {
   std::vector<std::string> words;
   for (const ComponentValue& v : match.normalized) {
@@ -1984,7 +2106,7 @@ bool IsAnchorSizeProperty(const std::string& name) {
 }  // namespace
 
 bool MatchPropertyValue(const PropertyDefinition& property, const ComponentValues& values, ValueMatch& out, const ComputeContext* compute) {
-  static const std::set<std::string> keepOrder = {"image-resolution", "hanging-punctuation", "word-space-transform"};
+  static const std::set<std::string> keepOrder = {"image-resolution", "hanging-punctuation", "word-space-transform", "position-try-fallbacks", "position-try"};
   g_keepWrittenOrder = keepOrder.count(property.name) > 0;
   g_numberZero = std::string(property.name).rfind("border-image", 0) == 0;
   const bool matched = MatchSyntax(property.syntax, values, out, compute);
@@ -1997,6 +2119,8 @@ bool MatchPropertyValue(const PropertyDefinition& property, const ComponentValue
   CanonicalGradients(out.normalized, compute != nullptr);
   if (!CanonicalFontValue(property.name, out, compute != nullptr)) return false;
   if (std::string(property.name) == "display") CanonicalDisplay(out);
+  if (std::string(property.name) == "position-area") CanonicalPositionArea(out, compute != nullptr);
+  if (std::string(property.name) == "position-try-fallbacks") CanonicalTryFallbacks(out, compute != nullptr);
   if (std::string(property.name) == "counter-reset" || std::string(property.name) == "counter-set" || std::string(property.name) == "counter-increment") {
     // A counter without a number has the property's default; none stands alone; the names are real names.
     const std::string defaultNumber = std::string(property.name) == "counter-increment" ? "1" : "0";

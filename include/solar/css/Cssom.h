@@ -48,6 +48,7 @@ enum class RuleKind {
   StartingStyle,
   NestedDeclarations,
   FontPaletteValues,
+  PositionTry,
 };
 
 // One declaration of a block: its name (lowercased for a known property, as written for a custom one), its
@@ -225,6 +226,10 @@ bool ApplyDeclaration(std::vector<DeclarationEntry>& items, const std::string& n
 CssStyleSheet* NewStyleSheet(Quanta::Context& ctx);
 CssRule* NewRule(Quanta::Context& ctx, RuleKind kind);
 CssDeclarations* NewDeclarations(Quanta::Context& ctx);
+// Whether @position-try takes the property.
+bool IsPositionTryProperty(const std::string& name);
+// The declarations of a @position-try rule (a CSSPositionTryDescriptors).
+CssDeclarations* NewPositionTryDeclarations(Quanta::Context& ctx);
 MediaList* NewMediaList(Quanta::Context& ctx);
 CssRuleList* NewRuleList(Quanta::Context& ctx);
 StyleSheetList* NewStyleSheetList(Quanta::Context& ctx, dom::Node* document);
