@@ -20,6 +20,7 @@ namespace {
 const char* const kFormScript = R"JS(
 (function () {
   const setHelper = globalThis.__solarSetHelper;
+  const submitPost = globalThis.__solarSubmitPost;
   const nativeChanged = globalThis.__solarFormChanged;
   const markTrusted = globalThis.__solarMarkTrusted;
   const trusted = (event) => { if (markTrusted) markTrusted(event); return event; };
@@ -281,7 +282,7 @@ const char* const kFormScript = R"JS(
     if (method === "get" || !/^https?:$/.test(url.protocol)) { url.search = query; location.assign(url.href); return; }
     // POST: the address and the body go to the program, which navigates.
     const enc = submitter && submitter.hasAttribute("formenctype") ? submitter.formEnctype : form.enctype;
-    if (typeof globalThis.__solarSubmitPost === "function") __solarSubmitPost(url.href, enc === "text/plain" ? entriesOf(form, submitter).map(([n, v]) => n + "=" + v).join("\r\n") : query, enc === "text/plain" ? "text/plain" : "application/x-www-form-urlencoded");
+    if (typeof submitPost === "function") submitPost(url.href, enc === "text/plain" ? entriesOf(form, submitter).map(([n, v]) => n + "=" + v).join("\r\n") : query, enc === "text/plain" ? "text/plain" : "application/x-www-form-urlencoded");
     else { url.search = query; location.assign(url.href); }
   };
   method(F, "submit", function () { submit(this, null); });

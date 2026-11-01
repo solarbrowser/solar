@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -57,7 +58,12 @@ class TlsTestServer {
   std::string serverName_;
   std::string alpn_;
   std::string version_;
-  std::vector<std::thread> workers_;
+  // A thread for each connection; those that have ended are joined as the next one comes (a server that is asked for thousands of connections keeps none of them).
+  struct Worker {
+    std::thread thread;
+    std::shared_ptr<std::atomic<bool>> done;
+  };
+  std::vector<Worker> workers_;
   std::vector<int> clients_;
 
   friend int ServerNameCallback(ssl_st*, int*, void*);

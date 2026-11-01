@@ -78,7 +78,7 @@ TlsTestServer::~TlsTestServer() {
     std::lock_guard<std::mutex> lock(mutex_);
     for (int client : clients_) sock::ShutdownBoth(static_cast<sock::Handle>(client));
   }
-  for (std::thread& worker : workers_) worker.join();
+  for (Worker& worker : workers_) worker.thread.join();
   if (listener_ >= 0) sock::Close(static_cast<sock::Handle>(listener_));
   SSL_CTX_free(context_);
 }
@@ -92,7 +92,16 @@ void TlsTestServer::AcceptLoop() {
 
     std::lock_guard<std::mutex> lock(mutex_);
     clients_.push_back(client);
-    workers_.emplace_back([this, client] {
+    for (auto it = workers_.begin(); it != workers_.end();) {
+      if (it->done->load()) {
+        it->thread.join();
+        it = workers_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    auto done = std::make_shared<std::atomic<bool>>(false);
+    workers_.push_back(Worker{std::thread([this, client, done] {
       SSL* connection = SSL_new(context_);
       SSL_set_fd(connection, client);
       if (SSL_accept(connection) == 1) {
@@ -105,7 +114,8 @@ void TlsTestServer::AcceptLoop() {
       }
       SSL_free(connection);
       sock::Close(static_cast<sock::Handle>(client));
-    });
+      done->store(true);
+    }), done});
   }
 }
 

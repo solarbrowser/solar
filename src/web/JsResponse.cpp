@@ -275,7 +275,18 @@ Value Consume(Context& ctx, Value t, qe::Args, Value) {
 
 }  // namespace
 
+// __solarOpaqueRedirect(response): [status, location] of the redirect an opaque-redirect response stands for, else null.
+Value OpaqueRedirectInfo(Context& ctx, Value, qe::Args args, Value) {
+  JsResponse* response = args.empty() ? nullptr : DOMObject::Cast<JsResponse>(args[0]);
+  if (!response || response->type != ResponseType::OpaqueRedirect) return qe::Null();
+  Value out = qe::NewArray(ctx);
+  qe::ArrayPush(ctx, out, qe::FromNumber(response->hiddenStatus));
+  qe::ArrayPush(ctx, out, qe::FromWtf8(ctx, response->hiddenLocation));
+  return out;
+}
+
 void DefineResponseClass(Context& ctx) {
+  qe::DefineGlobalFunction(ctx, "__solarOpaqueRedirect", OpaqueRedirectInfo, 1);
   qe::ClassRef response = qe::DefineClass(ctx, "Response", Construct, 0);
   qe::SetRealmData(ctx, &g_prototypeKey, response.prototype);
   qe::DefineStaticMethod(response.constructor, "error", Error, 0);

@@ -48,7 +48,7 @@ TestServer::~TestServer() {
     std::lock_guard<std::mutex> lock(mutex_);
     for (int client : clients_) sock::ShutdownBoth(static_cast<sock::Handle>(client));
   }
-  for (std::thread& worker : workers_) worker.join();
+  for (Worker& worker : workers_) worker.thread.join();
   if (listener_ >= 0) sock::Close(static_cast<sock::Handle>(listener_));
 }
 
@@ -61,10 +61,20 @@ void TestServer::AcceptLoop() {
 
     std::lock_guard<std::mutex> lock(mutex_);
     clients_.push_back(client);
-    workers_.emplace_back([this, client] {
+    for (auto it = workers_.begin(); it != workers_.end();) {
+      if (it->done->load()) {
+        it->thread.join();
+        it = workers_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    auto done = std::make_shared<std::atomic<bool>>(false);
+    workers_.push_back(Worker{std::thread([this, client, done] {
       script_(client);
       sock::Close(static_cast<sock::Handle>(client));
-    });
+      done->store(true);
+    }), done});
   }
 }
 

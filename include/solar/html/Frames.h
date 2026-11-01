@@ -36,6 +36,13 @@ class FrameEnvironment {
   // Blocking blocks comes back with no text.
   // The same for the document of a frame that is navigated, which a service worker of its scope is asked for first.
   // The address of the document a realm is for, when it is known (a frame's): what the realm's requests resolve against and take as their origin.
+  // A navigation a script asked a frame for (location, a form): the request, from the document at `referrer` which has `referrerPolicy` for its requests.
+  struct NavigationRequest {
+    std::string url, method = "GET", body, contentType, referrer, referrerPolicy, destination = "iframe";
+  };
+  virtual std::optional<std::string> LoadNavigationRequest(const NavigationRequest& request) { return LoadNavigation(request.url); }
+  // Where a navigation that LoadNavigation answered ended up after its redirects (the address itself when there were none).
+  virtual std::string NavigatedUrl(const std::string& url) { return url; }
   virtual void SetRealmUrl(Quanta::Embed::Realm*, const std::string& /*url*/) {}
   virtual std::optional<std::string> LoadNavigation(const std::string& url) { return Load(url); }
   virtual std::optional<std::string> LoadNoCors(const std::string& url, bool /*styleSheet*/) { return Load(url); }

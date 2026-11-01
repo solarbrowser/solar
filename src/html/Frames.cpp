@@ -10,6 +10,7 @@
 #include "solar/html/Frames.h"
 #include "solar/html/Encodings.h"
 
+#include <functional>
 #include <map>
 #include <tuple>
 
@@ -403,6 +404,38 @@ void Adopt(dom::Element* iframe, const FrameContext& context) {
 
 void RunFrameLoad(dom::Element* iframe, uint64_t load);
 
+// A navigation that a script asked of a frame (the frame's own document went to another address): it waits here for the task that loads it.
+std::map<dom::Element*, FrameEnvironment::NavigationRequest>& PendingFrameNavigations() {
+  static std::map<dom::Element*, FrameEnvironment::NavigationRequest> pending;
+  return pending;
+}
+
+std::string LowerEarly(std::string_view text) {
+  std::string out(text);
+  for (char& c : out) c = c >= 'A' && c <= 'Z' ? static_cast<char>(c + 0x20) : c;
+  return out;
+}
+
+// The referrer policy a document has for what it asks for: the content of its meta name=referrer, else empty (the default).
+std::string DocumentReferrerPolicy(const dom::Document* document) {
+  std::string found;
+  std::function<void(const dom::Node*)> walk = [&](const dom::Node* node) {
+    for (const dom::Node* child = node->firstChild; child && found.empty(); child = child->nextSibling) {
+      if (child->IsElement()) {
+        const dom::Element* element = static_cast<const dom::Element*>(child);
+        if (element->IsHtml("meta")) {
+          const dom::Attr* name = element->FindAttribute("", "name");
+          const dom::Attr* content = element->FindAttribute("", "content");
+          if (name && content && LowerEarly(name->value) == "referrer") found = LowerEarly(content->value);
+        }
+        walk(child);
+      }
+    }
+  };
+  walk(document);
+  return found;
+}
+
 void StartLoad(dom::Element* iframe) {
   dom::Document* parent = iframe->nodeDocument;
   if (!parent || !parent->context) return;
@@ -685,7 +718,25 @@ void RunFrameLoad(dom::Element* iframe, uint64_t load) {
   std::string markup, blobType;
   std::string address = "about:blank";
   bool navigate = false;
-  if (const dom::Attr* srcdoc = iframe->FindAttribute("", "srcdoc")) {
+  const auto pendingNav = PendingFrameNavigations().find(iframe);
+  if (pendingNav != PendingFrameNavigations().end()) {
+    // A script sent the frame's document elsewhere (its location, a form): the address, and the request that goes with it.
+    FrameEnvironment::NavigationRequest request = std::move(pendingNav->second);
+    PendingFrameNavigations().erase(pendingNav);
+    address = request.url;
+    navigate = true;
+    if (address.starts_with("about:")) {
+      markup = "";
+    } else if (address.starts_with("blob:")) {
+      if (auto blob = web::LookupBlobUrl(address)) {
+        markup = *blob->data;
+        blobType = blob->type;
+      }
+    } else if (std::optional<std::string> loaded = g_environment->LoadNavigationRequest(request)) {
+      markup = std::move(*loaded);
+      address = g_environment->NavigatedUrl(request.url);
+    }
+  } else if (const dom::Attr* srcdoc = iframe->FindAttribute("", "srcdoc")) {
     markup = srcdoc->value;
     address = "about:srcdoc";
     navigate = true;
@@ -703,6 +754,7 @@ void RunFrameLoad(dom::Element* iframe, uint64_t load) {
         }
       } else if (std::optional<std::string> loaded = g_environment->LoadNavigation(resolved)) {
         markup = std::move(*loaded);
+        address = g_environment->NavigatedUrl(resolved);
       }
     }
   }
@@ -724,7 +776,23 @@ void RunFrameLoad(dom::Element* iframe, uint64_t load) {
 }  // namespace
 
 void RequestNavigation(dom::Document* document, const std::string& url, bool replace, const std::string& method, const std::string& body, const std::string& contentType) {
-  if (g_environment && document && !document->frameElement) g_environment->Navigate(document, url, replace, method, body, contentType);
+  if (!g_environment || !document) return;
+  if (!document->frameElement) {
+    g_environment->Navigate(document, url, replace, method, body, contentType);
+    return;
+  }
+  // A frame's own document goes elsewhere: the frame loads it as it loads its src, asking for the request that was made.
+  dom::Element* iframe = document->frameElement;
+  if (iframe->contentDocument != document) return;
+  FrameEnvironment::NavigationRequest request;
+  request.url = url;
+  request.method = method.empty() ? "GET" : method;
+  request.body = body;
+  request.contentType = contentType;
+  request.referrer = document->url;
+  request.referrerPolicy = DocumentReferrerPolicy(document);
+  PendingFrameNavigations()[iframe] = std::move(request);
+  StartLoad(iframe);
 }
 
 void SetFrameEnvironment(FrameEnvironment* environment) {

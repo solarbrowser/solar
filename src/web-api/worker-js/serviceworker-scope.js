@@ -407,9 +407,14 @@
     }
     return request;
   };
-  const responseData = (response) => response.arrayBuffer().then((body) => ({
-    status: response.status, statusText: response.statusText, headers: Array.from(response.headers.entries()), body, url: response.url, type: response.type, redirected: response.redirected,
-  }));
+  const opaqueRedirect = globalThis.__solarOpaqueRedirect;
+  const responseData = (response) => response.arrayBuffer().then((body) => {
+    const data = { status: response.status, statusText: response.statusText, headers: Array.from(response.headers.entries()), body, url: response.url, type: response.type, redirected: response.redirected };
+    // An opaque redirect is followed by the program as the redirect it stands for.
+    const hidden = response.type === "opaqueredirect" && opaqueRedirect ? opaqueRedirect(response) : null;
+    if (hidden) data.hiddenRedirect = { status: hidden[0], location: hidden[1] };
+    return data;
+  });
   // The event is dispatched; the answer (or the lack of one) is given to `reply`.
   const serveFetch = (descriptor, clientId, resultingClientId, reply) => {
     let event;
@@ -436,16 +441,18 @@
       (error) => reply({ kind: "error", error: String(error && error.message || error) })));
   };
   // The program asks for a navigation (no page asks): __solarSwNavigate(id, url, method, body, bodyType) answers through __solarSwNavigateDone(id, mode, status, contentType, body, url).
-  define("__solarSwNavigate", function __solarSwNavigate(id, url, method, body, bodyType) {
+  define("__solarSwNavigate", function __solarSwNavigate(id, url, method, body, bodyType, referrer, referrerPolicy) {
     lastActivity = Date.now();
     const descriptor = { url, method, headers: bodyType ? [["content-type", bodyType]] : [], body };
-    serveFetch({ ...descriptor, mode: "navigate", credentials: "include", cache: "default", redirect: "manual", referrer: "" }, "", random(), (result) => {
+    serveFetch({ ...descriptor, mode: "navigate", credentials: "include", cache: "default", redirect: "manual", referrer: referrer || "", referrerPolicy: referrerPolicy || "" }, "", random(), (result) => {
       if (result.kind === "fallback") navigationDone(id, 1, 0, "", undefined, "");
       else if (result.kind === "error") navigationDone(id, 2, 0, "", undefined, "");
       else {
         const d = result.response;
+        if (d.hiddenRedirect) { navigationDone(id, 0, d.hiddenRedirect.status, "", undefined, d.url || descriptor.url, d.hiddenRedirect.location); return; }
         const type = d.headers.find((h) => h[0].toLowerCase() === "content-type");
-        navigationDone(id, 0, d.status, type ? type[1] : "", d.body, d.url || descriptor.url);
+        const location = d.headers.find((h) => h[0].toLowerCase() === "location");
+        navigationDone(id, 0, d.status, type ? type[1] : "", d.body, d.url || descriptor.url, location ? location[1] : "");
       }
     });
   });

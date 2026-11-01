@@ -237,6 +237,8 @@ void FetchOperation::OnResponseHeadIn(const net::HttpResponseHead& head, const u
   if (redirectMode == net::RedirectMode::Manual && IsRedirectStatus(head.status)) {
     r->type = ResponseType::OpaqueRedirect;
     r->status = 0;
+    r->hiddenStatus = head.status;
+    if (const auto location = head.Header("location")) r->hiddenLocation = std::string(*location);
     r->url = url::Serialize(withoutFragment);
     r->headers = NewResponseHeaders(ctx, {});
   } else if (mode == RequestMode::NoCors && crossOrigin) {

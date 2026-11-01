@@ -2,6 +2,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <functional>
 #include <fstream>
@@ -180,9 +181,10 @@ struct ServerAnswer {
   int status = 0;
   std::string contentType, body;
   bool noSniff = false;
+  std::string location;
 };
 
-ServerAnswer AskServer(const std::string& host, const std::string& target) {
+ServerAnswer AskServer(const std::string& host, const std::string& target, const std::string& method = "GET", const std::string& body = "", const std::vector<std::pair<std::string, std::string>>& headers = {}) {
   ServerAnswer answer;
 #ifdef __linux__
   const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
@@ -192,7 +194,10 @@ ServerAnswer AskServer(const std::string& host, const std::string& target) {
   address.sin_port = htons(static_cast<uint16_t>(g_serverPort));
   address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   if (::connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof address) != 0) { ::close(fd); return answer; }
-  const std::string request = "GET " + target + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n";
+  std::string request = method + " " + target + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n";
+  for (const auto& [name, value] : headers) request += name + ": " + value + "\r\n";
+  if (method != "GET" && method != "HEAD") request += "Content-Length: " + std::to_string(body.size()) + "\r\n";
+  request += "\r\n" + body;
   ::send(fd, request.data(), request.size(), 0);
   std::string raw;
   char buffer[65536];
@@ -208,6 +213,10 @@ ServerAnswer AskServer(const std::string& host, const std::string& target) {
     if (!line.empty() && line.back() == '\r') line.pop_back();
     std::string lower = line;
     for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (lower.starts_with("location:")) {
+      answer.location = line.substr(9);
+      while (!answer.location.empty() && answer.location.front() == ' ') answer.location.erase(answer.location.begin());
+    }
     if (lower.starts_with("x-content-type-options:") && lower.find("nosniff") != std::string::npos) answer.noSniff = true;
     if (lower.starts_with("content-type:")) {
       answer.contentType = line.substr(13);
@@ -315,11 +324,11 @@ class TestEnvironment : public solar::html::FrameEnvironment, public solar::weba
       solar::webapi::InstallWorkerScope(realm);
       // A service worker answers a navigation through this.
       Quanta::Context& wctx = realm.GetContext();
-      qe::Set(wctx, qe::FromObject(wctx.get_global_object()), "__solarSwNavigateDone", qe::NewFunction(wctx, "__solarSwNavigateDone", 6, [this](Quanta::Context& c, Quanta::Value, qe::Args args, Quanta::Value) {
+      qe::Set(wctx, qe::FromObject(wctx.get_global_object()), "__solarSwNavigateDone", qe::NewFunction(wctx, "__solarSwNavigateDone", 7, [this](Quanta::Context& c, Quanta::Value, qe::Args args, Quanta::Value) {
         if (args.size() < 6) return qe::Undefined();
         std::string body;
         if (auto bytes = qe::BytesOf(args[4])) body.assign(reinterpret_cast<const char*>(bytes->data()), bytes->size());
-        WorkerAnswered(qe::ToUint32(c, args[0]), static_cast<int>(qe::ToNumber(c, args[1])), static_cast<int>(qe::ToNumber(c, args[2])), qe::ToWtf8(c, args[3]), std::move(body), qe::ToWtf8(c, args[5]));
+        WorkerAnswered(qe::ToUint32(c, args[0]), static_cast<int>(qe::ToNumber(c, args[1])), static_cast<int>(qe::ToNumber(c, args[2])), qe::ToWtf8(c, args[3]), std::move(body), qe::ToWtf8(c, args[5]), args.size() > 6 ? qe::ToWtf8(c, args[6]) : std::string());
         return qe::Undefined();
       }));
     });
@@ -412,17 +421,17 @@ class TestEnvironment : public solar::html::FrameEnvironment, public solar::weba
   struct SwAnswer {
     bool done = false;
     int mode = 0, status = 0;
-    std::string contentType, body, address;
+    std::string contentType, body, address, location;
   };
   qe::Realm* controlledRealm_ = nullptr;
   bool bypassWorker_ = false;
   std::map<uint32_t, SwAnswer> swAnswers_;
   uint32_t nextSw_ = 1;
 
-  void WorkerAnswered(uint32_t id, int mode, int status, const std::string& contentType, std::string body, const std::string& address) {
+  void WorkerAnswered(uint32_t id, int mode, int status, const std::string& contentType, std::string body, const std::string& address, const std::string& location = "") {
     const auto found = swAnswers_.find(id);
     if (found == swAnswers_.end()) return;
-    found->second = SwAnswer{true, mode, status, contentType, std::move(body), address};
+    found->second = SwAnswer{true, mode, status, contentType, std::move(body), address, location};
   }
   // Waits, running the page's tasks and the network's, for the answer; nothing from a worker that is stuck holds the run past a few seconds.
   bool WaitForWorker(uint32_t id) {
@@ -431,7 +440,7 @@ class TestEnvironment : public solar::html::FrameEnvironment, public solar::weba
     return swAnswers_[id].done;
   }
   // The answer of the worker for the address: the text, nothing for a network error, and `viaNetwork` set where the worker left it to the network.
-  std::optional<std::string> ThroughWorker(const std::string& url, bool navigation, bool& viaNetwork) {
+  std::optional<std::string> ThroughWorker(const std::string& url, bool navigation, bool& viaNetwork, const solar::html::FrameEnvironment::NavigationRequest* nav = nullptr, const std::string& method = "GET", const std::string& body = "") {
     viaNetwork = true;
     if (bypassWorker_) return std::nullopt;
     const auto parsed = solar::url::Parse(url);
@@ -448,8 +457,14 @@ class TestEnvironment : public solar::html::FrameEnvironment, public solar::weba
         Quanta::Context& ctx = workerRealm->GetContext();
         Quanta::Value function = qe::Get(ctx, qe::FromObject(ctx.get_global_object()), "__solarSwNavigate");
         if (qe::IsCallable(function)) {
-          Quanta::Value arguments[] = {qe::FromNumber(id), qe::FromWtf8(ctx, url), qe::FromWtf8(ctx, "GET"), qe::Undefined(), qe::FromWtf8(ctx, "")};
-          qe::Call(ctx, function, qe::Undefined(), qe::Args(arguments, 5));
+          Quanta::Value payload = qe::Undefined();
+          if (!body.empty()) {
+            payload = qe::NewArrayBuffer(ctx, body.size());
+            if (auto bytes = qe::MutableBytesOf(payload)) std::memcpy(bytes->data(), body.data(), body.size());
+          }
+          Quanta::Value arguments[] = {qe::FromNumber(id), qe::FromWtf8(ctx, url), qe::FromWtf8(ctx, method), payload, qe::FromWtf8(ctx, nav ? nav->contentType : ""),
+                                       qe::FromWtf8(ctx, nav ? nav->referrer : ""), qe::FromWtf8(ctx, nav ? nav->referrerPolicy : "")};
+          qe::Call(ctx, function, qe::Undefined(), qe::Args(arguments, 7));
           taken = !qe::HasException(ctx);
         }
         if (qe::HasException(ctx)) ctx.clear_exception();
@@ -473,6 +488,8 @@ class TestEnvironment : public solar::html::FrameEnvironment, public solar::weba
     swAnswers_.erase(id);
     if (answer.mode == 1) return std::nullopt;  // left to the network
     viaNetwork = false;
+    lastSwStatus_ = answer.status;
+    lastSwLocation_ = answer.location;
     if (answer.mode == 2) return std::nullopt;  // a network error
     serverTypes_[url] = answer.contentType;
     return answer.body;
@@ -487,12 +504,112 @@ class TestEnvironment : public solar::html::FrameEnvironment, public solar::weba
     }
   }
 
-  std::optional<std::string> LoadNavigation(const std::string& url) override {
-    bool viaNetwork = true;
-    auto text = ThroughWorker(url, true, viaNetwork);
-    if (!viaNetwork) return text;
-    return Load(url);
+  // A redirect's target keeps the fragment of the address that was asked for, if it has none of its own.
+  static std::string WithFragment(std::string target, const std::string& original) {
+    const size_t hash = original.find('#');
+    if (hash != std::string::npos && target.find('#') == std::string::npos) target += original.substr(hash);
+    return target;
   }
+
+  // The Referer a navigation (or a request) has from the document that made it, by the policy: nothing, the origin, or the address.
+  static std::optional<std::string> RefererOf(const std::string& policy, const std::string& referrer, const solar::url::Url& target) {
+    const auto from = solar::url::Parse(referrer);
+    if (!from || (from->scheme != "http" && from->scheme != "https")) return std::nullopt;
+    solar::url::Url full = *from;
+    full.fragment.reset();
+    full.username.clear();
+    full.password.clear();
+    const std::string fullText = solar::url::Serialize(full), originText = solar::url::SerializeOrigin(*from) + "/";
+    const bool sameOrigin = solar::url::SerializeOrigin(*from) == solar::url::SerializeOrigin(target);
+    const bool downgrade = from->scheme == "https" && target.scheme != "https";
+    const std::string effective = policy.empty() ? "strict-origin-when-cross-origin" : policy;
+    if (effective == "no-referrer") return std::nullopt;
+    if (effective == "origin") return originText;
+    if (effective == "unsafe-url") return fullText;
+    if (effective == "same-origin") return sameOrigin ? std::optional<std::string>(fullText) : std::nullopt;
+    if (effective == "origin-when-cross-origin") return sameOrigin ? fullText : originText;
+    if (effective == "no-referrer-when-downgrade") return downgrade ? std::nullopt : std::optional<std::string>(fullText);
+    if (effective == "strict-origin") return downgrade ? std::nullopt : std::optional<std::string>(originText);
+    if (sameOrigin) return fullText;
+    return downgrade ? std::nullopt : std::optional<std::string>(originText);
+  }
+
+  std::optional<std::string> LoadNavigation(const std::string& url) override {
+    NavigationRequest request;
+    request.url = url;
+    return LoadNavigationRequest(request);
+  }
+
+  // A navigation: each address it comes to (the first and those of its redirects) is the service worker's to answer first, and then the server's.
+  std::optional<std::string> LoadNavigationRequest(const NavigationRequest& request) override {
+    const std::string url = request.url;
+    std::string current = url, method = request.method, body = request.body, contentType = request.contentType;
+    const auto initiator = solar::url::Parse(request.referrer.empty() ? "about:blank" : request.referrer);
+    const std::string initiatorOrigin = initiator && !request.referrer.empty() ? solar::url::SerializeOrigin(*initiator) : "";
+    bool tainted = false;
+    int site = 0;  // 0 same-origin, 1 same-site, 2 cross-site: the worst of the hops
+    for (int hop = 0; hop < 20; ++hop) {
+      bool viaNetwork = true;
+      lastSwLocation_.clear();
+      NavigationRequest forWorker = request;
+      forWorker.contentType = contentType;
+      auto text = ThroughWorker(current, true, viaNetwork, &forWorker, method, body);
+      if (!viaNetwork && !lastSwLocation_.empty() && lastSwStatus_ >= 300 && lastSwStatus_ < 400) {
+        // The worker made a redirect: it is followed like a server's.
+        const auto base = solar::url::Parse(current);
+        const auto next = base ? solar::url::Parse(lastSwLocation_, &*base) : std::nullopt;
+        if (!next) return std::nullopt;
+        current = WithFragment(solar::url::Serialize(*next), url);
+        if (lastSwStatus_ == 303 || ((lastSwStatus_ == 301 || lastSwStatus_ == 302) && method == "POST")) { method = "GET"; body.clear(); contentType.clear(); }
+        continue;
+      }
+      if (!viaNetwork) {
+        navigated_[url] = current;
+        if (current != url) serverTypes_[url] = serverTypes_[current];
+        return text;
+      }
+      const auto parsed = solar::url::Parse(current);
+      if (!parsed || !parsed->host || (parsed->scheme != "http" && parsed->scheme != "https")) return Load(current);
+      const std::string host = *parsed->host;
+      if (!(host == "web-platform.test" || host.ends_with(".web-platform.test") || host == "not-web-platform.test" || host.ends_with(".not-web-platform.test"))) return Load(current);
+      const bool secure = parsed->scheme == "https";
+      std::string target = solar::url::SerializePath(*parsed);
+      if (parsed->query) target += "?" + *parsed->query;
+      std::vector<std::pair<std::string, std::string>> headers;
+      if (!request.referrer.empty()) {
+        if (const auto referer = RefererOf(request.referrerPolicy, request.referrer, *parsed)) headers.emplace_back("Referer", *referer);
+        if (initiator) site = std::max(site, solar::url::SerializeOrigin(*initiator) == solar::url::SerializeOrigin(*parsed) ? 0 : solar::url::IsSameSite(*initiator, *parsed) ? 1 : 2);
+      }
+      if (method != "GET" && method != "HEAD" && !initiatorOrigin.empty()) headers.emplace_back("Origin", tainted ? "null" : initiatorOrigin);
+      if (secure) {
+        headers.emplace_back("Sec-Fetch-Dest", request.destination);
+        headers.emplace_back("Sec-Fetch-Mode", "navigate");
+        headers.emplace_back("Sec-Fetch-Site", request.referrer.empty() ? "none" : site == 0 ? "same-origin" : site == 1 ? "same-site" : "cross-site");
+      }
+      if (!contentType.empty()) headers.emplace_back("Content-Type", contentType);
+      const ServerAnswer answer = AskServer(host + ":" + std::to_string(parsed->port.value_or(secure ? 443 : 80)), target, method, body, headers);
+      if (!answer.ok) return std::nullopt;
+      if ((answer.status == 301 || answer.status == 302 || answer.status == 303 || answer.status == 307 || answer.status == 308) && !answer.location.empty()) {
+        const auto next = solar::url::Parse(answer.location, &*parsed);
+        if (!next) return std::nullopt;
+        if (solar::url::SerializeOrigin(*next) != solar::url::SerializeOrigin(*parsed)) tainted = true;
+        current = WithFragment(solar::url::Serialize(*next), url);
+        if (answer.status == 303 || ((answer.status == 301 || answer.status == 302) && method == "POST")) { method = "GET"; body.clear(); contentType.clear(); }
+        continue;
+      }
+      if (answer.status >= 400) return std::nullopt;
+      serverTypes_[current] = answer.contentType;
+      if (current != url) serverTypes_[url] = answer.contentType;
+      navigated_[url] = current;
+      return answer.body;
+    }
+    return std::nullopt;
+  }
+  std::string NavigatedUrl(const std::string& url) override {
+    const auto found = navigated_.find(url);
+    return found == navigated_.end() ? url : found->second;
+  }
+  std::map<std::string, std::string> navigated_;
 
   std::optional<std::string> Load(const std::string& url) override {
     if (controlledRealm_ && !bypassWorker_ && !inWorkerAsk_) {
@@ -505,6 +622,8 @@ class TestEnvironment : public solar::html::FrameEnvironment, public solar::weba
     return LoadFromServer(url);
   }
   bool inWorkerAsk_ = false;
+  int lastSwStatus_ = 0;
+  std::string lastSwLocation_;
 
   std::optional<std::string> LoadFromServer(const std::string& url) {
     const std::string origin = "http://web-platform.test:8000/";

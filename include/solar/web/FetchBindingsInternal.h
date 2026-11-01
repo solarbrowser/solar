@@ -131,6 +131,9 @@ struct JsResponse : JsBodyOwner {
   std::string statusText;
   std::string url;  // serialized without the fragment; empty if it has none
   bool redirected = false;
+  // What the page may not see of an opaque redirect, and the program needs to follow it (a service worker answering a navigation with one).
+  int hiddenStatus = 0;
+  std::string hiddenLocation;
   JsHeaders* headers = nullptr;
   void Visit(Quanta::Visitor& visitor) {
     JsBodyOwner::Visit(visitor);

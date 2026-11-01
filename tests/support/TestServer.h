@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -45,7 +46,12 @@ class TestServer {
   std::thread acceptor_;
 
   std::mutex mutex_;
-  std::vector<std::thread> workers_;
+  // A thread for each connection; those that have ended are joined as the next one comes (a server that is asked for thousands of connections keeps none of them).
+  struct Worker {
+    std::thread thread;
+    std::shared_ptr<std::atomic<bool>> done;
+  };
+  std::vector<Worker> workers_;
   std::vector<int> clients_;
 };
 

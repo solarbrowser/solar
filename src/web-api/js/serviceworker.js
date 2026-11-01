@@ -154,6 +154,7 @@
     const old = reg.active;
     reg.active = w;
     reg.activeSource = reg.waitingSource;
+    persist();  // (a page that opens now finds the worker as soon as it is the active one)
     setState(w, "activating");
     const done = await step(w, "activate");
     if (!done.ok || w.gone) {
