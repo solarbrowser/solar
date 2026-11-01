@@ -19,6 +19,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Fetch the submodules the tests use
         run: git submodule update --init --depth 1 third_party/quanta third_party/skia tests/wpt
+      # (Quanta's own submodules: its makefile fetches PCRE2 and mimalloc, but not utf8proc, which StringBuiltin.cpp includes. ICU4X, the one more, is not built here.)
+      - name: Fetch what Quanta's makefile does not
+        run: git -C third_party/quanta submodule update --init --depth 1 third_party/utf8proc third_party/pcre2 third_party/mimalloc
 
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y clang lld llvm make pkg-config liburing-dev libssl-dev zlib1g-dev libbrotli-dev libzstd-dev libnghttp2-dev libharfbuzz-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev
