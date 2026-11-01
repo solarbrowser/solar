@@ -40,6 +40,7 @@
 #include "solar/html/Modules.h"
 #include "solar/html/Parser.h"
 #include "solar/html/HtmlBindings.h"
+#include "solar/web/BlobUrls.h"
 #include "solar/web/Console.h"
 #include "solar/web/Messaging.h"
 #include "solar/web/DomBindings.h"
@@ -48,6 +49,12 @@
 #include "solar/url/Parser.h"
 #include "solar/url/Serializer.h"
 #include "solar/web/FetchBindings.h"
+#include "solar/web-api/CacheStore.h"
+#include "solar/web-api/Compression.h"
+#include "solar/web-api/Crypto.h"
+#include "solar/web-api/IndexedDb.h"
+#include "solar/web-api/WebSocket.h"
+#include "solar/web-api/Worker.h"
 #include "solar/web/FetchHost.h"
 #include "solar/web/MimeType.h"
 #include "solar/web/Orb.h"
@@ -272,10 +279,61 @@ PyAnswer RunPythonHandler(const std::string& file, const std::string& method, co
   return result;
 }
 
-class TestEnvironment : public solar::html::FrameEnvironment {
+class TestEnvironment : public solar::html::FrameEnvironment, public solar::webapi::WorkerHost {
  public:
   TestEnvironment(qe::Isolate& isolate, solar::net::Loop& loop, solar::net::HttpClient& client, solar::web::JsEventLoop& events)
-      : isolate_(isolate), loop_(loop), client_(client), events_(events) {}
+      : isolate_(isolate), loop_(loop), client_(client), events_(events) {
+    solar::webapi::SetWorkerHost(this);
+  }
+  ~TestEnvironment() override { solar::webapi::SetWorkerHost(nullptr); }
+
+  // The workers of the pages: a realm each, of the same isolate, with the APIs a worker has.
+  qe::Realm* CreateWorkerRealm(const std::string& scriptUrl) override {
+    auto bundle = std::make_unique<RealmBundle>();
+    qe::Isolate::RealmOptions options;
+    options.installConsole = false;
+    bundle->realm = isolate_.CreateRealm(options);
+    qe::Realm& realm = *bundle->realm;
+    solar::html::RunInRealm(realm, [&] {
+      solar::web::InstallUrlApis(realm);
+      static HarnessConsole console;
+      solar::web::InstallConsoleApi(realm, &console);
+      solar::web::InstallDomApis(realm);
+      solar::web::InstallFetchApis(realm);
+      solar::web::FetchHost::Config config;
+      config.loop = &loop_;
+      config.client = &client_;
+      config.tls = g_tls;
+      config.pageUrl = *solar::url::Parse(scriptUrl.rfind("blob:", 0) == 0 || scriptUrl.rfind("data:", 0) == 0 || scriptUrl.empty() ? (pageUrl_.empty() ? "about:blank" : pageUrl_) : scriptUrl);
+      config.afterScript = [this] { events_.AfterScript(); };
+      bundle->host = std::make_unique<solar::web::FetchHost>(realm.GetContext(), config);
+      solar::webapi::InstallWebSocketNatives(realm);
+      solar::webapi::InstallCryptoNatives(realm);
+      solar::webapi::InstallCacheStoreNatives(realm);
+      solar::webapi::InstallCompressionNatives(realm);
+      solar::webapi::InstallWorkerScope(realm);
+    });
+    qe::Realm* raw = bundle->realm.get();
+    bundles_.push_back(std::move(bundle));
+    return raw;
+  }
+  void ReleaseWorkerRealm(qe::Realm* realm) override {
+    for (auto it = bundles_.begin(); it != bundles_.end(); ++it) {
+      if ((*it)->realm.get() == realm) {
+        bundles_.erase(it);
+        break;
+      }
+    }
+  }
+  void RunLater(std::function<void()> task) override { loop_.Post(std::move(task)); }
+  std::optional<std::string> LoadScript(const std::string& url) override {
+    if (url.starts_with("data:")) return solar::html::DecodeDataUrlText(url);
+    if (url.starts_with("blob:")) {
+      if (auto blob = solar::web::LookupBlobUrl(url)) return *blob->data;
+      return std::nullopt;
+    }
+    return Load(url);
+  }
 
   qe::Realm* CreateRealm() override {
     auto bundle = std::make_unique<RealmBundle>();
@@ -294,6 +352,12 @@ class TestEnvironment : public solar::html::FrameEnvironment {
       solar::html::InstallHtmlApis(realm);
       solar::css::InstallSelectorApis(realm);
       solar::web::InstallFetchApis(realm);
+      solar::webapi::InstallWorkerApis(realm);
+      solar::webapi::InstallIndexedDbNatives(realm);
+      solar::webapi::InstallWebSocketNatives(realm);
+      solar::webapi::InstallCryptoNatives(realm);
+      solar::webapi::InstallCacheStoreNatives(realm);
+      solar::webapi::InstallCompressionNatives(realm);
 #ifdef SOLAR_WPT_CANVAS
       // (The canvas and WebGL are Skia's and the machine's: this build of the runner has them, as the window has.)
       solar::webapi::InstallCanvasNatives(realm);
@@ -737,6 +801,15 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
   isolate->SetSourcePositionTracking(true);
   solar::test::TestServer server(ServeWpt);
   g_serverPort = server.port();
+  // What the pages keep (databases, service worker registrations) is the run's own, and goes with it.
+  if (!std::getenv("SOLAR_IDB_DIR")) {
+    const std::filesystem::path keep = std::filesystem::temp_directory_path() / ("wpt-keep-" + std::to_string(static_cast<long>(::getpid())));
+    std::filesystem::create_directories(keep);
+    ::setenv("SOLAR_IDB_DIR", keep.c_str(), 1);
+    static std::filesystem::path toRemove;
+    toRemove = keep;
+    std::atexit([] { std::error_code ignored; std::filesystem::remove_all(toRemove, ignored); std::filesystem::remove_all(toRemove.string() + "-cache", ignored); });
+  }
   // The same server over TLS, for the pages that ask for https: a private authority signs for the names of the tests, and the client trusts it.
   solar::test::TestPki pki;
   solar::test::TlsTestServer tlsServer(pki.Issue({"web-platform.test", "*.web-platform.test", "not-web-platform.test", "*.not-web-platform.test", "127.0.0.1", "localhost"}),
