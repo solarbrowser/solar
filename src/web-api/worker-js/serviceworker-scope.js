@@ -223,6 +223,7 @@
     openWindow(url) { return ask({ t: "open-window", url: String(url) }).then((d) => (d ? makeClient({ desc: d, port: primary().port }) : null), () => null); }
     claim() {
       for (const c of clientList.values()) if (c.desc.url.startsWith(info.scope)) c.port.postMessage({ t: "claimed" });
+      try { const claims = new BroadcastChannel("solar-sw-claim:" + info.origin); claims.postMessage({ t: "claim", scope: info.scope }); claims.close(); } catch (e) { /* (no channel) */ }
       return Promise.resolve(undefined);
     }
   }

@@ -112,7 +112,7 @@ void FetchOperation::Done() {
   host.Finish(this);
 }
 
-bool FetchOperation::OnRedirect(const net::HttpResponseHead& redirect, const url::Url& next, std::vector<std::pair<std::string, std::string>>& headers) {
+bool FetchOperation::OnRedirectIn(const net::HttpResponseHead& redirect, const url::Url& next, std::vector<std::pair<std::string, std::string>>& headers) {
   if (settled && !body) return false;
   ++redirects;
   const bool nextCrossOrigin = url::SerializeOrigin(next) != pageOrigin;
@@ -177,7 +177,7 @@ bool FetchOperation::OnRedirect(const net::HttpResponseHead& redirect, const url
   return true;
 }
 
-void FetchOperation::OnResponseHead(const net::HttpResponseHead& head, const url::Url& finalUrl) {
+void FetchOperation::OnResponseHeadIn(const net::HttpResponseHead& head, const url::Url& finalUrl) {
   if (settled) return;  // aborted, or failed already
   if (preflighting) {
     const bool includeCredentials = credentials == RequestCredentials::Include;
@@ -272,7 +272,7 @@ void FetchOperation::OnResponseHead(const net::HttpResponseHead& head, const url
   if (host.config().afterScript) host.config().afterScript();
 }
 
-void FetchOperation::OnBody(std::span<const uint8_t> data) {
+void FetchOperation::OnBodyIn(std::span<const uint8_t> data) {
   if (preflighting) return;
   if (integrityBuffering) {
     integrityBytes.append(reinterpret_cast<const char*>(data.data()), data.size());
@@ -291,7 +291,7 @@ void FetchOperation::StartMain() {
   handle = host.config().client->Fetch(requestUrl, *this, std::move(mainOptions));
 }
 
-void FetchOperation::OnEnd() {
+void FetchOperation::OnEndIn() {
   if (preflighting) {
     preflighting = false;
     if (!settled) StartMain();
@@ -312,7 +312,7 @@ void FetchOperation::OnEnd() {
       return;
     }
     integrityReleased = true;
-    OnResponseHead(integrityHead, integrityFinalUrl);
+    OnResponseHeadIn(integrityHead, integrityFinalUrl);
     if (body && !body->failure) body->bytes = std::move(integrityBytes);
   }
   if (body && !body->failure) {
@@ -357,7 +357,7 @@ void FetchOperation::StartPreflightedHop(const url::Url& target, net::FetchOptio
   handle = host.config().client->Fetch(target, *this, std::move(preflight));
 }
 
-void FetchOperation::OnError(std::string_view message) {
+void FetchOperation::OnErrorIn(std::string_view message) {
   if (redirectForPreflight && !settled) {
     redirectForPreflight = false;
     StartPreflightedHop(redirectTarget, std::move(redirectOptions));
@@ -368,6 +368,24 @@ void FetchOperation::OnError(std::string_view message) {
     FailWith(MakeTypeError(host.context(), text), text);
   }
   Done();
+}
+
+bool FetchOperation::OnRedirect(const net::HttpResponseHead& redirect, const url::Url& next, std::vector<std::pair<std::string, std::string>>& headers) {
+  bool follow = false;
+  host.InRealm([&] { follow = OnRedirectIn(redirect, next, headers); });
+  return follow;
+}
+void FetchOperation::OnResponseHead(const net::HttpResponseHead& head, const url::Url& finalUrl) {
+  host.InRealm([&] { OnResponseHeadIn(head, finalUrl); });
+}
+void FetchOperation::OnBody(std::span<const uint8_t> data) {
+  host.InRealm([&] { OnBodyIn(data); });
+}
+void FetchOperation::OnEnd() {
+  host.InRealm([&] { OnEndIn(); });
+}
+void FetchOperation::OnError(std::string_view message) {
+  host.InRealm([&] { OnErrorIn(message); });
 }
 
 void CancelOperation(FetchOperation& operation) {

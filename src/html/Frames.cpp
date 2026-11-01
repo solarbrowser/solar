@@ -391,6 +391,7 @@ std::optional<FrameContext> MakeContext(dom::Element* iframe, const std::string&
     InstallWindow(*realm, document, reuseProxy);
   });
   if (!document) return std::nullopt;
+  g_environment->SetRealmUrl(realm, url);
   return FrameContext{realm, document};
 }
 
@@ -700,7 +701,7 @@ void RunFrameLoad(dom::Element* iframe, uint64_t load) {
           markup = *blob->data;
           blobType = blob->type;
         }
-      } else if (std::optional<std::string> loaded = g_environment->Load(resolved)) {
+      } else if (std::optional<std::string> loaded = g_environment->LoadNavigation(resolved)) {
         markup = std::move(*loaded);
       }
     }

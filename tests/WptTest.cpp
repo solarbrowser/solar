@@ -164,6 +164,7 @@ struct RealmBundle {
   ~RealmBundle() {
     host.reset();
     solar::html::ForgetRealm(realm.get());
+    solar::web::ForgetMessagingRealm(realm.get());
     realm.reset();
   }
 };
@@ -312,6 +313,15 @@ class TestEnvironment : public solar::html::FrameEnvironment, public solar::weba
       solar::webapi::InstallCacheStoreNatives(realm);
       solar::webapi::InstallCompressionNatives(realm);
       solar::webapi::InstallWorkerScope(realm);
+      // A service worker answers a navigation through this.
+      Quanta::Context& wctx = realm.GetContext();
+      qe::Set(wctx, qe::FromObject(wctx.get_global_object()), "__solarSwNavigateDone", qe::NewFunction(wctx, "__solarSwNavigateDone", 6, [this](Quanta::Context& c, Quanta::Value, qe::Args args, Quanta::Value) {
+        if (args.size() < 6) return qe::Undefined();
+        std::string body;
+        if (auto bytes = qe::BytesOf(args[4])) body.assign(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+        WorkerAnswered(qe::ToUint32(c, args[0]), static_cast<int>(qe::ToNumber(c, args[1])), static_cast<int>(qe::ToNumber(c, args[2])), qe::ToWtf8(c, args[3]), std::move(body), qe::ToWtf8(c, args[5]));
+        return qe::Undefined();
+      }));
     });
     qe::Realm* raw = bundle->realm.get();
     bundles_.push_back(std::move(bundle));
@@ -332,7 +342,12 @@ class TestEnvironment : public solar::html::FrameEnvironment, public solar::weba
       if (auto blob = solar::web::LookupBlobUrl(url)) return *blob->data;
       return std::nullopt;
     }
-    return Load(url);
+    // (importScripts and the like are not the worker's to answer: it is the one asking.)
+    const bool was = bypassWorker_;
+    bypassWorker_ = true;
+    auto text = Load(url);
+    bypassWorker_ = was;
+    return text;
   }
 
   qe::Realm* CreateRealm() override {
@@ -372,12 +387,126 @@ class TestEnvironment : public solar::html::FrameEnvironment, public solar::weba
       config.pageUrl = *solar::url::Parse(pageUrl_.empty() ? "http://web-platform.test:8000/fetch/api/" : pageUrl_);
       config.afterScript = [this] { events_.AfterScript(); };
       bundle->host = std::make_unique<solar::web::FetchHost>(realm.GetContext(), config);
+      // What the page's service worker script (src/web-api/js/serviceworker.js) tells the program: whether the page is controlled, and the worker's answers for resources.
+      Quanta::Context& pctx = realm.GetContext();
+      Quanta::Value global = qe::FromObject(pctx.get_global_object());
+      qe::Realm* self = &realm;
+      qe::Set(pctx, global, "__solarSwControlled", qe::NewFunction(pctx, "__solarSwControlled", 1, [this, self](Quanta::Context&, Quanta::Value, qe::Args args, Quanta::Value) {
+        if (!args.empty() && args[0].to_boolean()) controlledRealm_ = self;
+        else if (controlledRealm_ == self) controlledRealm_ = nullptr;
+        return qe::Undefined();
+      }));
+      qe::Set(pctx, global, "__solarSwResourceDone", qe::NewFunction(pctx, "__solarSwResourceDone", 5, [this](Quanta::Context& c, Quanta::Value, qe::Args args, Quanta::Value) {
+        if (args.size() < 5) return qe::Undefined();
+        std::string body;
+        if (auto bytes = qe::BytesOf(args[4])) body.assign(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+        WorkerAnswered(qe::ToUint32(c, args[0]), static_cast<int>(qe::ToNumber(c, args[1])), static_cast<int>(qe::ToNumber(c, args[2])), qe::ToWtf8(c, args[3]), std::move(body), "");
+        return qe::Undefined();
+      }));
     });
     bundles_.push_back(std::move(bundle));
     return &realm;
   }
 
+  // ---- The service worker of a page, asked for what the page loads ----
+  struct SwAnswer {
+    bool done = false;
+    int mode = 0, status = 0;
+    std::string contentType, body, address;
+  };
+  qe::Realm* controlledRealm_ = nullptr;
+  bool bypassWorker_ = false;
+  std::map<uint32_t, SwAnswer> swAnswers_;
+  uint32_t nextSw_ = 1;
+
+  void WorkerAnswered(uint32_t id, int mode, int status, const std::string& contentType, std::string body, const std::string& address) {
+    const auto found = swAnswers_.find(id);
+    if (found == swAnswers_.end()) return;
+    found->second = SwAnswer{true, mode, status, contentType, std::move(body), address};
+  }
+  // Waits, running the page's tasks and the network's, for the answer; nothing from a worker that is stuck holds the run past a few seconds.
+  bool WaitForWorker(uint32_t id) {
+    const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+    while (!swAnswers_[id].done && std::chrono::steady_clock::now() < limit) events_.Step(std::chrono::milliseconds(5));
+    return swAnswers_[id].done;
+  }
+  // The answer of the worker for the address: the text, nothing for a network error, and `viaNetwork` set where the worker left it to the network.
+  std::optional<std::string> ThroughWorker(const std::string& url, bool navigation, bool& viaNetwork) {
+    viaNetwork = true;
+    if (bypassWorker_) return std::nullopt;
+    const auto parsed = solar::url::Parse(url);
+    if (!parsed || (parsed->scheme != "http" && parsed->scheme != "https")) return std::nullopt;
+    const uint32_t id = nextSw_++;
+    swAnswers_[id] = SwAnswer{};
+    bool taken = false;
+    if (navigation) {
+      uint32_t workerId = 0;
+      if (!solar::webapi::FindServiceWorker(solar::url::SerializeOrigin(*parsed), url, workerId)) { swAnswers_.erase(id); return std::nullopt; }
+      qe::Realm* workerRealm = solar::webapi::WorkerRealmOf(workerId);
+      if (!workerRealm) { swAnswers_.erase(id); return std::nullopt; }
+      solar::html::RunInRealm(*workerRealm, [&] {
+        Quanta::Context& ctx = workerRealm->GetContext();
+        Quanta::Value function = qe::Get(ctx, qe::FromObject(ctx.get_global_object()), "__solarSwNavigate");
+        if (qe::IsCallable(function)) {
+          Quanta::Value arguments[] = {qe::FromNumber(id), qe::FromWtf8(ctx, url), qe::FromWtf8(ctx, "GET"), qe::Undefined(), qe::FromWtf8(ctx, "")};
+          qe::Call(ctx, function, qe::Undefined(), qe::Args(arguments, 5));
+          taken = !qe::HasException(ctx);
+        }
+        if (qe::HasException(ctx)) ctx.clear_exception();
+      });
+    } else if (controlledRealm_) {
+      qe::Realm* page = controlledRealm_;
+      solar::html::RunInRealm(*page, [&] {
+        Quanta::Context& ctx = page->GetContext();
+        Quanta::Value function = qe::Get(ctx, qe::FromObject(ctx.get_global_object()), "__solarSwResource");
+        if (qe::IsCallable(function)) {
+          Quanta::Value arguments[] = {qe::FromWtf8(ctx, url), qe::FromNumber(id)};
+          Quanta::Value result = qe::Call(ctx, function, qe::Undefined(), qe::Args(arguments, 2));
+          taken = !qe::HasException(ctx) && result.to_boolean();
+        }
+        if (qe::HasException(ctx)) ctx.clear_exception();
+      });
+    }
+    if (!taken) { swAnswers_.erase(id); return std::nullopt; }
+    if (!WaitForWorker(id)) { swAnswers_.erase(id); return std::nullopt; }
+    const SwAnswer answer = std::move(swAnswers_[id]);
+    swAnswers_.erase(id);
+    if (answer.mode == 1) return std::nullopt;  // left to the network
+    viaNetwork = false;
+    if (answer.mode == 2) return std::nullopt;  // a network error
+    serverTypes_[url] = answer.contentType;
+    return answer.body;
+  }
+
+  void SetRealmUrl(qe::Realm* realm, const std::string& url) override {
+    if (!url.starts_with("http://") && !url.starts_with("https://")) return;
+    for (auto& bundle : bundles_) {
+      if (bundle->realm.get() == realm && bundle->host) {
+        if (auto parsed = solar::url::Parse(url)) bundle->host->SetPageUrl(*parsed);
+      }
+    }
+  }
+
+  std::optional<std::string> LoadNavigation(const std::string& url) override {
+    bool viaNetwork = true;
+    auto text = ThroughWorker(url, true, viaNetwork);
+    if (!viaNetwork) return text;
+    return Load(url);
+  }
+
   std::optional<std::string> Load(const std::string& url) override {
+    if (controlledRealm_ && !bypassWorker_ && !inWorkerAsk_) {
+      inWorkerAsk_ = true;
+      bool viaNetwork = true;
+      auto text = ThroughWorker(url, false, viaNetwork);
+      inWorkerAsk_ = false;
+      if (!viaNetwork) return text;
+    }
+    return LoadFromServer(url);
+  }
+  bool inWorkerAsk_ = false;
+
+  std::optional<std::string> LoadFromServer(const std::string& url) {
     const std::string origin = "http://web-platform.test:8000/";
     // Another origin of the test server (a name of its own, another port), or an address with a pipe, is asked of the server itself.
     if (const auto parsed = solar::url::Parse(url); parsed && (parsed->scheme == "http" || parsed->scheme == "https") && parsed->host) {

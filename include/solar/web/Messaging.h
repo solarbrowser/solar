@@ -22,4 +22,7 @@ Quanta::Embed::SerializationHooks MakeSerializationHooks();
 // MessageEvent has as its ports.
 Quanta::Embed::ValueList PortsOf(Quanta::Context& ctx, Quanta::Embed::SerializedData& data);
 
+// A realm is going away: the ports and broadcast channels that were made in it stop delivering (a message can still be on its way to them).
+void ForgetMessagingRealm(Quanta::Embed::Realm* realm);
+
 }  // namespace solar::web

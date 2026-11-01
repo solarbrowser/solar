@@ -82,11 +82,18 @@ struct FetchOperation : net::FetchHandler {
   Quanta::Embed::Persistent responseValue;
   JsResponse* response = nullptr;
 
+  // What the network tells arrives outside any script, where the realm that natives answer for is the last one entered, not this one's: each of these goes
+  // into the realm of the host before it does anything with classes (a Response made here must be of this realm's).
   bool OnRedirect(const net::HttpResponseHead& redirect, const url::Url& next, std::vector<std::pair<std::string, std::string>>& headers) override;
   void OnResponseHead(const net::HttpResponseHead& head, const url::Url& finalUrl) override;
   void OnBody(std::span<const uint8_t> data) override;
   void OnEnd() override;
   void OnError(std::string_view message) override;
+  bool OnRedirectIn(const net::HttpResponseHead& redirect, const url::Url& next, std::vector<std::pair<std::string, std::string>>& headers);
+  void OnResponseHeadIn(const net::HttpResponseHead& head, const url::Url& finalUrl);
+  void OnBodyIn(std::span<const uint8_t> data);
+  void OnEndIn();
+  void OnErrorIn(std::string_view message);
 
   // Ends the promise (if it is not) and the body (if it is not) with a failure.
   void FailWith(const Quanta::Value& reason, const std::string& message);

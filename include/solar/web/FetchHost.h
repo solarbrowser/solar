@@ -46,6 +46,10 @@ class FetchHost {
   FetchHost& operator=(const FetchHost&) = delete;
 
   const Config& config() const { return config_; }
+  // Runs `work` with this host's realm the one that natives answer for (the network's callbacks come outside any script).
+  void InRealm(const std::function<void()>& work);
+  // The page's address changed (a frame is given its own).
+  void SetPageUrl(const url::Url& address) { config_.pageUrl = address; }
   Quanta::Context& context() { return *ctx_; }
 
   // JSON.parse and JSON.stringify as they were when the realm was made, so that a page that replaces

@@ -34,6 +34,10 @@ class FrameEnvironment {
   virtual std::optional<std::string> Load(const std::string& url) = 0;
   // The same for a script or a style sheet, which a page asks for with no CORS: a response from another origin that Opaque Response
   // Blocking blocks comes back with no text.
+  // The same for the document of a frame that is navigated, which a service worker of its scope is asked for first.
+  // The address of the document a realm is for, when it is known (a frame's): what the realm's requests resolve against and take as their origin.
+  virtual void SetRealmUrl(Quanta::Embed::Realm*, const std::string& /*url*/) {}
+  virtual std::optional<std::string> LoadNavigation(const std::string& url) { return Load(url); }
   virtual std::optional<std::string> LoadNoCors(const std::string& url, bool /*styleSheet*/) { return Load(url); }
 
   // What the resource at the URL is, as the Content-Type header would say: text/html, or an XML type.

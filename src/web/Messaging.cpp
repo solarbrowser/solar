@@ -46,6 +46,12 @@ struct PortCore {
   qe::Realm* realm = nullptr;
 };
 
+// Every port core there is, to be found by the realm it is in when that goes (the cores outlive their cells).
+std::vector<std::weak_ptr<PortCore>>& AllPorts() {
+  static std::vector<std::weak_ptr<PortCore>> ports;
+  return ports;
+}
+
 struct JsMessagePort : JsEventTarget {
   using Parent = JsEventTarget;
   std::shared_ptr<PortCore> core;  // empty once the port has been transferred away
@@ -295,6 +301,8 @@ Value ConstructChannel(Context& ctx, Value, qe::Args, Value newTarget) {
   if (qe::HasException(ctx)) return qe::Undefined();
   auto core1 = std::make_shared<PortCore>();
   auto core2 = std::make_shared<PortCore>();
+  AllPorts().push_back(core1);
+  AllPorts().push_back(core2);
   core1->peer = core2;
   core2->peer = core1;
   JsMessageChannel* channel = Heap::Allocate<JsMessageChannel>();
@@ -654,6 +662,25 @@ void DefineMessagingClasses(Context& ctx) {
   qe::DefineAccessor(channel.prototype, "port1", GetPort1, nullptr);
   qe::DefineAccessor(channel.prototype, "port2", GetPort2, nullptr);
   qe::DefineGlobal(ctx, "MessageChannel", channel.constructor);
+}
+
+void ForgetMessagingRealm(qe::Realm* realm) {
+  auto& ports = AllPorts();
+  for (size_t i = 0; i < ports.size();) {
+    if (auto core = ports[i].lock()) {
+      if (core->realm == realm) {
+        core->realm = nullptr;
+        core->owner = nullptr;
+        core->deliveryQueued = false;
+      }
+      ++i;
+    } else {
+      ports.erase(ports.begin() + static_cast<std::ptrdiff_t>(i));
+    }
+  }
+  for (JsBroadcastChannel* channel : Channels()) {
+    if (channel->realm == realm) channel->realm = nullptr;
+  }
 }
 
 }  // namespace solar::web

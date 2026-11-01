@@ -345,6 +345,12 @@
   const nullBody = (status) => status === 101 || status === 204 || status === 205 || status === 304;
   const intercepted = async (w, input, init, thisArg) => {
     let request;
+    // A Request of another realm (a page's frame is asked with its parent's) is rebuilt here from what it holds.
+    if (typeof input === "object" && input !== null && !(input instanceof Request) && Object.prototype.toString.call(input) === "[object Request]") {
+      const base = { method: input.method, headers: Array.from(input.headers.entries()), mode: input.mode === "navigate" ? "same-origin" : input.mode, credentials: input.credentials, cache: input.cache, redirect: input.redirect, referrer: input.referrer === "about:client" ? undefined : input.referrer, signal: input.signal };
+      if (input.method !== "GET" && input.method !== "HEAD") base.body = await input.clone().arrayBuffer();
+      input = new Request(input.url, base);
+    }
     request = new Request(input, init);
     const url = new URL(request.url);
     if (url.protocol !== "http:" && url.protocol !== "https:") return nativeFetch.call(thisArg, input, init);
@@ -410,24 +416,36 @@
 
   // ---- On this page's load: the registrations that were kept, and the worker that controls it ----
   if (secure) {
-    const text = kvRead(origin, KEY);
-    if (text) {
+    // The registrations that were kept (by this page or by others), and the worker that serves this page, if one is running or kept for it. `claimed` is for a worker that
+    // took the page over (clients.claim()) while it was already open.
+    const adoptKept = (claimedScope) => {
+      const text = kvRead(origin, KEY);
+      if (!text) return;
       let kept = [];
       try { kept = JSON.parse(text); } catch (e) { kept = []; }
       for (const k of kept) {
+        if (registrations.some((r) => r.scope === k.scope)) continue;
         const reg = newRecord(k.scope, k.updateViaCache);
         reg.activeSource = k.source;
         reg.stored = { scriptURL: k.scriptURL, source: k.source };
       }
-      const reg = matching(location.href);
-      if (reg) {
+      const reg = claimedScope ? registrations.find((r) => r.scope === claimedScope && location.href.startsWith(r.scope)) : matching(location.href);
+      if (reg && (!reg.active || claimedScope)) {
+        if (reg.active && controller === reg.active) return;
         const k = kept.find((x) => x.scope === reg.scope);
+        if (!k) return;
         // The worker may be there already (kept since an earlier page, or started for the navigation that made this page): then it is that one this page is served by.
         const running = adopt(origin, location.href);
         const w = spawn(reg, k.scriptURL, k.source, "activated", running >= 0 ? running : undefined);
-        if (w.failed) { retire(w); } else { reg.active = w; controller = w; if (tellControlled) tellControlled(true); }
+        if (w.failed) { retire(w); } else { reg.active = w; if (claimedScope) setController(w); else { controller = w; if (tellControlled) tellControlled(true); } }
       }
-    }
+    };
+    adoptKept();
+    // A worker that claims the pages of its scope tells them all, the ones that are open as well.
+    try {
+      const claims = new BroadcastChannel("solar-sw-claim:" + origin);
+      claims.onmessage = (e) => { if (e.data && e.data.t === "claim" && location.href.startsWith(e.data.scope)) adoptKept(e.data.scope); };
+    } catch (e) { /* (no channel) */ }
     Object.defineProperty(Navigator.prototype, "serviceWorker", { get() { return containerObject; }, enumerable: true, configurable: true });
   }
 })();

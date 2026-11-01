@@ -139,6 +139,7 @@ struct RealmBundle {
   ~RealmBundle() {
     host.reset();
     solar::html::ForgetRealm(realm.get());
+    solar::web::ForgetMessagingRealm(realm.get());
     realm.reset();
   }
 };

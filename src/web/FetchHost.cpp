@@ -26,6 +26,11 @@ FetchHost::FetchHost(Quanta::Context& ctx, Config config) : config_(std::move(co
   jsonStringify_ = qe::Persistent(ctx, qe::Get(ctx, json, "stringify"));
 }
 
+void FetchHost::InRealm(const std::function<void()>& work) {
+  if (Quanta::Embed::Realm* realm = Quanta::Embed::Realm::FromContext(*ctx_)) realm->Run(work);
+  else work();
+}
+
 FetchHost::~FetchHost() {
   *alive_ = false;
   qe::SetRealmData(*ctx_, &g_hostKey, nullptr);
