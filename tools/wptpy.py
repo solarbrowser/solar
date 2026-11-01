@@ -118,6 +118,10 @@ class RequestHeaders(object):
     def items(self):
         return [(k, self[k]) for k in self.keys()]
 
+    def raw_items(self):
+        """The pairs as the request had them (as text)."""
+        return [(k.decode("iso-8859-1"), v.decode("iso-8859-1")) for k, v in self._pairs]
+
     def __iter__(self):
         return iter(self.keys())
 

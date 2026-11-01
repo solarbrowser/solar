@@ -108,7 +108,7 @@
         fire(self, "loadend", { lengthComputable: true, loaded: bytes.length, total: bytes.length });
       }
     };
-    const local = (s.method === "GET" || s.method === "HEAD") && (!s.async || !crossOrigin(s.url)) ? load(s.url) : undefined;
+    const local = (s.method === "GET" || s.method === "HEAD") && (!s.async || !/^https?:/i.test(s.url)) ? load(s.url) : undefined;
     if (local !== undefined) {
       const headers = new Headers({ "content-type": contentTypeOf(s.url) });
       finish(200, "OK", headers, s.method === "HEAD" ? new Uint8Array(0) : encoder.encode(local), s.method === "HEAD" ? "" : local);
