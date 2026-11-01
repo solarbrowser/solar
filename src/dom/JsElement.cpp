@@ -201,7 +201,7 @@ Value ToggleAttribute(Context& ctx, Value t, qe::Args args, Value) {
   if (qe::HasException(ctx)) return qe::Undefined();
   const bool hasForce = args.size() > 1 && !qe::IsUndefined(args[1]);
   const bool force = hasForce && args[1].to_boolean();
-  if (!IsXmlName(name)) {
+  if (!IsValidAttributeName(name)) {
     Throw(ctx, {"InvalidCharacterError", "The string contains invalid characters"});
     return qe::Undefined();
   }

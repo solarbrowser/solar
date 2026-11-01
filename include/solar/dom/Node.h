@@ -641,6 +641,8 @@ uint16_t CompareDocumentPosition(Node* a, Node* b);
 // ---- Names ----
 // Whether `name` is an XML Name (the Name production), and an NCName (one without a colon).
 bool IsXmlName(std::string_view name);
+bool IsValidName(std::string_view name);
+bool IsValidAttributeName(std::string_view name);
 bool IsNcName(std::string_view name);
 struct QualifiedParts {
   std::string namespaceUri;  // empty: none

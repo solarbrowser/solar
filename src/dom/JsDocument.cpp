@@ -172,7 +172,7 @@ Value CreateElementMethod(Context& ctx, Value t, qe::Args args, Value) {
   if (!self || Missing(ctx, args, 1, "Document", "createElement")) return qe::Undefined();
   std::string name = qe::ToWtf8(ctx, args[0]);
   if (qe::HasException(ctx)) return qe::Undefined();
-  if (!IsXmlName(name)) {
+  if (!IsValidName(name)) {
     Throw(ctx, {"InvalidCharacterError", "The tag name provided ('" + name + "') is not a valid name."});
     return qe::Undefined();
   }
@@ -255,7 +255,7 @@ Value CreateAttribute(Context& ctx, Value t, qe::Args args, Value) {
   if (!self || Missing(ctx, args, 1, "Document", "createAttribute")) return qe::Undefined();
   std::string name = qe::ToWtf8(ctx, args[0]);
   if (qe::HasException(ctx)) return qe::Undefined();
-  if (!IsXmlName(name)) {
+  if (!IsValidAttributeName(name)) {
     Throw(ctx, {"InvalidCharacterError", "String contains an invalid character"});
     return qe::Undefined();
   }

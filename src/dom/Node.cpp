@@ -1296,11 +1296,38 @@ bool IsXmlName(std::string_view name) {
 
 bool IsNcName(std::string_view name) { return IsXmlName(name) && name.find(':') == std::string_view::npos; }
 
+namespace {
+bool PlainNameChar(uint32_t c) { return !(c == 0 || c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r' || c == '/' || c == '>'); }
+}  // namespace
+
+// The name of an attribute: anything but what ends one in the HTML syntax.
+bool IsValidAttributeName(std::string_view name) {
+  if (name.empty()) return false;
+  size_t at = 0;
+  while (at < name.size()) {
+    const uint32_t c = DecodeOne(name, at);
+    if (!PlainNameChar(c) || c == '=') return false;
+  }
+  return true;
+}
+
+// A name the tree takes (createElement, setAttribute...): it starts as a name does, or with any character beyond ASCII, and has none of what ends a name in the HTML syntax.
+bool IsValidName(std::string_view name) {
+  if (name.empty()) return false;
+  size_t at = 0;
+  const uint32_t first = DecodeOne(name, at);
+  if (!(first == ':' || first == '_' || (first >= 'A' && first <= 'Z') || (first >= 'a' && first <= 'z') || first >= 0x80)) return false;
+  while (at < name.size()) {
+    if (!PlainNameChar(DecodeOne(name, at))) return false;
+  }
+  return true;
+}
+
 std::optional<DomError> ValidateQualifiedName(std::string_view qualifiedName) {
   const DomError invalid{"InvalidCharacterError", "The string contains invalid characters"};
-  const size_t colon = qualifiedName.find(':');
-  if (colon == std::string_view::npos) return IsNcName(qualifiedName) ? std::nullopt : std::optional<DomError>(invalid);
-  if (!IsNcName(qualifiedName.substr(0, colon)) || !IsNcName(qualifiedName.substr(colon + 1))) return invalid;
+  for (const char c : qualifiedName) {
+    if (c == 0 || c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r' || c == '>') return invalid;
+  }
   return std::nullopt;
 }
 
@@ -1308,13 +1335,18 @@ std::optional<DomError> ValidateAndExtract(std::string_view ns, std::string_view
   const DomError invalid{"InvalidCharacterError", "The string contains invalid characters"};
   const size_t colon = qualifiedName.find(':');
   if (colon == std::string_view::npos) {
-    if (!IsNcName(qualifiedName)) return invalid;
+    if (!IsValidName(qualifiedName)) return invalid;
     out.prefix.clear();
     out.localName = qualifiedName;
   } else {
-    // A QName: an NCName, a colon and an NCName.
-    if (!IsNcName(qualifiedName.substr(0, colon)) || !IsNcName(qualifiedName.substr(colon + 1))) return invalid;
-    out.prefix = qualifiedName.substr(0, colon);
+    // A prefix (of anything but what ends a name) and a name.
+    const std::string_view prefix = qualifiedName.substr(0, colon);
+    if (prefix.empty() || !IsValidName(qualifiedName.substr(colon + 1))) return invalid;
+    size_t at = 0;
+    while (at < prefix.size()) {
+      if (!PlainNameChar(DecodeOne(prefix, at))) return invalid;
+    }
+    out.prefix = prefix;
     out.localName = qualifiedName.substr(colon + 1);
   }
   out.namespaceUri = ns;
@@ -1326,7 +1358,7 @@ std::optional<DomError> ValidateAndExtract(std::string_view ns, std::string_view
 }
 
 std::optional<DomError> SetAttribute(Context& ctx, Element* element, std::string_view name, std::string value) {
-  if (!IsXmlName(name)) return DomError{"InvalidCharacterError", "The string contains invalid characters"};
+  if (!IsValidAttributeName(name)) return DomError{"InvalidCharacterError", "The string contains invalid characters"};
 
   const std::string lowered = AttributeNameFor(element, name);
   if (Attr* existing = element->FindAttribute(lowered)) {
