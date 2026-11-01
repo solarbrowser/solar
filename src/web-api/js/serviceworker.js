@@ -343,6 +343,12 @@
   // ---- A controlled page's fetch() goes to the worker first ----
   let nextFetch = 1;
   const nullBody = (status) => status === 101 || status === 204 || status === 205 || status === 304;
+  // The referrer policy the requests of the document have unless they say: the one of its meta, else the default.
+  const documentReferrerPolicy = () => {
+    const meta = document.querySelector('meta[name="referrer" i]');
+    const value = meta ? (meta.getAttribute("content") || "").trim().toLowerCase() : "";
+    return value || "strict-origin-when-cross-origin";
+  };
   const intercepted = async (w, input, init, thisArg) => {
     let request;
     // A Request of another realm (a page's frame is asked with its parent's) is rebuilt here from what it holds.
@@ -363,7 +369,7 @@
       if (signal) signal.addEventListener("abort", () => { if (w.fetches.delete(id)) reject(signal.reason !== undefined ? signal.reason : new DOMException("The user aborted a request.", "AbortError")); }, { once: true });
       w.port.postMessage({
         t: "fetch", id, clientId: clientIdOf(),
-        request: { url: request.url, method: request.method, headers: Array.from(request.headers.entries()), body, mode: request.mode, credentials: request.credentials, cache: request.cache, redirect: request.redirect, referrer: request.referrer === "about:client" ? location.href : request.referrer },
+        request: { url: request.url, method: request.method, headers: Array.from(request.headers.entries()), body, mode: request.mode, credentials: request.credentials, cache: request.cache, redirect: request.redirect, referrer: request.referrer === "about:client" ? location.href : request.referrer, referrerPolicy: request.referrerPolicy || documentReferrerPolicy() },
       });
     });
     if (result.kind === "fallback") return nativeFetch.call(thisArg, input, init);

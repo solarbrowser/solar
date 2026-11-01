@@ -393,7 +393,8 @@
 
   // ---- Requests: from a page's fetch, a subresource, or a navigation ----
   const requestOf = (d) => {
-    const init = { method: d.method, headers: d.headers, credentials: d.credentials, cache: d.cache, redirect: d.redirect, referrer: d.referrer || undefined };
+    const init = { method: d.method, headers: d.headers, credentials: d.credentials, cache: d.cache, redirect: d.redirect, referrer: d.referrer === "" ? "" : d.referrer || undefined };
+    if (d.referrerPolicy) init.referrerPolicy = d.referrerPolicy;
     if (d.body && d.method !== "GET" && d.method !== "HEAD") init.body = d.body;
     const mode = d.mode === "navigate" ? "same-origin" : d.mode;
     if (mode) init.mode = mode;
