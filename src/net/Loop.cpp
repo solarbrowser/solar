@@ -223,6 +223,21 @@ void Loop::Run() {
   }
 }
 
+void Loop::RunUntil(const std::function<bool()>& done) {
+  Impl& core = *impl_;
+  const bool wasStopped = core.stopped;
+  core.stopped = false;
+  while (!core.stopped && !done()) {
+    core.RunPosted();
+    core.RunTimers();
+    core.DrainFinalizable();
+    if (done() || core.stopped) break;
+    if (!core.Pending() && core.finalizable.empty() && !core.HasPosted()) break;
+    if (!core.backend->Wait(core.TimeoutMs())) break;
+  }
+  core.stopped = wasStopped;
+}
+
 void Connection::Send(std::string data) {
   ConnectionState& c = State(this);
   if (c.closing || data.empty()) return;

@@ -115,6 +115,8 @@ class Loop {
   // Runs until no busy connection is open and no foreground timer is pending, or Stop() is called.
   void Run();
   void Stop();
+  // Runs as Run does, but returns once `done` says so, also from inside a task of the loop (a request that is waited for).
+  void RunUntil(const std::function<bool()>& done);
 
   struct Impl;
 

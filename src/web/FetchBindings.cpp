@@ -26,6 +26,7 @@ void Install(Host& host) {
   DefineResponseClass(host.GetContext());
   DefineRequestClass(host.GetContext());
   DefineFetchFunction(host.GetContext());
+  DefineSyncFetch(host.GetContext());
   // Web IDL makes @@iterator the same function object as entries, and the embedding surface has no
   // symbol-keyed definitions, so it is installed from script.
   host.Evaluate("Headers.prototype[Symbol.iterator] = Headers.prototype.entries; FormData.prototype[Symbol.iterator] = FormData.prototype.entries; Object.setPrototypeOf(File, Blob);");

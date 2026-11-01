@@ -9,9 +9,92 @@
 // can be synchronous; any other is sent with fetch, and only asynchronously.
 (function () {
   const load = __solarLoadText;
+  const syncFetch = typeof __solarSyncFetch === "function" ? __solarSyncFetch : null;
+  delete globalThis.__solarSyncFetch;
   const contentTypeOf = __solarContentTypeOf;
   delete globalThis.__solarLoadText;
   delete globalThis.__solarContentTypeOf;
+
+  // A MIME type as the MIME Sniffing Standard parses it and serializes it: null where the text is none.
+  const tokenChar = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+  const parseMime = (input) => {
+    const text = String(input).replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, "");
+    const slash = text.indexOf("/");
+    if (slash <= 0) return null;
+    const type = text.slice(0, slash);
+    let rest = text.slice(slash + 1);
+    const semi = rest.indexOf(";");
+    const subtype = (semi < 0 ? rest : rest.slice(0, semi)).replace(/[\t\n\r ]+$/, "");
+    if (!tokenChar.test(type) || !tokenChar.test(subtype)) return null;
+    const mime = { type: type.toLowerCase(), subtype: subtype.toLowerCase(), params: new Map() };
+    if (semi < 0) return mime;
+    let i = slash + 1 + semi + 1;
+    while (i < text.length) {
+      while (i < text.length && /[\t\n\r ]/.test(text[i])) i++;
+      let name = "";
+      while (i < text.length && text[i] !== ";" && text[i] !== "=") name += text[i++];
+      name = name.toLowerCase();
+      if (i < text.length) {
+        if (text[i] === ";") { i++; continue; }
+        i++;
+      }
+      let value = "";
+      if (text[i] === '"') {
+        i++;
+        while (i < text.length) {
+          if (text[i] === "\\") { i++; if (i >= text.length) { value += "\\"; break; } value += text[i++]; continue; }
+          if (text[i] === '"') { i++; break; }
+          value += text[i++];
+        }
+        while (i < text.length && text[i] !== ";") i++;
+      } else {
+        while (i < text.length && text[i] !== ";") value += text[i++];
+        value = value.replace(/[\t\n\r ]+$/, "");
+        if (value === "") continue;
+      }
+      if (name !== "" && tokenChar.test(name) && /^[\t\x20-\x7e\x80-\xff]*$/.test(value) && !mime.params.has(name)) mime.params.set(name, value);
+    }
+    return mime;
+  };
+  const serializeMime = (mime) => {
+    let out = mime.type + "/" + mime.subtype;
+    for (const [name, value] of mime.params) {
+      out += ";" + name + "=" + (value === "" || !tokenChar.test(value) ? '"' + value.replace(/["\\]/g, "\\$&") + '"' : value);
+    }
+    return out;
+  };
+  // The MIME type the response is taken to have: the one overrideMimeType gave (its charset kept to the response's where it has none), or the header's.
+  const finalMime = (s) => {
+    const header = s.responseHeaders && s.responseHeaders.get("content-type");
+    let mime = header === null || header === undefined ? null : parseMime(header);
+    if (s.overrideMime !== null) {
+      const over = parseMime(s.overrideMime) || parseMime("application/octet-stream");
+      if (!over.params.has("charset") && mime && mime.params.has("charset")) over.params.set("charset", mime.params.get("charset"));
+      return over;
+    }
+    return mime || parseMime("text/xml");
+  };
+
+  // The text of a response: in the encoding a byte order mark says, else the charset of its MIME type, else (for an XML one) the one its declaration names, else UTF-8.
+  const decodeText = (bytes, mime, sniffHtml, noXml) => {
+    let label = null;
+    if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) { label = "utf-16be"; bytes = bytes.subarray(2); }
+    else if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) { label = "utf-16le"; bytes = bytes.subarray(2); }
+    else if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) { label = "utf-8"; bytes = bytes.subarray(3); }
+    if (label === null && mime && mime.params.has("charset")) label = mime.params.get("charset");
+    if (label === null && !noXml && mime && (mime.subtype === "xml" || mime.subtype.endsWith("+xml")) && (mime.type === "text" || mime.type === "application" || mime.type === "image")) {
+      const head = String.fromCharCode(...bytes.subarray(0, 1024));
+      const m = /^<\?xml[^>]*?encoding\s*=\s*["']([^"']+)["']/.exec(head);
+      if (m) label = m[1];
+    }
+    if (label === null && sniffHtml) {
+      const m = /<meta[^>]*?charset\s*=\s*["']?\s*([^"'\s>;\/]+)/i.exec(String.fromCharCode(...bytes.subarray(0, 1024)));
+      if (m) label = m[1];
+    }
+    let decoder;
+    try { decoder = new TextDecoder(label || "utf-8", { ignoreBOM: true }); } catch (e) { decoder = new TextDecoder("utf-8", { ignoreBOM: true }); }
+    return decoder.decode(bytes);
+  };
 
   const UNSENT = 0, OPENED = 1, HEADERS_RECEIVED = 2, LOADING = 3, DONE = 4;
   const internal = new WeakMap();
@@ -108,6 +191,26 @@
         fire(self, "loadend", { lengthComputable: true, loaded: bytes.length, total: bytes.length });
       }
     };
+    if (!s.async && syncFetch && /^https?:/i.test(s.url)) {
+      // A synchronous request is waited for where it is sent.
+      let body = null;
+      if (s.body !== null) {
+        if (typeof s.body === "string") body = unescape(encodeURIComponent(s.body));
+        else if (ArrayBuffer.isView(s.body) || s.body instanceof ArrayBuffer) {
+          const view = ArrayBuffer.isView(s.body) ? new Uint8Array(s.body.buffer, s.body.byteOffset, s.body.byteLength) : new Uint8Array(s.body);
+          body = ""; for (let i = 0; i < view.length; i += 8192) body += String.fromCharCode.apply(null, view.subarray(i, i + 8192));
+        } else { fail(self, "error"); return; }
+      }
+      const pairs = [];
+      for (const [name, value] of s.headers) pairs.push((s.names && s.names.get(name)) || (name === "content-type" ? "Content-Type" : name), value);
+      const answer = syncFetch(s.method, s.url, pairs, body);
+      if (answer === null) { fail(self, "error"); return; }
+      const headers = new Headers();
+      for (let i = 0; i + 1 < answer[2].length; i += 2) { try { headers.append(answer[2][i], answer[2][i + 1]); } catch (e) { /* not a header */ } }
+      const bytes = s.method === "HEAD" ? new Uint8Array(0) : answer[3];
+      finish(answer[0], answer[1], headers, bytes, decodeText(bytes, finalMime({ responseHeaders: headers, overrideMime: s.overrideMime }), false, s.responseType !== ""));
+      return;
+    }
     const local = (s.method === "GET" || s.method === "HEAD") && (!s.async || !/^https?:/i.test(s.url)) ? load(s.url) : undefined;
     if (local !== undefined) {
       const headers = new Headers({ "content-type": contentTypeOf(s.url) });
@@ -119,7 +222,7 @@
     if (s.body !== null) init.body = s.body;
     fetch(s.url, init).then(async (response) => {
       const bytes = new Uint8Array(await response.arrayBuffer());
-      finish(response.status, response.statusText, response.headers, bytes, new TextDecoder().decode(bytes));
+      finish(response.status, response.statusText, response.headers, bytes, decodeText(bytes, finalMime({ responseHeaders: response.headers, overrideMime: s.overrideMime }), false, s.responseType !== ""));
     }, () => { if (s.id === id && s.sendFlag) fail(self, "error"); });
   }
 
@@ -177,7 +280,7 @@
       }
       s.id++;
       if (s.timer) { clearTimeout(s.timer); s.timer = null; }
-      s.method = method; s.url = parsed.href; s.async = Boolean(async); s.headers = new Headers(); s.body = null;
+      s.method = method; s.url = parsed.href; s.async = Boolean(async); s.headers = new Headers(); s.names = null; s.body = null;
       s.sendFlag = false; s.errorFlag = false; s.response = null; s.responseHeaders = null; s.status = 0; s.statusText = ""; s.text = ""; s.bytes = null; s.aborted = false;
       if (s.state !== OPENED) {
         s.state = OPENED;
@@ -197,6 +300,8 @@
       const lower = name.toLowerCase();
       if (forbiddenHeaders.has(lower) || lower.startsWith("proxy-") || lower.startsWith("sec-")) return;
       s.headers.append(name, value);
+      if (!s.names) s.names = new Map();
+      if (!s.names.has(lower)) s.names.set(lower, name);
     }
 
     send(body = null) {
@@ -282,17 +387,21 @@
       }
       if (s.state !== DONE || s.errorFlag) return null;
       if (s.response !== null) return s.response;
-      const mime = ((s.overrideMime || (s.responseHeaders && s.responseHeaders.get("content-type")) || "") + "").split(";")[0].trim().toLowerCase();
+      const fm = finalMime(s), mime = fm.type + "/" + fm.subtype;
       switch (s.responseType) {
         case "arraybuffer": s.response = s.bytes.buffer.slice(s.bytes.byteOffset, s.bytes.byteOffset + s.bytes.byteLength); break;
-        case "blob": s.response = new Blob([s.bytes], { type: mime }); break;
+        case "blob":
+          s.response = new Blob([s.bytes]);
+          // (The type of a blob made here is not lower-cased or limited as a script's is.)
+          Object.defineProperty(s.response, "type", { value: serializeMime(fm), configurable: true });
+          break;
         case "json":
           try { s.response = JSON.parse(s.text); } catch (e) { s.response = null; }
           break;
         case "document": {
           const parser = new DOMParser();
           try {
-            if (mime === "text/html") s.response = parser.parseFromString(s.text, "text/html");
+            if (mime === "text/html") s.response = parser.parseFromString(decodeText(s.bytes, fm, true), "text/html");
             else if (/^(text|application)\/(.+\+)?xml$/.test(mime) || mime === "image/svg+xml") s.response = parser.parseFromString(s.text, mime === "text/xml" || mime === "application/xml" || mime === "application/xhtml+xml" || mime === "image/svg+xml" ? mime : "application/xml");
             else s.response = null;
           } catch (e) { s.response = null; }
@@ -309,12 +418,12 @@
       const s = internal.get(this);
       if (s.responseType !== "" && s.responseType !== "document") throw new DOMException("The value is only accessible if the object's 'responseType' is '' or 'document'.", "InvalidStateError");
       if (s.state !== DONE || s.errorFlag) return null;
-      const mime = ((s.overrideMime || (s.responseHeaders && s.responseHeaders.get("content-type")) || "") + "").split(";")[0].trim().toLowerCase();
+      const fm = finalMime(s), mime = fm.type + "/" + fm.subtype;
       if (s.responseType === "") {
         if (!(mime === "text/xml" || mime === "application/xml" || mime === "image/svg+xml" || /\+xml$/.test(mime))) return null;
       }
       if (s.xmlDocument === undefined) {
-        try { s.xmlDocument = new DOMParser().parseFromString(s.text, mime === "text/html" ? "text/html" : mime || "application/xml"); } catch (e) { s.xmlDocument = null; }
+        try { s.xmlDocument = new DOMParser().parseFromString(mime === "text/html" ? decodeText(s.bytes, finalMime(s), true) : decodeText(s.bytes, finalMime(s)), mime === "text/html" ? "text/html" : mime || "application/xml"); } catch (e) { s.xmlDocument = null; }
       }
       return s.xmlDocument;
     }

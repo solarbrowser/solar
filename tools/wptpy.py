@@ -34,16 +34,26 @@ def to_bytes(value):
 _missing = object()
 
 
+def query_bytes(value):
+    """What a parameter of a query is: the bytes the percent escapes were, which parse_qsl read as latin-1 text."""
+    if isinstance(value, str):
+        try:
+            return value.encode("latin-1")
+        except UnicodeEncodeError:
+            return value.encode("utf-8")
+    return to_bytes(value)
+
+
 class MultiDict(dict):
     """The parameters of a query or a form: a name has a list of values (bytes)."""
 
     def __init__(self, pairs=()):
         super().__init__()
         for key, value in pairs:
-            self.setdefault(to_bytes(key), []).append(to_bytes(value))
+            self.setdefault(query_bytes(key), []).append(query_bytes(value))
 
     def _key(self, key):
-        return to_bytes(key)
+        return query_bytes(key)
 
     def __getitem__(self, key):
         return super().__getitem__(self._key(key))[0]

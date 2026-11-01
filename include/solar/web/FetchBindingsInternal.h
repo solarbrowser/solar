@@ -226,6 +226,8 @@ void DefineResponseClass(Quanta::Context& ctx);
 JsResponse* NewResponse(Quanta::Context& ctx);
 void DefineRequestClass(Quanta::Context& ctx);
 void DefineFetchFunction(Quanta::Context& ctx);
+// __solarSyncFetch: a request that is waited for, for XMLHttpRequest's synchronous send().
+void DefineSyncFetch(Quanta::Context& ctx);
 // Ends what is in flight for an operation that the host is going away with.
 struct FetchOperation;
 void CancelOperation(FetchOperation& operation);
