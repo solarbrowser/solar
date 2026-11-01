@@ -1187,7 +1187,7 @@ const TypeDefinition kTypeDefinitions[] = {
     {"<scroll-state-query>", "not <scroll-state-in-parens> | <scroll-state-in-parens> [ [ and <scroll-state-in-parens> ]* | [ or <scroll-state-in-parens> ]* ] | <scroll-state-feature>"},
     {"<scroller>", "root | nearest | self"},
     {"<selector-list>", "<complex-selector-list>"},
-    {"<self-position>", "center | start | end | self-start | self-end | flex-start | flex-end"},
+    {"<self-position>", "center | start | end | self-start | self-end | flex-start | flex-end | anchor-center"},
     {"<shadow>", "<color>? && [ <length>{2} [ <length [0,∞]> <length>? ]? ] && inset?"},
     {"<shape-box>", "<visual-box> | margin-box | half-border-box"},
     {"<shape-command>", "<move-command> | <line-command> | close | <horizontal-line-command> | <vertical-line-command> | <curve-command> | <smooth-command> | <arc-command>"},

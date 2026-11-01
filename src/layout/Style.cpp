@@ -234,11 +234,19 @@ std::shared_ptr<const BoxStyle> Logicalize(const std::shared_ptr<const BoxStyle>
   return l;
 }
 
+Length ParseLengthText(const std::string& text);
+
 namespace {
 
 Length ParseLength(const std::string& text) {
   Length l;
   if (text.empty() || text == "auto") return l;
+  // An anchor() or an anchor-size() in it: known when the box is placed, against its anchor.
+  if (text.find("anchor(") != std::string::npos || text.find("anchor-size(") != std::string::npos) {
+    l.kind = Length::Kind::Anchor;
+    l.calc = text;
+    return l;
+  }
   if (text == "none") { l.kind = Length::Kind::None; return l; }
   if (text == "min-content") { l.kind = Length::Kind::MinContent; return l; }
   if (text == "max-content") { l.kind = Length::Kind::MaxContent; return l; }
@@ -272,6 +280,9 @@ T Pick(const std::string& text, std::initializer_list<std::pair<const char*, T>>
 
 }  // namespace
 
+Length ParseLengthText(const std::string& text) { return ParseLength(text); }
+
+
 std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* element, const std::string& pseudo) {
   auto style = std::make_shared<BoxStyle>();
   BoxStyle& s = *style;
@@ -291,6 +302,31 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
       {"block flex", Display::Flex}, {"inline flex", Display::InlineFlex}, {"block grid", Display::Grid}, {"inline grid", Display::InlineGrid},
       {"block table", Display::Table}, {"inline table", Display::InlineTable}, {"list-item block flow", Display::ListItem}, {"block flow list-item", Display::ListItem}}, Display::Inline);
   s.gridLanes = display == "grid-lanes" || display == "inline-grid-lanes" || display == "block grid-lanes" || display == "inline grid-lanes";
+  {
+    // Anchor positioning: the names, the default anchor, the area and the fallbacks.
+    const std::string names = get("anchor-name");
+    if (!names.empty() && names != "none") {
+      size_t start = 0;
+      while (start <= names.size()) {
+        size_t comma = names.find(',', start);
+        std::string one = names.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+        const size_t b = one.find_first_not_of(' '), e = one.find_last_not_of(' ');
+        if (b != std::string::npos) s.anchorNames.push_back(one.substr(b, e - b + 1));
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+      }
+    }
+    const std::string anchor = get("position-anchor");
+    if (!anchor.empty()) s.positionAnchor = anchor;
+    const std::string area = get("position-area");
+    if (!area.empty()) s.positionArea = area;
+    const std::string fallbacks = get("position-try-fallbacks");
+    if (!fallbacks.empty()) s.positionTryFallbacks = fallbacks;
+    const std::string order = get("position-try-order");
+    if (!order.empty()) s.positionTryOrder = order;
+    const std::string visibility = get("position-visibility");
+    if (!visibility.empty()) s.positionVisibility = visibility;
+  }
   s.position = Pick<Position>(get("position"), {{"relative", Position::Relative}, {"absolute", Position::Absolute}, {"fixed", Position::Fixed}, {"sticky", Position::Sticky}, {"-webkit-sticky", Position::Sticky}}, Position::Static);
   s.floating = Pick<Float>(get("float"), {{"left", Float::Left}, {"right", Float::Right}, {"inline-start", Float::InlineStart}, {"inline-end", Float::InlineEnd}}, Float::None);
   s.clear = Pick<Clear>(get("clear"), {{"left", Clear::Left}, {"right", Clear::Right}, {"both", Clear::Both}, {"inline-start", Clear::InlineStart}, {"inline-end", Clear::InlineEnd}}, Clear::None);
@@ -355,7 +391,7 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
                                      {"last baseline", Align::Kind::LastBaseline}, {"start", Align::Kind::Start}, {"end", Align::Kind::End}, {"flex-start", Align::Kind::FlexStart},
                                      {"flex-end", Align::Kind::FlexEnd}, {"self-start", Align::Kind::SelfStart}, {"self-end", Align::Kind::SelfEnd}, {"center", Align::Kind::Center},
                                      {"left", Align::Kind::Left}, {"right", Align::Kind::Right}, {"space-between", Align::Kind::SpaceBetween}, {"space-around", Align::Kind::SpaceAround},
-                                     {"space-evenly", Align::Kind::SpaceEvenly}}, Align::Kind::Normal);
+                                     {"space-evenly", Align::Kind::SpaceEvenly}, {"anchor-center", Align::Kind::AnchorCenter}}, Align::Kind::Normal);
       return a;
     };
     s.justifyContent = align("justify-content");

@@ -8,6 +8,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "solar/dom/Node.h"
 
@@ -16,10 +17,10 @@
 namespace solar::layout {
 
 struct Length {
-  enum class Kind : uint8_t { Auto, Px, Percent, Calc, None, MinContent, MaxContent, FitContent, Stretch };
+  enum class Kind : uint8_t { Auto, Px, Percent, Calc, None, MinContent, MaxContent, FitContent, Stretch, Anchor };
   Kind kind = Kind::Auto;
   double value = 0;
-  std::string calc;  // a calc() that has a percentage in it, as written
+  std::string calc;  // a calc() that has a percentage in it, as written; for Anchor, the value as written (it has an anchor() or an anchor-size() in it)
 
   Length() = default;
   explicit Length(Kind k, double v = 0) : kind(k), value(v) {}
@@ -27,6 +28,7 @@ struct Length {
   static Length Percent(double v) { return Length(Kind::Percent, v); }
   bool IsAuto() const { return kind == Kind::Auto; }
   bool IsNone() const { return kind == Kind::None; }
+  bool IsAnchor() const { return kind == Kind::Anchor; }
   // Whether the value depends on the containing block (a percentage).
   bool IsPercentage() const { return kind == Kind::Percent || kind == Kind::Calc; }
   bool IsKeyword() const { return kind == Kind::MinContent || kind == Kind::MaxContent || kind == Kind::FitContent; }
@@ -64,7 +66,7 @@ enum class FlexWrap : uint8_t { Nowrap, Wrap, WrapReverse };
 // A value of the box alignment properties (justify-content, align-items, align-self, align-content, justify-self...).
 struct Align {
   enum class Kind : uint8_t {
-    Auto, Normal, Stretch, Baseline, LastBaseline, Start, End, FlexStart, FlexEnd, SelfStart, SelfEnd, Center, Left, Right, SpaceBetween, SpaceAround, SpaceEvenly,
+    Auto, Normal, Stretch, Baseline, LastBaseline, Start, End, FlexStart, FlexEnd, SelfStart, SelfEnd, Center, Left, Right, SpaceBetween, SpaceAround, SpaceEvenly, AnchorCenter,
   };
   Kind kind = Kind::Normal;
   bool safe = false;    // `safe`: not past the start edge
@@ -149,6 +151,10 @@ struct BoxStyle {
   bool flexBasisContent = false;
   int order = 0;
   Align justifyContent, alignItems, alignSelf, alignContent, justifyItems, justifySelf;
+  // Anchor positioning (css-anchor-position): the names it takes, the default anchor, the area, the fallbacks, as text.
+  std::vector<std::string> anchorNames;
+  std::string positionAnchor = "normal", positionArea = "none", positionTryFallbacks = "none", positionTryOrder = "normal", positionVisibility = "anchor-visible";
+  std::vector<std::string> anchorScope;
   // Transforms (css-transforms): the computed values as text.
   std::string transform = "none", transformOrigin, translate = "none", rotate = "none", scale = "none", perspective = "none", perspectiveOrigin;
   bool preserve3d = false;

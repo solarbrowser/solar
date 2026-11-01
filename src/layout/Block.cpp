@@ -665,11 +665,14 @@ bool MemoEligible(const Box& box) {
   return true;
 }
 
+// A block container whose writing mode is not its parent's is an independent formatting context.
+bool DiffersInWritingMode(const Box& box) { return box.parent && box.parent->kind == Box::Kind::Block && !box.anonymous && box.style->writingMode != box.parent->style->writingMode; }
+
 bool Establishes(const Box& box) {
   const BoxStyle& s = *box.style;
   const bool plainBlock = !box.replaced && !IsFlexDisplay(s.display) && !IsGridDisplay(s.display) && !IsTableDisplay(s.display) && s.display != Display::TableCell;
   const bool contentAligned = plainBlock && s.alignContent.kind != Align::Kind::Normal && s.alignContent.kind != Align::Kind::Stretch && s.alignContent.kind != Align::Kind::Auto;
-  return s.CreatesBlockFormattingContext() || IsRootBox(box) || box.forceBfc || contentAligned || s.display == Display::TableCell;
+  return s.CreatesBlockFormattingContext() || IsRootBox(box) || box.forceBfc || contentAligned || s.display == Display::TableCell || DiffersInWritingMode(box);
 }
 
 }  // namespace
@@ -946,7 +949,7 @@ void LayoutBlockLevelOnce(LayoutContext& lc, Box& box, double cbWidth, double cb
   // align-content other than normal puts the contents of a block container in the room it has, and makes it a formatting context.
   const bool plainBlock = !box.replaced && !IsFlexDisplay(s.display) && !IsGridDisplay(s.display) && !IsTableDisplay(s.display) && s.display != Display::TableCell;
   const bool contentAligned = plainBlock && s.alignContent.kind != Align::Kind::Normal && s.alignContent.kind != Align::Kind::Stretch && s.alignContent.kind != Align::Kind::Auto;
-  const bool establishes = s.CreatesBlockFormattingContext() || IsRootBox(box) || box.forceBfc || contentAligned || s.display == Display::TableCell;
+  const bool establishes = s.CreatesBlockFormattingContext() || IsRootBox(box) || box.forceBfc || contentAligned || s.display == Display::TableCell || DiffersInWritingMode(box);
   const bool heightIsAuto = !Known(specifiedHeight) && !Known(ratioHeight);
   const double minH = [&] {
     const double v = ResolveSize(s.minHeight, cbHeight);
@@ -1319,7 +1322,24 @@ double Place(Side side, double start, double end, double outer, double cbSize, b
   return pos;  // (the box is not kept within the containing block, as the engines that sized the tests have it)
 }
 
+void PlaceOneAt(LayoutContext& lc, Box& a);
+
+// An absolutely positioned box: placed in its containing block (with what depends on its anchors worked out first).
 void PlaceOne(LayoutContext& lc, Box& a) {
+  if (NeedsAnchors(*a.style)) {
+    const CbRect cb = ContainingBlockOf(lc, a);
+    if (std::shared_ptr<const BoxStyle> resolved = ResolveAnchorStyle(lc, a, cb.x, cb.y, cb.width, cb.height)) {
+      std::shared_ptr<const BoxStyle> own = a.style;
+      a.style = resolved;
+      PlaceOneAt(lc, a);
+      a.style = own;
+      return;
+    }
+  }
+  PlaceOneAt(lc, a);
+}
+
+void PlaceOneAt(LayoutContext& lc, Box& a) {
   const BoxStyle& s = *a.style;
   const WritingMode mode = a.Mode();
   CbRect cbPhys = ContainingBlockOf(lc, a);

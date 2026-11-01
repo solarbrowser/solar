@@ -173,4 +173,14 @@ void ApplyFirstLetters(LayoutContext& lc, Box& root);
 // Controls.cpp: the natural size of a form control, if the element is one that is replaced by a control.
 bool ControlSize(LayoutContext& lc, dom::Element* element, Box& box);
 
+// Style.cpp: a length as the computed value is written.
+Length ParseLengthText(const std::string& text);
+
+// Anchor.cpp: anchor positioning (css-anchor-position).
+// Whether the style of a positioned box has anything that is known only once its anchors are (anchor(), anchor-size(), an area).
+bool NeedsAnchors(const BoxStyle& style);
+// The style of an absolutely positioned box with what depends on its anchors worked out, against the containing block (its padding box in the page: x, y, width, height).
+// Nothing when it has no anchors to work out.
+std::shared_ptr<const BoxStyle> ResolveAnchorStyle(LayoutContext& lc, const Box& element, double cbX, double cbY, double cbWidth, double cbHeight);
+
 }  // namespace solar::layout
