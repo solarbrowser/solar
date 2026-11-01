@@ -67,6 +67,7 @@ enum class FlexWrap : uint8_t { Nowrap, Wrap, WrapReverse };
 struct Align {
   enum class Kind : uint8_t {
     Auto, Normal, Stretch, Baseline, LastBaseline, Start, End, FlexStart, FlexEnd, SelfStart, SelfEnd, Center, Left, Right, SpaceBetween, SpaceAround, SpaceEvenly, AnchorCenter,
+    PhysLeft, PhysRight, PhysTop, PhysBottom,  // (the alignments a position-area gives: toward a physical edge)
   };
   Kind kind = Kind::Normal;
   bool safe = false;    // `safe`: not past the start edge

@@ -48,6 +48,9 @@ struct LayoutContext {
   double forceHeight = std::numeric_limits<double>::quiet_NaN();  // content height
   double inlineCbHeight = std::numeric_limits<double>::quiet_NaN();  // the height inline-blocks resolve their percentages against
   bool keepOwnFrame = false;  // positioned boxes: left in their own frame, placed by PlaceOne
+  // A positioned box with an anchor: where the anchor is, and where its position-area is (both in the page), for the box being placed.
+  bool anchorKnown = false, areaKnown = false;
+  double anchorX = 0, anchorY = 0, anchorWidth = 0, anchorHeight = 0, areaX = 0, areaY = 0, areaWidth = 0, areaHeight = 0;
   // The width an auto-width box has to fit in when it is not the containing block's (beside floats).
   double availOverride = std::numeric_limits<double>::quiet_NaN();
   // For the lines of an inline formatting context: where the container's content box is in the block formatting context.
@@ -177,10 +180,25 @@ bool ControlSize(LayoutContext& lc, dom::Element* element, Box& box);
 Length ParseLengthText(const std::string& text);
 
 // Anchor.cpp: anchor positioning (css-anchor-position).
-// Whether the style of a positioned box has anything that is known only once its anchors are (anchor(), anchor-size(), an area).
+// Whether the style of a positioned box has anything that is known only once its anchors are (anchor(), anchor-size(), an area, anchor-center).
 bool NeedsAnchors(const BoxStyle& style);
-// The style of an absolutely positioned box with what depends on its anchors worked out, against the containing block (its padding box in the page: x, y, width, height).
-// Nothing when it has no anchors to work out.
-std::shared_ptr<const BoxStyle> ResolveAnchorStyle(LayoutContext& lc, const Box& element, double cbX, double cbY, double cbWidth, double cbHeight);
+struct AnchorResult {
+  std::shared_ptr<const BoxStyle> style;  // the style with what depends on the anchors worked out
+  bool area = false;                      // a position-area applies: the containing block is the rectangle areaX, areaY, areaWidth, areaHeight (in the page)
+  double areaX = 0, areaY = 0, areaWidth = 0, areaHeight = 0;
+  bool anchor = false;                    // the default anchor is there: its border box in the page
+  double anchorX = 0, anchorY = 0, anchorWidth = 0, anchorHeight = 0;
+};
+// What a positioned box's anchors make of it, against the containing block (its padding box in the page: x, y, width, height).
+// One of the options of position-try-fallbacks: the name of a @position-try rule and the tactics, or a position-area.
+struct PositionTryOption {
+  std::string rule;
+  std::vector<std::string> tactics;
+  std::string area;
+};
+// The options of the style's position-try-fallbacks, in order (none for `none`).
+std::vector<PositionTryOption> PositionTryOptions(const BoxStyle& style);
+// `option`: the one of the fallbacks the box is tried with, over its own style.
+AnchorResult ResolveAnchorStyle(LayoutContext& lc, const Box& element, double cbX, double cbY, double cbWidth, double cbHeight, const PositionTryOption* option = nullptr);
 
 }  // namespace solar::layout

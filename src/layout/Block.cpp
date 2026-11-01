@@ -1288,7 +1288,7 @@ Side StaticSide(const Box& a, const Box* parent, bool inlineAxis, WritingMode cb
   if (self.kind == Align::Kind::Auto && IsGridDisplay(ps.display)) self = cbInline ? ps.justifyItems : ps.alignItems;
   const Align::Kind kind = self.kind;
   if (kind == Align::Kind::Auto || kind == Align::Kind::Normal || kind == Align::Kind::Stretch) return Side::None;
-  if (kind == Align::Kind::Center || kind == Align::Kind::SpaceAround || kind == Align::Kind::SpaceEvenly) return Side::Center;
+  if (kind == Align::Kind::Center || kind == Align::Kind::SpaceAround || kind == Align::Kind::SpaceEvenly || kind == Align::Kind::AnchorCenter) return Side::Center;
   const WritingMode own = a.Mode();
   const Dir axis = inlineAxis ? FrameX(own) : FrameY(own);
   // Which end of the containing block's axis (or of the box's own) the box hugs, and which way that axis runs.
@@ -1300,6 +1300,10 @@ Side StaticSide(const Box& a, const Box* parent, bool inlineAxis, WritingMode cb
     case Align::Kind::SelfEnd: startToEnd = inlineAxis ? InlineStartDir(own, s.direction) : FrameY(own); wantStart = false; break;
     case Align::Kind::Left: startToEnd = FrameX(cbMode); break;
     case Align::Kind::Right: startToEnd = FrameX(cbMode); wantStart = false; break;
+    case Align::Kind::PhysLeft: startToEnd = Dir{1, 0}; break;
+    case Align::Kind::PhysRight: startToEnd = Dir{1, 0}; wantStart = false; break;
+    case Align::Kind::PhysTop: startToEnd = Dir{0, 1}; break;
+    case Align::Kind::PhysBottom: startToEnd = Dir{0, 1}; wantStart = false; break;
     default: break;
   }
   const int d = Dot(startToEnd, axis);
@@ -1324,25 +1328,85 @@ double Place(Side side, double start, double end, double outer, double cbSize, b
 
 void PlaceOneAt(LayoutContext& lc, Box& a);
 
-// An absolutely positioned box: placed in its containing block (with what depends on its anchors worked out first).
+// An absolutely positioned box: placed in its containing block (with what depends on its anchors worked out first), and, when its margin box
+// does not fit in the containing block the insets leave, with the next of its position-try-fallbacks that does.
 void PlaceOne(LayoutContext& lc, Box& a) {
-  if (NeedsAnchors(*a.style)) {
-    const CbRect cb = ContainingBlockOf(lc, a);
-    if (std::shared_ptr<const BoxStyle> resolved = ResolveAnchorStyle(lc, a, cb.x, cb.y, cb.width, cb.height)) {
-      std::shared_ptr<const BoxStyle> own = a.style;
-      a.style = resolved;
-      PlaceOneAt(lc, a);
-      a.style = own;
+  if (!NeedsAnchors(*a.style)) {
+    PlaceOneAt(lc, a);
+    return;
+  }
+  const std::shared_ptr<const BoxStyle> own = a.style;
+  const CbRect cb = ContainingBlockOf(lc, a);
+  const std::vector<PositionTryOption> options = PositionTryOptions(*own);
+  // One try: the style the option makes, the box placed with it, whether it fits, and the size of the containing block the insets leave it.
+  struct Try {
+    bool fits = true;
+    double width = 0, height = 0;
+  };
+  const auto attempt = [&](const PositionTryOption* option) {
+    Try outcome;
+    const AnchorResult result = ResolveAnchorStyle(lc, a, cb.x, cb.y, cb.width, cb.height, option);
+    a.style = result.style ? result.style : own;
+    lc.anchorKnown = result.anchor;
+    lc.anchorX = result.anchorX; lc.anchorY = result.anchorY; lc.anchorWidth = result.anchorWidth; lc.anchorHeight = result.anchorHeight;
+    lc.areaKnown = result.area;
+    lc.areaX = result.areaX; lc.areaY = result.areaY; lc.areaWidth = result.areaWidth; lc.areaHeight = result.areaHeight;
+    PlaceOneAt(lc, a);
+    if (!options.empty()) {
+      // The margin box must be inside the containing block (the area, when there is one) less the insets.
+      double x = result.area ? result.areaX : cb.x, y = result.area ? result.areaY : cb.y, w = result.area ? result.areaWidth : cb.width, h = result.area ? result.areaHeight : cb.height;
+      const BoxStyle& physical = a.style->Physical();
+      const double top = ResolveSize(physical.inset[0], h), right = ResolveSize(physical.inset[1], w), bottom = ResolveSize(physical.inset[2], h), left = ResolveSize(physical.inset[3], w);
+      if (Known(left)) { x += left; w -= left; }
+      if (Known(right)) w -= right;
+      if (Known(top)) { y += top; h -= top; }
+      if (Known(bottom)) h -= bottom;
+      const Rect border = AbsoluteBorderBox(a);
+      const double eps = 0.01;
+      outcome.fits = border.x - a.margin.left >= x - eps && border.x + border.width + a.margin.right <= x + w + eps && border.y - a.margin.top >= y - eps && border.y + border.height + a.margin.bottom <= y + h + eps;
+      outcome.width = w;
+      outcome.height = h;
+    }
+    lc.anchorKnown = lc.areaKnown = false;
+    a.style = own;
+    return outcome;
+  };
+  const Try base = attempt(nullptr);
+  const std::string& order = own->Physical().positionTryOrder;
+  if (options.empty() || (base.fits && order == "normal")) return;
+  if (order == "normal") {
+    for (const PositionTryOption& option : options) {
+      if (attempt(&option).fits) return;
+    }
+    // None of them fits: the first, the box as it is without them.
+    attempt(nullptr);
+    return;
+  }
+  // The options, the style's own among them, by how much room their containing blocks have in the dimension asked, the most first.
+  struct Candidate {
+    const PositionTryOption* option;
+    Try outcome;
+  };
+  std::vector<Candidate> candidates{{nullptr, base}};
+  for (const PositionTryOption& option : options) candidates.push_back({&option, attempt(&option)});
+  const bool cbVertical = IsVertical(cb.box ? cb.box->Mode() : lc.tree.root->Mode());
+  const bool byWidth = order == "most-width" || (order == "most-inline-size" && !cbVertical) || (order == "most-block-size" && cbVertical);
+  std::stable_sort(candidates.begin(), candidates.end(), [&](const Candidate& x, const Candidate& y) { return byWidth ? x.outcome.width > y.outcome.width : x.outcome.height > y.outcome.height; });
+  for (const Candidate& c : candidates) {
+    if (c.outcome.fits) {
+      attempt(c.option);
       return;
     }
   }
-  PlaceOneAt(lc, a);
+  attempt(nullptr);
 }
 
 void PlaceOneAt(LayoutContext& lc, Box& a) {
   const BoxStyle& s = *a.style;
   const WritingMode mode = a.Mode();
   CbRect cbPhys = ContainingBlockOf(lc, a);
+  // The area a position-area makes of the containing block.
+  if (lc.areaKnown) cbPhys = {lc.areaX, lc.areaY, lc.areaWidth, lc.areaHeight, cbPhys.box};
   bool inGridArea = false;
   const Box* cbGrid = cbPhys.box;
   // Inside a grid container, the grid-placement properties name the area that is the containing block.
@@ -1494,6 +1558,12 @@ void PlaceOneAt(LayoutContext& lc, Box& a) {
     // Aligned in the space between the insets (a missing one being the static rectangle's edge).
     const double i0 = Known(left) ? left : spL, i1 = Known(right) ? cw - right : spR;
     L = Place(inlineSide, i0, i1, W + extrasH + ml + mr, cw, Dot(orthogonalToCb ? FrameY(cbMode) : InlineStartDir(cbMode, cbDirection), FrameX(mode)) < 0, inlineSelf.safe, inlineSelf.unsafe);
+    if (inlineSelf.kind == Align::Kind::AnchorCenter && lc.anchorKnown) {
+      // Centered on the anchor, which is in the containing block's frame.
+      double ax, ay, aw, ah;
+      PhysicalToFrame(mode, cw, ch, Rect{lc.anchorX - cbPhys.x, lc.anchorY - cbPhys.y, lc.anchorWidth, lc.anchorHeight}, ax, ay, aw, ah);
+      L = ax + aw / 2 - (W + extrasH + ml + mr) / 2;
+    }
   }
 
   if (getenv("SOLAR_DEBUG")) std::fprintf(stderr, "PlaceOne W %g L %g R %g ml %g mr %g extrasH %g cw %g stretch %d inlineSide %d\n", W, L, R, ml, mr, extrasH, cw, (int)stretchW, (int)inlineSide);
@@ -1547,6 +1617,11 @@ void PlaceOneAt(LayoutContext& lc, Box& a) {
   if (blockSide != Side::None) {
     const double i0 = Known(top) ? top : spT, i1 = Known(bottom) ? ch - bottom : spB;
     T = Place(blockSide, i0, i1, H + extrasV + mt + mb, ch, Dot(orthogonalToCb ? InlineStartDir(cbMode, cbDirection) : FrameY(cbMode), FrameY(mode)) < 0, blockSelf.safe, blockSelf.unsafe);
+    if (blockSelf.kind == Align::Kind::AnchorCenter && lc.anchorKnown) {
+      double ax, ay, aw, ah;
+      PhysicalToFrame(mode, cw, ch, Rect{lc.anchorX - cbPhys.x, lc.anchorY - cbPhys.y, lc.anchorWidth, lc.anchorHeight}, ax, ay, aw, ah);
+      T = ay + ah / 2 - (H + extrasV + mt + mb) / 2;
+    }
   }
   lc.forceWidth = W;
   lc.forceHeight = H;
