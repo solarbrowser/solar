@@ -99,7 +99,10 @@ bool FetchOperation::OnRedirect(const net::HttpResponseHead& redirect, const url
     return false;
   }
   if (next.scheme != "http" && next.scheme != "https") return false;
-  if (mode == RequestMode::Cors && nextCrossOrigin && next.IncludesCredentials()) return false;
+  if (mode == RequestMode::Cors && (corsTainted || nextCrossOrigin) && next.IncludesCredentials()) {
+    FailWith(MakeTypeError(host.context(), "Failed to fetch: a redirect to an address with credentials"), "a redirect to an address with credentials");
+    return false;
+  }
   if (preflightNeeded) {
     // The permission was asked for the address that was fetched, not for where it now points.
     FailWith(MakeTypeError(host.context(), "Failed to fetch: a request that needs a CORS preflight was redirected"), "a request that needs a CORS preflight was redirected");
@@ -113,7 +116,11 @@ bool FetchOperation::OnRedirect(const net::HttpResponseHead& redirect, const url
 
   // The Origin header follows: null once tainted, and dropped again on a same-origin GET.
   std::erase_if(headers, [](const auto& header) { return EqualsIgnoreCase(header.first, "origin"); });
-  if (corsTainted || taintedOrigin) headers.emplace_back("Origin", taintedOrigin ? "null" : pageOrigin);
+  // (301 and 302 turn a POST into a GET, 303 turns anything but a HEAD into one; 307 and 308 keep the method.)
+  std::string next_method = method;
+  if (((redirect.status == 301 || redirect.status == 302) && method == "POST") || (redirect.status == 303 && method != "GET" && method != "HEAD")) next_method = "GET";
+  if (corsTainted || taintedOrigin || (next_method != "GET" && next_method != "HEAD")) headers.emplace_back("Origin", taintedOrigin ? "null" : pageOrigin);
+  method = next_method;
   return true;
 }
 
@@ -472,7 +479,7 @@ Value Fetch(Context& ctx, Value, qe::Args args, Value newTarget) {
     options.headers.emplace_back("Referer", *referer);
   }
   // Origin goes with a cross-origin request, and with any request that is not a GET or a HEAD.
-  if ((op->corsTainted || (request->method != "GET" && request->method != "HEAD")) && request->mode != RequestMode::NoCors) {
+  if (op->corsTainted || (request->method != "GET" && request->method != "HEAD")) {
     options.headers.emplace_back("Origin", op->pageOrigin);
   }
 

@@ -1084,6 +1084,7 @@ tests/wpt/xhr/access-control-preflight-request-invalid-status-501.htm
 tests/wpt/xhr/access-control-preflight-request-must-not-contain-cookie.htm
 tests/wpt/xhr/access-control-response-with-body-sync.htm
 tests/wpt/xhr/access-control-response-with-body.htm
+tests/wpt/xhr/data-uri.htm
 tests/wpt/xhr/formdata/append-formelement.html
 tests/wpt/xhr/formdata/constructor-submitter.html
 tests/wpt/xhr/formdata/delete-formelement.html

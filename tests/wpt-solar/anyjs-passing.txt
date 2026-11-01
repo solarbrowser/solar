@@ -68,6 +68,7 @@ tests/wpt/fetch/api/cors/cors-preflight-not-cors-safelisted.any.js
 tests/wpt/fetch/api/cors/cors-preflight-star.any.js
 tests/wpt/fetch/api/cors/cors-preflight-status.any.js
 tests/wpt/fetch/api/cors/cors-preflight.any.js
+tests/wpt/fetch/api/cors/cors-redirect-credentials.any.js
 tests/wpt/fetch/api/crashtests/huge-fetch.any.js
 tests/wpt/fetch/api/credentials/authentication-basic.any.js
 tests/wpt/fetch/api/headers/header-setcookie.any.js
@@ -256,6 +257,7 @@ tests/wpt/xhr/access-control-basic-allow-star.any.js
 tests/wpt/xhr/access-control-basic-allow.any.js
 tests/wpt/xhr/access-control-preflight-request-allow-headers-returns-star.any.js
 tests/wpt/xhr/access-control-preflight-request-header-returns-origin.any.js
+tests/wpt/xhr/blob-range.any.js
 tests/wpt/xhr/content-type-unmodified.any.js
 tests/wpt/xhr/cors-upload.any.js
 tests/wpt/xhr/event-abort.any.js

@@ -313,6 +313,7 @@ class TestEnvironment : public solar::html::FrameEnvironment {
       if (name.starts_with("GET[") && name.ends_with("]")) { const auto found = query.find(name.substr(4, name.size() - 5)); value = found == query.end() ? "" : found->second; }
       else if (name.starts_with("domains[") && name.ends_with("]")) { const std::string label = name.substr(8, name.size() - 9); value = label.empty() ? "web-platform.test" : label + ".web-platform.test"; }
       else if (name == "host" || name == "location[hostname]") value = "web-platform.test";
+      else if (name == "ports[http][1]") value = "8001";  // (the server answers on any port a name is given: another port is another origin)
       else if (name.starts_with("ports[http][")) value = "8000";
       else if (name.starts_with("hosts[alt][") || name == "hosts[alt][]") value = "not-web-platform.test";
       else if (name == "location[host]") value = "web-platform.test:8000";
