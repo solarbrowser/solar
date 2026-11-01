@@ -7,6 +7,7 @@
 #include <chrono>
 #include <fstream>
 #include "solar/html/Frames.h"
+#include "solar/html/Encodings.h"
 
 #include <map>
 #include <tuple>
@@ -730,7 +731,7 @@ std::string DeclaredCharset(std::string_view contentType, std::string_view marku
   at += 8;
   while (at < source.size() && (source[at] == '"' || source[at] == '\'' || source[at] == ' ')) ++at;
   size_t end = at;
-  while (end < source.size() && (std::isalnum(static_cast<unsigned char>(source[end])) || source[end] == '-' || source[end] == '_')) ++end;
+  while (end < source.size() && (std::isalnum(static_cast<unsigned char>(source[end])) || source[end] == '-' || source[end] == '_' || source[end] == '.' || source[end] == ':')) ++end;
   return source.substr(at, end - at);
 }
 
@@ -778,6 +779,12 @@ bool LoadPage(Quanta::Embed::Realm& realm, dom::Document* document, std::string_
   type = type.substr(0, type.find(';'));
   while (!type.empty() && type.back() == ' ') type.pop_back();
   const std::string text = TranscodeLegacy(std::string(markup), contentType);
+  // The encoding the page says it is in (the header's, or a meta's), as its name: document.characterSet. One the standard knows not, or that is UTF-16 for a meta, is UTF-8.
+  {
+    const std::string label = DeclaredCharset(contentType, markup);
+    const std::string name = label.empty() ? "" : EncodingNameOfLabel(label);
+    if (!name.empty()) document->characterSet = (name == "UTF-16LE" || name == "UTF-16BE") && contentType.find("charset=") == std::string_view::npos ? "UTF-8" : name;
+  }
   RunAs(realm, [&] { ok = LoadPageIn(realm, document, text, type); });
   return ok;
 }

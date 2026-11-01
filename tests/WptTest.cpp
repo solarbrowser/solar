@@ -1,3 +1,4 @@
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -13,6 +14,14 @@
 
 #ifdef __linux__
 #include <sys/resource.h>
+#endif
+
+#ifdef _WIN32
+#define POPEN _popen
+#define PCLOSE _pclose
+#else
+#define POPEN ::popen
+#define PCLOSE ::pclose
 #endif
 
 #include "quanta/Embed.h"
@@ -142,6 +151,56 @@ struct RealmBundle {
 };
 
 // What pages and frames get from the test run: realms of one isolate, and the files of the tests as the web.
+// What a handler in Python (tools/wptpy.py) answered.
+struct PyAnswer {
+  bool ok = false;
+  int status = 500;
+  std::string reason, contentType = "text/plain", headers, body;
+};
+
+// Runs the handler in `file` for a request: the request is written for it as a file, and what it prints is the answer.
+PyAnswer RunPythonHandler(const std::string& file, const std::string& method, const std::string& url, const std::string& headerLines, const std::string& body) {
+  static std::atomic<int> counter{0};
+  PyAnswer result;
+  const std::string requestFile = (std::filesystem::temp_directory_path() / ("wptpy-" + std::to_string(static_cast<long>(std::chrono::steady_clock::now().time_since_epoch().count())) + "-" + std::to_string(counter++) + ".req")).string();
+  {
+    std::ofstream out(requestFile, std::ios::binary);
+    out << method << "\r\n" << url << "\r\n" << headerLines << "\r\n\r\n" << body;
+  }
+  const std::string command = "python3 tools/wptpy.py '" + file + "' '" + requestFile + "'" + (std::getenv("WPT_PY_DEBUG") ? "" : " 2>/dev/null");
+  std::string answer;
+  if (FILE* pipe = POPEN(command.c_str(), "r")) {
+    char buffer[65536];
+    size_t got;
+    while ((got = std::fread(buffer, 1, sizeof buffer, pipe)) > 0) answer.append(buffer, got);
+    PCLOSE(pipe);
+  }
+  std::filesystem::remove(requestFile);
+  const size_t statusEnd = answer.find('\n');
+  const size_t blank = answer.find("\n\n");
+  if (statusEnd == std::string::npos || blank == std::string::npos) return result;
+  result.ok = true;
+  result.status = std::atoi(answer.c_str());
+  const size_t reasonAt = answer.find(' ');
+  result.reason = answer.substr(reasonAt + 1, statusEnd - reasonAt - 1);
+  std::istringstream lines(answer.substr(statusEnd + 1, blank - statusEnd));
+  std::string headerLine;
+  while (std::getline(lines, headerLine)) {
+    if (headerLine.empty()) continue;
+    const size_t colon = headerLine.find(':');
+    if (colon == std::string::npos) continue;
+    std::string name = headerLine.substr(0, colon), value = headerLine.substr(colon + 1);
+    while (!value.empty() && value.front() == ' ') value.erase(value.begin());
+    std::string lowerName = name;
+    for (char& c : lowerName) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (lowerName == "content-type") result.contentType = value;
+    else if (lowerName == "content-length" || lowerName == "connection") continue;
+    else result.headers += name + ": " + value + "\r\n";
+  }
+  result.body = answer.substr(blank + 2);
+  return result;
+}
+
 class TestEnvironment : public solar::html::FrameEnvironment {
  public:
   TestEnvironment(qe::Isolate& isolate, solar::net::Loop& loop, solar::net::HttpClient& client, solar::web::JsEventLoop& events)
@@ -189,10 +248,24 @@ class TestEnvironment : public solar::html::FrameEnvironment {
     const std::string rest = path.substr(path.find_first_of("?#") == std::string::npos ? path.size() : path.find_first_of("?#"));
     path = path.substr(0, path.find_first_of("?#"));
     std::string contents;
+    if (path.ends_with(".py") && path.find("..") == std::string::npos && std::filesystem::is_regular_file("tests/wpt/" + path)) {
+      const PyAnswer answer = RunPythonHandler("tests/wpt/" + path, "GET", url, "Host: web-platform.test:8000", "");
+      if (!answer.ok) return std::nullopt;
+      handlerTypes_[url] = answer.contentType;
+      return answer.body;
+    }
     if (!ReadFile("tests/wpt/" + path, contents)) return std::nullopt;
     if (path.find(".sub.") != std::string::npos) contents = Substitute(contents, rest);
     return contents;
   }
+
+  // What a handler in Python said its answer is.
+  std::string ContentType(const std::string& url) override {
+    const auto found = handlerTypes_.find(url);
+    if (found != handlerTypes_.end()) return found->second.substr(0, found->second.find(';')) == "text/html" || found->second.find("xml") != std::string::npos || found->second.find("svg") != std::string::npos ? found->second : "text/html";
+    return FrameEnvironment::ContentType(url);
+  }
+  std::map<std::string, std::string> handlerTypes_;
 
   // What the WPT server does to a file with .sub. in its name: {{GET[name]}} is the parameter of the query, {{host}}, {{ports[http][0]}} and {{location[...]}} the server's.
   static std::string Substitute(const std::string& text, const std::string& rest) {
@@ -323,11 +396,40 @@ void ServeWpt(int client) {
     if (!headOnly) out += body;
     TestServer::SendAll(client, out);
   };
-  if (method != "GET" && method != "HEAD") { reply(405, "Method Not Allowed", "text/plain", "", "", true); return; }
   std::string file;
   const std::string own = "/solar/";
   if (path.starts_with(own)) file = "tests/wpt-solar/pages/" + path.substr(own.size());
   else file = "tests/wpt" + path;
+  // A handler in Python (what WPT's own server runs): the request goes to tools/wptpy.py, which answers.
+  if (file.ends_with(".py") && path.find("..") == std::string::npos && std::filesystem::is_regular_file(file)) {
+    std::string lengthText;
+    size_t length = 0;
+    {
+      std::string lower = head;
+      for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      const size_t at = lower.find("\r\ncontent-length:");
+      if (at != std::string::npos) length = static_cast<size_t>(std::strtoull(head.c_str() + at + 17, nullptr, 10));
+    }
+    const std::string body = length ? TestServer::ReadBytes(client, length) : std::string();
+    std::string host = "web-platform.test";
+    {
+      std::string lower = head;
+      for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      const size_t at = lower.find("\r\nhost:");
+      if (at != std::string::npos) {
+        const size_t end = head.find("\r\n", at + 2);
+        host = head.substr(at + 7, end - at - 7);
+        while (!host.empty() && host.front() == ' ') host.erase(host.begin());
+      }
+    }
+    const PyAnswer answer = RunPythonHandler(file, method, "http://" + host + target, head.substr(lineEnd + 2, head.size() >= lineEnd + 6 ? head.size() - lineEnd - 6 : 0), body);
+    if (!answer.ok) { reply(500, "Internal Server Error", "text/plain", "handler failed", "", method == "HEAD"); return; }
+    std::string headers = answer.headers;
+    if (headers.find("Access-Control-Allow-Origin") == std::string::npos && headers.find("access-control-allow-origin") == std::string::npos) headers += "Access-Control-Allow-Origin: *\r\n";
+    reply(answer.status, answer.reason, answer.contentType, answer.body, headers, method == "HEAD");
+    return;
+  }
+  if (method != "GET" && method != "HEAD") { reply(405, "Method Not Allowed", "text/plain", "", "", true); return; }
   if (path.find("..") != std::string::npos || !std::filesystem::is_regular_file(file)) { reply(404, "Not Found", "text/plain", "not found", "", method == "HEAD"); return; }
   std::string contents;
   ReadFile(file, contents);
