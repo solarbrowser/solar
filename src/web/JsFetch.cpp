@@ -69,6 +69,27 @@ std::optional<std::string> RefererFor(const std::string& policy, const url::Url&
   return downgrade ? std::nullopt : std::optional<std::string>(originText);
 }
 
+// Sec-Fetch-Site / -Mode / -Dest (Fetch Metadata): sent to the addresses a browser trusts (https, and the loopback), and to no others.
+bool PotentiallyTrustworthy(const url::Url& address) {
+  if (address.scheme == "https" || address.scheme == "wss") return true;
+  if (address.scheme != "http" || !address.host) return false;
+  const std::string& host = *address.host;
+  return host == "localhost" || host.ends_with(".localhost") || host == "[::1]" || host.starts_with("127.");
+}
+
+void SetSecFetchHeaders(std::vector<std::pair<std::string, std::string>>& headers, const url::Url& target, int site, const std::string& mode) {
+  std::erase_if(headers, [](const auto& header) { return header.first.size() > 10 && EqualsIgnoreCase(header.first.substr(0, 10), "sec-fetch-"); });
+  if (!PotentiallyTrustworthy(target)) return;
+  headers.emplace_back("Sec-Fetch-Dest", "empty");
+  headers.emplace_back("Sec-Fetch-Mode", mode);
+  headers.emplace_back("Sec-Fetch-Site", site == 0 ? "same-origin" : site == 1 ? "same-site" : "cross-site");
+}
+
+int SecFetchSiteOf(const url::Url& page, const url::Url& target) {
+  if (url::SerializeOrigin(page) == url::SerializeOrigin(target)) return 0;
+  return url::IsSameSite(page, target) ? 1 : 2;
+}
+
 }  // namespace
 
 void FetchOperation::FailWith(const Value& reason, const std::string& message) {
@@ -116,6 +137,8 @@ bool FetchOperation::OnRedirect(const net::HttpResponseHead& redirect, const url
   // (301 and 302 turn a POST into a GET, 303 turns anything but a HEAD into one; 307 and 308 keep the method.)
   std::string next_method = method;
   if (((redirect.status == 301 || redirect.status == 302) && method == "POST") || (redirect.status == 303 && method != "GET" && method != "HEAD")) next_method = "GET";
+  secFetchSite = std::max(secFetchSite, SecFetchSiteOf(secFetchPage, next));
+  SetSecFetchHeaders(headers, next, secFetchSite, secFetchMode);
   // The Referrer-Policy of the redirect response is the policy from here on (the last of its tokens that is one), and the Referer is made again.
   if (const auto policyHeader = redirect.Header("referrer-policy")) {
     std::string value(*policyHeader), token;
@@ -328,6 +351,7 @@ void FetchOperation::StartPreflightedHop(const url::Url& target, net::FetchOptio
   preflight.useCookies = false;
   preflight.timeout = options.timeout;
   preflight.initiator = options.initiator;
+  preflight.tls = options.tls;
   mainOptions = std::move(options);
   preflighting = true;
   handle = host.config().client->Fetch(target, *this, std::move(preflight));
@@ -594,6 +618,11 @@ Value Fetch(Context& ctx, Value, qe::Args args, Value newTarget) {
   options.timeout = std::chrono::hours(24);
   options.useCookies = request->credentials == RequestCredentials::Include || (request->credentials == RequestCredentials::SameOrigin && !op->crossOrigin);
   options.initiator = page;
+  options.tls = host->config().tls;
+  op->secFetchPage = page;
+  op->secFetchSite = SecFetchSiteOf(page, request->url);
+  op->secFetchMode = request->mode == RequestMode::Cors ? "cors" : request->mode == RequestMode::NoCors ? "no-cors" : "same-origin";
+  SetSecFetchHeaders(options.headers, request->url, op->secFetchSite, op->secFetchMode);
   op->referrerPolicy = request->referrerPolicy;
   op->sendsReferrer = !request->referrer.empty();
   op->referrerSource = page;
@@ -662,6 +691,7 @@ Value Fetch(Context& ctx, Value, qe::Args args, Value newTarget) {
         preflight.useCookies = false;                   // it never carries credentials
         preflight.timeout = options.timeout;
         preflight.initiator = page;
+        preflight.tls = host->config().tls;
         op->mainOptions = std::move(options);
         op->preflighting = true;
         op->handle = host->config().client->Fetch(request->url, *op, std::move(preflight));

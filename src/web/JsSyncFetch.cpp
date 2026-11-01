@@ -88,6 +88,7 @@ Value SyncFetch(Context& ctx, Value, qe::Args args, Value) {
   net::FetchOptions options;
   options.method = method;
   options.initiator = host->config().pageUrl;
+  options.tls = host->config().tls;
   const uint32_t count = qe::ToUint32(ctx, qe::Get(ctx, args[2], "length"));
   for (uint32_t i = 0; i + 1 < count; i += 2) {
     options.headers.emplace_back(FromIsomorphic(qe::ToWtf8(ctx, qe::Get(ctx, args[2], std::to_string(i).c_str()))),

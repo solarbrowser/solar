@@ -67,6 +67,8 @@ tests/wpt/fetch/api/cors/cors-cookies.any.js
 tests/wpt/fetch/api/cors/cors-expose-star.sub.any.js
 tests/wpt/fetch/api/cors/cors-filtering.sub.any.js
 tests/wpt/fetch/api/cors/cors-multiple-origins.sub.any.js
+tests/wpt/fetch/api/cors/cors-no-preflight.any.js
+tests/wpt/fetch/api/cors/cors-origin.any.js
 tests/wpt/fetch/api/cors/cors-preflight-cache-tainted.any.js
 tests/wpt/fetch/api/cors/cors-preflight-cache.any.js
 tests/wpt/fetch/api/cors/cors-preflight-not-cors-safelisted.any.js

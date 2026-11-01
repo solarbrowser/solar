@@ -64,6 +64,9 @@ struct FetchOperation : net::FetchHandler {
   std::string integrityBytes;
   // The request is not a simple one: wherever it goes as a cors request it asks first, a redirect's target included.
   bool nonSimple = false;
+  int secFetchSite = 0;  // 0 same-origin, 1 same-site, 2 cross-site: the worst of the hops so far
+  url::Url secFetchPage;
+  std::string secFetchMode;
   net::FetchHeaders requestHeaders;  // (the request's own, as the preflight of a redirect's target names them)
   // A redirect whose target has to be asked first: the hop ends there, and the next one starts with the preflight.
   bool redirectForPreflight = false;

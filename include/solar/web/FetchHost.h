@@ -35,6 +35,8 @@ class FetchHost {
     // Called after the host has called into script (settling a promise, say), to run the promise jobs
     // that has queued: an Isolate's PerformMicrotaskCheckpoint.
     std::function<void()> afterScript;
+    // The TLS settings of the requests, when they are not the shared ones (a private CA to trust).
+    std::shared_ptr<net::TlsContext> tls;
   };
 
   FetchHost(Quanta::Context& ctx, Config config);

@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <memory>
 #include <optional>
@@ -54,7 +55,9 @@
 #include "solar/web/TimerHost.h"
 #include "solar/web/UrlBindings.h"
 #include "solar/net/Resolver.h"
+#include "support/Pki.h"
 #include "support/TestServer.h"
+#include "support/TlsTestServer.h"
 #ifdef SOLAR_WPT_CANVAS
 #include "solar/paint/Canvas.h"
 #include "solar/web-api/ImageLoad.h"
@@ -160,6 +163,7 @@ struct RealmBundle {
 
 // The port the test server listens on (set in main), for what the pages load from the names and ports it answers to.
 int g_serverPort = 0;
+std::shared_ptr<solar::net::TlsContext> g_tls;
 
 // One request to the test server, waited for: the status, the Content-Type and the body of the answer. For the loader of the pages
 // (a script from another origin, a frame with a pipe in its address), which asks the server as the network would.
@@ -300,6 +304,7 @@ class TestEnvironment : public solar::html::FrameEnvironment {
       solar::web::FetchHost::Config config;
       config.loop = &loop_;
       config.client = &client_;
+      config.tls = g_tls;
       config.pageUrl = *solar::url::Parse(pageUrl_.empty() ? "http://web-platform.test:8000/fetch/api/" : pageUrl_);
       config.afterScript = [this] { events_.AfterScript(); };
       bundle->host = std::make_unique<solar::web::FetchHost>(realm.GetContext(), config);
@@ -311,12 +316,15 @@ class TestEnvironment : public solar::html::FrameEnvironment {
   std::optional<std::string> Load(const std::string& url) override {
     const std::string origin = "http://web-platform.test:8000/";
     // Another origin of the test server (a name of its own, another port), or an address with a pipe, is asked of the server itself.
-    if (const auto parsed = solar::url::Parse(url); parsed && parsed->scheme == "http" && parsed->host) {
+    if (const auto parsed = solar::url::Parse(url); parsed && (parsed->scheme == "http" || parsed->scheme == "https") && parsed->host) {
       const std::string host = *parsed->host;
       const bool served = host == "web-platform.test" || host.ends_with(".web-platform.test") || host == "not-web-platform.test" || host.ends_with(".not-web-platform.test");
-      const uint16_t port = parsed->port.value_or(80);
+      const bool secure = parsed->scheme == "https";
+      const uint16_t port = parsed->port.value_or(secure ? 443 : 80);
       const bool piped = url.find("pipe=") != std::string::npos;
-      if (served && (port == 80 || (port >= 8000 && port <= 8010)) && (!url.starts_with(origin) || piped)) {
+      const bool portServed = secure ? (port == 443 || (port >= 8443 && port <= 8450)) : (port == 80 || (port >= 8000 && port <= 8010));
+      // (The server answers the same over TLS: what is read here is read from it without.)
+      if (served && portServed && (secure || !url.starts_with(origin) || piped)) {
         std::string target = solar::url::SerializePath(*parsed);
         if (parsed->query) target += "?" + *parsed->query;
         const ServerAnswer answer = AskServer(host + ":" + std::to_string(port), target);
@@ -344,6 +352,7 @@ class TestEnvironment : public solar::html::FrameEnvironment {
 
   // Opaque Response Blocking of what a page took with no CORS from another origin than its own: what it blocks has no text.
   std::optional<std::string> LoadNoCors(const std::string& url, bool styleSheet) override {
+    blockedLoad_ = false;
     std::optional<std::string> text = Load(url);
     if (!text) return text;
     const auto parsed = solar::url::Parse(url);
@@ -354,11 +363,11 @@ class TestEnvironment : public solar::html::FrameEnvironment {
     // (A style sheet of another origin is one only if it says it is.)
     if (styleSheet) {
       const auto mime = solar::web::ParseMimeType(found->second);
-      if (!mime || mime->type != "text" || mime->subtype != "css") return std::string();
+      if (!mime || mime->type != "text" || mime->subtype != "css") return blockedLoad_ = true, std::nullopt;
     }
     const auto nosniff = serverNoSniff_.find(url);
     const solar::web::OrbVerdict verdict = solar::web::OrbCheckHead(200, found->second, nosniff != serverNoSniff_.end() && nosniff->second, "");
-    if (verdict == solar::web::OrbVerdict::Block || (verdict == solar::web::OrbVerdict::NeedBody && solar::web::OrbBodyIsBlocked(*text))) return std::string();
+    if (verdict == solar::web::OrbVerdict::Block || (verdict == solar::web::OrbVerdict::NeedBody && solar::web::OrbBodyIsBlocked(*text))) return blockedLoad_ = true, std::nullopt;
     return text;
   }
 
@@ -412,9 +421,16 @@ class TestEnvironment : public solar::html::FrameEnvironment {
       if (name.starts_with("GET[") && name.ends_with("]")) { const auto found = query.find(name.substr(4, name.size() - 5)); value = found == query.end() ? "" : found->second; }
       else if (name.starts_with("domains[") && name.ends_with("]")) { const std::string label = name.substr(8, name.size() - 9); value = label.empty() ? "web-platform.test" : label + ".web-platform.test"; }
       else if (name == "host" || name == "location[hostname]") value = "web-platform.test";
+      else if (name.starts_with("ports[https][") && name.size() == 15) value = std::to_string(8443 + (name[13] - '0'));
       else if (name == "ports[http][1]") value = "8001";  // (the server answers on any port a name is given: another port is another origin)
       else if (name.starts_with("ports[http][")) value = "8000";
-      else if (name.starts_with("hosts[alt][") || name == "hosts[alt][]") value = "not-web-platform.test";
+      else if (name.starts_with("hosts[") && name.ends_with("]")) {
+        // hosts[set][label]: a host of the set ("" the tests', alt the other one's), a subdomain of it for a label.
+        const size_t close1 = name.find(']');
+        const std::string set = name.substr(6, close1 - 6);
+        std::string label = close1 + 2 < name.size() ? name.substr(close1 + 2, name.size() - close1 - 3) : "";
+        value = (label.empty() ? "" : label + ".") + (set == "alt" ? "not-web-platform.test" : "web-platform.test");
+      }
       else if (name == "location[host]") value = "web-platform.test:8000";
       else if (name == "location[port]" || name == "ports[http][0]") value = "8000";
       else if (name == "location[protocol]") value = "http:";
@@ -444,7 +460,9 @@ class TestEnvironment : public solar::html::FrameEnvironment {
 
   void RunJobs() override { isolate_.PerformMicrotaskCheckpoint(); }
 
-  void ScriptFailed(const std::string& message) override { std::printf("  FAIL script error: %s\n", message.c_str()); }
+  // (A script that Opaque Response Blocking refused gets an error event, which is what the tests look for, and is no failure of the run.)
+  void ScriptFailed(const std::string& message) override { if (!blockedLoad_) std::printf("  FAIL script error: %s\n", message.c_str()); }
+  bool blockedLoad_ = false;
 
  private:
   qe::Isolate& isolate_;
@@ -456,6 +474,11 @@ class TestEnvironment : public solar::html::FrameEnvironment {
 };
 
 // Where a page is on the server it is tested on: its path below tests/wpt (the web-platform-tests submodule), or /solar/ for the pages of our own (tests/wpt-solar/pages).
+// Where the pages of the run are served from: a page that says it is https is served as that.
+std::string PageBase(const std::string& name) {
+  return name.find(".https.") != std::string::npos ? "https://web-platform.test:8443/" : "http://web-platform.test:8000/";
+}
+
 std::string PageUrlPath(const std::string& path) {
   const std::string own = "tests/wpt-solar/pages/";
   if (path.starts_with(own)) return "solar/" + path.substr(own.size());
@@ -487,9 +510,16 @@ std::string UrlDecode(const std::string& v) {
   return out;
 }
 
-void ServeWpt(int client) {
-  using solar::test::TestServer;
-  const std::string head = TestServer::ReadHead(client);
+// How the server reads a request and answers it: over a socket, or over a TLS connection.
+struct WptIo {
+  std::function<std::string()> readHead;
+  std::function<std::string(size_t)> readBytes;
+  std::function<void(std::string_view)> sendAll;
+  const char* scheme = "http";
+};
+
+void ServeWptIo(WptIo& io) {
+  const std::string head = io.readHead();
   const size_t lineEnd = head.find("\r\n");
   const std::string line = head.substr(0, lineEnd);
   const size_t a = line.find(' '), b = line.find(' ', a + 1);
@@ -503,7 +533,7 @@ void ServeWpt(int client) {
   auto reply = [&](int status, const std::string& reason, const std::string& type, const std::string& body, const std::string& extra, bool headOnly) {
     std::string out = "HTTP/1.1 " + std::to_string(status) + " " + reason + "\r\n" + (type == "\x01none" ? std::string() : "Content-Type: " + type + "\r\n") + ((extra.rfind("Content-Length:", 0) == std::string::npos && extra.find("\r\nContent-Length:") == std::string::npos) ? "Content-Length: " + std::to_string(body.size()) + "\r\n" : std::string()) + "Connection: close\r\n" + extra + "\r\n";
     if (!headOnly) out += body;
-    TestServer::SendAll(client, out);
+    io.sendAll(out);
   };
   std::string file;
   const std::string own = "/solar/";
@@ -519,7 +549,7 @@ void ServeWpt(int client) {
       const size_t at = lower.find("\r\ncontent-length:");
       if (at != std::string::npos) length = static_cast<size_t>(std::strtoull(head.c_str() + at + 17, nullptr, 10));
     }
-    const std::string body = length ? TestServer::ReadBytes(client, length) : std::string();
+    const std::string body = length ? io.readBytes(length) : std::string();
     std::string host = "web-platform.test";
     {
       std::string lower = head;
@@ -531,9 +561,9 @@ void ServeWpt(int client) {
         while (!host.empty() && host.front() == ' ') host.erase(host.begin());
       }
     }
-    const PyAnswer answer = RunPythonHandler(file, method, "http://" + host + target, head.substr(lineEnd + 2, head.size() >= lineEnd + 6 ? head.size() - lineEnd - 6 : 0), body);
+    const PyAnswer answer = RunPythonHandler(file, method, std::string(io.scheme) + "://" + host + target, head.substr(lineEnd + 2, head.size() >= lineEnd + 6 ? head.size() - lineEnd - 6 : 0), body);
     if (!answer.ok) { reply(500, "Internal Server Error", "text/plain", "handler failed", "", method == "HEAD"); return; }
-    if (answer.raw) { TestServer::SendAll(client, answer.body); return; }
+    if (answer.raw) { io.sendAll(answer.body); return; }
     std::string headers = answer.headers;
     if (headers.find("Access-Control-Allow-Origin") == std::string::npos && headers.find("access-control-allow-origin") == std::string::npos) headers += "Access-Control-Allow-Origin: *\r\n";
     reply(answer.status, answer.reason, answer.contentType, answer.body, headers, method == "HEAD");
@@ -624,19 +654,37 @@ void ServeWpt(int client) {
   reply(status, reason, type, contents, extra, method == "HEAD");
 }
 
+void ServeWpt(int client) {
+  using solar::test::TestServer;
+  WptIo io;
+  io.readHead = [client] { return TestServer::ReadHead(client); };
+  io.readBytes = [client](size_t n) { return TestServer::ReadBytes(client, n); };
+  io.sendAll = [client](std::string_view data) { TestServer::SendAll(client, data); };
+  ServeWptIo(io);
+}
+
 // Names of the test's hosts go to the server on the loopback interface; the port the page says is the server's.
-solar::net::SystemResolverOptions WptResolverOptions(uint16_t port) {
+solar::net::SystemResolverOptions WptResolverOptions(uint16_t port, uint16_t tlsPort) {
   solar::net::SystemResolverOptions options;
-  options.lookup = [port](const std::string& host, uint16_t requested, solar::net::SocketAddress::Family family) {
+  options.lookup = [port, tlsPort](const std::string& host, uint16_t requested, solar::net::SocketAddress::Family family) {
     solar::net::ResolveResult result;
     // (The ports of the test server, 8000 and the next ones, are all this one; any other, port 1 say, is nothing listening.)
-    const bool served = requested == 0 || requested == 80 || (requested >= 8000 && requested <= 8010);
-    if (served && (host == "web-platform.test" || host.ends_with(".web-platform.test") || host == "not-web-platform.test" || host.ends_with(".not-web-platform.test"))) {
+    const bool secure = requested == 443 || (requested >= 8443 && requested <= 8450);
+    const bool served = requested == 0 || requested == 80 || secure || (requested >= 8000 && requested <= 8010);
+    // (The names that exist: the domain and its few subdomains; any other, nonexistent.web-platform.test say, is nothing.)
+    const auto exists = [&](const std::string& domain) {
+      if (host == domain) return true;
+      for (const char* label : {"www", "www1", "www2", "xn--lve-6lad", "xn--n8j6ds53lwwkrqhv28a"}) {
+        if (host == std::string(label) + "." + domain) return true;
+      }
+      return false;
+    };
+    if (served && (exists("web-platform.test") || exists("not-web-platform.test"))) {
       if (family == solar::net::SocketAddress::Family::IPv4) {
         solar::net::SocketAddress address;
         address.family = family;
         address.bytes = {127, 0, 0, 1};
-        address.port = port;
+        address.port = secure ? tlsPort : port;
         result.addresses.push_back(address);
       }
     } else {
@@ -689,9 +737,23 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
   isolate->SetSourcePositionTracking(true);
   solar::test::TestServer server(ServeWpt);
   g_serverPort = server.port();
+  // The same server over TLS, for the pages that ask for https: a private authority signs for the names of the tests, and the client trusts it.
+  solar::test::TestPki pki;
+  solar::test::TlsTestServer tlsServer(pki.Issue({"web-platform.test", "*.web-platform.test", "not-web-platform.test", "*.not-web-platform.test", "127.0.0.1", "localhost"}),
+                                       [](ssl_st* connection) {
+                                         WptIo io;
+                                         io.scheme = "https";
+                                         io.readHead = [connection] { return solar::test::TlsTestServer::ReadHead(connection); };
+                                         io.readBytes = [connection](size_t n) { return solar::test::TlsTestServer::ReadBytes(connection, n); };
+                                         io.sendAll = [connection](std::string_view data) { solar::test::TlsTestServer::SendAll(connection, data); };
+                                         ServeWptIo(io);
+                                       });
+  solar::net::TlsOptions tlsOptions;
+  tlsOptions.extraRootsPem = pki.rootPem();
+  g_tls = solar::net::TlsContext::Create(tlsOptions);
   auto loop = solar::net::Loop::Create();
   solar::net::HttpClientOptions clientOptions;
-  clientOptions.resolver = solar::net::MakeSystemResolver(*loop, WptResolverOptions(server.port()));
+  clientOptions.resolver = solar::net::MakeSystemResolver(*loop, WptResolverOptions(server.port(), tlsServer.port()));
   solar::net::HttpClient client(*loop, std::move(clientOptions));
   // The tasks of the page are the program's: timers go into its queue, which its event loop runs.
   solar::web::TimerHost timers;
@@ -700,7 +762,7 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
                                          [&] { return timers.NextDelayMs(); }});
   TestEnvironment environment(*isolate, *loop, client, events);
   solar::html::SetFrameEnvironment(&environment);
-  environment.SetPageUrl("http://web-platform.test:8000/" + PageUrlPath(path));
+  environment.SetPageUrl(PageBase(name) + PageUrlPath(path));
   qe::Realm& realm = *environment.CreateRealm();
   qe::DefineGlobalFunction(realm.GetContext(), "gc", CollectGarbage, 0);
 
@@ -718,22 +780,22 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
     // A page: it has a window and a document of its own, which its scripts run in.
     solar::html::RunInRealm(realm, [&] {
       document = solar::dom::NewDocument(realm.GetContext(), true);
-      document->url = "http://web-platform.test:8000/" + PageUrlPath(path);
+      document->url = PageBase(name) + PageUrlPath(path);
       solar::html::InstallWindow(realm, document);
     });
   }
   qe::EvaluateResult result = realm.Evaluate(std::string(std::getenv("WPT_ALL") ? "globalThis.__allFailures = true;\n" : "") + skips + resources + harness, "harness.js");
   // A script that is not of a page (.any.js) has an address all the same, which is where its tests are served from.
   if (result.ok && !isHtml && !isWindowScript) {
-    result = realm.Evaluate("Object.defineProperty(globalThis, 'location', { value: new URL(" + JsString("http://web-platform.test:8000/" + PageUrlPath(path)) + "), writable: true, configurable: true });", "location.js");
+    result = realm.Evaluate("Object.defineProperty(globalThis, 'location', { value: new URL(" + JsString(PageBase(name) + PageUrlPath(path)) + "), writable: true, configurable: true });", "location.js");
   }
   if (result.ok && !prelude.empty()) result = realm.Evaluate(prelude, "prelude.js");
   if (result.ok && isWindowScript) {
-    const std::string address = "http://web-platform.test:8000/" + PageUrlPath(path);
+    const std::string address = PageBase(name) + PageUrlPath(path);
     if (!solar::html::LoadPage(realm, document, "<!DOCTYPE html><html><head></head><body></body></html>", "text/html")) result.ok = false;
     if (result.ok) result = realm.Evaluate(source, name);
   } else if (result.ok && isHtml) {
-    const std::string address = "http://web-platform.test:8000/" + PageUrlPath(path);
+    const std::string address = PageBase(name) + PageUrlPath(path);
     if (!solar::html::LoadPage(realm, document, source, environment.ContentType(address))) {
       result.ok = false;
       result.error = "a script of the page failed";
