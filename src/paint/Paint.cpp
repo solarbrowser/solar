@@ -671,6 +671,7 @@ class Painter {
       PaintImageOf(box, borderBox, props);
       PaintVideoOf(box, borderBox, props);
       PaintCanvasOf(box, borderBox, props);
+      PaintFrameOf(box, borderBox, props);
     }
     if (leftEdge && rightEdge && box.formControl) PaintControl(box, borderBox);
   }
@@ -1130,6 +1131,48 @@ class Painter {
     const std::string rendering = reader.Get("image-rendering");
     item.pixelated = rendering == "pixelated" || rendering == "crisp-edges";
     list_->items.push_back(std::move(item));
+  }
+
+  // An iframe: the page it holds, laid out in the room of the frame's content box, drawn there. The frame's own list is made (its tree is the document's own) and
+  // put in this one, moved to the content box and cut to it. What a frame holds that follows the scroll or sticks follows the frame's own viewport, which does not
+  // move here, so those items are fixed in place.
+  void PaintFrameOf(const Box& box, const RectF& borderBox, const PaintProps& props) {
+    if (!box.replaced || box.kind != Box::Kind::Block) return;
+    dom::Element* element = box.element();
+    if (!element || !element->IsHtml("iframe") || !element->contentDocument) return;
+    dom::Document* inner = element->contentDocument;
+    if (!inner->context || inner->frameElement != element) return;
+    static int depth = 0;
+    if (depth >= 4) return;
+    layout::Edges insets;
+    insets.top = box.border.top + box.padding.top;
+    insets.right = box.border.right + box.padding.right;
+    insets.bottom = box.border.bottom + box.padding.bottom;
+    insets.left = box.border.left + box.padding.left;
+    const RectF content{borderBox.x + F(insets.left), borderBox.y + F(insets.top), std::max(0.0f, borderBox.width - F(insets.Horizontal())), std::max(0.0f, borderBox.height - F(insets.Vertical()))};
+    if (content.width <= 0 || content.height <= 0) return;
+    ++depth;
+    layout::Tree* frameTree = layout::UpdateLayout(*inner->context, inner);
+    DisplayList frame;
+    if (frameTree && frameTree->root) frame = BuildDisplayList(*inner->context, *frameTree, 0);
+    --depth;
+    if (frame.items.empty()) return;
+    PushClip clip;
+    clip.rect = Rounded(box, content, props, 1, &insets);
+    list_->items.push_back(clip);
+    PushTransform move;
+    move.matrix.m[12] = content.x - frame.scrollX;
+    move.matrix.m[13] = content.y - frame.scrollY;
+    list_->items.push_back(move);
+    for (Item& item : frame.items) {
+      if (auto* transform = std::get_if<PushTransform>(&item)) {
+        transform->followsScroll = false;
+        transform->sticky = StickyInfo{};
+      }
+      list_->items.push_back(std::move(item));
+    }
+    list_->items.push_back(PopTransform{});
+    list_->items.push_back(PopClip{});
   }
 
   // The picture of a video: the player's current one, in the content box.
