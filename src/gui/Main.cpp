@@ -2224,6 +2224,40 @@ int PageMain(Shared& shared, int argc, char** argv) {
     }
     return chain;
   };
+  // A link clicked in the page of a frame goes where its target says: the frame itself (no target, _self, or the name of a frame, which is taken to be it),
+  // the page above it (_parent) or the window (_top). A link that opens a window of its own (_blank) goes nowhere: there are no other windows.
+  const auto followFrameLink = [&](const std::vector<FrameHit>& chain, size_t at, solar::dom::Element* from) {
+    for (solar::dom::Node* n = from; n; n = n->parentNode) {
+      if (!n->IsElement()) continue;
+      solar::dom::Element* element = static_cast<solar::dom::Element*>(n);
+      if (!element->IsHtml("a") && !element->IsHtml("area")) continue;
+      const solar::dom::Attr* href = element->FindAttribute("", "href");
+      if (!href) return;
+      const std::string baseText = solar::html::DocumentBaseUrl(chain[at].doc);
+      std::optional<solar::url::Url> base = solar::url::Parse(baseText);
+      std::optional<solar::url::Url> target = base ? solar::url::Parse(href->value, &*base) : solar::url::Parse(href->value);
+      if (!target || (target->scheme != "http" && target->scheme != "https" && target->scheme != "file")) return;
+      const std::string where = solar::url::Serialize(*target);
+      std::string name;
+      if (const solar::dom::Attr* attr = element->FindAttribute("", "target")) name = attr->value;
+      for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      if (name == "_blank") return;
+      if (name == "_top" || (name == "_parent" && at == 0)) {
+        navigate(where);
+        return;
+      }
+      qe::Realm* realm = name == "_parent" ? chain[at - 1].realm : chain[at].realm;
+      std::string quoted = "location.assign('";
+      for (char c : where) {
+        if (c == '\\' || c == '\'') quoted += '\\';
+        quoted += c;
+      }
+      quoted += "');";
+      solar::html::RunInRealm(*realm, [&] { realm->Evaluate(quoted, "link"); });
+      dirty = true;
+      return;
+    }
+  };
   std::vector<solar::dom::Document*> hoveredFrames;  // the frames that have an element under the pointer
   // What is under the pointer in each frame it is over is what is hovered there; the frames it left have nothing hovered.
   const auto updateFrameHover = [&](bool moved) {
@@ -2876,10 +2910,11 @@ int PageMain(Shared& shared, int argc, char** argv) {
                 solar::html::DispatchPointer(hit.doc, released, "mouseup", hit.x, hit.y, pressButton, 0);
                 if (clicked) follow = solar::html::DispatchClick(hit.doc, clicked, hit.x, hit.y, pressButton);
               });
-              (void)follow;
               dirty = true;
+              if (clicked && follow && event.button.button == SDL_BUTTON_LEFT) followFrameLink(chain, static_cast<size_t>(&hit - chain.data()), clicked);
               break;
             }
+            pressTarget = nullptr;  // (the page above does not hear of a click that was in the frame)
             framePressElement = nullptr;
             framePress = FrameHit{};
           }
