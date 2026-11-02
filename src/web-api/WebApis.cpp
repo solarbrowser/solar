@@ -42,7 +42,7 @@ std::string DisableEpilogue() {
   return script + "})();\n";
 }
 
-// SOLAR_TRACE=postmessage: each message a window sends and receives is written to the console, with whose it is (to see what two frames say to each other).
+// SOLAR_TRACE=errors|net|postmessage (a list of them, with commas): the errors of every window, the fetches and XHRs with their status, each message a window sends and receives is written to the console, with whose it is (to see what two frames say to each other).
 std::string TraceEpilogue() {
   const char* named = std::getenv("SOLAR_TRACE");
   if (!named) return "";
@@ -52,6 +52,31 @@ std::string TraceEpilogue() {
 ;(() => {
   addEventListener("error", (e) => { console.log("[error] " + e.message + " @ " + e.filename + ":" + e.lineno + ":" + e.colno + (e.error && e.error.stack ? "\n" + String(e.error.stack).split("\n").slice(0, 6).join("\n") : "")); }, true);
   addEventListener("unhandledrejection", (e) => { const r = e.reason; console.log("[rejection] " + (r && r.stack ? String(r.stack).split("\n").slice(0, 6).join("\n") : String(r))); }, true);
+})();
+)JS";
+  }
+  if (std::string(named).find("net") != std::string::npos) {
+    script += R"JS(
+;(() => {
+  const who = () => { try { return (window.name || (window.top === window ? "top" : "frame")) + "@" + location.pathname.slice(0, 40); } catch (e) { return "?"; } };
+  const nativeFetch = window.fetch;
+  if (typeof nativeFetch === "function") {
+    window.fetch = function (input, init) {
+      const url = String(input && input.url || input).slice(0, 110);
+      const r = nativeFetch.apply(this, arguments);
+      r.then((res) => console.log("[net] " + who() + " fetch " + url + " -> " + res.status), (err) => console.log("[net] " + who() + " fetch " + url + " FAILED " + err));
+      return r;
+    };
+  }
+  if (typeof XMLHttpRequest === "function") {
+    const open = XMLHttpRequest.prototype.open, send = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function (method, url) { this.__trace = method + " " + String(url).slice(0, 110); return open.apply(this, arguments); };
+    XMLHttpRequest.prototype.send = function () {
+      const what = this.__trace;
+      this.addEventListener("loadend", () => console.log("[net] " + who() + " xhr " + what + " -> " + this.status + " " + (this.responseType ? "" : String(this.responseText || "").length + " chars " + String(this.responseText || "").slice(-1500).replace(/\n/g, " "))));
+      return send.apply(this, arguments);
+    };
+  }
 })();
 )JS";
   }
