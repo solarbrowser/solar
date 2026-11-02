@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -92,8 +93,11 @@ class Http2Session {
 
   Transport& transport_;
   nghttp2_session* session_ = nullptr;
-  std::unordered_map<int32_t, std::unique_ptr<StreamState>> streams_;
+  std::unordered_map<int32_t, std::shared_ptr<StreamState>> streams_;
   bool receiving_ = false;
+  // What the streams' sinks are told while nghttp2 is inside Receive waits here until it is out: a sink may run the loop again (a font
+  // fetched in the middle of a layout), and nghttp2 must not be entered a second time before it has returned from the first.
+  std::vector<std::function<void()>>* events_ = nullptr;
   bool flushing_ = false;
 };
 

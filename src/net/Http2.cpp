@@ -42,6 +42,19 @@ struct Http2Session::StreamState {
 
 // The functions nghttp2 calls. They are members only to reach Http2Session's private state.
 struct Http2Session::Callbacks {
+  // Tells the stream's sink, when nghttp2 is not inside Receive any more, if the sink is still there by then.
+  static void Tell(void* user, std::shared_ptr<StreamState> state, std::function<void(Http2Stream&)> what) {
+    auto* self = static_cast<Http2Session*>(user);
+    auto run = [state = std::move(state), what = std::move(what)] {
+      if (state->sink) what(*state->sink);
+    };
+    if (self->events_) {
+      self->events_->push_back(std::move(run));
+    } else {
+      run();
+    }
+  }
+
   static StreamState* StateOf(nghttp2_session* session, int32_t id) {
     return static_cast<StreamState*>(nghttp2_session_get_stream_user_data(session, id));
   }
@@ -77,7 +90,7 @@ struct Http2Session::Callbacks {
     return 0;
   }
 
-  static int OnFrame(nghttp2_session* session, const nghttp2_frame* frame, void*) {
+  static int OnFrame(nghttp2_session* session, const nghttp2_frame* frame, void* user) {
     StreamState* state = StateOf(session, frame->hd.stream_id);
     if (!state) return 0;
     if (frame->hd.type == NGHTTP2_HEADERS && !state->headDelivered) {
@@ -87,7 +100,10 @@ struct Http2Session::Callbacks {
         state->headerBytes = 0;
       } else {
         state->headDelivered = true;
-        if (state->sink) state->sink->OnHead(state->head);
+        auto owner = static_cast<Http2Session*>(user)->streams_.find(frame->hd.stream_id);
+        if (state->sink && owner != static_cast<Http2Session*>(user)->streams_.end()) {
+          Tell(user, owner->second, [head = state->head](Http2Stream& sink) { sink.OnHead(head); });
+        }
       }
     }
     if ((frame->hd.type == NGHTTP2_HEADERS || frame->hd.type == NGHTTP2_DATA) && (frame->hd.flags & NGHTTP2_FLAG_END_STREAM)) {
@@ -96,9 +112,12 @@ struct Http2Session::Callbacks {
     return 0;
   }
 
-  static int OnData(nghttp2_session* session, uint8_t, int32_t id, const uint8_t* data, size_t length, void*) {
+  static int OnData(nghttp2_session* session, uint8_t, int32_t id, const uint8_t* data, size_t length, void* user) {
     StreamState* state = StateOf(session, id);
-    if (state && state->sink) state->sink->OnBody({data, length});
+    auto owner = static_cast<Http2Session*>(user)->streams_.find(id);
+    if (state && state->sink && owner != static_cast<Http2Session*>(user)->streams_.end()) {
+      Tell(user, owner->second, [bytes = std::vector<uint8_t>(data, data + length)](Http2Stream& sink) { sink.OnBody({bytes.data(), bytes.size()}); });
+    }
     return 0;
   }
 
@@ -106,19 +125,19 @@ struct Http2Session::Callbacks {
     auto* self = static_cast<Http2Session*>(user);
     auto it = self->streams_.find(id);
     if (it == self->streams_.end()) return 0;
-    std::unique_ptr<StreamState> state = std::move(it->second);
+    std::shared_ptr<StreamState> state = std::move(it->second);
     self->streams_.erase(it);
     if (!state->sink) return 0;
     if (code == NGHTTP2_NO_ERROR && state->ended) {
-      state->sink->OnEnd();
+      Tell(user, state, [](Http2Stream& sink) { sink.OnEnd(); });
     } else if (!state->failure.empty()) {
-      state->sink->OnReset(state->failure, false);
+      Tell(user, state, [failure = state->failure](Http2Stream& sink) { sink.OnReset(failure, false); });
     } else {
       // REFUSED_STREAM promises the request was not processed, so it may be sent again.
       const bool refused = code == NGHTTP2_REFUSED_STREAM && !state->headDelivered;
-      state->sink->OnReset(code == NGHTTP2_NO_ERROR ? "the server ended the stream before the response was complete"
-                                                    : std::string("the server reset the stream: ") + nghttp2_http2_strerror(code),
-                           refused);
+      std::string why = code == NGHTTP2_NO_ERROR ? "the server ended the stream before the response was complete"
+                                                 : std::string("the server reset the stream: ") + nghttp2_http2_strerror(code);
+      Tell(user, state, [why = std::move(why), refused](Http2Stream& sink) { sink.OnReset(why, refused); });
     }
     return 0;
   }
@@ -157,6 +176,8 @@ bool Http2Session::Start() {
 
 std::optional<std::string> Http2Session::Receive(std::span<const uint8_t> data) {
   std::optional<std::string> error;
+  std::vector<std::function<void()>> events;
+  events_ = &events;
   receiving_ = true;
   while (!data.empty()) {
     const nghttp2_ssize used = nghttp2_session_mem_recv2(session_, data.data(), data.size());
@@ -167,7 +188,9 @@ std::optional<std::string> Http2Session::Receive(std::span<const uint8_t> data) 
     data = data.subspan(static_cast<size_t>(used));
   }
   receiving_ = false;
+  events_ = nullptr;
   Flush();
+  for (auto& event : events) event();
   return error;
 }
 
@@ -181,7 +204,7 @@ int32_t Http2Session::Submit(const Http2Request& request, Http2Stream& stream) {
   fields.push_back(Field(kPath, request.path));
   for (const auto& [name, value] : request.headers) fields.push_back(Field(name, value));
 
-  auto state = std::make_unique<StreamState>();
+  auto state = std::make_shared<StreamState>();
   state->sink = &stream;
   state->body = request.body;
   StreamState* raw = state.get();
