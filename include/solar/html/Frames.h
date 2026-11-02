@@ -146,6 +146,8 @@ bool ReadControl(dom::Element* element, ControlView& out);
 // Asks the script of the window for the state of the controls that changed since, and keeps it for ReadControl (which gives it as it was committed).
 // Called before a frame is made.
 void RefreshControls(dom::Document* document);
+// The same for the pages of the frames the document holds (and theirs): what their controls show is asked of their own scripts.
+void RefreshFrameControls(dom::Document* document);
 // Whether the element is :valid (0), :invalid (1), :in-range (2) or :out-of-range (3).
 bool ValidityQuery(const dom::Element* element, int which);
 

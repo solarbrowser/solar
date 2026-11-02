@@ -1525,3 +1525,17 @@ bool DelayDocumentLoad(dom::Document* document) { return document && DelayLoad(d
 void ResumeDocumentLoad(dom::Document* document) { if (document) ResumeLoad(document); }
 
 }  // namespace solar::html
+
+namespace solar::html {
+
+void RefreshFrameControls(dom::Document* document) {
+  if (!document) return;
+  for (dom::Element* iframe : IframesIn(document)) {
+    dom::Document* inner = iframe->contentDocument;
+    if (!inner || !inner->context || inner->frameElement != iframe) continue;
+    if (inner->realm) RunAs(*inner->realm, [&] { RefreshControls(inner); });
+    RefreshFrameControls(inner);
+  }
+}
+
+}  // namespace solar::html

@@ -1579,6 +1579,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
   // (What the form controls show is asked of the page's script before the frame, on the thread the script is on; the frame reads it as it was committed.)
   const auto currentTree = [&]() -> solar::layout::Tree* {
     solar::html::RunInRealm(*realm, [&] { solar::html::RefreshControls(document); });
+    solar::html::RefreshFrameControls(document);
     return solar::layout::UpdateLayout(realm->GetContext(), document);
   };
   // The page is shown while it is still being loaded (what the parser has made, once a script or a picture is waited for): a page that takes seconds to be
@@ -2084,6 +2085,88 @@ int PageMain(Shared& shared, int argc, char** argv) {
       dirty = true;
     }
   };
+  // ---- Frames ----
+  // A page in an iframe is a document of its own with its own tree: what is under the pointer, which is a frame, is asked of that tree at the place in it.
+  // The chain is the frames the point is in, outermost first, each with the point as the frame's own viewport has it.
+  struct FrameHit {
+    solar::dom::Document* doc = nullptr;
+    solar::layout::Tree* tree = nullptr;
+    qe::Realm* realm = nullptr;
+    double x = 0, y = 0;
+  };
+  const auto frameChainAt = [&](double px, double py) -> std::vector<FrameHit> {
+    std::vector<FrameHit> chain;
+    solar::dom::Document* doc = document;
+    solar::layout::Tree* tree = currentTree();
+    double x = px, y = py;
+    for (int depth = 0; depth < 4 && tree && doc; ++depth) {
+      const std::vector<solar::dom::Element*> elements = solar::layout::ElementsAtPoint(*tree, x, y);
+      if (elements.empty()) break;
+      solar::dom::Element* frame = elements.front();
+      if (!frame->IsHtml("iframe") || !frame->contentDocument || !frame->contentDocument->realm || frame->contentDocument->frameElement != frame) break;
+      solar::dom::Document* inner = frame->contentDocument;
+      solar::layout::Tree* innerTree = inner->layoutTree.get();
+      if (!innerTree || !innerTree->root) break;
+      const solar::layout::Box* box = nullptr;
+      for (const solar::layout::Box* candidate : solar::layout::BoxesOf(*tree, frame)) {
+        if (candidate->kind == solar::layout::Box::Kind::Block) { box = candidate; break; }
+      }
+      if (!box) break;
+      solar::layout::Rect rect = solar::layout::AbsoluteBorderBox(*box);
+      for (const solar::layout::Box* q = box->parent; q; q = q->parent) {
+        if (!q->node) continue;
+        const auto found = tree->scroll.find(q->node);
+        if (found != tree->scroll.end()) { rect.x -= found->second.first; rect.y -= found->second.second; }
+      }
+      x -= rect.x + box->border.left + box->padding.left;
+      y -= rect.y + box->border.top + box->padding.top;
+      chain.push_back(FrameHit{inner, innerTree, inner->realm, x, y});
+      doc = inner;
+      tree = innerTree;
+    }
+    return chain;
+  };
+  std::vector<solar::dom::Document*> hoveredFrames;  // the frames that have an element under the pointer
+  // What is under the pointer in each frame it is over is what is hovered there; the frames it left have nothing hovered.
+  const auto updateFrameHover = [&](bool moved) {
+    const std::vector<FrameHit> chain = frameChainAt(pointerX, pointerY);
+    std::vector<solar::dom::Document*> now;
+    for (const FrameHit& hit : chain) {
+      const std::vector<solar::dom::Element*> elements = solar::layout::ElementsAtPoint(*hit.tree, hit.x, hit.y);
+      solar::dom::Element* over = elements.empty() ? nullptr : elements.front();
+      solar::dom::Element* before = hit.doc->hoverElement;
+      solar::dom::SetHoverElement(hit.doc, over);
+      if (over != before) solar::html::RunInRealm(*hit.realm, [&] { solar::html::DispatchHover(hit.doc, before, over, hit.x, hit.y); });
+      if (moved && over && &hit == &chain.back()) {
+        solar::html::RunInRealm(*hit.realm, [&] { solar::html::DispatchPointer(hit.doc, over, "mousemove", hit.x, hit.y, 0, pressTarget ? 1 : 0); });
+      }
+      now.push_back(hit.doc);
+      dirty = true;
+    }
+    for (solar::dom::Document* old : hoveredFrames) {
+      if (std::find(now.begin(), now.end(), old) != now.end() || !old->realm) continue;
+      solar::dom::Element* before = old->hoverElement;
+      if (!before) continue;
+      solar::dom::SetHoverElement(old, nullptr);
+      solar::html::RunInRealm(*old->realm, [&] { solar::html::DispatchHover(old, before, nullptr, 0, 0); });
+      dirty = true;
+    }
+    hoveredFrames = std::move(now);
+  };
+  // The frame a press began in (the release and the click go to it).
+  FrameHit framePress;
+  solar::dom::Element* framePressElement = nullptr;
+  // The page that has the keyboard: the one whose focused element is a frame, down the chain; the document itself when its focus is not in a frame.
+  const auto keyboardDocument = [&]() -> solar::dom::Document* {
+    solar::dom::Document* doc = document;
+    for (int depth = 0; depth < 4 && doc; ++depth) {
+      solar::dom::Element* focused = doc->focusedElement;
+      if (!focused || !focused->IsHtml("iframe") || !focused->contentDocument || !focused->contentDocument->realm) break;
+      doc = focused->contentDocument;
+    }
+    return doc;
+  };
+
   // The scroll is the window's (it glides, it is dragged by the scrollbar): the page asks it to move, and is told where it is.
   const bool scrollTestMode = std::getenv("SOLAR_GUI_SCROLL") != nullptr;
   const auto scrollBy = [&](double dx, double dy) {
@@ -2193,6 +2276,15 @@ int PageMain(Shared& shared, int argc, char** argv) {
             break;
           }
           caretReset();
+          if (solar::dom::Document* typing = keyboardDocument(); typing && typing != document && typing->realm) {
+            // The keyboard is in a frame: the text goes to the control that has the focus there.
+            solar::dom::Element* field = typing->focusedElement;
+            if (field && (field->IsHtml("input") || field->IsHtml("textarea"))) {
+              solar::html::RunInRealm(*typing->realm, [&] { solar::html::TypeInto(typing, field, event.text.text, "text"); });
+              dirty = true;
+            }
+            break;
+          }
           solar::dom::Element* focused = document ? document->focusedElement : nullptr;
           if (popupSelect) {
             // Typing in the open drop-down goes to the next row that begins with it.
@@ -2225,6 +2317,43 @@ int PageMain(Shared& shared, int argc, char** argv) {
           const int h = shared.height.load();
           suppressText = false;
           caretReset();
+          if (solar::dom::Document* typing = keyboardDocument(); typing && typing != document && typing->realm && typing->DocumentElement()) {
+            // The keyboard is in a frame: its page sees the key, and its control with the focus takes what edits it.
+            const KeyInfo info = DescribeKey(event.key);
+            bool proceed = true;
+            if (!info.key.empty()) {
+              solar::dom::Element* target = typing->focusedElement ? typing->focusedElement : typing->DocumentElement();
+              solar::html::RunInRealm(*typing->realm, [&] {
+                proceed = solar::html::DispatchKey(typing, target, "keydown", info.key, info.code, info.keyCode, event.key.repeat, info.modifiers);
+                if (proceed && !(info.modifiers & (1 | 4 | 8)) && (info.key == "Enter" || (info.key.size() == 1 && info.key[0] >= 0x20))) {
+                  if (typing->focusedElement) target = typing->focusedElement;
+                  proceed = solar::html::DispatchKey(typing, target, "keypress", info.key, info.code, info.key == "Enter" ? 13 : static_cast<unsigned char>(info.key[0]), event.key.repeat, info.modifiers);
+                }
+              });
+              dirty = true;
+            }
+            if (!proceed) {
+              suppressText = info.key.size() == 1;
+              break;
+            }
+            solar::dom::Element* field = typing->focusedElement;
+            const SDL_Keycode frameKey = event.key.key;
+            if (frameKey == SDLK_TAB) {
+              typing->focusByKeyboard = true;
+              solar::html::RunInRealm(*typing->realm, [&] { solar::html::FocusNext(typing, (event.key.mod & SDL_KMOD_SHIFT) != 0); });
+              dirty = true;
+            } else if (field && (field->IsHtml("input") || field->IsHtml("textarea"))) {
+              const char* kind = frameKey == SDLK_BACKSPACE ? "backspace" : frameKey == SDLK_DELETE ? "delete" : (frameKey == SDLK_RETURN || frameKey == SDLK_KP_ENTER) ? "enter" : frameKey == SDLK_LEFT ? "left" : frameKey == SDLK_RIGHT ? "right" : frameKey == SDLK_HOME ? "home" : frameKey == SDLK_END ? "end" : nullptr;
+              if (kind) {
+                solar::html::RunInRealm(*typing->realm, [&] { solar::html::TypeInto(typing, field, "", kind); });
+                dirty = true;
+              }
+            } else if ((frameKey == SDLK_RETURN || frameKey == SDLK_SPACE) && field) {
+              solar::html::RunInRealm(*typing->realm, [&] { solar::html::DispatchClick(typing, field, 0, 0, 0); });
+              dirty = true;
+            }
+            break;
+          }
           if (document && document->DocumentElement()) {
             // The page sees the key first; what the program does with it (scrolling, typing, pressing) is for when no script cancelled it.
             const KeyInfo info = DescribeKey(event.key);
@@ -2341,6 +2470,18 @@ int PageMain(Shared& shared, int argc, char** argv) {
             solar::html::RunInRealm(*realm, [&] { solar::html::DispatchWheel(document, over, pointerX, pointerY, -event.wheel.x * 100.0, -event.wheel.y * 100.0); });
             dirty = true;
           }
+          if (document && pointerKnown) {
+            const std::vector<FrameHit> chain = frameChainAt(pointerX, pointerY);
+            if (!chain.empty()) {
+              const FrameHit& hit = chain.back();
+              const std::vector<solar::dom::Element*> elements = solar::layout::ElementsAtPoint(*hit.tree, hit.x, hit.y);
+              if (!elements.empty()) {
+                solar::dom::Element* over = elements.front();
+                solar::html::RunInRealm(*hit.realm, [&] { solar::html::DispatchWheel(hit.doc, over, hit.x, hit.y, -event.wheel.x * 100.0, -event.wheel.y * 100.0); });
+                dirty = true;
+              }
+            }
+          }
           break;
         }
         case SDL_EVENT_MOUSE_MOTION: {
@@ -2393,6 +2534,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
               solar::html::RunInRealm(*realm, [&] { solar::html::DispatchPointer(document, over, "mousemove", event.motion.x, event.motion.y, 0, pressTarget ? 1 : 0); });
               dirty = true;
             }
+            updateFrameHover(true);
           }
           break;
         }
@@ -2420,6 +2562,34 @@ int PageMain(Shared& shared, int argc, char** argv) {
           }
           updateHover();
           pressTarget = document->hoverElement;
+          framePressElement = nullptr;
+          framePress = FrameHit{};
+          if (pressTarget && pressTarget->IsHtml("iframe")) {
+            // A press on a frame is a press in the page it holds, at the place it is.
+            const std::vector<FrameHit> chain = frameChainAt(event.button.x, event.button.y);
+            if (!chain.empty()) {
+              const FrameHit& hit = chain.back();
+              const std::vector<solar::dom::Element*> elements = solar::layout::ElementsAtPoint(*hit.tree, hit.x, hit.y);
+              if (!elements.empty()) {
+                const int button = event.button.button == SDL_BUTTON_LEFT ? 0 : event.button.button == SDL_BUTTON_MIDDLE ? 1 : 2;
+                framePress = hit;
+                framePressElement = elements.front();
+                // The focus is in the frame now: each page that holds it has the frame as what it has the focus in.
+                for (solar::dom::Document* holder = hit.doc; holder && holder->frameElement; holder = holder->frameElement->nodeDocument) {
+                  solar::dom::Document* parent = holder->frameElement->nodeDocument;
+                  if (!parent) break;
+                  if (parent->focusedElement != holder->frameElement) {
+                    parent->focusedElement = holder->frameElement;
+                    parent->NoteWrite();
+                  }
+                }
+                solar::dom::Element* target = framePressElement;
+                solar::html::RunInRealm(*hit.realm, [&] { solar::html::DispatchPointer(hit.doc, target, "mousedown", hit.x, hit.y, button, 1 << button); });
+                if (event.button.button == SDL_BUTTON_LEFT) solar::dom::SetPressedElement(hit.doc, target);
+                dirty = true;
+              }
+            }
+          }
           if (timing) std::fprintf(stderr, "press at %.0f,%.0f on %s%s%s\n", event.button.x, event.button.y, pressTarget ? pressTarget->localName.c_str() : "nothing", pressTarget && pressTarget->FindAttribute("", "class") ? "." : "", pressTarget && pressTarget->FindAttribute("", "class") ? pressTarget->FindAttribute("", "class")->value.c_str() : "");
           pressButton = event.button.button == SDL_BUTTON_LEFT ? 0 : event.button.button == SDL_BUTTON_MIDDLE ? 1 : 2;
           if (event.button.button == SDL_BUTTON_X1 || event.button.button == SDL_BUTTON_X2) {
@@ -2557,6 +2727,34 @@ int PageMain(Shared& shared, int argc, char** argv) {
           }
           solar::dom::Element* pressed = document->pressedElement;
           solar::dom::SetPressedElement(document, nullptr);
+          if (framePress.doc && framePressElement) {
+            // The release of a press that began in a frame goes to the page there, which has the click if it was released on what it was pressed on.
+            const std::vector<FrameHit> chain = frameChainAt(event.button.x, event.button.y);
+            solar::dom::Document* pressedDoc = framePress.doc;
+            solar::dom::SetPressedElement(pressedDoc, nullptr);
+            for (const FrameHit& hit : chain) {
+              if (hit.doc != pressedDoc) continue;
+              const std::vector<solar::dom::Element*> elements = solar::layout::ElementsAtPoint(*hit.tree, hit.x, hit.y);
+              solar::dom::Element* released = elements.empty() ? nullptr : elements.front();
+              if (!released) break;
+              solar::dom::Element* clicked = nullptr;
+              if (framePressElement == released) clicked = released;
+              else {
+                for (solar::dom::Node* n = released; n && !clicked; n = n->parentNode) if (n == framePressElement) clicked = framePressElement;
+                for (solar::dom::Node* n = framePressElement; n && !clicked; n = n->parentNode) if (n == released) clicked = released;
+              }
+              bool follow = true;
+              solar::html::RunInRealm(*hit.realm, [&] {
+                solar::html::DispatchPointer(hit.doc, released, "mouseup", hit.x, hit.y, pressButton, 0);
+                if (clicked) follow = solar::html::DispatchClick(hit.doc, clicked, hit.x, hit.y, pressButton);
+              });
+              (void)follow;
+              dirty = true;
+              break;
+            }
+            framePressElement = nullptr;
+            framePress = FrameHit{};
+          }
           // The release goes to what is under the pointer; a click is the press and the release on the same element (or one inside the other).
           pointerX = event.button.x;
           pointerY = event.button.y;
