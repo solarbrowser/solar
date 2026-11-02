@@ -1580,7 +1580,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
   const auto currentTree = [&]() -> solar::layout::Tree* {
     solar::html::RunInRealm(*realm, [&] { solar::html::RefreshControls(document); });
     solar::html::RefreshFrameControls(document);
-    return solar::layout::UpdateLayout(realm->GetContext(), document);
+    return solar::paint::UpdateLayoutWithFrames(realm->GetContext(), document);
   };
   // The page is shown while it is still being loaded (what the parser has made, once a script or a picture is waited for): a page that takes seconds to be
   // loaded has its first part drawn in the first one. How often is held to what a frame costs, so that showing it does not slow the loading.

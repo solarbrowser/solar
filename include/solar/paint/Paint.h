@@ -23,6 +23,8 @@ Color ParseColor(const std::string& text);
 
 // The display list of the document in `tree`. The scroll position of the viewport and of the scroll containers is the one in the tree.
 // `overscan` is how far above and below the viewport items are made for, so that the list can be drawn at other scrolls than the one it was made at.
+// The layout of the page and of the pages in its frames, up to date, ready for BuildDisplayList (which lays nothing out).
+layout::Tree* UpdateLayoutWithFrames(Quanta::Context& ctx, dom::Document* document, int depth = 0);
 DisplayList BuildDisplayList(Quanta::Context& ctx, layout::Tree& tree, double overscan = 0);
 
 // The drop-down list of a select that is open: drawn over everything, under the select (above it where there is no room below). `hover` is the row the pointer

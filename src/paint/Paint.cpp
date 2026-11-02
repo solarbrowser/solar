@@ -1680,6 +1680,31 @@ class Painter {
 
 }  // namespace
 
+namespace {
+void CollectFrames(const layout::Box& box, std::vector<dom::Document*>& frames) {
+  if (box.replaced && box.kind == layout::Box::Kind::Block) {
+    dom::Element* element = box.element();
+    if (element && element->IsHtml("iframe") && element->contentDocument && element->contentDocument->context && element->contentDocument->frameElement == element) {
+      frames.push_back(element->contentDocument);
+    }
+  }
+  for (const auto& child : box.children) CollectFrames(*child, frames);
+}
+
+}  // namespace
+
+// The layout of a page and of the pages in its frames. Painting freezes layout, and a frame's page is laid out when it is painted: it has to be done before.
+// (Laying a page out may run the loop, a font being fetched, and the tree of the page may be made again by then: it is asked for last.)
+layout::Tree* UpdateLayoutWithFrames(Quanta::Context& ctx, dom::Document* document, int depth) {
+  layout::Tree* tree = layout::UpdateLayout(ctx, document);
+  if (!tree || !tree->root || depth >= 4) return tree;
+  std::vector<dom::Document*> frames;
+  CollectFrames(*tree->root, frames);
+  if (frames.empty()) return tree;
+  for (dom::Document* inner : frames) UpdateLayoutWithFrames(*inner->context, inner, depth + 1);
+  return layout::UpdateLayout(ctx, document);
+}
+
 DisplayList BuildDisplayList(Quanta::Context& ctx, layout::Tree& tree, double overscan) {
   // What is painted is the tree as it was committed (see dom::CommittedViewScope).
   dom::CommittedViewScope view;
