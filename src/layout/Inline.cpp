@@ -1512,6 +1512,23 @@ double LayoutInlineContentOnce(LayoutContext& lc, Box& container, double width, 
   return lineTop;
 }
 
+namespace {
+// What the min-width and max-width (in px) of an atom that is as wide as it is told do to the widths it counts for in a line.
+void ClampToWidthLimits(const Box& b, double& mn, double& mx) {
+  const BoxStyle& s = *b.style;
+  const double edges = b.padding.Horizontal() + b.border.Horizontal();
+  const auto content = [&](double v) { return s.boxSizing == BoxSizing::BorderBox ? std::max(0.0, v - edges) : v; };
+  if (s.maxWidth.kind == Length::Kind::Px) {
+    mn = std::min(mn, content(s.maxWidth.value));
+    mx = std::min(mx, content(s.maxWidth.value));
+  }
+  if (s.minWidth.kind == Length::Kind::Px) {
+    mn = std::max(mn, content(s.minWidth.value));
+    mx = std::max(mx, content(s.minWidth.value));
+  }
+}
+}  // namespace
+
 void InlineContentSizesOnce(LayoutContext& lc, Box& container, double& minContent, double& maxContent, double* firstWord) {
   Collector collector(lc, container);
   collector.Collect(container);
@@ -1583,6 +1600,7 @@ void InlineContentSizesOnce(LayoutContext& lc, Box& container, double& minConten
       const double extras = b.padding.Horizontal() + b.border.Horizontal() + (s.margin[1].IsAuto() ? 0 : s.margin[1].Resolve(0)) + (s.margin[3].IsAuto() ? 0 : s.margin[3].Resolve(0));
       double mn = b.minContent, mx = b.maxContent;
       if (s.width.kind == Length::Kind::Px) mn = mx = s.boxSizing == BoxSizing::BorderBox ? std::max(0.0, s.width.value - b.padding.Horizontal() - b.border.Horizontal()) : s.width.value;
+      ClampToWidthLimits(b, mn, mx);
       line += mx + extras;
       word += mn + extras;
       hanging = 0;
@@ -1601,6 +1619,7 @@ void InlineContentSizesOnce(LayoutContext& lc, Box& container, double& minConten
       const double extras = b.padding.Horizontal() + b.border.Horizontal() + (s.margin[1].IsAuto() ? 0 : s.margin[1].Resolve(0)) + (s.margin[3].IsAuto() ? 0 : s.margin[3].Resolve(0));
       double mn = b.minContent, mx = b.maxContent;
       if (s.width.kind == Length::Kind::Px) mn = mx = s.boxSizing == BoxSizing::BorderBox ? std::max(0.0, s.width.value - b.padding.Horizontal() - b.border.Horizontal()) : s.width.value;
+      ClampToWidthLimits(b, mn, mx);
       line += mx + extras;
       hanging = 0;
       minContent = std::max(minContent, mn + extras);
