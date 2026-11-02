@@ -393,6 +393,18 @@ std::optional<FrameContext> MakeContext(dom::Element* iframe, const std::string&
   });
   if (!document) return std::nullopt;
   g_environment->SetRealmUrl(realm, url);
+  // The frame's browsing context has the name its iframe gives it, so window.name says it (a page looks itself up by it in its parent's frames).
+  if (const dom::Attr* name = iframe->FindAttribute("", "name"); name && !name->value.empty()) {
+    std::string quoted = "name = \"";
+    for (char c : name->value) {
+      if (c == '\\' || c == '"') quoted.push_back('\\');
+      if (c == '\n') { quoted += "\\n"; continue; }
+      if (c == '\r') { quoted += "\\r"; continue; }
+      quoted.push_back(c);
+    }
+    quoted += "\";";
+    RunAs(*realm, [&] { realm->Evaluate(quoted, "frame-name"); });
+  }
   return FrameContext{realm, document};
 }
 
@@ -1493,6 +1505,10 @@ std::vector<Quanta::Object*> ChildWindowsOf(dom::Document* document) { return Ch
 Quanta::Object* ChildWindowNamed(dom::Document* document, const std::string& name) {
   if (!document) return nullptr;
   for (dom::Element* iframe : IframesIn(document)) {
+    // (Only those of the document's own tree: a frame in a shadow tree is not named in the window.)
+    dom::Node* root = iframe;
+    while (root->parentNode) root = root->parentNode;
+    if (root != document) continue;
     if (iframe->contentWindow && dom::GetAttribute(iframe, "name") == name) return iframe->contentWindow;
   }
   return nullptr;

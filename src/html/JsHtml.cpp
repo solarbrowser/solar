@@ -1497,6 +1497,11 @@ Value IllegalWindowConstructor(Context& ctx, Value, qe::Args, Value) {
 bool NamedWindowProperty(qe::Realm* realm, const std::string& name, Value& out) {
   dom::Document* document = DocumentOfRealm(realm);
   if (!document) return false;
+  // A child browsing context of that name comes first (window.frames["a"], parent.frames[name]): the window of the iframe, not the iframe.
+  if (Object* child = ChildWindowNamed(document, name)) {
+    out = qe::FromObject(child);
+    return true;
+  }
   const std::vector<dom::Element*>* elements = dom::WindowNamedElements(document, name);
   if (!elements || elements->empty()) return false;
   out = elements->size() == 1 ? qe::FromObject(elements->front()) : dom::NewWindowNamedCollection(realm->GetContext(), document, name);
