@@ -513,6 +513,8 @@ uint64_t BaseVersion();
 // How many nodes are alive (made and not yet collected), for looking for what keeps a page after it was left.
 // A document that will not be used again (a page that was left): what hangs from it is let go of, so that what keeps the document itself keeps no more than that.
 void DisposeDocument(Document* document);
+// Told of each document that goes (the one disposed and the documents of the frames in it), for whoever keeps a pointer to a document.
+void SetDocumentGoneHook(void (*hook)(Document*));
 size_t LiveNodes();
 size_t LiveDocuments();
 // The same, but for the changes of what is in a document: what happens to a node that is not in one does not change it.

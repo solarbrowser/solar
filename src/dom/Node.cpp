@@ -255,8 +255,23 @@ CommittedViewScope::~CommittedViewScope() { --g_committedViewDepth; }
 
 // ---- Letting a document go ----
 
+namespace {
+void (*g_documentGone)(Document*) = nullptr;
+
+void TellGone(Document* document, int depth) {
+  if (!g_documentGone || !document || depth > 8) return;
+  g_documentGone(document);
+  for (Node* n = document; n; n = n->NextInTree(document)) {
+    if (n->IsElement() && static_cast<Element*>(n)->contentDocument) TellGone(static_cast<Element*>(n)->contentDocument, depth + 1);
+  }
+}
+}  // namespace
+
+void SetDocumentGoneHook(void (*hook)(Document*)) { g_documentGone = hook; }
+
 void DisposeDocument(Document* document) {
   if (!document) return;
+  TellGone(document, 0);
   ForgetNameIndex(document);
   // Every node that hangs from it, through the children, the shadow trees and the contents of templates.
   std::vector<Node*> all;

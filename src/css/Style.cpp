@@ -2659,23 +2659,39 @@ void SnapshotComputedValues(Quanta::Context& ctx, dom::Element* element) {
   }
 }
 namespace {
-Quanta::Context* g_wakeContext = nullptr;
-dom::Document* g_wakeDocument = nullptr;
+// Each document with script has its own animations and transitions, run by its own realm: every one of them is asked for its frame.
+struct Waker {
+  Quanta::Context* context;
+  dom::Document* document;
+};
+std::vector<Waker> g_wakers;
 bool g_inWake = false;
+void WakerGone(dom::Document* document) {
+  g_wakers.erase(std::remove_if(g_wakers.begin(), g_wakers.end(), [&](const Waker& w) { return w.document == document; }), g_wakers.end());
+}
 }  // namespace
 void SetAnimationWake(Quanta::Context& ctx, dom::Document* document) {
-  g_wakeContext = &ctx;
-  g_wakeDocument = document;
+  dom::SetDocumentGoneHook(WakerGone);
+  for (Waker& waker : g_wakers) {
+    if (waker.document == document) {
+      waker.context = &ctx;
+      return;
+    }
+  }
+  g_wakers.push_back({&ctx, document});
 }
 
 // The frame that starts what is declared has to be asked for, as nothing else tells that there is something to start.
 void WakeAnimations() {
-  if (g_wakeDocument && g_wakeDocument->animationWake && g_wakeContext && !g_inWake) {
-    g_inWake = true;
+  if (g_inWake) return;
+  g_inWake = true;
+  const std::vector<Waker> wakers = g_wakers;  // (a call may add or take away a document)
+  for (const Waker& waker : wakers) {
+    if (!waker.document->animationWake) continue;
     dom::CommittedViewSuspend suspend;
-    Quanta::Embed::Call(*g_wakeContext, Quanta::Embed::FromObject(g_wakeDocument->animationWake), Quanta::Embed::Undefined());
-    g_inWake = false;
+    Quanta::Embed::Call(*waker.context, Quanta::Embed::FromObject(waker.document->animationWake), Quanta::Embed::Undefined());
   }
+  g_inWake = false;
 }
 
 void BeginSheetParse() { ++g_sheetParsing; }
