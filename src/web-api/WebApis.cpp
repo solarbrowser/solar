@@ -45,8 +45,18 @@ std::string DisableEpilogue() {
 // SOLAR_TRACE=postmessage: each message a window sends and receives is written to the console, with whose it is (to see what two frames say to each other).
 std::string TraceEpilogue() {
   const char* named = std::getenv("SOLAR_TRACE");
-  if (!named || std::string(named).find("postmessage") == std::string::npos) return "";
-  return R"JS(
+  if (!named) return "";
+  std::string script;
+  if (std::string(named).find("errors") != std::string::npos) {
+    script += R"JS(
+;(() => {
+  addEventListener("error", (e) => { console.log("[error] " + e.message + " @ " + e.filename + ":" + e.lineno + ":" + e.colno + (e.error && e.error.stack ? "\n" + String(e.error.stack).split("\n").slice(0, 6).join("\n") : "")); }, true);
+  addEventListener("unhandledrejection", (e) => { const r = e.reason; console.log("[rejection] " + (r && r.stack ? String(r.stack).split("\n").slice(0, 6).join("\n") : String(r))); }, true);
+})();
+)JS";
+  }
+  if (std::string(named).find("postmessage") == std::string::npos) return script;
+  return script + R"JS(
 ;(() => {
   const who = () => { try { return (window.name || (window.top === window ? "top" : "frame")) + "@" + location.pathname.slice(0, 40); } catch (e) { return "?"; } };
   const show = (v) => { try { return typeof v === "string" ? v.slice(0, 160) : JSON.stringify(v).slice(0, 160); } catch (e) { return "[" + typeof v + "]"; } };
