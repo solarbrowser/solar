@@ -814,9 +814,18 @@ size_t LineEndAt(const std::string& s, size_t at) {
   return newline == std::string::npos ? s.size() : newline;
 }
 
+// A page in a frame that has more than its room: the wheel over it scrolls it, and the window has to know where it is to leave the page alone.
+// (The place is the frame's content box, in the coordinates of the page, or of the window for what is held in the viewport.)
+struct ScrollRegion {
+  double x = 0, y = 0, width = 0, height = 0;
+  bool fixed = false;
+  double curX = 0, curY = 0, maxX = 0, maxY = 0;
+};
+
 struct Frame {
   std::shared_ptr<const solar::paint::DisplayList> list;
   double maxX = 0, maxY = 0;  // how far the page can be scrolled
+  std::vector<ScrollRegion> regions;  // the frames that can be scrolled, the outer ones first
 };
 
 // The pointer is locked to an element of the page (the Pointer Lock API): the window hides the pointer and gives movements, and the page's mouse events are the locked element's.
@@ -1013,7 +1022,17 @@ void RunWindow(Shared& shared, SDL_Window* window, SDL_Renderer* renderer, solar
           break;
         }
         case SDL_EVENT_MOUSE_WHEEL: {
-          scrollBy(-event.wheel.x * 60, -event.wheel.y * 60, false);
+          const double stepX = -event.wheel.x * 60, stepY = -event.wheel.y * 60;
+          // A frame under the pointer that can be scrolled that way takes the wheel (the page of the frame scrolls it); at its end, the page has it.
+          bool frameTakes = false;
+          for (auto it = frame.regions.rbegin(); it != frame.regions.rend() && !frameTakes; ++it) {
+            const double px = event.wheel.mouse_x + (it->fixed ? 0 : x), py = event.wheel.mouse_y + (it->fixed ? 0 : y);
+            if (px < it->x || py < it->y || px >= it->x + it->width || py >= it->y + it->height) continue;
+            const bool moreX = stepX > 0 ? it->curX < it->maxX : stepX < 0 && it->curX > 0;
+            const bool moreY = stepY > 0 ? it->curY < it->maxY : stepY < 0 && it->curY > 0;
+            frameTakes = moreX || moreY;
+          }
+          if (!frameTakes) scrollBy(stepX, stepY, false);
           // (The page hears of it too, for what it does with the wheel besides scrolling; it cannot hold the scroll back.)
           UiEvent forward;
           forward.event = event;
@@ -1582,6 +1601,41 @@ int PageMain(Shared& shared, int argc, char** argv) {
     solar::html::RefreshFrameControls(document);
     return solar::paint::UpdateLayoutWithFrames(realm->GetContext(), document);
   };
+  // The frames of a page that have more to scroll than their room, where they are and where they are scrolled to.
+  const auto scrollRegions = [&](solar::layout::Tree& top) {
+    std::vector<ScrollRegion> out;
+    std::function<void(solar::layout::Tree&, const solar::layout::Box&, double, double, bool, int)> walk;
+    walk = [&](solar::layout::Tree& tree, const solar::layout::Box& box, double originX, double originY, bool fixedAbove, int depth) {
+      if (box.replaced && box.kind == solar::layout::Box::Kind::Block && box.element() && box.element()->IsHtml("iframe")) {
+        solar::dom::Document* inner = box.element()->contentDocument;
+        if (inner && inner->frameElement == box.element() && inner->layoutTree && inner->layoutTree->root && depth < 3) {
+          solar::layout::Rect rect = solar::layout::AbsoluteBorderBox(box);
+          bool fixed = fixedAbove || box.style->position == solar::layout::Position::Fixed;
+          for (const solar::layout::Box* q = box.parent; q; q = q->parent) {
+            if (q->style && q->style->position == solar::layout::Position::Fixed) fixed = true;
+            if (!q->node) continue;
+            const auto found = tree.scroll.find(q->node);
+            if (found != tree.scroll.end()) { rect.x -= found->second.first; rect.y -= found->second.second; }
+          }
+          ScrollRegion region;
+          region.x = originX + rect.x + box.border.left + box.padding.left;
+          region.y = originY + rect.y + box.border.top + box.padding.top;
+          region.width = rect.width - box.border.Horizontal() - box.padding.Horizontal();
+          region.height = rect.height - box.border.Vertical() - box.padding.Vertical();
+          region.fixed = fixed;
+          solar::layout::ScrollRange(*inner->layoutTree, nullptr, region.maxX, region.maxY);
+          const auto at = inner->layoutTree->scroll.find(inner);
+          if (at != inner->layoutTree->scroll.end()) { region.curX = at->second.first; region.curY = at->second.second; }
+          if (region.maxX > 0 || region.maxY > 0) out.push_back(region);
+          walk(*inner->layoutTree, *inner->layoutTree->root, region.x - region.curX, region.y - region.curY, fixed, depth + 1);
+          return;
+        }
+      }
+      for (const auto& child : box.children) walk(tree, *child, originX, originY, fixedAbove, depth);
+    };
+    if (top.root) walk(top, *top.root, 0, 0, false, 0);
+    return out;
+  };
   // The page is shown while it is still being loaded (what the parser has made, once a script or a picture is waited for): a page that takes seconds to be
   // loaded has its first part drawn in the first one. How often is held to what a frame costs, so that showing it does not slow the loading.
   const auto paintEarly = [&] {
@@ -1607,6 +1661,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
     Frame frame;
     frame.list = list;
     solar::layout::ScrollRange(*tree, nullptr, frame.maxX, frame.maxY);
+    frame.regions = scrollRegions(*tree);
     shared.PostFrame(std::move(frame));
     if (firstEarly) {
       firstEarly = false;
@@ -2480,6 +2535,19 @@ int PageMain(Shared& shared, int argc, char** argv) {
                 solar::html::RunInRealm(*hit.realm, [&] { solar::html::DispatchWheel(hit.doc, over, hit.x, hit.y, -event.wheel.x * 100.0, -event.wheel.y * 100.0); });
                 dirty = true;
               }
+              // The innermost frame that can be scrolled that way is scrolled (the window did not, see the wheel of the window).
+              const double stepX = -event.wheel.x * 60, stepY = -event.wheel.y * 60;
+              for (auto at = chain.rbegin(); at != chain.rend(); ++at) {
+                double maxX = 0, maxY = 0;
+                solar::layout::ScrollRange(*at->tree, nullptr, maxX, maxY);
+                auto& position = at->tree->scroll[at->doc];
+                const double nx = std::clamp(position.first + stepX, 0.0, std::max(0.0, maxX)), ny = std::clamp(position.second + stepY, 0.0, std::max(0.0, maxY));
+                if (nx == position.first && ny == position.second) continue;
+                position = {nx, ny};
+                solar::layout::ApplySticky(*at->tree);
+                dirty = true;
+                break;
+              }
             }
           }
           break;
@@ -2856,6 +2924,8 @@ int PageMain(Shared& shared, int argc, char** argv) {
       } else if (step.rfind("w:", 0) == 0) {
         e.type = SDL_EVENT_MOUSE_WHEEL;
         e.wheel.y = -static_cast<float>(std::atof(step.c_str() + 2));
+        e.wheel.mouse_x = static_cast<float>(pointerX);
+        e.wheel.mouse_y = static_cast<float>(pointerY);
         SDL_PushEvent(&e);
       } else if (step.rfind("t:", 0) == 0) {
         e.type = SDL_EVENT_TEXT_INPUT;
@@ -2978,6 +3048,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
     Frame frame;
     frame.list = list;
     solar::layout::ScrollRange(*tree, nullptr, frame.maxX, frame.maxY);
+    frame.regions = scrollRegions(*tree);
     const size_t itemCount = list->items.size();
     shared.PostFrame(std::move(frame));
     // SOLAR_GUI_SHOT=file.png: the frame is written to a file by the window, and the program ends (for looking at what it paints without a screen).
