@@ -1602,6 +1602,22 @@ int PageMain(Shared& shared, int argc, char** argv) {
     return solar::paint::UpdateLayoutWithFrames(realm->GetContext(), document);
   };
   // The frames of a page that have more to scroll than their room, where they are and where they are scrolled to.
+  // How far the user can scroll an element with the wheel: what its overflow lets be scrolled (hidden is for script), 0 for what is not a scroller.
+  const auto userScrollRange = [&](solar::layout::Tree& tree, solar::dom::Element* element, double& maxX, double& maxY) {
+    maxX = maxY = 0;
+    const solar::layout::Box* scroller = nullptr;
+    for (const solar::layout::Box* b : solar::layout::BoxesOf(tree, element)) {
+      if (b->kind == solar::layout::Box::Kind::Block) { scroller = b; break; }
+    }
+    if (!scroller || scroller->formControl || !scroller->style) return false;
+    const solar::layout::BoxStyle& p = scroller->style->Physical();
+    const auto wheels = [](solar::layout::Overflow o) { return o == solar::layout::Overflow::Auto || o == solar::layout::Overflow::Scroll; };
+    if (!wheels(p.overflowX) && !wheels(p.overflowY)) return false;
+    solar::layout::ScrollRange(tree, element, maxX, maxY);
+    if (!wheels(p.overflowX)) maxX = 0;
+    if (!wheels(p.overflowY)) maxY = 0;
+    return maxX > 0 || maxY > 0;
+  };
   const auto scrollRegions = [&](solar::layout::Tree& top) {
     std::vector<ScrollRegion> out;
     std::function<void(solar::layout::Tree&, const solar::layout::Box&, double, double, bool, int)> walk;
@@ -1629,6 +1645,33 @@ int PageMain(Shared& shared, int argc, char** argv) {
           if (region.maxX > 0 || region.maxY > 0) out.push_back(region);
           walk(*inner->layoutTree, *inner->layoutTree->root, region.x - region.curX, region.y - region.curY, fixed, depth + 1);
           return;
+        }
+      }
+      // A box with an overflow that scrolls and more than its room.
+      if (box.kind == solar::layout::Box::Kind::Block && box.element() && box.parent) {
+        solar::dom::Element* element = box.element();
+        double maxX = 0, maxY = 0;
+        const bool viewport = element == element->nodeDocument->DocumentElement() || element->IsHtml("body");
+        if (!viewport && userScrollRange(tree, element, maxX, maxY)) {
+          solar::layout::Rect rect = solar::layout::AbsoluteBorderBox(box);
+          bool fixed = fixedAbove || box.style->position == solar::layout::Position::Fixed;
+          for (const solar::layout::Box* q = box.parent; q; q = q->parent) {
+            if (q->style && q->style->position == solar::layout::Position::Fixed) fixed = true;
+            if (!q->node) continue;
+            const auto found = tree.scroll.find(q->node);
+            if (found != tree.scroll.end()) { rect.x -= found->second.first; rect.y -= found->second.second; }
+          }
+          ScrollRegion region;
+          region.x = originX + rect.x + box.border.left;
+          region.y = originY + rect.y + box.border.top;
+          region.width = rect.width - box.border.Horizontal();
+          region.height = rect.height - box.border.Vertical();
+          region.fixed = fixed;
+          region.maxX = maxX;
+          region.maxY = maxY;
+          const auto at = tree.scroll.find(element);
+          if (at != tree.scroll.end()) { region.curX = at->second.first; region.curY = at->second.second; }
+          out.push_back(region);
         }
       }
       for (const auto& child : box.children) walk(tree, *child, originX, originY, fixedAbove, depth);
@@ -2535,18 +2578,35 @@ int PageMain(Shared& shared, int argc, char** argv) {
                 solar::html::RunInRealm(*hit.realm, [&] { solar::html::DispatchWheel(hit.doc, over, hit.x, hit.y, -event.wheel.x * 100.0, -event.wheel.y * 100.0); });
                 dirty = true;
               }
-              // The innermost frame that can be scrolled that way is scrolled (the window did not, see the wheel of the window).
-              const double stepX = -event.wheel.x * 60, stepY = -event.wheel.y * 60;
-              for (auto at = chain.rbegin(); at != chain.rend(); ++at) {
+            }
+            // What is scrolled is the innermost scroller under the pointer that can go that way: an element with an overflow that scrolls, then the
+            // page of its frame, then what is around the frame (the window did not scroll, see the wheel of the window; at the end of them all it does).
+            const double stepX = -event.wheel.x * 60, stepY = -event.wheel.y * 60;
+            struct Level { solar::layout::Tree* tree; solar::dom::Document* doc; double x, y; };
+            std::vector<Level> levels;
+            if (solar::layout::Tree* top = currentTree()) levels.push_back({top, document, pointerX, pointerY});
+            for (const FrameHit& hit : chain) levels.push_back({hit.tree, hit.doc, hit.x, hit.y});
+            const auto scrollAt = [&](solar::layout::Tree& tree, const solar::dom::Node* key, double maxX, double maxY) {
+              auto& position = tree.scroll[key];
+              const double nx = std::clamp(position.first + stepX, 0.0, std::max(0.0, maxX)), ny = std::clamp(position.second + stepY, 0.0, std::max(0.0, maxY));
+              if (nx == position.first && ny == position.second) return false;
+              position = {nx, ny};
+              solar::layout::ApplySticky(tree);
+              dirty = true;
+              return true;
+            };
+            for (auto level = levels.rbegin(); level != levels.rend(); ++level) {
+              const std::vector<solar::dom::Element*> under = solar::layout::ElementsAtPoint(*level->tree, level->x, level->y);
+              bool done = false;
+              for (solar::dom::Node* n = under.empty() ? nullptr : under.front(); n && n->IsElement() && !done; n = n->parentNode) {
                 double maxX = 0, maxY = 0;
-                solar::layout::ScrollRange(*at->tree, nullptr, maxX, maxY);
-                auto& position = at->tree->scroll[at->doc];
-                const double nx = std::clamp(position.first + stepX, 0.0, std::max(0.0, maxX)), ny = std::clamp(position.second + stepY, 0.0, std::max(0.0, maxY));
-                if (nx == position.first && ny == position.second) continue;
-                position = {nx, ny};
-                solar::layout::ApplySticky(*at->tree);
-                dirty = true;
-                break;
+                if (userScrollRange(*level->tree, static_cast<solar::dom::Element*>(n), maxX, maxY)) done = scrollAt(*level->tree, n, maxX, maxY);
+              }
+              if (done) break;
+              if (level->doc != document) {
+                double maxX = 0, maxY = 0;
+                solar::layout::ScrollRange(*level->tree, nullptr, maxX, maxY);
+                if (scrollAt(*level->tree, level->doc, maxX, maxY)) break;
               }
             }
           }
