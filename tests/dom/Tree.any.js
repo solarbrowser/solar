@@ -51,7 +51,7 @@ test(() => {
   assert_throws_dom('NamespaceError', () => document.createElementNS(null, 'a:b'));
   assert_throws_dom('NamespaceError', () => document.createElementNS('http://example.com', 'xml:b'));
   assert_throws_dom('NamespaceError', () => document.createElementNS('http://www.w3.org/2000/xmlns/', 'a'));
-  assert_throws_dom('InvalidCharacterError', () => document.createElementNS('x', 'a:b:c'));
+  assert_throws_dom('InvalidCharacterError', () => document.createElementNS('x', 'a b'));   // (a name has none of what ends one in the HTML syntax; 'a:b:c' is one now)
 }, 'createElementNS');
 
 test(() => {

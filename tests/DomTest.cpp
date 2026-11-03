@@ -130,7 +130,8 @@ void TestAttributes(Quanta::Context& ctx) {
   Check(GetAttribute(div, "id") == "a", "an HTML element's attribute names are lowered");
   Check(GetAttribute(div, "Id") == "a", "and so are the names looked up");
   Check(!SetAttribute(ctx, div, "id", "b") && div->attributes.size() == 1 && GetAttribute(div, "id") == "b", "set again changes the value");
-  Check(ErrorName(SetAttribute(ctx, div, "1bad", "x")) == "InvalidCharacterError", "a name cannot start with a digit");
+  Check(!SetAttribute(ctx, div, "1bad", "x") && GetAttribute(div, "1bad") == "x", "a name may start with a digit: the standard takes any name that has none of what ends one in the HTML syntax");
+  Check(ErrorName(SetAttribute(ctx, div, "a=b", "x")) == "InvalidCharacterError", "a name has no equals sign");
   Check(ErrorName(SetAttribute(ctx, div, "a b", "x")) == "InvalidCharacterError", "a name has no space");
   Check(ErrorName(SetAttribute(ctx, div, "", "x")) == "InvalidCharacterError", "a name is not empty");
   Check(!SetAttribute(ctx, div, "data-x_y.z:w", "x"), "a name with the allowed punctuation");
