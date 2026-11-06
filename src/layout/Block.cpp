@@ -1258,6 +1258,13 @@ Side StaticSide(const Box& a, const Box* parent, bool inlineAxis, WritingMode cb
     bool reversed = ps.flexDirection == FlexDirection::RowReverse || ps.flexDirection == FlexDirection::ColumnReverse;
     if (row && ps.direction == Direction::Rtl) reversed = !reversed;
     if (inlineAxis == row) {  // the main axis
+      // As on the cross axis: an inset that is given places the box (`bottom: 0` of a fixed bar in a column container puts it at the bottom edge); only the
+      // static position of a box with auto insets on this axis is aligned by justify-content.
+      const Align::Kind own = (inlineAxis ? s.justifySelf : s.alignSelf).kind;
+      if (own == Align::Kind::Auto || own == Align::Kind::Normal) {
+        const bool mainVertical = row == IsVertical(parent->Mode());
+        if (!s.inset[mainVertical ? 0 : 3].IsAuto() || !s.inset[mainVertical ? 2 : 1].IsAuto()) return Side::None;
+      }
       const Align::Kind k = ps.justifyContent.kind;
       switch (k) {
         case Align::Kind::Normal: case Align::Kind::Stretch: case Align::Kind::FlexStart: case Align::Kind::SpaceBetween: return reversed ? Side::End : Side::Start;
