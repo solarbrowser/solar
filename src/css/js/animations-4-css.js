@@ -148,7 +148,20 @@
 
   // ---- @keyframes ----
 
+  // The @keyframes rule of a name, kept until the rules of the sheets (or the sheets, or the window the media queries are of) change: an element is asked about its
+  // animations at every flush, and the answer was a walk over every rule of every sheet of the page.
+  const keyframesKept = new WeakMap();
   const keyframesFor = (el, name) => {
+    const root = el.getRootNode();
+    const key = root && typeof root === 'object' ? root : null;
+    if (!key || !S.natives.sheets) return keyframesWalk(el, name);
+    const stamp = S.natives.sheets() + ':' + (root.styleSheets ? root.styleSheets.length : 0) + ':' + (root.adoptedStyleSheets ? root.adoptedStyleSheets.length : 0) + ':' + innerWidth + 'x' + innerHeight;
+    let kept = keyframesKept.get(key);
+    if (!kept || kept.stamp !== stamp) keyframesKept.set(key, (kept = { stamp, byName: new Map() }));
+    if (!kept.byName.has(name)) kept.byName.set(name, keyframesWalk(el, name));
+    return kept.byName.get(name);
+  };
+  const keyframesWalk = (el, name) => {
     let root = el.getRootNode();
     const found = [];
     const layers = new Map();

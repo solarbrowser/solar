@@ -97,6 +97,8 @@ Value Compute(Context& ctx, Value, qe::Args args, Value) {
 
 // __solarAuthorVersion(): changes when what is declared, or the tree, does.
 Value AuthorVersion(Context&, Value, qe::Args, Value) { return qe::FromNumber(static_cast<double>(FlushVersion() % 9007199254740991ULL)); }
+// __solarSheetsVersion(): changes when the rules of the style sheets do (not for every change of the tree).
+Value SheetsVersionNative(Context&, Value, qe::Args, Value) { return qe::FromNumber(static_cast<double>(SheetsVersion() % 9007199254740991ULL)); }
 
 // __solarAnimOnFlush(function): the function to run before a computed style is read when what is declared has changed.
 Value OnFlush(Context& ctx, Value, qe::Args args, Value) {
@@ -262,6 +264,7 @@ void InstallAnimationNatives(Context& ctx) {
   qe::DefineGlobalFunction(ctx, "__solarAnimStarting", Starting, 3);
   qe::DefineGlobalFunction(ctx, "__solarAnimForget", Forget, 1);
   qe::DefineGlobalFunction(ctx, "__solarAuthorVersion", AuthorVersion, 0);
+  qe::DefineGlobalFunction(ctx, "__solarSheetsVersion", SheetsVersionNative, 0);
   qe::DefineGlobalFunction(ctx, "__solarAnimPropertyKind", Kind, 1);
 }
 

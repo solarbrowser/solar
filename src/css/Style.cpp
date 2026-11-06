@@ -1148,10 +1148,12 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   const dom::Element::Versions pv = parent ? parent->VersionsInView() : dom::Element::Versions();
   const bool basic = reuse.allowed && !shadowed && !entry.shadowed && entry.serial == element->serial && entry.parent == parentNode && entry.parentEpoch == parentEpoch && entry.attr == ev.attr && entry.animInherit == ev.animInherit;
   bool good = basic;
+  bool goodButForHas = false;  // everything that makes a style good held except what :has() looks at below the element
   const bool animSame = entry.anim == ev.anim;
   if (good && reuse.structural) good = entry.children == ev.children && (!parent || entry.parentChildren == pv.children);
   if (good && reuse.sibling) good = !parent || (entry.parentChildAttr == pv.childAttr && entry.parentChildren == pv.children);
   if (good && reuse.has) {
+    const bool before = good;
     HasUse use = entry.plain.has;
     for (const auto& other : entry.others) {
       use.any = use.any || other.second.has.any;
@@ -1162,6 +1164,7 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
     if (use.other) good = entry.treeVersion == dom::DocumentVersion() * 1000003 + dom::StateVersion();
     else if (use.sibling) good = entry.subtree == ev.selectorSubtree && (!parent || entry.parentSubtree == pv.selectorSubtree);
     else if (use.any) good = entry.subtree == ev.selectorSubtree;
+    goodButForHas = before && !good && !use.other;
   }
   const bool stateSame = entry.state == ev.state;
   if (good && animSame && stateSame) return;
@@ -1169,7 +1172,9 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   const uint64_t keptEpoch = good && !animSame ? entry.epoch : 0;
   // A state of the element that no rule looks at from another element: it is made again at once, and if the same declarations win nothing is different for the
   // elements under it.
-  const bool soft = good && animSame && !stateSame && entry.plain.built;
+  // (What something below the element changed that a :has() may look at, and nothing else of it: the style is made again at once too, and if the same declarations
+  // win nothing is different for the elements under it.)
+  const bool soft = ((good && animSame && !stateSame) || (goodButForHas && animSame)) && entry.plain.built;
   const uint64_t oldEpoch = entry.epoch;
   ElementStyle old;
   std::map<std::string, ElementStyle> oldOthers;
