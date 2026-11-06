@@ -201,7 +201,7 @@ void CommitPending() {
     }
     if ((mask & kPendingVersions) && node->IsElement()) {
       Element* element = static_cast<Element*>(node);
-      element->committedVersions = {element->attrVersion, element->stateVersion, element->childrenVersion, element->childAttrVersion, element->animVersion, element->animInheritVersion, element->subtreeVersion};
+      element->committedVersions = {element->attrVersion, element->stateVersion, element->childrenVersion, element->childAttrVersion, element->animVersion, element->animInheritVersion, element->subtreeVersion, element->subtreeSelectorVersion};
     }
     if ((mask & kPendingAnimated) && node->IsElement()) {
       Element* element = static_cast<Element*>(node);

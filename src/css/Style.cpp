@@ -54,6 +54,7 @@ int g_sheetParsing = 0;
 bool g_styleChangedInParse = false;
 bool g_wakeAfterParse = false;
 uint64_t g_cacheGeneration = 1;  // changed whenever the entries of the style cache are dropped (a reference to one is no longer good)
+uint64_t g_sizingAnimation = 1;  // changed when what animations give changes the size of something
 uint64_t g_cacheVersion = 1;   // changed when what the kept styles were made from is (not for the values animations give: each element has its own number for those)
 LayoutHook g_layoutHook = nullptr;
 Quanta::Context* g_activeContext = nullptr;  // the realm a style is being worked out in, for what a rule's condition needs of other elements
@@ -429,14 +430,7 @@ struct RuleIndex {
   std::unordered_map<uint64_t, std::vector<uint32_t>> buckets;
 };
 
-const RuleIndex& IndexOf(const std::vector<CssRule*>& rules) {
-  static std::unordered_map<const void*, RuleIndex> indexes;
-  const uint64_t version = dom::DocumentVersion() * 1000003 + g_authorVersion;
-  RuleIndex& index = indexes[&rules];
-  if (index.version == version && index.size == rules.size()) return index;
-  index = RuleIndex();
-  index.version = version;
-  index.size = rules.size();
+void BuildRuleIndex(const std::vector<CssRule*>& rules, RuleIndex& index) {
   for (uint32_t i = 0; i < rules.size(); ++i) {
     CssRule* rule = rules[i];
     const bool group = rule->kind == RuleKind::Media || rule->kind == RuleKind::Supports;
@@ -450,8 +444,47 @@ const RuleIndex& IndexOf(const std::vector<CssRule*>& rules) {
       index.buckets[key].push_back(i);
     }
   }
+}
+
+const RuleIndex& IndexOf(const std::vector<CssRule*>& rules) {
+  static std::unordered_map<const void*, RuleIndex> indexes;
+  const uint64_t version = dom::DocumentVersion() * 1000003 + g_authorVersion;
+  RuleIndex& index = indexes[&rules];
+  if (index.version == version && index.size == rules.size()) return index;
+  index = RuleIndex();
+  index.version = version;
+  index.size = rules.size();
+  BuildRuleIndex(rules, index);
   if (indexes.size() > 4096) { indexes.clear(); return IndexOf(rules); }
   return index;
+}
+
+// The rules of the author sheets of a tree with every @media, @supports, @layer and @import in them settled (what they hold is in the list, in order, with the
+// cascade layer it is in), and an index of them: an element looks at the rules of its keys, not at each group of a page that has thousands of them.
+struct FlatList {
+  std::vector<CssRule*> rules;
+  std::vector<int> layers;
+  std::vector<uint32_t> pathIds;
+  std::vector<std::string> paths;
+  RuleIndex index;
+  uint32_t lastPath = 0;
+  void Push(CssRule* rule, int layer, const std::string& path) {
+    if (paths.empty()) paths.push_back(std::string());
+    if (paths[lastPath] != path) {
+      lastPath = static_cast<uint32_t>(paths.size());
+      for (uint32_t i = 0; i < paths.size(); ++i) if (paths[i] == path) { lastPath = i; break; }
+      if (lastPath == paths.size()) paths.push_back(path);
+    }
+    rules.push_back(rule);
+    layers.push_back(layer);
+    pathIds.push_back(lastPath);
+  }
+};
+
+bool HoldsAnonymousLayer(const CssRule* rule) {
+  if ((rule->kind == RuleKind::LayerBlock && rule->name.empty()) || (rule->kind == RuleKind::Import && rule->layerName == "\x01")) return true;
+  for (const CssRule* inner : rule->rules) if (HoldsAnonymousLayer(inner)) return true;
+  return false;
 }
 
 // Whether an @supports condition holds: what is supported does not change, so the answer for a text is kept.
@@ -597,12 +630,17 @@ struct Gatherer {
       }
     }
     const std::vector<CssRule*>& rules = indexed ? candidates : all;
-    for (CssRule* rule : rules) {
+    for (CssRule* rule : rules) Rule(rule, layer, outer);
+  }
+
+  // One rule of a list: what it holds, if it is for the element.
+  void Rule(CssRule* rule, int layer, const Specificity* outer) {
+    {
       if (collecting && rule->kind == RuleKind::Scope) {
         Rules(rule->rules, layer, outer);
-        continue;
+        return;
       }
-      if (collecting && (rule->kind == RuleKind::Style || rule->kind == RuleKind::NestedDeclarations)) continue;
+      if (collecting && (rule->kind == RuleKind::Style || rule->kind == RuleKind::NestedDeclarations)) return;
       switch (rule->kind) {
         case RuleKind::NestedDeclarations:
           if (outer && rule->style) {
@@ -768,6 +806,87 @@ struct Gatherer {
         default: break;
       }
     }
+  }
+
+  // The rules of a list put into a FlatList the way Rules would walk them for an element of no particular kind: a group whose condition does not hold is
+  // left out, what a group holds comes in place of it. Anything that has to be asked of the element (a style rule, a container query, a scope) is kept as it is.
+  void Flatten(const std::vector<CssRule*>& rules, int layer, FlatList& out, bool& unsafe) {
+    for (CssRule* rule : rules) {
+      switch (rule->kind) {
+        case RuleKind::Media:
+          if (!rule->media || MediaListMatches(rule->media->queries, media)) Flatten(rule->rules, layer, out, unsafe);
+          break;
+        case RuleKind::Supports:
+          if (SupportsText(rule->supportsText)) Flatten(rule->rules, layer, out, unsafe);
+          break;
+        case RuleKind::StartingStyle: case RuleKind::LayerStatement: break;
+        case RuleKind::Import: {
+          CssStyleSheet* imported = rule->importedSheet;
+          if (imported && imported->disabled) break;
+          if (rule->media && !MediaListMatches(rule->media->queries, media)) break;
+          if (!rule->supportsText.empty() && !SupportsText(rule->supportsText)) break;
+          const std::string savedPath = layerPath;
+          int id = layer;
+          if (!rule->layerName.empty()) {
+            layerPath = Child(rule->layerName == "\x01" ? "\x01" + std::to_string(++anonymousLayers) : rule->layerName);
+            id = RankOf(layerPath);
+          }
+          if (imported) Flatten(imported->rules, id, out, unsafe);
+          layerPath = savedPath;
+          break;
+        }
+        case RuleKind::LayerBlock: {
+          const std::string savedPath = layerPath;
+          layerPath = Child(rule->name.empty() ? "\x01" + std::to_string(++anonymousLayers) : rule->name);
+          Flatten(rule->rules, RankOf(layerPath), out, unsafe);
+          layerPath = savedPath;
+          break;
+        }
+        default:
+          // (A layer with no name met inside what is asked of the element would be numbered by how many of those the element meets.)
+          if (HoldsAnonymousLayer(rule)) unsafe = true;
+          out.Push(rule, layer, layerPath);
+          break;
+      }
+    }
+  }
+
+  // The rules of a FlatList for the element: those of its keys, in the order of the list.
+  void FlatRules(const FlatList& flat) {
+    std::vector<uint32_t> positions;
+    if (keys.usable && mode == Mode::Own) {
+      const uint64_t marker = PseudoMarker(matchContext.pseudoElement);
+      struct Run { const uint32_t* at; const uint32_t* end; };
+      std::vector<Run> runs;
+      runs.reserve(keys.keys.size() + 3);
+      if (!flat.index.always.empty()) runs.push_back({flat.index.always.data(), flat.index.always.data() + flat.index.always.size()});
+      const auto take = [&](uint64_t key) {
+        const auto found = flat.index.buckets.find(key);
+        if (found != flat.index.buckets.end() && !found->second.empty()) runs.push_back({found->second.data(), found->second.data() + found->second.size()});
+      };
+      for (uint64_t key : keys.keys) take(key ^ marker);
+      if (marker) take(marker);
+      size_t total = 0;
+      for (const Run& run : runs) total += static_cast<size_t>(run.end - run.at);
+      positions.reserve(total);
+      uint32_t last = UINT32_MAX;
+      for (;;) {
+        Run* best = nullptr;
+        for (Run& run : runs) if (run.at != run.end && (!best || *run.at < *best->at)) best = &run;
+        if (!best) break;
+        const uint32_t position = *best->at++;
+        if (position != last) { positions.push_back(position); last = position; }
+      }
+    } else {
+      positions.resize(flat.rules.size());
+      for (uint32_t i = 0; i < positions.size(); ++i) positions[i] = i;
+    }
+    for (const uint32_t position : positions) {
+      const std::string& path = flat.paths[flat.pathIds[position]];
+      if (layerPath != path) layerPath = path;
+      Rule(flat.rules[position], flat.layers[position], nullptr);
+    }
+    layerPath.clear();
   }
 };
 
@@ -1041,8 +1160,8 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
     }
     // (The elements it looked at are under it, or after it; when it was for some other element in the selector, they can be anywhere: the styles are made anew at every change of the tree.)
     if (use.other) good = entry.treeVersion == dom::DocumentVersion() * 1000003 + dom::StateVersion();
-    else if (use.sibling) good = entry.subtree == ev.subtree && (!parent || entry.parentSubtree == pv.subtree);
-    else if (use.any) good = entry.subtree == ev.subtree;
+    else if (use.sibling) good = entry.subtree == ev.selectorSubtree && (!parent || entry.parentSubtree == pv.selectorSubtree);
+    else if (use.any) good = entry.subtree == ev.selectorSubtree;
   }
   const bool stateSame = entry.state == ev.state;
   if (good && animSame && stateSame) return;
@@ -1072,8 +1191,8 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   entry.parentChildAttr = parent ? pv.childAttr : 0;
   entry.shadowed = shadowed;
   entry.treeVersion = dom::DocumentVersion() * 1000003 + dom::StateVersion();
-  entry.subtree = ev.subtree;
-  entry.parentSubtree = parent ? pv.subtree : 0;
+  entry.subtree = ev.selectorSubtree;
+  entry.parentSubtree = parent ? pv.selectorSubtree : 0;
   entry.state = ev.state;
   if (soft) {
     Build(element, entry.plain, "");
@@ -1126,7 +1245,7 @@ ElementStyle& StyleOf(dom::Element* element, const std::string& pseudo = "") {
       const uint64_t signature = DocumentSignature(element->nodeDocument);
       if (state.signature != signature) {
         if (state.signature != 0) {
-          ClearShared();
+                ClearShared();
           Cache().clear();
           ++g_cacheGeneration;
         }
@@ -1780,9 +1899,39 @@ void BuildUntimed(dom::Element* element, ElementStyle& style, const std::string&
       }
     }
     gatherer.collecting = false;
-    for (CssStyleSheet* sheet : sheets) {
-      if (sheet->disabled || !MediaListMatches(sheet->media ? sheet->media->queries : std::vector<std::string>(), gatherer.media)) continue;
-      gatherer.Rules(sheet->rules, kUnlayered);
+    // The rules, with the conditions of their groups settled, are listed once for the tree (until its rules or the environment change): an element
+    // reads the ones of its own keys off one index.
+    struct FlatEntry {
+      uint64_t version = 0;
+      std::shared_ptr<const FlatList> list;  // (null: the rules cannot be listed)
+    };
+    static std::unordered_map<const dom::Node*, FlatEntry> flats;
+    std::shared_ptr<const FlatList> flat;
+    if (shareable && !gatherer.startingMode && !std::getenv("SOLAR_NO_FLAT_RULES")) {
+      auto entry = flats.find(treeRoot);
+      if (entry == flats.end() || entry->second.version != snapshotVersion) {
+        auto list = std::make_shared<FlatList>();
+        bool unsafe = false;
+        gatherer.anonymousLayers = 0;
+        for (CssStyleSheet* sheet : sheets) {
+          if (sheet->disabled || !MediaListMatches(sheet->media ? sheet->media->queries : std::vector<std::string>(), gatherer.media)) continue;
+          gatherer.Flatten(sheet->rules, kUnlayered, *list, unsafe);
+        }
+        gatherer.anonymousLayers = 0;
+        gatherer.layerPath.clear();
+        if (!unsafe) BuildRuleIndex(list->rules, list->index);
+        if (flats.size() > 64) flats.clear();
+        entry = flats.insert_or_assign(treeRoot, FlatEntry{snapshotVersion, unsafe ? nullptr : std::shared_ptr<const FlatList>(list)}).first;
+      }
+      flat = entry->second.list;
+    }
+    if (flat) {
+      gatherer.FlatRules(*flat);
+    } else {
+      for (CssStyleSheet* sheet : sheets) {
+        if (sheet->disabled || !MediaListMatches(sheet->media ? sheet->media->queries : std::vector<std::string>(), gatherer.media)) continue;
+        gatherer.Rules(sheet->rules, kUnlayered);
+      }
     }
   }
   // A shadow host also takes the :host rules of its shadow tree, below the rules of the tree it is in.
@@ -2734,6 +2883,7 @@ void NoteAnimatedStyleChange(bool affectsSizes, bool) {
   // What animations give is looked at element by element (the style of an element is made again when its animation changes, and so are those under it
   // when it is what they inherit): nothing that is kept for all of them is let go.
   ++g_animationVersion;
+  if (affectsSizes) ++g_sizingAnimation;
   if (g_anyContainerQueries && affectsSizes) ++g_cacheVersion;  // (the size of a container may be what an animation gives)
 }
 uint64_t AuthorStyleVersion() { return dom::DocumentVersion() * 1000003 + g_authorVersion; }
@@ -3365,9 +3515,27 @@ std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std
   static bool inLayoutHook = false;
   const auto bringLayout = [&]() {
     if (!document || !document->containerQueriesSeen || !g_layoutHook || inLayoutHook || depth != 1) return;
+    // What the sizes of containers are made from: the tree, the styles (an animation of a size counts as one), the states and the window. While none of it has
+    // changed since layout was last brought up to date, it has nothing new to give (what animations give that only changes how things are drawn is a new version
+    // of the layout, but not a new size for a container): a walk that reads the style of each element, setting what animations give as it goes, is not a layout for each.
+    struct Made {
+      uint64_t document = 0, style = 0, cache = 0, state = 0, sizing = 0;
+      double width = 0, height = 0;
+      bool operator==(const Made& o) const { return document == o.document && style == o.style && cache == o.cache && state == o.state && sizing == o.sizing && width == o.width && height == o.height; }
+    };
+    static std::unordered_map<const dom::Document*, Made> brought;
+    const MediaEnvironment& media = CurrentMediaEnvironment();
+    const Made now{dom::DocumentVersion(), g_styleVersion, g_cacheVersion, dom::StateVersion(), g_sizingAnimation, media.width, media.height};
+    const auto at = brought.find(document);
+    if (at != brought.end() && at->second == now && document->layoutTree) return;
     inLayoutHook = true;
     g_layoutHook(ctx, document);
     inLayoutHook = false;
+    const MediaEnvironment& after = CurrentMediaEnvironment();
+    // (Layout that changed the styles itself, because container sizes it found were not what they were made from, is not done: it asks again.)
+    const Made done{dom::DocumentVersion(), g_styleVersion, g_cacheVersion, dom::StateVersion(), g_sizingAnimation, after.width, after.height};
+    if (done == now) brought[document] = done;
+    else brought.erase(document);
   };
   bringLayout();
   // (The style is made from the tree as it was committed, however script changes it meanwhile.)

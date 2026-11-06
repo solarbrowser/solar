@@ -113,6 +113,7 @@ void NoteDamage(Node* node, uint8_t flags) {
   for (Node* n = node; n; n = n->parentNode) {
     if (n->IsElement()) {
       ++static_cast<Element*>(n)->subtreeVersion;
+      ++static_cast<Element*>(n)->subtreeSelectorVersion;
       MarkPending(n, kPendingVersions);
     }
   }

@@ -333,13 +333,14 @@ struct Element : Node {
   uint32_t animVersion = 0;       // what animations give it changed
   uint32_t animInheritVersion = 0;  // ... in a way that is more than itself: a property that is inherited (or one that what is under it is made from) changed
   uint32_t subtreeVersion = 0;    // anything in it, or it, changed (counted on it and on every element above)
+  uint32_t subtreeSelectorVersion = 0;  // the same, but not for what animations give: what a selector (:has()) can see of the tree
   uint32_t subtreeBuilt = UINT32_MAX;  // the count when layout last built its box (of the committed ones)
   // The counts above as they were committed (see CommitPending): what style and layout compare their stamps with.
   struct Versions {
-    uint32_t attr = 0, state = 0, children = 0, childAttr = 0, anim = 0, animInherit = 0, subtree = 0;
+    uint32_t attr = 0, state = 0, children = 0, childAttr = 0, anim = 0, animInherit = 0, subtree = 0, selectorSubtree = 0;
   } committedVersions;
   Versions VersionsInView() const {
-    return g_committedViewDepth ? committedVersions : Versions{attrVersion, stateVersion, childrenVersion, childAttrVersion, animVersion, animInheritVersion, subtreeVersion};
+    return g_committedViewDepth ? committedVersions : Versions{attrVersion, stateVersion, childrenVersion, childAttrVersion, animVersion, animInheritVersion, subtreeVersion, subtreeSelectorVersion};
   }
   std::map<std::string, std::map<std::string, std::string>> committedAnimatedValues;
   // A form control's state: what script's side made of it last (pending), and as committed.
