@@ -1432,6 +1432,14 @@ int PageMain(Shared& shared, int argc, char** argv) {
   int pressButton = 0;
   const bool timing_log = std::getenv("SOLAR_GUI_TIMES") != nullptr;
   const auto commit = [&](const std::string& where, std::string markup, std::string type, const Clock::time_point& started) {
+    // (SOLAR_INJECT_HEAD=file: the text of the file is put right after <head> of each page that comes, for looking into what a page's scripts do.)
+    if (const char* inject = std::getenv("SOLAR_INJECT_HEAD")) {
+      std::ifstream in(inject, std::ios::binary);
+      const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+      const size_t at = markup.find("<head");
+      const size_t close = at == std::string::npos ? at : markup.find('>', at);
+      if (close != std::string::npos) markup.insert(close + 1, text);
+    }
     // (SOLAR_DUMP_DOC=dir: the text of each page that comes is written to dir/N.html, for looking at what a site sent.)
     if (const char* dump = std::getenv("SOLAR_DUMP_DOC")) {
       static int dumped = 0;
