@@ -512,7 +512,7 @@ void BuildFlatIndex(const std::vector<CssRule*>& rules, RuleIndex& index) {
 
 const RuleIndex& IndexOf(const std::vector<CssRule*>& rules) {
   static std::unordered_map<const void*, RuleIndex> indexes;
-  const uint64_t version = dom::DocumentVersion() * 1000003 + g_authorVersion;
+  const uint64_t version = g_authorVersion;
   RuleIndex& index = indexes[&rules];
   if (index.version == version && index.size == rules.size()) return index;
   index = RuleIndex();
@@ -564,6 +564,12 @@ bool SupportsText(const std::string& text) {
   return result;
 }
 
+// A number for which sheets there are and in what order.
+uint64_t SheetsSignature(const std::vector<CssStyleSheet*>& sheets) {
+  uint64_t h = sheets.size();
+  for (const CssStyleSheet* sheet : sheets) h = h * 1000003 + reinterpret_cast<uintptr_t>(sheet);
+  return h;
+}
 bool NoFlatRules() {
   static const bool off = std::getenv("SOLAR_NO_FLAT_RULES") != nullptr;
   return off;
@@ -997,7 +1003,7 @@ std::vector<CssStyleSheet*> SheetsOfTreeUncached(dom::Node* root, Quanta::Contex
 // The style sheets of a tree, kept until something changes: every element asks for them (what is kept is shared, not copied for each).
 std::shared_ptr<const std::vector<CssStyleSheet*>> SheetsOfTreeShared(dom::Node* root, Quanta::Context* ctx = nullptr) {
   static std::unordered_map<dom::Node*, std::pair<uint64_t, std::shared_ptr<const std::vector<CssStyleSheet*>>>> cache;
-  const uint64_t version = dom::DocumentVersion() * 1000003 + g_styleVersion;
+  const uint64_t version = dom::StructureVersion() * 1000003 + g_styleVersion;
   auto found = cache.find(root);
   if (found != cache.end() && found->second.first == version) return found->second.second;
   auto sheets = std::make_shared<const std::vector<CssStyleSheet*>>(SheetsOfTreeUncached(root, ctx));
@@ -2055,7 +2061,7 @@ void BuildUntimed(dom::Element* element, ElementStyle& style, const std::string&
     };
     static std::unordered_map<const dom::Node*, LayerSnapshot> snapshots;
     const bool shareable = true;  // (the layers a container query holds are all taken into account when they are collected)
-    uint64_t snapshotVersion = AuthorStyleVersion() * 1000003 + sheets.size();
+    uint64_t snapshotVersion = static_cast<uint64_t>(g_authorVersion) * 1000003 + SheetsSignature(sheets);  // (the rules, not the tree: a page that is being built has them listed once for each sheet)
     {
       const MediaEnvironment& m = gatherer.media;
       snapshotVersion = (snapshotVersion * 31 + static_cast<uint64_t>(m.width * 8)) * 31 + static_cast<uint64_t>(m.height * 8);
@@ -2161,7 +2167,7 @@ void BuildUntimed(dom::Element* element, ElementStyle& style, const std::string&
         std::shared_ptr<const FlatList> list;
       };
       static std::map<std::pair<const dom::Node*, int>, Special> specials;
-      uint64_t version = AuthorStyleVersion() * 1000003 + sheets.size();
+      uint64_t version = static_cast<uint64_t>(g_authorVersion) * 1000003 + SheetsSignature(sheets);
       {
         const MediaEnvironment& m = g.media;
         version = (version * 31 + static_cast<uint64_t>(m.width * 8)) * 31 + static_cast<uint64_t>(m.height * 8);
@@ -3661,6 +3667,11 @@ void NotePseudoKeysOfRules(const std::vector<CssRule*>& rules, std::unordered_ma
 }
 
 // Whether a rule of the document's sheets or of the user agent's could be for a pseudo-element of that name, and for the element (a document with no shadow trees only).
+// A number that changes with the rules of the sheets of a tree (not with each change of the tree: what is made of the rules is kept while they are the same).
+uint64_t RulesVersionOf(dom::Node* tree, Quanta::Context* ctx) {
+  return (static_cast<uint64_t>(g_authorVersion) * 1000003 + g_styleVersion) * 1000003 + SheetsSignature(*SheetsOfTreeShared(tree, ctx));
+}
+
 bool PseudoMayHaveRulesFor(dom::Element* element, const std::string& pseudo, dom::Node* tree) {
   static const std::unordered_map<std::string, PseudoKeys> ua = [] {
     std::unordered_map<std::string, PseudoKeys> keys;
@@ -3672,7 +3683,7 @@ bool PseudoMayHaveRulesFor(dom::Element* element, const std::string& pseudo, dom
     return keys;
   }();
   static std::unordered_map<const dom::Node*, std::pair<uint64_t, std::unordered_map<std::string, PseudoKeys>>> cache;
-  const uint64_t version = AuthorStyleVersion();
+  const uint64_t version = RulesVersionOf(tree, element->nodeDocument->context);
   auto found = cache.find(tree);
   if (found == cache.end() || found->second.first != version) {
     std::unordered_map<std::string, PseudoKeys> keys;
@@ -3726,7 +3737,7 @@ bool PseudoNameMayHaveRules(dom::Element* element, const std::string& pseudo) {
   }();
   const bool inUserAgent = ua.count(pseudo) > 0;  // (which elements the rules of the user agent are for is looked at below, with the author's)
   static std::unordered_map<const dom::Node*, std::pair<uint64_t, std::unordered_set<std::string>>> cache;
-  const uint64_t version = AuthorStyleVersion();
+  const uint64_t version = RulesVersionOf(tree, element->nodeDocument->context);
   auto found = cache.find(tree);
   if (found == cache.end() || found->second.first != version) {
     std::unordered_set<std::string> names;

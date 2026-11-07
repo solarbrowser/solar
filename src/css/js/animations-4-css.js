@@ -444,7 +444,32 @@
   });
 
   let lastVersion = -1;
+  // A page that is still loading and costs much to look at (a style change of its own at every step, each making the look dear) is looked at again not before ten times what the
+  // last look took has passed; when it is complete it is looked at again for what was left.
+  let backoffUntil = 0, skippedWhileLoading = false;
+  if (typeof document !== 'undefined' && document.readyState !== 'complete') {
+    document.addEventListener('readystatechange', () => {
+      if (document.readyState !== 'complete' || !skippedWhileLoading) return;
+      skippedWhileLoading = false;
+      backoffUntil = 0;
+      S.cssForce = true;
+      S.wake();
+    });
+  }
   S.cssUpdate = () => {
+    const loading = typeof document !== 'undefined' && document.readyState !== 'complete';
+    if (loading && !S.cssForce && backoffUntil && performance.now() < backoffUntil) {
+      skippedWhileLoading = true;
+      return;
+    }
+    const began = performance.now();
+    cssUpdateNow();
+    if (loading) {
+      const took = performance.now() - began;
+      backoffUntil = took > 250 ? performance.now() + 10 * took : 0;
+    }
+  };
+  const cssUpdateNow = () => {
     const version = N.version();
     // Nothing starts or ends but with a change of style, and the animations and transitions there are were seen to by the last.
     if (version === lastVersion && !S.cssForce) return;
