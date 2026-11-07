@@ -408,13 +408,14 @@ Truth EvalQuery(Query& q, const ComponentValues& values) {
 struct ContainerFacts {
   bool size = false, inlineSize = false;
   bool eligible = true;  // size containment applies to it (it has a box of its own that is not a table or ruby)
+  bool vertical = false;  // its writing mode is vertical
   std::vector<std::string> names;
 };
 
 ContainerFacts FactsOfUncached(Quanta::Context& ctx, dom::Element* element);
 
 // What an element is as a container, kept until something changes (every rule with a container condition asks it of each ancestor of each element).
-ContainerFacts FactsOf(Quanta::Context& ctx, dom::Element* element) {
+const ContainerFacts& FactsOf(Quanta::Context& ctx, dom::Element* element) {
   static std::unordered_map<dom::Element*, ContainerFacts> kept;
   static uint64_t version = 0;
   const uint64_t now = (dom::DocumentVersion() * 1000003 + StyleVersion()) * 1000003 + StyleCacheVersion();
@@ -424,9 +425,7 @@ ContainerFacts FactsOf(Quanta::Context& ctx, dom::Element* element) {
   }
   const auto found = kept.find(element);
   if (found != kept.end()) return found->second;
-  ContainerFacts facts = FactsOfUncached(ctx, element);
-  kept[element] = facts;
-  return facts;
+  return kept.emplace(element, FactsOfUncached(ctx, element)).first->second;
 }
 
 ContainerFacts FactsOfUncached(Quanta::Context& ctx, dom::Element* element) {
@@ -448,53 +447,74 @@ ContainerFacts FactsOfUncached(Quanta::Context& ctx, dom::Element* element) {
     at = end;
   }
   if (facts.names.size() == 1 && facts.names[0] == "none") facts.names.clear();
+  const std::string mode = ComputedValue(ctx, element, "writing-mode");
+  facts.vertical = mode.rfind("vertical", 0) == 0 || mode.rfind("sideways", 0) == 0;
   return facts;
 }
 
 }  // namespace
 
-bool ContainerRuleMatches(Quanta::Context& ctx, dom::Element* element, bool pseudoElement, const std::string& prelude) {
+namespace {
+
+// The conditions of the prelude of a @container rule, read once for the text: what name each asks for, the query, and whether it needs a container with a size.
+struct ContainerCondition {
+  std::string name;
+  ComponentValues query;
+  bool needsSize = false;
+};
+
+const std::vector<ContainerCondition>& ParsedPrelude(const std::string& prelude) {
+  static std::unordered_map<std::string, std::vector<ContainerCondition>> kept;
+  if (kept.size() > 4096) kept.clear();
+  const auto found = kept.find(prelude);
+  if (found != kept.end()) return found->second;
+  std::vector<ContainerCondition> conditions;
   const ComponentValues parsed = ParseComponentValues(prelude);
   for (const ComponentValues& condition : SplitOnCommas(parsed)) {
     ComponentValues trimmed = Trimmed(condition);
     if (trimmed.empty()) continue;
-    std::string name;
+    ContainerCondition c;
     size_t start = 0;
     if (trimmed[0].IsIdent() && Lower(trimmed[0].token.value) != "not") {
-      name = trimmed[0].token.value;
+      c.name = trimmed[0].token.value;
       start = 1;
     }
     ComponentValues query(trimmed.begin() + static_cast<long>(start), trimmed.end());
-    query = Trimmed(query);
+    c.query = Trimmed(query);
     // What kind of container the query needs.
-    bool needsSize = false;
-    {
-      const std::vector<const ComponentValue*> stack = [&] {
-        std::vector<const ComponentValue*> out;
-        for (const ComponentValue& v : query) out.push_back(&v);
-        return out;
-      }();
-      std::vector<const ComponentValue*> walk = stack;
-      while (!walk.empty()) {
-        const ComponentValue* v = walk.back();
-        walk.pop_back();
-        if (v->kind == ComponentValue::Kind::Function && Lower(v->name) == "style") continue;
-        if (v->IsBlock(Token::Type::LeftParen)) {
-          bool nested = false;
-          for (const ComponentValue& c : v->children) {
-            if (c.IsWhitespace()) continue;
-            nested = c.IsBlock(Token::Type::LeftParen) || (c.IsIdent() && Lower(c.token.value) == "not") || c.kind == ComponentValue::Kind::Function;
-            break;
-          }
-          if (!nested) needsSize = true;
+    std::vector<const ComponentValue*> walk;
+    for (const ComponentValue& v : c.query) walk.push_back(&v);
+    while (!walk.empty()) {
+      const ComponentValue* v = walk.back();
+      walk.pop_back();
+      if (v->kind == ComponentValue::Kind::Function && Lower(v->name) == "style") continue;
+      if (v->IsBlock(Token::Type::LeftParen)) {
+        bool nested = false;
+        for (const ComponentValue& child : v->children) {
+          if (child.IsWhitespace()) continue;
+          nested = child.IsBlock(Token::Type::LeftParen) || (child.IsIdent() && Lower(child.token.value) == "not") || child.kind == ComponentValue::Kind::Function;
+          break;
         }
-        for (const ComponentValue& c : v->children) walk.push_back(&c);
+        if (!nested) c.needsSize = true;
       }
+      for (const ComponentValue& child : v->children) walk.push_back(&child);
     }
+    conditions.push_back(std::move(c));
+  }
+  return kept.emplace(prelude, std::move(conditions)).first->second;
+}
+
+}  // namespace
+
+bool ContainerRuleMatches(Quanta::Context& ctx, dom::Element* element, bool pseudoElement, const std::string& prelude) {
+  for (const ContainerCondition& condition : ParsedPrelude(prelude)) {
+    const std::string& name = condition.name;
+    const ComponentValues& query = condition.query;
+    const bool needsSize = condition.needsSize;
     // The nearest ancestor that is such a container (the element itself, for a pseudo-element).
     dom::Element* candidate = pseudoElement ? element : FlatParentOf(element);
     for (; candidate; candidate = FlatParentOf(candidate)) {
-      const ContainerFacts facts = FactsOf(ctx, candidate);
+      const ContainerFacts& facts = FactsOf(ctx, candidate);
       if (!name.empty() && std::find(facts.names.begin(), facts.names.end(), name) == facts.names.end()) continue;
       if (needsSize && !facts.size && !facts.inlineSize) continue;
       // The nearest container is the one asked, even if it cannot be one: then the query does not match.
@@ -502,8 +522,7 @@ bool ContainerRuleMatches(Quanta::Context& ctx, dom::Element* element, bool pseu
       Query q{ctx, candidate};
       q.sizeContainer = facts.size || facts.inlineSize;
       q.inlineOnly = facts.inlineSize && !facts.size;
-      const std::string mode = ComputedValue(ctx, candidate, "writing-mode");
-      q.vertical = mode.rfind("vertical", 0) == 0 || mode.rfind("sideways", 0) == 0;
+      q.vertical = facts.vertical;
       q.width = candidate->containerWidth;
       q.height = candidate->containerHeight;
       if (query.empty()) return true;
