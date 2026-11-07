@@ -12,6 +12,8 @@
 #include <map>
 #include <optional>
 
+#include <set>
+
 #include "quanta/Embed.h"
 
 // The event loop's queue of tasks (https://html.spec.whatwg.org/#timers): what setTimeout, setInterval, setImmediate and
@@ -46,6 +48,7 @@ class TimerHost {
   void Schedule(Quanta::Embed::Task task);
 
   std::multimap<Clock::time_point, Quanta::Embed::Task> queue_;
+  std::multiset<Quanta::Embed::Realm*> running_;  // the realms that have a task on the stack
 };
 
 }  // namespace solar::web
