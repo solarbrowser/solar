@@ -343,6 +343,12 @@
     close() { const at = shown.indexOf(this); if (at >= 0) shown.splice(at, 1); }
   }
   tag(WorkerNotification, "Notification");
+  // The Notification of a worker's global: its permission, and a constructor that a service worker may not call (it shows one with registration.showNotification).
+  const NotificationGlobal = function Notification() { throw new TypeError("Failed to construct 'Notification': Illegal constructor"); };
+  Object.defineProperty(NotificationGlobal, "prototype", { value: WorkerNotification.prototype, writable: false });
+  Object.defineProperty(NotificationGlobal, "permission", { get() { const state = globalThis.__solarPermissions ? globalThis.__solarPermissions.get("notifications") : "prompt"; return state === "prompt" ? "default" : state; }, configurable: true, enumerable: true });
+  Object.defineProperty(NotificationGlobal, "maxActions", { get() { return 2; }, configurable: true, enumerable: true });
+  define("Notification", NotificationGlobal);
 
   const registrationToken = Symbol("ServiceWorkerRegistration");
   class ServiceWorkerRegistration extends EventTarget {
