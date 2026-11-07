@@ -12,6 +12,8 @@
 #include <dlfcn.h>
 #include <unistd.h>
 
+#include <chrono>
+#include <cstdio>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -1065,8 +1067,10 @@ Value CreateCall(Context& ctx, Value, qe::Args a, Value) {
   // The drawing buffer is copied into the surface just before the surface is published.
   n->beforePublish[surface] = [raw, n, surface] {
     raw->dirtySinceRead = false;
+    const auto t0 = std::chrono::steady_clock::now();
     MakeCurrent(*raw);
     const std::vector<uint8_t> pixels = ReadDrawingBuffer(*raw);
+    const auto t1 = std::chrono::steady_clock::now();
     const SkImageInfo info = SkImageInfo::Make(std::max(1, raw->width), std::max(1, raw->height), kRGBA_8888_SkColorType, raw->premultiplied ? kPremul_SkAlphaType : kUnpremul_SkAlphaType);
     SkBitmap bitmap;
     if (!bitmap.tryAllocPixels(info)) return;
@@ -1074,7 +1078,16 @@ Value CreateCall(Context& ctx, Value, qe::Args a, Value) {
     bitmap.setImmutable();
     const auto found = n->surfaces.find(surface);
     if (found != n->surfaces.end()) found->second->SetContents(bitmap.asImage(), true);
+    const auto t2 = std::chrono::steady_clock::now();
     if (!raw->preserve) ClearAfterPresent(*raw);
+    if (std::getenv("SOLAR_GL_DEBUG")) {
+      static int frames = 0;
+      static double read = 0, copy = 0, clear = 0;
+      read += std::chrono::duration<double, std::milli>(t1 - t0).count();
+      copy += std::chrono::duration<double, std::milli>(t2 - t1).count();
+      clear += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t2).count();
+      if (++frames % 60 == 0) std::fprintf(stderr, "gl present: per frame read %.2f ms, copy %.2f ms, clear %.2f ms\n", read / 60, copy / 60, clear / 60), read = copy = clear = 0;
+    }
   };
   Value list = qe::NewArray(ctx);
   qe::ArrayPush(ctx, list, qe::FromNumber(id));

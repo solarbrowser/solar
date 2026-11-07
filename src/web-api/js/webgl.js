@@ -103,7 +103,18 @@
       if (!this._lost) N.GlResize(this._id, Math.max(1, w), Math.max(1, h));
     }
     _present() { if (!this._lost) N.GlPresent(this._id); }
-    _op(name, ...args) { return call(this._id, OP[name], ...args); }
+    _op(name, a, b, c, d, e, f) {
+      const code = OP[name];
+      switch (arguments.length) {
+        case 1: return call(this._id, code);
+        case 2: return call(this._id, code, a);
+        case 3: return call(this._id, code, a, b);
+        case 4: return call(this._id, code, a, b, c);
+        case 5: return call(this._id, code, a, b, c, d);
+        case 6: return call(this._id, code, a, b, c, d, e);
+        default: return call(this._id, code, ...Array.prototype.slice.call(arguments, 1));
+      }
+    }
     _setError(e) { if (!this._error) this._error = e; }
     // The name of an object the script gave, or 0 for none; -1 when it is not usable (the error is set).
     _use(obj, cls, allowDeleted) {
@@ -145,15 +156,41 @@
     polygonOffset: 2, sampleCoverage: 2, scissor: 4, stencilFunc: 3, stencilFuncSeparate: 4, stencilMask: 1, stencilMaskSeparate: 2, stencilOp: 3, stencilOpSeparate: 4, vertexAttrib1f: 2,
     vertexAttrib2f: 3, vertexAttrib3f: 4, vertexAttrib4f: 5, copyTexImage2D: 8, copyTexSubImage2D: 8, renderbufferStorage: 4, texParameterf: 3, texParameteri: 3, viewport: 4, drawArrays: 3,
     generateMipmap: 1 };
+  // (One function for each number of arguments: a call a page makes thousands of times a frame makes no array of its arguments.)
+  const missing = (name, argc, got) => new TypeError(`Failed to execute '${name}' on 'WebGLRenderingContext': ${argc} arguments required, but only ${got} present.`);
   for (const [name, op] of Object.entries(PASS)) {
     if (!op) continue;
     const argc = ARGC[name] || 0;
-    method(name, function (...a) {
-      if (a.length < argc) throw new TypeError(`Failed to execute '${name}' on 'WebGLRenderingContext': ${argc} arguments required, but only ${a.length} present.`);
-      if (this._lost) return;
-      if (name === "activeTexture") this._activeUnit = Number(a[0]) - C.TEXTURE0;
-      return this._op(op, ...a.slice(0, argc).map(Number));
-    });
+    const code = OP[op];
+    let fn;
+    if (name === "activeTexture") {
+      fn = function (a) {
+        if (arguments.length < 1) throw missing(name, 1, arguments.length);
+        if (this._lost) return;
+        this._activeUnit = Number(a) - C.TEXTURE0;
+        return call(this._id, code, Number(a));
+      };
+    } else if (argc === 0) {
+      fn = function () { if (this._lost) return; return call(this._id, code); };
+    } else if (argc === 1) {
+      fn = function (a) { if (arguments.length < 1) throw missing(name, 1, arguments.length); if (this._lost) return; return call(this._id, code, Number(a)); };
+    } else if (argc === 2) {
+      fn = function (a, b) { if (arguments.length < 2) throw missing(name, 2, arguments.length); if (this._lost) return; return call(this._id, code, Number(a), Number(b)); };
+    } else if (argc === 3) {
+      fn = function (a, b, c) { if (arguments.length < 3) throw missing(name, 3, arguments.length); if (this._lost) return; return call(this._id, code, Number(a), Number(b), Number(c)); };
+    } else if (argc === 4) {
+      fn = function (a, b, c, d) { if (arguments.length < 4) throw missing(name, 4, arguments.length); if (this._lost) return; return call(this._id, code, Number(a), Number(b), Number(c), Number(d)); };
+    } else if (argc === 5) {
+      fn = function (a, b, c, d, e) { if (arguments.length < 5) throw missing(name, 5, arguments.length); if (this._lost) return; return call(this._id, code, Number(a), Number(b), Number(c), Number(d), Number(e)); };
+    } else {
+      fn = function (...a) {
+        if (a.length < argc) throw missing(name, argc, a.length);
+        if (this._lost) return;
+        return call(this._id, code, ...a.slice(0, argc).map(Number));
+      };
+    }
+    Object.defineProperty(fn, "name", { value: name, configurable: true });
+    method(name, fn);
   }
   method("clear", function clear(mask) { if (!this._lost) this._op("clear", Number(mask)); });
   method("getSupportedExtensions", function getSupportedExtensions() { return this._lost ? null : Object.keys(EXTENSIONS).filter((n) => EXTENSIONS[n].has(this)); });
@@ -553,11 +590,14 @@
   for (const n of [1, 2, 3, 4]) {
     for (const [suffix, kindOp] of [["f", "f"], ["i", "i"]]) {
       const name = "uniform" + n + suffix, op = name;
-      method(name, function (location, ...v) {
-        if (this._lost) return;
-        const l = locOf(this, location); if (l === null) return;
-        this._op(op, l, ...v.slice(0, n).map(Number));
-      });
+      const code = OP[op];
+      let fn;
+      if (n === 1) fn = function (location, a) { if (this._lost) return; const l = locOf(this, location); if (l === null) return; call(this._id, code, l, Number(a)); };
+      else if (n === 2) fn = function (location, a, b) { if (this._lost) return; const l = locOf(this, location); if (l === null) return; call(this._id, code, l, Number(a), Number(b)); };
+      else if (n === 3) fn = function (location, a, b, c) { if (this._lost) return; const l = locOf(this, location); if (l === null) return; call(this._id, code, l, Number(a), Number(b), Number(c)); };
+      else fn = function (location, a, b, c, d) { if (this._lost) return; const l = locOf(this, location); if (l === null) return; call(this._id, code, l, Number(a), Number(b), Number(c), Number(d)); };
+      Object.defineProperty(fn, "name", { value: name, configurable: true });
+      method(name, fn);
     }
     method("uniform" + n + "fv", function (location, v, srcOffset, srcLength) {
       if (this._lost) return;
