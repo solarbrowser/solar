@@ -28,6 +28,10 @@ dom::Element* ElementArg(qe::Args args) { return args.empty() ? nullptr : DOMObj
 Tree* TreeFor(Context& ctx, dom::Element* element) {
   dom::Document* document = element ? element->nodeDocument : nullptr;
   if (!document) return nullptr;
+  // An element that is not in the document has no box: its metrics are nothing, and no layout is needed to say so (a script that builds what it puts in the page
+  // measures it before, and every measure was a layout of the page).
+  const dom::Node* top = dom::ShadowIncludingRoot(element);
+  if (!top || !top->IsDocument()) return nullptr;
   return UpdateLayout(ctx, document);
 }
 
@@ -320,6 +324,12 @@ Value WantUpdates(Context&, Value, qe::Args args, Value) {
 Value BoxSizes(Context& ctx, Value, qe::Args args, Value) {
   dom::Element* element = args.empty() ? nullptr : DOMObject::Cast<dom::Element>(args[0]);
   if (!element || !element->nodeDocument) return qe::Null();
+  const dom::Node* top = dom::ShadowIncludingRoot(element);
+  if (!top || !top->IsDocument()) {  // (an element that is not in the document has no box)
+    Value none = qe::NewArray(ctx);
+    for (double v : {0.0, 0.0, 0.0, 0.0, 0.0, 0.0}) qe::ArrayPush(ctx, none, qe::FromNumber(v));
+    return none;
+  }
   Tree* tree = UpdateLayout(ctx, element->nodeDocument);
   if (!tree) return qe::Null();  // (layout is being made: what asks for it from inside it is told nothing)
   const std::vector<Box*>& boxes = BoxesOf(*tree, element);

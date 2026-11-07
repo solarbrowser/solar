@@ -1159,6 +1159,8 @@ std::unordered_map<dom::Element*, StyleEntry>& Cache() {
 struct DocumentState {
   uint64_t checkedAt = 0;
   uint64_t signature = 0;
+  std::vector<const CssStyleSheet*> sheets;  // the sheets that counted when the styles were last looked at, in order
+  std::vector<char> disabled;                // and whether each was off
 };
 std::unordered_map<const dom::Document*, DocumentState>& DocumentStates() {
   static std::unordered_map<const dom::Document*, DocumentState> states;
@@ -1172,11 +1174,6 @@ void DropSharedBuckets();
 uint64_t DocumentSignature(dom::Document* document) {
   uint64_t h = 1469598103934665603ull;
   const auto mix = [&](uint64_t v) { h = (h ^ v) * 1099511628211ull; };
-  for (CssStyleSheet* sheet : SheetsOfTree(document, document->context)) {
-    // (A sheet that came in as new rules was seen to by the elements it is for: it is not what the styles of the others were made from.)
-    mix(sheet->additiveAnnounced ? 5 : reinterpret_cast<uintptr_t>(sheet));
-    mix(sheet->disabled ? 1 : 2);
-  }
   const MediaEnvironment e = EnvironmentFor(document);
   mix(static_cast<uint64_t>(e.width * 8));
   mix(static_cast<uint64_t>(e.height * 8));
@@ -1374,14 +1371,26 @@ ElementStyle& StyleOf(dom::Element* element, const std::string& pseudo = "") {
     if (state.checkedAt != version) {
       state.checkedAt = version;
       const uint64_t signature = DocumentSignature(element->nodeDocument);
-      if (state.signature != signature) {
+      // The sheets are the same as they were, or sheets that were seen to as they came (NoteSheetAdded) have come after them.
+      const std::vector<CssStyleSheet*> sheetsNow = SheetsOfTree(element->nodeDocument, element->nodeDocument->context);
+      bool sheetsSame = state.sheets.size() <= sheetsNow.size();
+      for (size_t i = 0; sheetsSame && i < state.sheets.size(); ++i) {
+        if (sheetsNow[i] != state.sheets[i] || (sheetsNow[i]->disabled ? 1 : 0) != state.disabled[i]) sheetsSame = false;
+      }
+      for (size_t i = state.sheets.size(); sheetsSame && i < sheetsNow.size(); ++i) {
+        if (!sheetsNow[i]->additiveAnnounced) sheetsSame = false;
+      }
+      if (state.signature != signature || !sheetsSame) {
         if (state.signature != 0) {
-                ClearShared();
+          ClearShared();
           Cache().clear();
           ++g_cacheGeneration;
         }
         state.signature = signature;
       }
+      state.sheets.assign(sheetsNow.begin(), sheetsNow.end());
+      state.disabled.assign(sheetsNow.size(), 0);
+      for (size_t i = 0; i < sheetsNow.size(); ++i) state.disabled[i] = sheetsNow[i]->disabled ? 1 : 0;
     }
   }
   StyleEntry& entry = Cache()[element];
@@ -3100,9 +3109,6 @@ bool DirtyKeysOfRules(const std::vector<CssRule*>& rules, std::unordered_set<uin
         break;
       case RuleKind::LayerStatement:
         usesLayers = true;
-        break;
-      case RuleKind::Property:
-        registered.push_back(rule->name);  // (what it changes is for the elements whose styles mention the name: the caller looks)
         break;
       case RuleKind::Keyframes: case RuleKind::Keyframe: case RuleKind::FontFace: case RuleKind::Page: case RuleKind::FontPaletteValues: case RuleKind::NestedDeclarations: case RuleKind::PositionTry:
         break;
