@@ -3572,7 +3572,8 @@ struct PseudoKeys {
   bool any = false;
 };
 
-void NotePseudoKeys(const SelectorList& list, std::unordered_map<std::string, PseudoKeys>& out) {
+// `contentDeclared` says whether the rule gives a content (or `all`): without one a ::before or ::after is not a box, so the rule is for no such element.
+void NotePseudoKeys(const SelectorList& list, std::unordered_map<std::string, PseudoKeys>& out, bool contentDeclared = true) {
   for (const ComplexSelector& selector : list) {
     if (selector.compounds.empty()) continue;
     const CompoundSelector& subject = selector.compounds.back();
@@ -3598,6 +3599,7 @@ void NotePseudoKeys(const SelectorList& list, std::unordered_map<std::string, Ps
       }
     }
     for (const std::string* name : names) {
+      if (!contentDeclared && (*name == "before" || *name == "after")) continue;
       PseudoKeys& entry = out[*name];
       if (found) {
         entry.keys.insert(key);
@@ -3630,7 +3632,11 @@ void NotePseudoKeys(const SelectorList& list, std::unordered_map<std::string, Ps
 void NotePseudoKeysOfRules(const std::vector<CssRule*>& rules, std::unordered_map<std::string, PseudoKeys>& out, int depth) {
   if (depth > 40) return;
   for (const CssRule* rule : rules) {
-    if (rule->selectors) NotePseudoKeys(*rule->selectors, out);
+    if (rule->selectors) {
+      bool declares = !rule->rules.empty() || !rule->style;  // (what is nested may give one)
+      if (rule->style) for (const DeclarationEntry& entry : rule->style->items) if (entry.name == "content" || entry.name == "all" || !entry.pendingShorthand.empty()) { declares = true; break; }
+      NotePseudoKeys(*rule->selectors, out, declares);
+    }
     NotePseudoKeysOfRules(rule->rules, out, depth + 1);
     if (rule->importedSheet) NotePseudoKeysOfRules(rule->importedSheet->rules, out, depth + 1);
   }
@@ -3640,7 +3646,11 @@ void NotePseudoKeysOfRules(const std::vector<CssRule*>& rules, std::unordered_ma
 bool PseudoMayHaveRulesFor(dom::Element* element, const std::string& pseudo, dom::Node* tree) {
   static const std::unordered_map<std::string, PseudoKeys> ua = [] {
     std::unordered_map<std::string, PseudoKeys> keys;
-    for (const UserAgentRule& rule : UserAgentRules()) NotePseudoKeys(rule.selectors, keys);
+    for (const UserAgentRule& rule : UserAgentRules()) {
+      bool declares = false;
+      for (const DeclarationEntry& entry : rule.declarations) if (entry.name == "content" || entry.name == "all" || !entry.pendingShorthand.empty()) { declares = true; break; }
+      NotePseudoKeys(rule.selectors, keys, declares);
+    }
     return keys;
   }();
   static std::unordered_map<const dom::Node*, std::pair<uint64_t, std::unordered_map<std::string, PseudoKeys>>> cache;
