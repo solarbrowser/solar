@@ -32,6 +32,8 @@
 #include "solar/css/Shorthands.h"
 #include "solar/css/Values.h"
 
+namespace solar::layout { void SetLayoutCause(const char* cause); }
+
 namespace solar::css {
 
 namespace {
@@ -47,6 +49,7 @@ std::string Lower(std::string_view text) {
 
 uint64_t g_styleVersion = 1;
 uint64_t g_animationVersion = 1;
+bool g_loadThrottle = false;  // the program shows pages as they load (the window): see the bringing of layout in ComputedValue
 uint64_t g_layoutAnimationVersion = 1;  // the same, but not for what animations give that only changes how things are drawn
 uint64_t g_authorVersion = 1;  // changed when the rules do
 bool g_anyContainerQueries = false;  // a rule with a container query has been looked at
@@ -3316,6 +3319,7 @@ void NoteStyleChangeForRegistry() { NoteStyleChange(); }
 uint64_t AnimationVersion() { return g_animationVersion; }
 uint64_t LayoutAnimationVersion() { return g_layoutAnimationVersion; }
 void NoteDrawAnimated() { ++g_animationVersion; }
+void SetLoadThrottle(bool on) { g_loadThrottle = on; }
 void NoteAnimatedStyleChange(bool affectsSizes, bool) {
   // What animations give is looked at element by element (the style of an element is made again when its animation changes, and so are those under it
   // when it is what they inherit): nothing that is kept for all of them is let go.
@@ -3988,9 +3992,18 @@ std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std
     const Made now{dom::DocumentVersion(), g_styleVersion, g_cacheVersion, dom::StateVersion(), g_sizingAnimation, media.width, media.height};
     const auto at = brought.find(document);
     if (at != brought.end() && at->second == now && document->layoutTree) return;
+    // A page that is still loading and takes long to lay out (a layout at every step, for the sizes of containers, would be most of the time it takes to load) has its layout
+    // brought up to date not more often than four times the time it took lets be: what is asked of its styles meanwhile is made from the sizes of the last layout.
+    static std::chrono::steady_clock::time_point lastEnd;
+    static double lastCostMs = 0;
+    const auto began = std::chrono::steady_clock::now();
+    if (g_loadThrottle && document->readyState != "complete" && lastCostMs > 100 && began < lastEnd + std::chrono::milliseconds(static_cast<long>(4 * lastCostMs))) return;
     inLayoutHook = true;
+    layout::SetLayoutCause("style-hook");
     g_layoutHook(ctx, document);
     inLayoutHook = false;
+    lastEnd = std::chrono::steady_clock::now();
+    lastCostMs = std::chrono::duration<double, std::milli>(lastEnd - began).count();
     const MediaEnvironment& after = CurrentMediaEnvironment();
     // (Layout that changed the styles itself, because container sizes it found were not what they were made from, is not done: it asks again.)
     const Made done{dom::DocumentVersion(), g_styleVersion, g_cacheVersion, dom::StateVersion(), g_sizingAnimation, after.width, after.height};

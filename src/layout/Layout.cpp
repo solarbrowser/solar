@@ -174,6 +174,8 @@ void VerifyAgainstFresh(Quanta::Context& ctx, dom::Document* document, const css
 
 }  // namespace
 
+const char* g_layoutCause = "?";
+void SetLayoutCause(const char* cause) { g_layoutCause = cause; }
 double g_layoutMs = 0;
 double LayoutMillis() { return g_layoutMs; }
 
@@ -341,7 +343,7 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
         tree->memoInconsistent.clear();
         LayoutRoot(lc);
       }
-      if (std::getenv("SOLAR_LAYOUT_DEBUG")) std::fprintf(stderr, "[%.0f ms] layout pass %d attempt %d [doc %llu style %llu cache %llu author %llu anim %llu state %llu]: build %.1f ms, layout %.1f ms\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count() - 0, pass, attempt, (unsigned long long)dom::DocumentVersion(), (unsigned long long)css::StyleVersion(), (unsigned long long)css::StyleCacheVersion(), (unsigned long long)css::SheetsVersion(), (unsigned long long)css::AnimationVersion(), (unsigned long long)dom::StateVersion(), std::chrono::duration<double, std::milli>(t1 - t0).count(), std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count());
+      if (std::getenv("SOLAR_LAYOUT_DEBUG")) std::fprintf(stderr, "[%.0f ms] layout pass %d attempt %d [doc %llu style %llu cache %llu author %llu anim %llu state %llu] (%s): build %.1f ms, layout %.1f ms\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count() - 0, pass, attempt, (unsigned long long)dom::DocumentVersion(), (unsigned long long)css::StyleVersion(), (unsigned long long)css::StyleCacheVersion(), (unsigned long long)css::SheetsVersion(), (unsigned long long)css::AnimationVersion(), (unsigned long long)dom::StateVersion(), g_layoutCause, std::chrono::duration<double, std::milli>(t1 - t0).count(), std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count());
       tree->extraWidth = extraWidth;
       tree->extraHeight = extraHeight;
       if (attempt >= 2 || autos.thickness <= 0 || (!autos.x && !autos.y) || !tree->root) break;
@@ -388,6 +390,7 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
   }
   ApplySticky(*tree);
   document->layoutTree = tree;
+  g_layoutCause = "?";
   if (getenv("SOLAR_VERIFY") && previous && (previous->damaged || getenv("SOLAR_NOREUSE"))) VerifyAgainstFresh(ctx, document, environment, *tree);
   return tree.get();
 }

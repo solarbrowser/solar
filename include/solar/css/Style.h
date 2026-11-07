@@ -48,6 +48,8 @@ uint64_t DrawAnimationVersion();
 uint64_t LayoutAnimationVersion();
 // An animation gave an element something that is only drawn (the styles that were kept are made again for it, a layout is not).
 void NoteDrawAnimated();
+// The program shows pages while they load (the window): a page that takes long to lay out is not laid out for the sizes of containers at every step of loading.
+void SetLoadThrottle(bool on);
 // Whether any rule gives the pseudo-element of the element a style.
 bool HasPseudoStyle(dom::Element* element, const std::string& pseudo);
 // The width the vertical scrollbar or gutter of the viewport takes, and the height of the horizontal one.

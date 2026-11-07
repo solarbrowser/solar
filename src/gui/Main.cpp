@@ -1346,6 +1346,7 @@ int main(int argc, char** argv) {
     pthread_attr_init(&attributes);
     pthread_attr_setstacksize(&attributes, static_cast<size_t>(256) << 20);
     auto* start = new std::function<void()>([&] {
+      solar::css::SetLoadThrottle(true);
       result = PageMain(shared, argc, argv);
       shared.pageDone = true;
       shared.quit = true;

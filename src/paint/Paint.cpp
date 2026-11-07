@@ -1696,6 +1696,7 @@ void CollectFrames(const layout::Box& box, std::vector<dom::Document*>& frames) 
 // The layout of a page and of the pages in its frames. Painting freezes layout, and a frame's page is laid out when it is painted: it has to be done before.
 // (Laying a page out may run the loop, a font being fetched, and the tree of the page may be made again by then: it is asked for last.)
 layout::Tree* UpdateLayoutWithFrames(Quanta::Context& ctx, dom::Document* document, int depth) {
+  layout::SetLayoutCause("frame");
   layout::Tree* tree = layout::UpdateLayout(ctx, document);
   if (!tree || !tree->root || depth >= 4) return tree;
   std::vector<dom::Document*> frames;
