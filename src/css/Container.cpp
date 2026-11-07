@@ -506,29 +506,75 @@ const std::vector<ContainerCondition>& ParsedPrelude(const std::string& prelude)
 
 }  // namespace
 
-bool ContainerRuleMatches(Quanta::Context& ctx, dom::Element* element, bool pseudoElement, const std::string& prelude) {
-  for (const ContainerCondition& condition : ParsedPrelude(prelude)) {
-    const std::string& name = condition.name;
-    const ComponentValues& query = condition.query;
-    const bool needsSize = condition.needsSize;
-    // The nearest ancestor that is such a container (the element itself, for a pseudo-element).
-    dom::Element* candidate = pseudoElement ? element : FlatParentOf(element);
-    for (; candidate; candidate = FlatParentOf(candidate)) {
-      const ContainerFacts& facts = FactsOf(ctx, candidate);
-      if (!name.empty() && std::find(facts.names.begin(), facts.names.end(), name) == facts.names.end()) continue;
-      if (needsSize && !facts.size && !facts.inlineSize) continue;
-      // The nearest container is the one asked, even if it cannot be one: then the query does not match.
-      if (needsSize && !facts.eligible) break;
-      Query q{ctx, candidate};
-      q.sizeContainer = facts.size || facts.inlineSize;
-      q.inlineOnly = facts.inlineSize && !facts.size;
-      q.vertical = facts.vertical;
-      q.width = candidate->containerWidth;
-      q.height = candidate->containerHeight;
-      if (query.empty()) return true;
-      if (EvalQuery(q, query) == Truth::True) return true;
+namespace {
+
+// The nearest ancestor (the element itself first) that a condition asks for: the one with the name, that has a size if the query needs one. `blocked`: the nearest one
+// that could be is one that cannot be a container (the query does not match then). Every rule with a container condition asks it of each element, and an element's
+// answer is its parent's unless the element is the one: the answers are kept for the version the facts are (and are worked out once for each element and condition).
+struct NearestAnswer {
+  dom::Element* container = nullptr;
+  bool blocked = false;
+};
+
+NearestAnswer NearestContainer(Quanta::Context& ctx, dom::Element* start, const std::string& name, bool needsSize) {
+  struct Kept {
+    std::string name;
+    bool needsSize;
+    NearestAnswer answer;
+  };
+  static std::unordered_map<dom::Element*, std::vector<Kept>> kept;
+  static uint64_t version = 0;
+  const uint64_t now = (dom::DocumentVersion() * 1000003 + StyleVersion()) * 1000003 + StyleCacheVersion();
+  if (version != now || kept.size() > 100000) {
+    kept.clear();
+    version = now;
+  }
+  const auto lookup = [&](dom::Element* e) -> const NearestAnswer* {
+    const auto found = kept.find(e);
+    if (found == kept.end()) return nullptr;
+    for (const Kept& k : found->second) {
+      if (k.needsSize == needsSize && k.name == name) return &k.answer;
+    }
+    return nullptr;
+  };
+  std::vector<dom::Element*> walked;
+  NearestAnswer answer;
+  for (dom::Element* candidate = start; candidate; candidate = FlatParentOf(candidate)) {
+    if (const NearestAnswer* known = lookup(candidate)) {
+      answer = *known;
       break;
     }
+    walked.push_back(candidate);
+    const ContainerFacts& facts = FactsOf(ctx, candidate);
+    if (!name.empty() && std::find(facts.names.begin(), facts.names.end(), name) == facts.names.end()) continue;
+    if (needsSize && !facts.size && !facts.inlineSize) continue;
+    answer.container = candidate;
+    // The nearest container is the one asked, even if it cannot be one: then the query does not match.
+    answer.blocked = needsSize && !facts.eligible;
+    break;
+  }
+  for (dom::Element* e : walked) kept[e].push_back({name, needsSize, answer});
+  return answer;
+}
+
+}  // namespace
+
+bool ContainerRuleMatches(Quanta::Context& ctx, dom::Element* element, bool pseudoElement, const std::string& prelude) {
+  for (const ContainerCondition& condition : ParsedPrelude(prelude)) {
+    const ComponentValues& query = condition.query;
+    // The nearest ancestor that is such a container (the element itself, for a pseudo-element).
+    const NearestAnswer nearest = NearestContainer(ctx, pseudoElement ? element : FlatParentOf(element), condition.name, condition.needsSize);
+    if (!nearest.container || nearest.blocked) continue;
+    dom::Element* candidate = nearest.container;
+    const ContainerFacts& facts = FactsOf(ctx, candidate);
+    Query q{ctx, candidate};
+    q.sizeContainer = facts.size || facts.inlineSize;
+    q.inlineOnly = facts.inlineSize && !facts.size;
+    q.vertical = facts.vertical;
+    q.width = candidate->containerWidth;
+    q.height = candidate->containerHeight;
+    if (query.empty()) return true;
+    if (EvalQuery(q, query) == Truth::True) return true;
   }
   return false;
 }

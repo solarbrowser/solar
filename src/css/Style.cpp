@@ -471,6 +471,9 @@ bool KeysOfComplex(const ComplexSelector& selector, std::vector<uint64_t>& out, 
   for (const SimpleSelector& simple : last.simples) {
     if (simple.kind == SimpleSelector::Kind::Attribute && !simple.namespaceName && !simple.namespaceUri && !simple.name.empty()) { out.push_back(KeyHash(5, simple.name, true) ^ marker); return true; }
   }
+  for (const SimpleSelector& simple : last.simples) {
+    if (simple.kind == SimpleSelector::Kind::Pseudo && simple.pseudo == PseudoClass::Root) { out.push_back(KeyHash(6, "root", false) ^ marker); return true; }
+  }
   if (marker == 0) {
     for (const SimpleSelector& simple : last.simples) {
       if ((simple.kind == SimpleSelector::Kind::Is || simple.kind == SimpleSelector::Kind::Where) && simple.list && !simple.list->empty()) {
@@ -560,6 +563,10 @@ bool SupportsText(const std::string& text) {
   return result;
 }
 
+bool NoFlatRules() {
+  static const bool off = std::getenv("SOLAR_NO_FLAT_RULES") != nullptr;
+  return off;
+}
 struct Gatherer {
   dom::Element* element;
   MatchContext matchContext;
@@ -943,6 +950,7 @@ struct Gatherer {
       for (uint64_t key : keys.keys) take(key ^ marker);
       if (marker) take(marker);
       for (const dom::Attr* attribute : element->AttributesInView()) take(KeyHash(5, attribute->localName, true) ^ marker);
+      if (dom::ParentOf(element) && dom::ParentOf(element)->IsDocument()) take(KeyHash(6, "root", false) ^ marker);  // (the rules for :root)
       size_t total = 0;
       for (const Run& run : runs) total += static_cast<size_t>(run.end - run.at);
       positions.reserve(total);
@@ -2078,7 +2086,7 @@ void BuildUntimed(dom::Element* element, ElementStyle& style, const std::string&
     };
     static std::unordered_map<const dom::Node*, FlatEntry> flats;
     std::shared_ptr<const FlatList> flat;
-    if (shareable && !gatherer.startingMode && !std::getenv("SOLAR_NO_FLAT_RULES")) {
+    if (shareable && !gatherer.startingMode && !NoFlatRules()) {
       auto entry = flats.find(treeRoot);
       if (entry == flats.end() || entry->second.version != snapshotVersion) {
         auto list = std::make_shared<FlatList>();

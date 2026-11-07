@@ -14,6 +14,13 @@
 #include "Internal.h"
 
 namespace solar::layout {
+namespace {
+bool BlockDebug() {
+  static const bool on = getenv("SOLAR_DEBUG") != nullptr;
+  return on;
+}
+}  // namespace
+
 
 void ShiftContents(Box& box, double dy) {
   for (auto& c : box.children) {
@@ -1444,7 +1451,7 @@ void PlaceOneAt(LayoutContext& lc, Box& a) {
   const double top = ResolveSize(s.inset[0], ch), bottom = ResolveSize(s.inset[2], ch);
   lc.keepOwnFrame = true;
   LayoutBlockLevel(lc, a, cw, ch, true);
-  if (getenv("SOLAR_DEBUG")) std::fprintf(stderr, "PlaceOne trial: width %g height %g inline %d children %zu min %g max %g cw %g lines %zu\n", a.width, a.height, (int)a.hasInlineContent, a.children.size(), a.minContent, a.maxContent, cw, a.lines.size());
+  if (BlockDebug()) std::fprintf(stderr, "PlaceOne trial: width %g height %g inline %d children %zu min %g max %g cw %g lines %zu\n", a.width, a.height, (int)a.hasInlineContent, a.children.size(), a.minContent, a.maxContent, cw, a.lines.size());
   const double extrasH = ExtrasHorizontal(a), extrasV = ExtrasVertical(a);
   const bool autoMl = s.margin[3].IsAuto(), autoMr = s.margin[1].IsAuto(), autoMt = s.margin[0].IsAuto(), autoMb = s.margin[2].IsAuto();
   double ml = autoMl ? 0 : s.margin[3].Resolve(cw), mr = autoMr ? 0 : s.margin[1].Resolve(cw);
@@ -1576,7 +1583,7 @@ void PlaceOneAt(LayoutContext& lc, Box& a) {
     }
   }
 
-  if (getenv("SOLAR_DEBUG")) std::fprintf(stderr, "PlaceOne W %g L %g R %g ml %g mr %g extrasH %g cw %g stretch %d inlineSide %d\n", W, L, R, ml, mr, extrasH, cw, (int)stretchW, (int)inlineSide);
+  if (BlockDebug()) std::fprintf(stderr, "PlaceOne W %g L %g R %g ml %g mr %g extrasH %g cw %g stretch %d inlineSide %d\n", W, L, R, ml, mr, extrasH, cw, (int)stretchW, (int)inlineSide);
   // Lay out at the width, for the height the contents have.
   lc.forceWidth = W;
   lc.keepOwnFrame = true;
