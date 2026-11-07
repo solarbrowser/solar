@@ -4,6 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+#include <unordered_map>
 #include "solar/css/Syntax.h"
 
 #include <cmath>
@@ -442,7 +443,17 @@ ComponentValues ParseComponentValues(const std::vector<Token>& tokens) {
   return values;
 }
 
-ComponentValues ParseComponentValues(std::string_view text) { return ParseComponentValues(Tokenize(text)); }
+ComponentValues ParseComponentValues(std::string_view text) {
+  // The values of declarations are the same ones again and again (0px, auto, none, a color, and the one text three times for one property): what is made of a short text is kept.
+  if (text.size() > 160) return ParseComponentValues(Tokenize(text));
+  thread_local std::unordered_map<std::string, ComponentValues> kept;
+  const auto found = kept.find(std::string(text));
+  if (found != kept.end()) return found->second;
+  if (kept.size() > 20000) kept.clear();
+  ComponentValues parsed = ParseComponentValues(Tokenize(text));
+  kept.emplace(std::string(text), parsed);
+  return parsed;
+}
 
 std::vector<ComponentValues> SplitOnCommas(const ComponentValues& values) {
   std::vector<ComponentValues> lists(1);

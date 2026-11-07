@@ -2876,12 +2876,19 @@ std::string Resolver::ComputeInner(dom::Element* element, const std::string& pro
   lastKind_ = "other";
   if (!element) return "";
   // The initial value, asked for by the root of the tree.
-  bool initialOnly = false;
-  std::string name = property;
-  if (property.rfind("\x01initial:", 0) == 0) {
-    initialOnly = true;
-    name = property.substr(9);
+  const bool initialOnly = property.rfind("\x01initial:", 0) == 0;
+  // (What was worked out before is answered at once: the style is made, and its parents', when it is not there yet.)
+  if (!initialOnly) {
+    ElementStyle& made = StyleOf(element, pseudo);
+    if (made.built) {
+      const auto cached = made.memo->computed.find(property);
+      if (cached != made.memo->computed.end()) {
+        lastKind_ = "memo hit";
+        return cached->second;
+      }
+    }
   }
+  const std::string name = initialOnly ? property.substr(9) : property;
   if (!initialOnly && pseudo.empty() && !AnimatedValuesSuppressed() && !StartingStyleFor(element, pseudo)) {
     dom::Node* tree = dom::ShadowIncludingRoot(element);
     if (tree && tree->IsDocument()) Prepare(element);
