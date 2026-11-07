@@ -47,6 +47,7 @@ std::string Lower(std::string_view text) {
 
 uint64_t g_styleVersion = 1;
 uint64_t g_animationVersion = 1;
+uint64_t g_layoutAnimationVersion = 1;  // the same, but not for what animations give that only changes how things are drawn
 uint64_t g_authorVersion = 1;  // changed when the rules do
 bool g_anyContainerQueries = false;  // a rule with a container query has been looked at
 bool g_overlayScrollbars = false;
@@ -3307,14 +3308,17 @@ void NoteStyleChange() {
 }
 void NoteStyleChangeForRegistry() { NoteStyleChange(); }
 uint64_t AnimationVersion() { return g_animationVersion; }
+uint64_t LayoutAnimationVersion() { return g_layoutAnimationVersion; }
+void NoteDrawAnimated() { ++g_animationVersion; }
 void NoteAnimatedStyleChange(bool affectsSizes, bool) {
   // What animations give is looked at element by element (the style of an element is made again when its animation changes, and so are those under it
   // when it is what they inherit): nothing that is kept for all of them is let go.
   ++g_animationVersion;
+  ++g_layoutAnimationVersion;
   if (affectsSizes) ++g_sizingAnimation;
   if (g_anyContainerQueries && affectsSizes) ++g_cacheVersion;  // (the size of a container may be what an animation gives)
 }
-uint64_t AuthorStyleVersion() { return dom::DocumentVersion() * 1000003 + g_authorVersion; }
+uint64_t AuthorStyleVersion() { return dom::StructureVersion() * 1000003 + g_authorVersion; }
 uint64_t FlushVersion() { return AuthorStyleVersion() * 1000003 + dom::StateVersion(); }
 uint64_t StyleVersion() { return g_styleVersion; }
 

@@ -15,6 +15,10 @@
 
 namespace solar::layout {
 namespace {
+bool NoItemMemo() {
+  static const bool off = getenv("SOLAR_NO_ITEM_MEMO") != nullptr;
+  return off;
+}
 bool BlockDebug() {
   static const bool on = getenv("SOLAR_DEBUG") != nullptr;
   return on;
@@ -664,10 +668,20 @@ bool MemoEligible(const Box& box) {
   if (box.style->IsOutOfFlow() || box.style->IsFloating()) return false;
   switch (box.parent->style->display) {
     case Display::Block: case Display::FlowRoot: case Display::ListItem: break;
+    case Display::Flex: case Display::InlineFlex: case Display::Grid: case Display::InlineGrid: if (NoItemMemo()) return false; break;
     default: return false;
   }
   for (const Box* p = box.parent; p; p = p->parent) {
     if (p->style->IsMulticol()) return false;
+  }
+  // (A subgrid takes its tracks, and its items' baselines, from the grid around it: what is placed in it is not placed by it alone.)
+  if (IsGridDisplay(box.parent->style->display)) {
+    const auto subgrid = [](const BoxStyle& st) { return st.gridTemplateColumns.rfind("subgrid", 0) == 0 || st.gridTemplateRows.rfind("subgrid", 0) == 0; };
+    if (subgrid(*box.parent->style) || subgrid(*box.style)) return false;
+    for (const Box* p = box.parent->parent; p; p = p->parent) {
+      if (!IsGridDisplay(p->style->display)) break;
+      if (subgrid(*p->style)) return false;
+    }
   }
   return true;
 }

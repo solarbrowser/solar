@@ -184,6 +184,39 @@ int g_layoutFrozen = 0;
 LayoutFreeze::LayoutFreeze() { ++g_layoutFrozen; }
 LayoutFreeze::~LayoutFreeze() { --g_layoutFrozen; }
 
+namespace {
+
+// The boxes of elements whose animation changed only how they are drawn are given the style they draw with now (opacity, transform, its background color); what else is read at
+// paint time is read from the style then. False when a box is of a kind that is not for this (its style makes a stacking context or a containing block differently now).
+bool RefreshDrawn(Quanta::Context& ctx, Tree& tree, const std::vector<dom::Element*>& elements) {
+  for (dom::Element* element : elements) {
+    const std::vector<Box*>& boxes = BoxesOf(tree, element);
+    if (boxes.empty()) continue;
+    const std::shared_ptr<const BoxStyle> fresh = ReadStyle(ctx, element, "");
+    if (!fresh) return false;
+    for (Box* box : boxes) {
+      if (!box->style) return false;
+      if (box->style->containsPositioned != fresh->containsPositioned || box->style->stackingContext != fresh->stackingContext) return false;
+      const auto patched = [&](const BoxStyle& old) {
+        auto copy = std::make_shared<BoxStyle>(old);
+        copy->opacity = fresh->opacity;
+        copy->transform = fresh->transform;
+        copy->translate = fresh->translate;
+        copy->rotate = fresh->rotate;
+        copy->scale = fresh->scale;
+        copy->backgroundColor = fresh->backgroundColor;
+        return copy;
+      };
+      auto copy = patched(*box->style);
+      if (box->style->physicalStyle) copy->physicalStyle = patched(*box->style->physicalStyle);
+      box->style = std::move(copy);
+    }
+  }
+  return true;
+}
+
+}  // namespace
+
 Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
   if (dom::g_refreshControls && g_layoutFrozen == 0) dom::g_refreshControls(document);
   if (g_layoutFrozen > 0 && document->layoutTree && document->layoutTree->root) return document->layoutTree.get();
@@ -214,7 +247,7 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
     }
   }
   const auto versionNow = [&] {
-    uint64_t v = (((dom::DocumentVersion() * 1000003 + css::StyleVersion()) * 1000003 + css::AnimationVersion()) * 1000003 + dom::StateVersion()) * 1000003 + static_cast<uint64_t>(environment.width * 7 + environment.height);
+    uint64_t v = (((dom::DocumentVersion() * 1000003 + css::StyleVersion()) * 1000003 + css::LayoutAnimationVersion()) * 1000003 + dom::StateVersion()) * 1000003 + static_cast<uint64_t>(environment.width * 7 + environment.height);
     // What is relevant to the user of content-visibility: auto depends on the focus and the selection.
     if (document->contentVisibilityAutoSeen) {
       v = v * 1000003 + reinterpret_cast<uintptr_t>(document->focusedElement);
@@ -225,6 +258,16 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
     }
     return v;
   };
+  // What animations changed only in how elements are drawn is given to the boxes there are, without a layout; when the tree is not good as it is (or a box cannot take it),
+  // the pending elements are let go and layout is made.
+  if (!document->drawAnimated.empty()) {
+    std::vector<dom::Element*> pending = std::move(document->drawAnimated);
+    document->drawAnimated.clear();
+    Tree* current = document->layoutTree.get();
+    if (current && current->root && current->builtFor == versionNow() && !current->damaged) {
+      if (!RefreshDrawn(ctx, *current, pending)) css::NoteAnimatedStyleChange(true, false);  // (a box that cannot: layout is made again)
+    }
+  }
   if (document->layoutTree && document->layoutTree->builtFor == versionNow() && document->layoutTree->root && (!document->layoutTree->truncated || g_previewBudget > 0)) return document->layoutTree.get();
   static std::set<const dom::Document*> inside;
   // (Asked for again while it is being made, from a style that needs the size of a container: what is there is answered.)
@@ -263,7 +306,7 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
       BuildTree(lc, document, attempt == 0 && pass == 0 && previous && previous->root ? previous.get() : nullptr);
       const auto t1 = std::chrono::steady_clock::now();
       LayoutRoot(lc);
-      if (std::getenv("SOLAR_LAYOUT_DEBUG")) std::fprintf(stderr, "[%.0f ms] layout pass %d attempt %d [doc %llu style %llu cache %llu author %llu]: build %.1f ms, layout %.1f ms\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count() - 0, pass, attempt, (unsigned long long)dom::DocumentVersion(), (unsigned long long)css::StyleVersion(), (unsigned long long)css::StyleCacheVersion(), (unsigned long long)css::SheetsVersion(), std::chrono::duration<double, std::milli>(t1 - t0).count(), std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count());
+      if (std::getenv("SOLAR_LAYOUT_DEBUG")) std::fprintf(stderr, "[%.0f ms] layout pass %d attempt %d [doc %llu style %llu cache %llu author %llu anim %llu state %llu]: build %.1f ms, layout %.1f ms\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count() - 0, pass, attempt, (unsigned long long)dom::DocumentVersion(), (unsigned long long)css::StyleVersion(), (unsigned long long)css::StyleCacheVersion(), (unsigned long long)css::SheetsVersion(), (unsigned long long)css::AnimationVersion(), (unsigned long long)dom::StateVersion(), std::chrono::duration<double, std::milli>(t1 - t0).count(), std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count());
       tree->extraWidth = extraWidth;
       tree->extraHeight = extraHeight;
       if (attempt >= 2 || autos.thickness <= 0 || (!autos.x && !autos.y) || !tree->root) break;

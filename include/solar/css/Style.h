@@ -42,6 +42,12 @@ uint64_t StyleCacheVersion();
 uint64_t FlushVersion();
 // Changes when what an animation gives changes (for what is made again from it, as a layout).
 uint64_t AnimationVersion();
+// Changes when an animation changed only how an element is drawn (layout is not made again for it).
+uint64_t DrawAnimationVersion();
+// AnimationVersion without the changes that are only of how things are drawn: what a layout is made for.
+uint64_t LayoutAnimationVersion();
+// An animation gave an element something that is only drawn (the styles that were kept are made again for it, a layout is not).
+void NoteDrawAnimated();
 // Whether any rule gives the pseudo-element of the element a style.
 bool HasPseudoStyle(dom::Element* element, const std::string& pseudo);
 // The width the vertical scrollbar or gutter of the viewport takes, and the height of the horizontal one.

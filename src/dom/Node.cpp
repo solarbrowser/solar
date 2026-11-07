@@ -68,6 +68,7 @@ void Document::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(adoptedStyleSheets);
   visitor.Mark(styleFlush);
   visitor.Mark(animationWake);
+  for (Element* element : drawAnimated) visitor.Mark(element);
   visitor.Mark(contentVisibilityWake);
   visitor.Mark(frameElement);
 }
@@ -166,12 +167,15 @@ namespace {
 // The versions of the documents and their states, as script moves them and as they were when last committed.
 uint64_t g_documentVersion = 1;
 uint64_t g_stateVersion = 1;
+uint64_t g_structureVersion = 1;  // the same, but not for a change of what text says (an element is as it was, for what style and animations look at)
+uint64_t g_committedStructureVersion = 1;
 uint64_t g_committedDocumentVersion = 1;
 uint64_t g_committedStateVersion = 1;
 }  // namespace
 
 void CommitPending() {
   g_committedDocumentVersion = g_documentVersion;
+  g_committedStructureVersion = g_structureVersion;
   g_committedStateVersion = g_stateVersion;
   std::vector<Node*>& list = DirtyLinks();
   for (Node* node : list) {
@@ -351,6 +355,7 @@ Node::~Node() {
 size_t LiveNodes() { return g_liveNodes; }
 size_t LiveDocuments() { return 0; }
 uint64_t DocumentVersion() { return g_committedViewDepth ? g_committedDocumentVersion : g_documentVersion; }
+uint64_t StructureVersion() { return g_committedViewDepth ? g_committedStructureVersion : g_structureVersion; }
 uint64_t StateVersion() { return g_committedViewDepth ? g_committedStateVersion : g_stateVersion; }
 
 namespace {
@@ -365,6 +370,15 @@ void (*g_nodeRemovedHook)(Node* node) = nullptr;
 void NoteTreeChange() {
   ++g_treeVersion;
   ++g_documentVersion;
+  ++g_structureVersion;
+  if (g_treeChangeHook) g_treeChangeHook();
+}
+
+// A change of the text of a node: the lines it is in are not what they were, but no element is (unless the text was nothing or is now: :empty).
+void NoteTextChange(bool wasEmpty, bool isEmpty) {
+  ++g_treeVersion;
+  ++g_documentVersion;
+  if (wasEmpty != isEmpty) ++g_structureVersion;
   if (g_treeChangeHook) g_treeChangeHook();
 }
 
@@ -381,7 +395,10 @@ void NoteTreeChangeAt(const Node* node) {
     n = up;
   }
   ++g_treeVersion;
-  if (connected) ++g_documentVersion;
+  if (connected) {
+    ++g_documentVersion;
+    ++g_structureVersion;
+  }
   if (g_treeChangeHook) g_treeChangeHook();
 }
 
@@ -1001,10 +1018,11 @@ std::optional<DomError> ReplaceData(CharacterData* node, uint32_t offset, uint32
   if (count > units.size() - offset) count = static_cast<uint32_t>(units.size() - offset);
   const std::u16string inserted = ToUtf16(replacement);
   if (HasMutationObservers()) QueueCharacterDataRecord(node, node->data);
+  const bool wasEmpty = node->data.empty();
   units.replace(offset, count, inserted);
   node->data = FromUtf16(units);
   NoteDamage(node, kDamageText);
-  NoteTreeChange();  // (the lines of text it is in are not what they were)
+  NoteTextChange(wasEmpty, node->data.empty());  // (the lines of text it is in are not what they were)
   if (HasLiveRanges()) RangesReplaceData(node, offset, count, static_cast<uint32_t>(inserted.size()));
   if (g_hooks.childrenChanged && node->parentNode) g_hooks.childrenChanged(node->parentNode);
   return std::nullopt;
@@ -1016,9 +1034,10 @@ void SetCharacterData(CharacterData* node, std::string data) {
     return;
   }
   if (HasMutationObservers()) QueueCharacterDataRecord(node, node->data);
+  const bool wasEmpty = node->data.empty();
   node->data = std::move(data);
   NoteDamage(node, kDamageText);
-  NoteTreeChange();
+  NoteTextChange(wasEmpty, node->data.empty());
   if (g_hooks.childrenChanged && node->parentNode) g_hooks.childrenChanged(node->parentNode);
 }
 
@@ -1028,9 +1047,10 @@ void AppendCharacterData(CharacterData* node, std::string_view data) {
     return;
   }
   if (HasMutationObservers()) QueueCharacterDataRecord(node, node->data);
+  const bool wasEmpty = node->data.empty();
   node->data += data;
   NoteDamage(node, kDamageText);
-  NoteTreeChange();
+  NoteTextChange(wasEmpty, node->data.empty());
 }
 
 void SetAttrValue(Attr* attribute, std::string value) {

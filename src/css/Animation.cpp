@@ -257,6 +257,8 @@ bool OnlyItself(const AnimatedValues& values) {
 }  // namespace
 
 // The longhands of a color that is drawn (border-top-color, text-decoration-color...): nothing of the size of a box.
+uint64_t g_drawAnimationVersion = 0;
+uint64_t DrawAnimationVersion() { return g_drawAnimationVersion; }
 bool DrawOnlyColor(const std::string& name) { return name.size() > 6 && name.compare(name.size() - 6, 6, "-color") == 0; }
 
 void SetAnimatedValues(dom::Element* element, const std::string& pseudo, AnimatedValues values) {
@@ -306,6 +308,24 @@ void SetAnimatedValues(dom::Element* element, const std::string& pseudo, Animate
     }
   } else {
     itself = false;  // (it ended: what was there before is what changes)
+  }
+  // What changes only how the element is drawn (and is not inherited): layout is not made again for it, the boxes of the element are given what they draw with (RefreshDrawn).
+  static const std::set<std::string> boxDrawn = {"opacity", "transform", "translate", "rotate", "scale", "filter", "backdrop-filter", "box-shadow", "clip-path", "background-color",
+                                                  "outline-color", "background-position", "mask-position"};
+  static const bool noFast = std::getenv("SOLAR_NO_DRAW_FAST") != nullptr;
+  bool drawFast = !noFast && pseudo.empty() && !sizing && itself && now != element->animatedValues.end() && element->nodeDocument && !sizingElements.count(element);
+  if (drawFast) {
+    for (const auto& entry : now->second) {
+      if (!boxDrawn.count(entry.first) && !(DrawOnlyColor(entry.first) && entry.first != "color" && entry.first != "caret-color" && entry.first != "accent-color")) { drawFast = false; break; }
+    }
+  }
+  if (drawFast) {
+    std::vector<dom::Element*>& pending = element->nodeDocument->drawAnimated;
+    if (std::find(pending.begin(), pending.end(), element) == pending.end()) pending.push_back(element);
+    element->nodeDocument->NoteWrite();
+    ++g_drawAnimationVersion;
+    NoteDrawAnimated();
+    return;
   }
   const bool wasSizing = sizingElements.count(element) != 0;
   if (sizing) sizingElements.insert(element);

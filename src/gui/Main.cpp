@@ -3132,7 +3132,8 @@ int PageMain(Shared& shared, int argc, char** argv) {
       if (browser.TakeArrived()) dirty = true;
     }
 
-    const uint64_t version = (solar::dom::DocumentVersion() * 1000003 + solar::css::StyleVersion()) * 1000003 + solar::dom::StateVersion();
+    // (An animation that changed how something is drawn, or what a layout is made of, is a new frame.)
+    const uint64_t version = (((solar::dom::DocumentVersion() * 1000003 + solar::css::StyleVersion()) * 1000003 + solar::dom::StateVersion()) * 1000003 + solar::css::AnimationVersion()) * 1000003 + solar::css::DrawAnimationVersion();
     if (version != lastVersion) {
       if (timing) std::fprintf(stderr, "version: tree %llu style %llu\n", (unsigned long long)solar::dom::TreeVersion(), (unsigned long long)solar::css::StyleVersion());
       lastVersion = version;

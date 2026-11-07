@@ -426,6 +426,7 @@ struct Document : Node {
   bool containIntrinsicAutoSeen = false;  // a box with contain-intrinsic-size: auto was made (it remembers the size it had)
   // The function that asks for a frame, which parsing something that declares animations or transitions calls.
   Quanta::Object* animationWake = nullptr;
+  std::vector<Element*> drawAnimated;  // elements whose animation only changed how they are drawn since layout last looked (see css::SetAnimatedValues)
   // The function that asks for a frame to send the contentvisibilityautostatechange events in.
   Quanta::Object* contentVisibilityWake = nullptr;
   // For an about: document whose iframe is gone: the address it was resolving against, which is the origin it keeps.
@@ -521,6 +522,9 @@ size_t LiveNodes();
 size_t LiveDocuments();
 // The same, but for the changes of what is in a document: what happens to a node that is not in one does not change it.
 uint64_t DocumentVersion();
+// The same, but not for a change of the text of a node that stays text: what style and animations look at (the elements, their attributes) is as it was.
+uint64_t StructureVersion();
+void NoteTextChange(bool wasEmpty, bool isEmpty);
 // Changes with the states of elements (hover, focus, pressed, defined): style is made anew for them, and what is kept of the tree is not let go.
 uint64_t StateVersion();
 void NoteTreeChangeAt(const Node* node);
