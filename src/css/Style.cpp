@@ -467,6 +467,9 @@ struct FlatList {
   std::vector<uint32_t> pathIds;
   std::vector<std::string> paths;
   RuleIndex index;
+  // What a rule needs of the elements above the subject, for the rules that can be told by it alone (one selector, nothing nested in it): the first two keys of the
+  // selector's ancestors, 0 for none. An element looks at these before it looks at the rule.
+  std::vector<uint64_t> ancestorKey1, ancestorKey2;
   uint32_t lastPath = 0;
   void Push(CssRule* rule, int layer, const std::string& path) {
     if (paths.empty()) paths.push_back(std::string());
@@ -881,7 +884,13 @@ struct Gatherer {
       positions.resize(flat.rules.size());
       for (uint32_t i = 0; i < positions.size(); ++i) positions[i] = i;
     }
+    const bool screening = keys.usable && mode == Mode::Own && !flat.ancestorKey1.empty();
     for (const uint32_t position : positions) {
+      if (screening && flat.ancestorKey1[position]) {
+        // (What the rule needs of the elements above, looked at without the rule: the same answer its own screening gives.)
+        const Bloom* above = AncestorBloom();
+        if (!above || !above->Has(flat.ancestorKey1[position]) || (flat.ancestorKey2[position] && !above->Has(flat.ancestorKey2[position]))) continue;
+      }
       const std::string& path = flat.paths[flat.pathIds[position]];
       if (layerPath != path) layerPath = path;
       Rule(flat.rules[position], flat.layers[position], nullptr);
@@ -1953,7 +1962,19 @@ void BuildUntimed(dom::Element* element, ElementStyle& style, const std::string&
         }
         gatherer.anonymousLayers = 0;
         gatherer.layerPath.clear();
-        if (!unsafe) BuildRuleIndex(list->rules, list->index);
+        if (!unsafe) {
+          BuildRuleIndex(list->rules, list->index);
+          list->ancestorKey1.assign(list->rules.size(), 0);
+          list->ancestorKey2.assign(list->rules.size(), 0);
+          for (size_t i = 0; i < list->rules.size(); ++i) {
+            CssRule* rule = list->rules[i];
+            if (rule->kind != RuleKind::Style || !rule->selectors || !rule->style || !rule->rules.empty() || rule->selectors->size() != 1) continue;
+            if (rule->quickState == 0) WorkOutQuickKeys(*rule);
+            if (rule->quickAncestors.size() != 1 || rule->quickAncestors[0].empty()) continue;
+            list->ancestorKey1[i] = rule->quickAncestors[0][0];
+            if (rule->quickAncestors[0].size() > 1) list->ancestorKey2[i] = rule->quickAncestors[0][1];
+          }
+        }
         if (flats.size() > 64) flats.clear();
         entry = flats.insert_or_assign(treeRoot, FlatEntry{snapshotVersion, unsafe ? nullptr : std::shared_ptr<const FlatList>(list)}).first;
       }
