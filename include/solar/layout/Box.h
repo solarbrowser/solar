@@ -208,6 +208,7 @@ struct Tree {
   std::unordered_map<const dom::Node*, std::vector<Box*>> boxesOf;
   double viewportWidth = 800, viewportHeight = 600;
   bool keepScrollbars = false;  // layout is being repeated for container queries: the scrollbars of the pass before stay
+  bool truncated = false;  // made for a first look at a page (see SetPreviewBudget): what comes after the first elements is not in it, and it is made again for anything else
   bool firstLetterApplied = false, firstLineApplied = false;  // a ::first-letter or ::first-line was made of something in it: its boxes are not what the elements alone make
   double extraWidth = 0, extraHeight = 0;  // the room the scrollbars of the viewport took of this layout (what the contents that overflow asked for)
   Overflow viewportOverflowX = Overflow::Auto, viewportOverflowY = Overflow::Auto;  // the overflow of the viewport, the root element's or the body's

@@ -97,6 +97,11 @@ void ScrollBounds(Tree& tree, dom::Element* element, double& minX, double& minY,
 // How far the element may scroll in each direction (0 for what does not scroll); the viewport for the root element.
 void ScrollRange(Tree& tree, dom::Element* element, double& maxX, double& maxY);
 
+// While the budget is more than 0, a tree is made of the first `elements` elements of the document only (a first look at a page that is still coming: the part
+// above the fold is shown before the rest is laid out). Such a tree is made again when it is asked for with no budget.
+void SetPreviewBudget(long elements);
+extern long g_previewBudget;  // (what it was set to)
+
 // Text for looking at layout by eye or in a test.
 std::string DumpTree(const Tree& tree);
 

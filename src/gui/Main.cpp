@@ -1702,7 +1702,10 @@ int PageMain(Shared& shared, int argc, char** argv) {
     }
     if (!body || !body->firstChild) return;
     const auto t0 = Clock::now();
+    // The first look at the page is of what is first in it: the rest is laid out for the frames that come after (a page of thousands of elements is not waited for).
+    if (firstEarly && !std::getenv("SOLAR_NO_PREVIEW")) solar::layout::SetPreviewBudget(1200);
     solar::layout::Tree* tree = currentTree();
+    solar::layout::SetPreviewBudget(0);
     if (!tree) return;
     browser.painting_ = true;
     auto list = std::make_shared<const solar::paint::DisplayList>(solar::paint::BuildDisplayList(realm->GetContext(), *tree, shared.height.load()));

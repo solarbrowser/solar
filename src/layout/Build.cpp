@@ -463,7 +463,7 @@ class Builder {
     if (html) css::ComputedValue(lc_.ctx, html, "display");
     // The boxes of the tree before are kept for what has not changed, when nothing in the document makes a box depend on more than its own subtree.
     canReuse_ = previous_ && previous_->root && reuse_.allowed && !getenv("SOLAR_NOREUSE") && !document->contentVisibilityAutoSeen &&
-                !(previous_ && (previous_->firstLetterApplied || previous_->firstLineApplied));
+                !(previous_ && (previous_->firstLetterApplied || previous_->firstLineApplied || previous_->truncated)) && g_previewBudget == 0;
     if (getenv("SOLAR_LAYOUT_DEBUG")) std::fprintf(stderr, "  build: previous %d allowed %d shadows %d cvauto %d firstLetter %d firstLine %d -> reuse %d\n", previous_ != nullptr, reuse_.allowed, dom::HasShadowTrees(), document->contentVisibilityAutoSeen, css::g_firstLetterSeen, css::g_firstLineSeen, canReuse_);
     if (canReuse_) {
       lc_.tree.boxesOf = std::move(previous_->boxesOf);
@@ -755,6 +755,10 @@ class Builder {
       ~Pop() { b->PopFrame(); }
     } pop{this};
     for (dom::Node* child : RenderedChildren(node)) {
+      if (g_previewBudget > 0 && g_visited >= g_previewBudget) {
+        lc_.tree.truncated = true;
+        break;
+      }
       if (child->IsElement()) {
         BuildElement(parent, static_cast<dom::Element*>(child));
       } else if (child->nodeType == dom::NodeType::Text || child->nodeType == dom::NodeType::CdataSection) {
@@ -888,6 +892,10 @@ class Builder {
   }
 
   void BuildElement(Box& parent, dom::Element* element) {
+    if (g_previewBudget > 0 && g_visited >= g_previewBudget) {
+      lc_.tree.truncated = true;
+      return;
+    }
     bool recomputed = false;
     std::shared_ptr<const BoxStyle> style = StyleFor(element, recomputed);
     ++g_visited;

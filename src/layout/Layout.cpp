@@ -24,6 +24,10 @@
 
 namespace solar::layout {
 
+long g_previewBudget = 0;
+void SetPreviewBudget(long elements) { g_previewBudget = elements; }
+
+
 namespace {
 
 // The content boxes of the containers, for the container queries. True if one is not what style was made with.
@@ -221,7 +225,7 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
     }
     return v;
   };
-  if (document->layoutTree && document->layoutTree->builtFor == versionNow() && document->layoutTree->root) return document->layoutTree.get();
+  if (document->layoutTree && document->layoutTree->builtFor == versionNow() && document->layoutTree->root && (!document->layoutTree->truncated || g_previewBudget > 0)) return document->layoutTree.get();
   static std::set<const dom::Document*> inside;
   // (Asked for again while it is being made, from a style that needs the size of a container: what is there is answered.)
   if (inside.count(document)) return document->layoutTree && !document->layoutTree->damaged ? document->layoutTree.get() : nullptr;
