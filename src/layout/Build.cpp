@@ -483,7 +483,8 @@ class Builder {
   LayoutContext& lc_;
   solar::css::StyleReuse reuse_;
   uint64_t environmentKey_ = 0;
-  bool dirtyBelow_ = false;  // the style of an element above was made again
+  bool dirtyBelow_ = false;  // the style of an element above was made again (the boxes under it are made again)
+  bool langBelow_ = false;   // an element above has other attributes (or another parent) than it had: what is read of the styles under it (the language) may be another
   Tree* previous_ = nullptr;
   bool canReuse_ = false;
   static inline uint64_t g_serial = 0;
@@ -831,7 +832,7 @@ class Builder {
   }
 
   // The style layout reads of an element: what was made of it before, while nothing it depends on has changed, and else worked out again.
-  std::shared_ptr<const BoxStyle> StyleFor(dom::Element* element, bool& recomputed) {
+  std::shared_ptr<const BoxStyle> StyleFor(dom::Element* element, bool& recomputed, bool* attrChanged = nullptr) {
     const dom::Node* parent = dom::ParentOf(element);
     const dom::Element* parentElement = parent && parent->IsElement() ? static_cast<const dom::Element*>(parent) : nullptr;
     dom::Element::LayoutStamp want;
@@ -847,9 +848,11 @@ class Builder {
     want.parentChildAttr = reuse_.sibling && parentElement ? pv.childAttr : 0;
     want.epoch = reuse_.allowed ? css::StyleEpochOf(element) : 0;
     const dom::Element::LayoutStamp& have = element->layoutStamp;
-    if (reuse_.allowed && !dirtyBelow_ && element->layoutStyle && have.author == want.author && have.environment == want.environment && have.parent == want.parent &&
+    if (attrChanged) *attrChanged = have.attr != want.attr || have.parent != want.parent;
+    if (reuse_.allowed && !langBelow_ && element->layoutStyle && have.author == want.author && have.environment == want.environment && have.parent == want.parent &&
         have.attr == want.attr && have.anim == want.anim && have.children == want.children && have.parentChildren == want.parentChildren && have.parentChildAttr == want.parentChildAttr && have.epoch == want.epoch) {
-      recomputed = false;
+      // (What is read of the style is as it was; the box of it is made again when an element above was (see dirtyBelow_).)
+      recomputed = dirtyBelow_;
       return std::static_pointer_cast<const BoxStyle>(element->layoutStyle);
     }
     std::shared_ptr<const BoxStyle> style = SharedBoxStyle(element);
@@ -896,18 +899,19 @@ class Builder {
       lc_.tree.truncated = true;
       return;
     }
-    bool recomputed = false;
-    std::shared_ptr<const BoxStyle> style = StyleFor(element, recomputed);
+    bool recomputed = false, attrChanged = false;
+    std::shared_ptr<const BoxStyle> style = StyleFor(element, recomputed, &attrChanged);
     ++g_visited;
     if (recomputed) ++g_recomputed;
     if ((style->containIntrinsicWidthAuto || style->containIntrinsicHeightAuto) && element->nodeDocument) element->nodeDocument->containIntrinsicAutoSeen = true;
     // What an element's style is made again from, its children's is too (they inherit).
     struct Below {
       Builder* builder;
-      bool saved;
-      ~Below() { builder->dirtyBelow_ = saved; }
-    } below{this, dirtyBelow_};
+      bool saved, savedLang;
+      ~Below() { builder->dirtyBelow_ = saved; builder->langBelow_ = savedLang; }
+    } below{this, dirtyBelow_, langBelow_};
     dirtyBelow_ = dirtyBelow_ || recomputed;
+    langBelow_ = langBelow_ || attrChanged;
     if (style->display == Display::None) return;
     // Whether the box of the element depends on more than the DOM nodes under it: a shadow host and a slot are made of other trees, and what is in a shadow tree or
     // slotted is where it is by the flat tree. Their boxes are made again each time, and so are those above them (volatileSubtree).

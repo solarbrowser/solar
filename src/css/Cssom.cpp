@@ -684,7 +684,8 @@ std::string MediaList::Text() const {
 
 void MediaList::SetText(std::string_view text) {
   // (The list of a matchMedia() or of a rule that is being made is of no sheet that style has: nothing changes for it.)
-  if (ownerSheet || ownerRule) NoteStyleChange();
+  // (A sheet that is made for an element and is not yet the element's is told of when it is: NoteSheetAttached.)
+  if ((ownerSheet && !ownerSheet->pendingAttach) || ownerRule) NoteStyleChange();
   queries.clear();
   if (Trim(std::string(text)).empty()) return;
   for (const ComponentValues& part : SplitOnCommas(ParseComponentValues(text))) {

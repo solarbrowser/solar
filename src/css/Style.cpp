@@ -49,6 +49,7 @@ std::string Lower(std::string_view text) {
 
 uint64_t g_styleVersion = 1;
 uint64_t g_animationVersion = 1;
+bool g_styleContainerQueries = false;  // a container query asks about style() (the custom properties of the containers around an element tell its rules)
 bool g_loadThrottle = false;  // the program shows pages as they load (the window): see the bringing of layout in ComputedValue
 uint64_t g_layoutAnimationVersion = 1;  // the same, but not for what animations give that only changes how things are drawn
 uint64_t g_authorVersion = 1;  // changed when the rules do
@@ -846,6 +847,7 @@ struct Gatherer {
           }
           if (element->nodeDocument) element->nodeDocument->containerQueriesSeen = true;
           g_anyContainerQueries = true;
+          if (!g_styleContainerQueries && rule->prelude.find("tyle(") != std::string::npos) g_styleContainerQueries = true;
           if (g_activeContext && ContainerRuleMatches(*g_activeContext, const_cast<dom::Element*>(element), matchContext.pseudoElement != nullptr, rule->prelude)) Rules(rule->rules, layer, outer);
           break;
         case RuleKind::Import: {
@@ -1164,6 +1166,8 @@ struct StyleEntry {
   bool shadowed = false;  // it was made when the element was in a shadow tree, a host or assigned to a slot
   const dom::Node* parent = nullptr;
   uint64_t parentEpoch = 0;
+  // The same as the epoch, and a new number too when only the custom properties of the style changed (what is made of it by the elements below that use none, with var(), is as it was).
+  uint64_t customEpoch = 0, parentCustomEpoch = 0;
   uint32_t animInherit = 0;
   uint32_t attr = 0, anim = 0, children = 0, parentChildren = 0, parentChildAttr = 0, state = 0;
   uint64_t treeVersion = 0;  // of the tree when the styles were begun
@@ -1234,18 +1238,44 @@ bool SameCascade(const ElementStyle& a, const ElementStyle& b) {
   return true;
 }
 
+
+// Whether a style says something with a var() in it (what it is worked out to depends on custom properties).
+bool UsesVar(const ElementStyle& style) {
+  for (const auto& [name, winner] : style.cascade) {
+    if (winner.entry && (winner.entry->value.find("var(") != std::string::npos || !winner.entry->pendingShorthand.empty())) return true;
+  }
+  return false;
+}
+
+// The same winners but for the custom properties (the declarations of --x are not looked at).
+bool SameCascadeButCustom(const ElementStyle& a, const ElementStyle& b) {
+  if (a.hasLogical != b.hasLogical || !a.storage.empty() || !b.storage.empty()) return false;
+  auto x = a.cascade.begin();
+  auto y = b.cascade.begin();
+  const auto custom = [](const std::string& name) { return name.size() > 1 && name[0] == '-' && name[1] == '-'; };
+  for (;;) {
+    while (x != a.cascade.end() && custom(x->first)) ++x;
+    while (y != b.cascade.end() && custom(y->first)) ++y;
+    if (x == a.cascade.end() || y == b.cascade.end()) return x == a.cascade.end() && y == b.cascade.end();
+    if (x->first != y->first || !SameWinners(x->second, y->second)) return false;
+    ++x;
+    ++y;
+  }
+}
+
 void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   if (entry.checked == treeVersion) return;
   entry.checked = treeVersion;
   const StyleReuse reuse = element->nodeDocument ? StyleReuseFor(element->nodeDocument) : StyleReuse();
   const dom::Node* parentNode = dom::ParentOf(element);
   dom::Element* parent = parentNode && parentNode->IsElement() ? const_cast<dom::Element*>(static_cast<const dom::Element*>(parentNode)) : nullptr;
-  uint64_t parentEpoch = 0, parentCascade = 0;
+  uint64_t parentEpoch = 0, parentCascade = 0, parentCustom = 0;
   if (parent) {
     StyleEntry& up = Cache()[parent];
     Validate(parent, up, treeVersion);
     parentEpoch = up.epoch;
     parentCascade = up.cascadeEpoch;
+    parentCustom = up.customEpoch;
   }
   // The rules that apply to an element are told by the tree around it (the attributes and states of the elements above), not by their styles: but a container query asks
   // what its container is, which is a style.
@@ -1312,11 +1342,31 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
       other.second.resolving.clear();
     }
   };
+  // Only the custom properties of the style above are others than they were: what is worked out here that uses none of them is as it was, and the elements under it follow by their own.
+  const bool customStale = !computedStale && entry.parentCustomEpoch != parentCustom;
   if (good && animSame && stateSame && !dirty) {
-    if (!computedStale) return;
-    dropWorkedOut();
-    entry.parentEpoch = parentEpoch;
-    entry.epoch = ++g_styleEpoch;
+    if (!computedStale && !customStale) return;
+    if (computedStale || g_styleContainerQueries || !entry.plain.built) {
+      dropWorkedOut();
+      entry.parentEpoch = parentEpoch;
+      entry.parentCustomEpoch = parentCustom;
+      entry.epoch = ++g_styleEpoch;
+      entry.customEpoch = entry.epoch;
+      return;
+    }
+    entry.parentCustomEpoch = parentCustom;
+    bool uses = UsesVar(entry.plain);
+    for (const auto& other : entry.others) uses = uses || UsesVar(other.second);
+    if (uses) {
+      dropWorkedOut();
+      entry.epoch = ++g_styleEpoch;
+      entry.customEpoch = entry.epoch;
+    } else {
+      // (A memo can be shared with the style of an element beside it: the custom properties are made again by both.)
+      entry.plain.memo->custom.clear();
+      for (auto& other : entry.others) other.second.memo->custom.clear();
+      entry.customEpoch = ++g_styleEpoch;
+    }
     return;
   }
   // What animations give is read when a value is worked out, not when the rules that apply are collected: of an element whose style is good but for that, the
@@ -1324,9 +1374,11 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   if (good && !animSame && stateSame && entry.plain.built && !dirty) {
     entry.anim = ev.anim;
     dropWorkedOut();
-    if (computedStale) {
+    if (computedStale || customStale) {
       entry.parentEpoch = parentEpoch;
+      entry.parentCustomEpoch = parentCustom;
       entry.epoch = ++g_styleEpoch;
+      entry.customEpoch = entry.epoch;
     }
     return;
   }
@@ -1349,7 +1401,10 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   entry.plain = ElementStyle();
   entry.others.clear();
   entry.serial = element->serial;
+  const uint64_t oldCustomEpoch = entry.customEpoch;
   entry.epoch = keptEpoch ? keptEpoch : ++g_styleEpoch;
+  entry.customEpoch = entry.epoch;
+  entry.parentCustomEpoch = parentCustom;
   entry.cascadeEpoch = ruleSetOnly ? oldCascadeEpoch : ++g_styleEpoch;
   entry.animInherit = ev.animInherit;
   entry.parent = parentNode;
@@ -1377,11 +1432,20 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
     }
     if (same) {
       // (The memo is good while what it was worked out from is: the style of the element above is the same too.)
-      if (!computedStale) {
+      if (!computedStale && !customStale) {
         entry.plain.memo = old.memo;
         for (auto& [key, style] : entry.others) style.memo = oldOthers[key].memo;
         entry.epoch = oldEpoch;
+        entry.customEpoch = oldCustomEpoch;
       }
+      entry.cascadeEpoch = oldCascadeEpoch;
+    } else if (!computedStale && !g_styleContainerQueries && oldEpoch != 0 && entry.others.empty() && oldOthers.empty() && SameCascadeButCustom(old, entry.plain) &&
+               !UsesVar(old) && !UsesVar(entry.plain)) {
+      // Only custom properties are others, and nothing of the element is worked out from them: what it was worked out to stays; the elements under it are told.
+      entry.plain.memo = old.memo;
+      entry.plain.memo->custom.clear();
+      entry.epoch = oldEpoch;
+      entry.customEpoch = ++g_styleEpoch;
       entry.cascadeEpoch = oldCascadeEpoch;
     }
   }
@@ -1420,13 +1484,18 @@ ElementStyle& StyleOf(dom::Element* element, const std::string& pseudo = "") {
       const uint64_t signature = DocumentSignature(element->nodeDocument);
       // The sheets are the same as they were, or sheets that were seen to as they came (NoteSheetAdded) have come after them.
       const std::vector<CssStyleSheet*> sheetsNow = SheetsOfTree(element->nodeDocument, element->nodeDocument->context);
+      // (The sheets there were are all there, in their order, and the ones that came, wherever they are among them, were seen to as they came.)
       bool sheetsSame = state.sheets.size() <= sheetsNow.size();
-      for (size_t i = 0; sheetsSame && i < state.sheets.size(); ++i) {
-        if (sheetsNow[i] != state.sheets[i] || (sheetsNow[i]->disabled ? 1 : 0) != state.disabled[i]) sheetsSame = false;
+      size_t kept = 0;
+      for (size_t i = 0; sheetsSame && i < sheetsNow.size(); ++i) {
+        if (kept < state.sheets.size() && sheetsNow[i] == state.sheets[kept]) {
+          if ((sheetsNow[i]->disabled ? 1 : 0) != state.disabled[kept]) sheetsSame = false;
+          ++kept;
+        } else if (!sheetsNow[i]->additiveAnnounced) {
+          sheetsSame = false;
+        }
       }
-      for (size_t i = state.sheets.size(); sheetsSame && i < sheetsNow.size(); ++i) {
-        if (!sheetsNow[i]->additiveAnnounced) sheetsSame = false;
-      }
+      if (kept != state.sheets.size()) sheetsSame = false;
       if (state.signature != signature || !sheetsSame) {
         if (state.signature != 0) {
           ClearShared();
@@ -3163,6 +3232,9 @@ bool DirtyKeysOfRules(const std::vector<CssRule*>& rules, std::unordered_set<uin
       case RuleKind::LayerStatement:
         usesLayers = true;
         break;
+      case RuleKind::Property:
+        registered.push_back(rule->name);  // (what the elements that have the property are made again for: see NoteSheetAdded)
+        break;
       case RuleKind::Keyframes: case RuleKind::Keyframe: case RuleKind::FontFace: case RuleKind::Page: case RuleKind::FontPaletteValues: case RuleKind::NestedDeclarations: case RuleKind::PositionTry:
         break;
       default:
@@ -3226,16 +3298,32 @@ bool NoteSheetAdded(CssStyleSheet* sheet) {
     }
     for (const auto& entry : after) if (entry.first.find('\x01') != std::string::npos) return false;  // (the layers with no name are numbered by where they come)
   }
-  if (!registered.empty()) {
-    // A registration changes what the custom property is for the elements whose styles mention it; where nothing does, nothing is different yet (the rules that come
-    // later are looked at when they come).
-    for (CssStyleSheet* other : sheets) {
-      if (other != sheet && !other->disabled && MentionsAny(other->rules, registered, 0)) return false;
-    }
-  }
   ++g_styleVersion;
   ++g_authorVersion;
   sheet->additiveAnnounced = true;
+  if (!registered.empty()) {
+    // A registration changes what the custom property is for every element: what is worked out of a style with a var() in it is made again, and what was worked out for the
+    // custom properties of the others (which the elements under them follow by their own epochs).
+    for (auto& [element, entry] : Cache()) {
+      if (!entry.plain.built) continue;
+      bool uses = UsesVar(entry.plain);
+      for (const auto& other : entry.others) uses = uses || UsesVar(other.second);
+      if (uses) {
+        entry.plain.memo = std::make_shared<Memo>();
+        entry.plain.resolving.clear();
+        for (auto& other : entry.others) {
+          other.second.memo = std::make_shared<Memo>();
+          other.second.resolving.clear();
+        }
+        entry.epoch = ++g_styleEpoch;
+        entry.customEpoch = entry.epoch;
+      } else {
+        entry.plain.memo->custom.clear();
+        for (auto& other : entry.others) other.second.memo->custom.clear();
+        entry.customEpoch = ++g_styleEpoch;
+      }
+    }
+  }
   const uint64_t rootKey = KeyHash(6, "root", false);
   for (auto& [element, entry] : Cache()) {
     bool touched = everything || !connected(element);
@@ -3316,6 +3404,7 @@ void NoteStyleChange() {
   ++g_authorVersion;
 }
 void NoteStyleChangeForRegistry() { NoteStyleChange(); }
+
 uint64_t AnimationVersion() { return g_animationVersion; }
 uint64_t LayoutAnimationVersion() { return g_layoutAnimationVersion; }
 void NoteDrawAnimated() { ++g_animationVersion; }
