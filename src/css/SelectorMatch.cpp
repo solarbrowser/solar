@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <unordered_map>
 
 #include "solar/css/Selectors.h"
 #include "solar/dom/MediaHook.h"
@@ -15,6 +16,8 @@ namespace solar::css {
 namespace {
 HasUse g_hasUse;
 const dom::Element* g_hasSubject = nullptr;
+int g_hasDepth = 0;
+bool g_hasUseSuspended = false;  // a question kept with a style is being asked again: nothing is recorded
 }  // namespace
 
 namespace {
@@ -352,6 +355,69 @@ bool MatchesPseudo(PseudoClass pseudo, const Element* element, const MatchContex
   }
 }
 
+// Whether the element has what the relative selectors of a :has() ask for (what it looked at is not recorded here: see MatchesSimple).
+bool MatchesHasList(const SimpleSelector& selector, const Element* element, const MatchContext& context) {
+  // The elements the relative selector can be about, which depend on how it starts.
+  const auto matchesRelative = [&](const ComplexSelector& relative, const Element* anchor, auto&& self, size_t index, const Element* candidate) -> bool {
+    if (!MatchesCompound(relative.compounds[index], candidate, context)) return false;
+    const auto leading = [&](const Element* leftmost) {
+      switch (relative.leading) {
+        case Combinator::Descendant:
+          for (const Element* up = ParentElement(leftmost); up; up = ParentElement(up)) {
+            if (up == anchor) return true;
+          }
+          return false;
+        case Combinator::Child: return ParentElement(leftmost) == anchor;
+        case Combinator::NextSibling: return PreviousElement(leftmost) == anchor;
+        case Combinator::SubsequentSibling:
+          for (const Element* before = PreviousElement(leftmost); before; before = PreviousElement(before)) {
+            if (before == anchor) return true;
+          }
+          return false;
+      }
+      return false;
+    };
+    if (index == 0) return leading(candidate);
+    switch (relative.combinators[index - 1]) {
+      case Combinator::Descendant:
+        for (const Element* up = ParentElement(candidate); up; up = ParentElement(up)) {
+          if (self(relative, anchor, self, index - 1, up)) return true;
+        }
+        return false;
+      case Combinator::Child: {
+        const Element* parent = ParentElement(candidate);
+        return parent && self(relative, anchor, self, index - 1, parent);
+      }
+      case Combinator::NextSibling: {
+        const Element* before = PreviousElement(candidate);
+        return before && self(relative, anchor, self, index - 1, before);
+      }
+      case Combinator::SubsequentSibling:
+        for (const Element* before = PreviousElement(candidate); before; before = PreviousElement(before)) {
+          if (self(relative, anchor, self, index - 1, before)) return true;
+        }
+        return false;
+    }
+    return false;
+  };
+  for (const ComplexSelector& relative : *selector.list) {
+    const auto tryTree = [&](const Node* root, bool includeRoot) {
+      for (const Node* node = includeRoot ? root : const_cast<Node*>(root)->NextInTree(root); node; node = const_cast<Node*>(node)->NextInTree(root)) {
+        if (node->IsElement() && matchesRelative(relative, element, matchesRelative, relative.compounds.size() - 1, static_cast<const Element*>(node))) return true;
+      }
+      return false;
+    };
+    if (relative.leading == Combinator::Descendant || relative.leading == Combinator::Child) {
+      if (tryTree(element, false)) return true;
+    } else {
+      for (const Element* sibling = NextElement(element); sibling; sibling = NextElement(sibling)) {
+        if (tryTree(sibling, true)) return true;
+      }
+    }
+  }
+  return false;
+}
+
 bool MatchesSimple(const SimpleSelector& selector, const Element* element, const MatchContext& context) {
   switch (selector.kind) {
     case SimpleSelector::Kind::Universal:
@@ -379,65 +445,24 @@ bool MatchesSimple(const SimpleSelector& selector, const Element* element, const
       for (const ComplexSelector& relative : *selector.list) {
         if (relative.leading == Combinator::NextSibling || relative.leading == Combinator::SubsequentSibling) g_hasUse.sibling = true;
       }
-      // The elements the relative selector can be about, which depend on how it starts.
-      const auto matchesRelative = [&](const ComplexSelector& relative, const Element* anchor, auto&& self, size_t index, const Element* candidate) -> bool {
-        if (!MatchesCompound(relative.compounds[index], candidate, context)) return false;
-        const auto leading = [&](const Element* leftmost) {
-          switch (relative.leading) {
-            case Combinator::Descendant:
-              for (const Element* up = ParentElement(leftmost); up; up = ParentElement(up)) {
-                if (up == anchor) return true;
-              }
-              return false;
-            case Combinator::Child: return ParentElement(leftmost) == anchor;
-            case Combinator::NextSibling: return PreviousElement(leftmost) == anchor;
-            case Combinator::SubsequentSibling:
-              for (const Element* before = PreviousElement(leftmost); before; before = PreviousElement(before)) {
-                if (before == anchor) return true;
-              }
-              return false;
-          }
-          return false;
-        };
-        if (index == 0) return leading(candidate);
-        switch (relative.combinators[index - 1]) {
-          case Combinator::Descendant:
-            for (const Element* up = ParentElement(candidate); up; up = ParentElement(up)) {
-              if (self(relative, anchor, self, index - 1, up)) return true;
-            }
-            return false;
-          case Combinator::Child: {
-            const Element* parent = ParentElement(candidate);
-            return parent && self(relative, anchor, self, index - 1, parent);
-          }
-          case Combinator::NextSibling: {
-            const Element* before = PreviousElement(candidate);
-            return before && self(relative, anchor, self, index - 1, before);
-          }
-          case Combinator::SubsequentSibling:
-            for (const Element* before = PreviousElement(candidate); before; before = PreviousElement(before)) {
-              if (self(relative, anchor, self, index - 1, before)) return true;
-            }
-            return false;
-        }
-        return false;
-      };
-      for (const ComplexSelector& relative : *selector.list) {
-        const auto tryTree = [&](const Node* root, bool includeRoot) {
-          for (const Node* node = includeRoot ? root : const_cast<Node*>(root)->NextInTree(root); node; node = const_cast<Node*>(node)->NextInTree(root)) {
-            if (node->IsElement() && matchesRelative(relative, element, matchesRelative, relative.compounds.size() - 1, static_cast<const Element*>(node))) return true;
-          }
-          return false;
-        };
-        if (relative.leading == Combinator::Descendant || relative.leading == Combinator::Child) {
-          if (tryTree(element, false)) return true;
-        } else {
-          for (const Element* sibling = NextElement(element); sibling; sibling = NextElement(sibling)) {
-            if (tryTree(sibling, true)) return true;
+      const bool outermost = g_hasDepth == 0;
+      ++g_hasDepth;
+      const bool result = MatchesHasList(selector, element, context);
+      --g_hasDepth;
+      // What the answer was made from is kept with the style: it is still good while the question has the same answer. Only a question about the element itself or an
+      // element above it can be kept (what is beside it may be gone when the style is looked at), and only one asked in the plain way.
+      if (outermost && !g_hasUseSuspended) {
+        bool keep = !context.scope && !context.host && !context.pseudoElement && g_hasSubject && !g_hasUse.opaque;
+        if (keep) {
+          keep = false;
+          for (const Element* up = g_hasSubject; up; up = ParentElement(up)) {
+            if (up == element) { keep = true; break; }
           }
         }
+        if (keep) g_hasUse.queries.push_back({element, &selector, context.quirks, result});
+        else g_hasUse.opaque = true;
       }
-      return false;
+      return result;
     }
     case SimpleSelector::Kind::Nth: return MatchesNth(selector, element, context);
     case SimpleSelector::Kind::Lang: {
@@ -560,8 +585,39 @@ void MergeHasUse(const HasUse& use) {
   g_hasUse.any = g_hasUse.any || use.any;
   g_hasUse.other = g_hasUse.other || use.other;
   g_hasUse.sibling = g_hasUse.sibling || use.sibling;
+  g_hasUse.opaque = g_hasUse.opaque || use.opaque;
+  g_hasUse.queries.insert(g_hasUse.queries.end(), use.queries.begin(), use.queries.end());
 }
 
 bool MatchesAny(const SelectorList& list, const Element* element, const MatchContext& context) { return MatchesSelectorListAt(list, element, context); }
+
+}  // namespace solar::css
+
+namespace solar::css {
+
+// The answer of a question kept with a style (HasQuery), for the tree as it is now. Asked of many styles at once (a bar that has a :has() is above every element
+// in it), so the answer is kept until the tree or a state changes.
+bool EvaluateHasQuery(const HasQuery& query, uint64_t treeVersion) {
+  struct Kept {
+    uint64_t version = 0;
+    bool result = false;
+  };
+  static std::unordered_map<const void*, std::unordered_map<const void*, Kept>> kept;
+  static uint64_t keptVersion = 0;
+  if (keptVersion != treeVersion || kept.size() > 4096) {
+    kept.clear();
+    keptVersion = treeVersion;
+  }
+  Kept& entry = kept[query.anchor][query.selector];
+  if (entry.version == treeVersion) return entry.result;
+  MatchContext context;
+  context.quirks = query.quirks;
+  const bool saved = g_hasUseSuspended;
+  g_hasUseSuspended = true;
+  entry.result = MatchesHasList(*query.selector, query.anchor, context);
+  g_hasUseSuspended = saved;
+  entry.version = treeVersion;
+  return entry.result;
+}
 
 }  // namespace solar::css

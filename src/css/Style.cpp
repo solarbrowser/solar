@@ -1159,12 +1159,29 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
       use.any = use.any || other.second.has.any;
       use.other = use.other || other.second.has.other;
       use.sibling = use.sibling || other.second.has.sibling;
+      use.opaque = use.opaque || other.second.has.opaque;
     }
-    // (The elements it looked at are under it, or after it; when it was for some other element in the selector, they can be anywhere: the styles are made anew at every change of the tree.)
-    if (use.other) good = entry.treeVersion == dom::DocumentVersion() * 1000003 + dom::StateVersion();
-    else if (use.sibling) good = entry.subtree == ev.selectorSubtree && (!parent || entry.parentSubtree == pv.selectorSubtree);
-    else if (use.any) good = entry.subtree == ev.selectorSubtree;
-    goodButForHas = before && !good && !use.other;
+    const auto kept = [&](const auto& visit) {
+      for (const HasQuery& q : entry.plain.has.queries) visit(q);
+      for (const auto& other : entry.others) for (const HasQuery& q : other.second.has.queries) visit(q);
+    };
+    bool byQuestions = use.any && !use.opaque;
+    if (byQuestions) {
+      // Each :has() the style was made from, asked again of the tree as it is: the style is good while every one has the answer it had (a change somewhere in the
+      // tree that none of them can see is nothing for it).
+      const uint64_t treeNow = dom::DocumentVersion() * 1000003 + dom::StateVersion();
+      bool same = true;
+      kept([&](const HasQuery& q) { if (same && EvaluateHasQuery(q, treeNow) != q.result) same = false; });
+      good = same;
+    } else if (use.other) {
+      // (The elements it looked at are under it, or after it; when it was for some other element in the selector, they can be anywhere: the styles are made anew at every change of the tree.)
+      good = entry.treeVersion == dom::DocumentVersion() * 1000003 + dom::StateVersion();
+    } else if (use.sibling) {
+      good = entry.subtree == ev.selectorSubtree && (!parent || entry.parentSubtree == pv.selectorSubtree);
+    } else if (use.any) {
+      good = entry.subtree == ev.selectorSubtree;
+    }
+    goodButForHas = before && !good && (byQuestions || !use.other);
   }
   const bool stateSame = entry.state == ev.state;
   if (good && animSame && stateSame) return;
