@@ -4,6 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+#include <unordered_map>
 #include <chrono>
 // The natives under Web Animations (Animation, KeyframeEffect, CSS animations and transitions), which is written in script over them.
 #include "solar/css/Animation.h"
@@ -180,7 +181,23 @@ void CollectCandidates(Context& ctx, dom::Node* node, bool pseudos, Value& out) 
   for (dom::Node* child = node->firstChild; child; child = child->nextSibling) {
     if (!child->IsElement()) continue;
     dom::Element* element = static_cast<dom::Element*>(child);
-    const int mask = AnimationMask(ctx, element, pseudos);
+    // What an element asks for is a matter of its styles, which are made again with a new epoch: it is looked at again only then (a page that is being built
+    // changes at every step, and every step looked at every element of it).
+    struct Seen {
+      uint64_t epoch = 0;
+      int mask = 0;
+    };
+    static std::unordered_map<const dom::Element*, std::pair<Seen, Seen>> seen;
+    if (seen.size() > 200000) seen.clear();
+    const uint64_t epoch = StyleEpochOf(element);
+    Seen& slot = pseudos ? seen[element].second : seen[element].first;
+    int mask;
+    if (epoch != 0 && slot.epoch == epoch) {
+      mask = slot.mask;
+    } else {
+      mask = AnimationMask(ctx, element, pseudos);
+      slot = {epoch, mask};
+    }
     if (mask) {
       qe::ArrayPush(ctx, out, qe::FromObject(element));
       qe::ArrayPush(ctx, out, qe::FromInt32(mask));

@@ -1185,6 +1185,18 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   }
   const bool stateSame = entry.state == ev.state;
   if (good && animSame && stateSame) return;
+  // What animations give is read when a value is worked out, not when the rules that apply are collected: of an element whose style is good but for that, the
+  // collected rules stay and only what was worked out from them is dropped (every tick of an animation was a new cascade for the element).
+  if (good && !animSame && stateSame && entry.plain.built) {
+    entry.anim = ev.anim;
+    entry.plain.memo = std::make_shared<Memo>();
+    entry.plain.resolving.clear();
+    for (auto& other : entry.others) {
+      other.second.memo = std::make_shared<Memo>();
+      other.second.resolving.clear();
+    }
+    return;
+  }
   // What an animation gives that is only of the element itself (its opacity, its transform) makes its own style anew, not the ones of the elements under it.
   const uint64_t keptEpoch = good && !animSame ? entry.epoch : 0;
   // A state of the element that no rule looks at from another element: it is made again at once, and if the same declarations win nothing is different for the
