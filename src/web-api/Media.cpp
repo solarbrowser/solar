@@ -140,7 +140,7 @@ struct Item {
 
 // What the realm keeps: its players. When the realm goes they are closed, and nothing more is told to script.
 struct State : std::enable_shared_from_this<State> {
-  State(Context& c, web::FetchHost& h) : ctx(&c), host(&h) {}
+  State(Context& c, web::FetchHost& h) : ctx(&h.context()), host(&h) {}
   ~State() { CloseAll(); }
   Context* ctx;
   web::FetchHost* host;

@@ -21,7 +21,7 @@ namespace solar::paint {
 
 // What a realm keeps for its canvases: the surfaces and the decoded images, each by a number the script holds (CanvasNatives.cpp and WebGl.cpp both use it).
 struct Natives {
-  Natives(Quanta::Context& c, web::FetchHost& h) : ctx(&c), host(&h) {}
+  Natives(Quanta::Context& c, web::FetchHost& h) : ctx(&h.context()), host(&h) {}
   Quanta::Context* ctx;
   web::FetchHost* host;
   std::map<uint32_t, std::shared_ptr<CanvasSurface>> surfaces;

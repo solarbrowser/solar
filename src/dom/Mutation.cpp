@@ -236,7 +236,7 @@ Value ConstructObserver(Context& ctx, Value, qe::Args args, Value newTarget) {
   }
   JsMutationObserver* observer = Heap::Allocate<JsMutationObserver>();
   observer->initialize_prototype(prototype ? prototype : static_cast<Object*>(qe::GetRealmData(ctx, &g_observerPrototypeKey)));
-  observer->ctx = &ctx;
+  observer->ctx = &qe::Realm::FromContext(ctx)->GetContext();
   observer->callback = args[0];
   observer->NoteWrite(args[0]);
   return qe::FromObject(observer);

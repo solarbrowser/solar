@@ -42,7 +42,7 @@ struct Transfer final : net::FetchHandler {
 };
 
 struct State {
-  State(Context& c, web::FetchHost& h) : ctx(&c), host(&h) {}
+  State(Context& c, web::FetchHost& h) : ctx(&h.context()), host(&h) {}
   Context* ctx;
   web::FetchHost* host;
   struct Item {
