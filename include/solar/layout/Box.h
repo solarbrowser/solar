@@ -175,7 +175,14 @@ struct Box {
   // Kept from the tree before when nothing in it changed (see Builder): a box whose subtree depends on more than the document's nodes is volatile.
   bool volatileSubtree = false;
   uint64_t reusedIn = 0;  // the build that took it over from the tree before
-  LayoutMemo memo;
+  // The last two ways it was laid out, and which of them the boxes under it are as laid out in now (a box that is asked in two ways in turn by its parent, a flex item that is
+  // stretched after it was measured, has both): see LayoutBlockLevel.
+  static constexpr int kMemoSlots = 2;
+  LayoutMemo memos[kMemoSlots];
+  int8_t memoDesc = -1;
+  uint64_t memoDescSerial = 0;  // the tree whose layout left what is under it as it is
+  bool memoStrict = false;        // it was left unsettled once: it is left as it was only when asked the way its contents are laid out as
+  bool memoInconsistent = false;  // its size and place are those of another slot than the one its contents are laid out as: to be settled before the layout is done
   uint64_t hitSerial = 0;  // the tree in which layout left it as it was (see LayoutMemo)
   bool converted = false;  // what is in it is in the physical frame already (it has not been laid out since)
   // Intrinsic widths, cached.
@@ -207,6 +214,8 @@ struct Tree {
   std::unique_ptr<Box> root;  // the initial containing block, anonymous, whose only child is the root element's box
   std::unordered_map<const dom::Node*, std::vector<Box*>> boxesOf;
   double viewportWidth = 800, viewportHeight = 600;
+  std::vector<Box*> memoInconsistent;  // the boxes that were left that way in this layout (see Box::memoInconsistent)
+  bool strictMemo = false;             // a box is left as it was only when the way it was laid out last is the way it is asked now
   bool keepScrollbars = false;  // layout is being repeated for container queries: the scrollbars of the pass before stay
   bool truncated = false;  // made for a first look at a page (see SetPreviewBudget): what comes after the first elements is not in it, and it is made again for anything else
   bool firstLetterApplied = false, firstLineApplied = false;  // a ::first-letter or ::first-line was made of something in it: its boxes are not what the elements alone make

@@ -332,6 +332,7 @@ struct Element : Node {
   uint32_t childAttrVersion = 0;  // an attribute of a child of it changed
   uint32_t animVersion = 0;       // what animations give it changed
   uint32_t animInheritVersion = 0;  // ... in a way that is more than itself: a property that is inherited (or one that what is under it is made from) changed
+  bool layoutMemoStrict = false;  // layout once left a box of it unsettled: its boxes are left as they were only in the way their contents are laid out as (see layout::LayoutBlockLevel)
   uint32_t subtreeVersion = 0;    // anything in it, or it, changed (counted on it and on every element above)
   uint32_t subtreeSelectorVersion = 0;  // the same, but not for what animations give: what a selector (:has()) can see of the tree
   uint32_t subtreeBuilt = UINT32_MAX;  // the count when layout last built its box (of the committed ones)

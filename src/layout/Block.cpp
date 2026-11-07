@@ -705,23 +705,68 @@ void ResetStatics(Box& box) {
   }
 }
 
+namespace {
+
+bool MemoMatches(const LayoutMemo& memo, LayoutContext& lc, double cbWidth, double cbHeight, bool shrinkToFit) {
+  return memo.valid && memo.shrinkToFit == shrinkToFit && memo.keepOwnFrame == lc.keepOwnFrame && memo.keepScrollbars == lc.tree.keepScrollbars &&
+         SameNumber(memo.cbWidth, cbWidth) && SameNumber(memo.cbHeight, cbHeight) && SameNumber(memo.forceWidth, lc.forceWidth) && SameNumber(memo.forceHeight, lc.forceHeight) &&
+         SameNumber(memo.availOverride, lc.availOverride) && SameNumber(memo.inlineCbHeight, lc.inlineCbHeight) && memo.viewportWidth == lc.viewportWidth && memo.viewportHeight == lc.viewportHeight;
+}
+
+void RestoreFromMemo(Box& box, const LayoutMemo& memo) {
+  box.x = memo.x; box.y = memo.y; box.width = memo.width; box.height = memo.height; box.ownWidth = memo.ownWidth; box.ownHeight = memo.ownHeight;
+  box.margin = memo.margin; box.border = memo.border; box.padding = memo.padding; box.scrollbar = memo.scrollbar;
+  box.scrollbarForce[0] = memo.scrollbarForce[0]; box.scrollbarForce[1] = memo.scrollbarForce[1];
+  box.topPositive = memo.topPositive; box.topNegative = memo.topNegative; box.bottomPositive = memo.bottomPositive; box.bottomNegative = memo.bottomNegative;
+  box.collapsedThrough = memo.collapsedThrough;
+  box.staticX = memo.staticX; box.staticY = memo.staticY; box.shiftX = memo.shiftX; box.shiftY = memo.shiftY;
+  box.baseline = memo.baseline; box.firstBaseline = memo.firstBaseline; box.minContent = memo.minContent; box.maxContent = memo.maxContent;
+  box.ownFirstBaseline = memo.ownFirstBaseline; box.ownLastBaseline = memo.ownLastBaseline;
+}
+
+void StoreInMemo(LayoutMemo& memo, const LayoutMemo& key, const Box& box) {
+  memo = key;
+  memo.valid = true;
+  memo.x = box.x; memo.y = box.y; memo.width = box.width; memo.height = box.height; memo.ownWidth = box.ownWidth; memo.ownHeight = box.ownHeight;
+  memo.margin = box.margin; memo.border = box.border; memo.padding = box.padding; memo.scrollbar = box.scrollbar;
+  memo.scrollbarForce[0] = box.scrollbarForce[0]; memo.scrollbarForce[1] = box.scrollbarForce[1];
+  memo.topPositive = box.topPositive; memo.topNegative = box.topNegative; memo.bottomPositive = box.bottomPositive; memo.bottomNegative = box.bottomNegative;
+  memo.collapsedThrough = box.collapsedThrough;
+  memo.staticX = box.staticX; memo.staticY = box.staticY; memo.shiftX = box.shiftX; memo.shiftY = box.shiftY;
+  memo.baseline = box.baseline; memo.firstBaseline = box.firstBaseline; memo.minContent = box.minContent; memo.maxContent = box.maxContent;
+  memo.ownFirstBaseline = box.ownFirstBaseline; memo.ownLastBaseline = box.ownLastBaseline;
+}
+
+}  // namespace
+
+// A box is left as it was when it is asked to be laid out in a way it was laid out in before and nothing under it changed. It keeps the last two ways, and which of them the
+// boxes under it are as laid out in now: asked in the way that one was, nothing under it needs to move; asked in the other, its own size and place are given back from that
+// way and what is under it stays as the first left it, to be put right by the next time it is asked in that way (a parent that measures an item and then stretches it asks in
+// two ways each time it is laid out, and the second is the one that counts). When a layout ends with such a box still not put right, it is made again the strict way.
 void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeight, bool shrinkToFit) {
   static const bool disabled = std::getenv("SOLAR_NOMEMO") != nullptr;
+  static const bool oneSlot = std::getenv("SOLAR_ONE_MEMO_SLOT") != nullptr;
   const bool eligible = !disabled && MemoEligible(box);
   const bool establishes = eligible && Establishes(box);
   const bool floatsEmpty = !lc.bfc || lc.bfc->floats.empty();
-  LayoutMemo& memo = box.memo;
-  if (eligible && memo.valid && (floatsEmpty || establishes) && memo.shrinkToFit == shrinkToFit && memo.keepOwnFrame == lc.keepOwnFrame && memo.keepScrollbars == lc.tree.keepScrollbars &&
-      SameNumber(memo.cbWidth, cbWidth) && SameNumber(memo.cbHeight, cbHeight) && SameNumber(memo.forceWidth, lc.forceWidth) && SameNumber(memo.forceHeight, lc.forceHeight) &&
-      SameNumber(memo.availOverride, lc.availOverride) && SameNumber(memo.inlineCbHeight, lc.inlineCbHeight) && memo.viewportWidth == lc.viewportWidth && memo.viewportHeight == lc.viewportHeight) {
-    box.x = memo.x; box.y = memo.y; box.width = memo.width; box.height = memo.height; box.ownWidth = memo.ownWidth; box.ownHeight = memo.ownHeight;
-    box.margin = memo.margin; box.border = memo.border; box.padding = memo.padding; box.scrollbar = memo.scrollbar;
-    box.scrollbarForce[0] = memo.scrollbarForce[0]; box.scrollbarForce[1] = memo.scrollbarForce[1];
-    box.topPositive = memo.topPositive; box.topNegative = memo.topNegative; box.bottomPositive = memo.bottomPositive; box.bottomNegative = memo.bottomNegative;
-    box.collapsedThrough = memo.collapsedThrough;
-    box.staticX = memo.staticX; box.staticY = memo.staticY; box.shiftX = memo.shiftX; box.shiftY = memo.shiftY;
-    box.baseline = memo.baseline; box.firstBaseline = memo.firstBaseline; box.minContent = memo.minContent; box.maxContent = memo.maxContent;
-    box.ownFirstBaseline = memo.ownFirstBaseline; box.ownLastBaseline = memo.ownLastBaseline;
+  int hit = -1;
+  if (!box.memoStrict && box.node && box.node->IsElement() && static_cast<dom::Element*>(box.node)->layoutMemoStrict) box.memoStrict = true;  // (it was left unsettled before, as another box of the element)
+  if (eligible && (floatsEmpty || establishes)) {
+    if (box.memoDesc >= 0 && MemoMatches(box.memos[box.memoDesc], lc, cbWidth, cbHeight, shrinkToFit)) hit = box.memoDesc;
+    else if (!lc.tree.strictMemo && !box.memoStrict && !oneSlot) {
+      for (int j = 0; j < Box::kMemoSlots && hit < 0; ++j) {
+        if (j != box.memoDesc && MemoMatches(box.memos[j], lc, cbWidth, cbHeight, shrinkToFit)) hit = j;
+      }
+    }
+  }
+  if (hit >= 0) {
+    RestoreFromMemo(box, box.memos[hit]);
+    if (hit != box.memoDesc) {
+      if (!box.memoInconsistent) lc.tree.memoInconsistent.push_back(&box);
+      box.memoInconsistent = true;
+    } else {
+      box.memoInconsistent = false;
+    }
     box.stickyX = box.stickyY = 0;
     box.hitSerial = lc.tree.serial;
     // (What a layout takes from the context for the box laid out is used up.)
@@ -737,18 +782,20 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
     key.cbWidth = cbWidth; key.cbHeight = cbHeight; key.forceWidth = lc.forceWidth; key.forceHeight = lc.forceHeight; key.availOverride = lc.availOverride; key.inlineCbHeight = lc.inlineCbHeight;
     key.viewportWidth = lc.viewportWidth; key.viewportHeight = lc.viewportHeight; key.shrinkToFit = shrinkToFit; key.keepOwnFrame = lc.keepOwnFrame; key.keepScrollbars = lc.tree.keepScrollbars;
     LayoutBlockLevelDetecting(lc, box, cbWidth, cbHeight, shrinkToFit);
-    memo.valid = false;
+    box.memoInconsistent = false;  // (laid out as asked: what is under it is as it is now)
     if (eligible && ((floatsEmpty && lc.floatEvents == events) || establishes)) {
-      memo = key;
-      memo.valid = true;
-      memo.x = box.x; memo.y = box.y; memo.width = box.width; memo.height = box.height; memo.ownWidth = box.ownWidth; memo.ownHeight = box.ownHeight;
-      memo.margin = box.margin; memo.border = box.border; memo.padding = box.padding; memo.scrollbar = box.scrollbar;
-      memo.scrollbarForce[0] = box.scrollbarForce[0]; memo.scrollbarForce[1] = box.scrollbarForce[1];
-      memo.topPositive = box.topPositive; memo.topNegative = box.topNegative; memo.bottomPositive = box.bottomPositive; memo.bottomNegative = box.bottomNegative;
-      memo.collapsedThrough = box.collapsedThrough;
-      memo.staticX = box.staticX; memo.staticY = box.staticY; memo.shiftX = box.shiftX; memo.shiftY = box.shiftY;
-      memo.baseline = box.baseline; memo.firstBaseline = box.firstBaseline; memo.minContent = box.minContent; memo.maxContent = box.maxContent;
-      memo.ownFirstBaseline = box.ownFirstBaseline; memo.ownLastBaseline = box.ownLastBaseline;
+      // The way it was laid out before this one stays, in the other slot; the one the contents were left in is the one that is not written over.
+      int slot = 0;
+      if (box.memoDesc >= 0) slot = (box.memoDesc + 1) % Box::kMemoSlots;
+      else if (box.memos[0].valid) slot = 1;
+      if (oneSlot) slot = 0;
+      for (int j = 0; j < Box::kMemoSlots; ++j) if (j != slot && oneSlot) box.memos[j].valid = false;
+      StoreInMemo(box.memos[slot], key, box);
+      box.memoDesc = static_cast<int8_t>(slot);
+      box.memoDescSerial = lc.tree.serial;
+    } else {
+      for (LayoutMemo& m : box.memos) m.valid = false;
+      box.memoDesc = -1;
     }
   }
   if (box.node && box.node->IsElement() && !box.anonymous) {

@@ -306,6 +306,41 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
       BuildTree(lc, document, attempt == 0 && pass == 0 && previous && previous->root ? previous.get() : nullptr);
       const auto t1 = std::chrono::steady_clock::now();
       LayoutRoot(lc);
+      // A box that was given back its size from one way it was laid out, and was left with what is under it as another way left it, and was not asked in that other way after: it
+      // is marked (it is left as it was only in the way its contents are in from then on), and the layout is made once more on the same tree, where those boxes lay out what is under
+      // them as they are asked. (Should something still be unsettled, it is made once more without boxes kept from before and with none left as they were in another way.)
+      const auto unsettledBoxes = [&]() -> std::vector<Box*> {
+        std::vector<Box*> out;
+        for (Box* b : tree->memoInconsistent) {
+          if (b->memoInconsistent) out.push_back(b);
+        }
+        return out;
+      };
+      int rounds = 0;
+      for (;;) {
+        std::vector<Box*> unsettled = unsettledBoxes();
+        if (unsettled.empty()) break;
+        static const bool debugMemo = std::getenv("SOLAR_LAYOUT_DEBUG") != nullptr;
+        if (debugMemo) std::fprintf(stderr, "  layout made again: %zu boxes left unsettled (round %d)\n", unsettled.size(), rounds);
+        if (++rounds > 8) {
+          if (debugMemo) std::fprintf(stderr, "  layout made again from the start\n");
+          tree = std::make_shared<Tree>();
+          tree->keepScrollbars = pass > 0;
+          tree->strictMemo = true;
+          tree->viewportWidth = environment.width - barWidth - extraWidth;
+          tree->viewportHeight = environment.height - barHeight - extraHeight;
+          LayoutContext strict{ctx, *tree, tree->viewportWidth, tree->viewportHeight};
+          BuildTree(strict, document, nullptr);
+          LayoutRoot(strict);
+          break;
+        }
+        for (Box* b : unsettled) {
+          b->memoStrict = true;
+          if (b->node && b->node->IsElement()) static_cast<dom::Element*>(b->node)->layoutMemoStrict = true;
+        }
+        tree->memoInconsistent.clear();
+        LayoutRoot(lc);
+      }
       if (std::getenv("SOLAR_LAYOUT_DEBUG")) std::fprintf(stderr, "[%.0f ms] layout pass %d attempt %d [doc %llu style %llu cache %llu author %llu anim %llu state %llu]: build %.1f ms, layout %.1f ms\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count() - 0, pass, attempt, (unsigned long long)dom::DocumentVersion(), (unsigned long long)css::StyleVersion(), (unsigned long long)css::StyleCacheVersion(), (unsigned long long)css::SheetsVersion(), (unsigned long long)css::AnimationVersion(), (unsigned long long)dom::StateVersion(), std::chrono::duration<double, std::milli>(t1 - t0).count(), std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count());
       tree->extraWidth = extraWidth;
       tree->extraHeight = extraHeight;
