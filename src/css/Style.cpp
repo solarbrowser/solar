@@ -446,6 +446,65 @@ void BuildRuleIndex(const std::vector<CssRule*>& rules, RuleIndex& index) {
   }
 }
 
+// The keys a selector can be told by (an id, a class, a type, then the name of an attribute; for :is() and :where() the keys of each of its selectors), when it has them:
+// an element that has none of them can not be what the selector is for.
+bool KeysOfComplex(const ComplexSelector& selector, std::vector<uint64_t>& out, int depth) {
+  if (selector.compounds.empty() || depth > 3) return false;
+  const CompoundSelector& last = selector.compounds.back();
+  uint64_t marker = 0;
+  int pseudoElements = 0;
+  for (const SimpleSelector& simple : last.simples) {
+    if (simple.kind == SimpleSelector::Kind::PseudoElement) { ++pseudoElements; marker = PseudoMarker(&simple.name); }
+    if (simple.kind == SimpleSelector::Kind::Host || simple.kind == SimpleSelector::Kind::Unknown) return false;
+  }
+  if (pseudoElements > 1) return false;
+  for (const SimpleSelector& simple : last.simples) {
+    if (simple.kind == SimpleSelector::Kind::Id) { out.push_back(KeyHash(1, simple.name, false) ^ marker); return true; }
+  }
+  for (const SimpleSelector& simple : last.simples) {
+    if (simple.kind == SimpleSelector::Kind::Class) { out.push_back(KeyHash(2, simple.name, false) ^ marker); return true; }
+  }
+  for (const SimpleSelector& simple : last.simples) {
+    if (simple.kind == SimpleSelector::Kind::Type && !simple.name.empty() && simple.name != "*") { out.push_back(KeyHash(3, simple.name, true) ^ marker); return true; }
+  }
+  for (const SimpleSelector& simple : last.simples) {
+    if (simple.kind == SimpleSelector::Kind::Attribute && !simple.namespaceName && !simple.namespaceUri && !simple.name.empty()) { out.push_back(KeyHash(5, simple.name, true) ^ marker); return true; }
+  }
+  if (marker == 0) {
+    for (const SimpleSelector& simple : last.simples) {
+      if ((simple.kind == SimpleSelector::Kind::Is || simple.kind == SimpleSelector::Kind::Where) && simple.list && !simple.list->empty()) {
+        const size_t before = out.size();
+        bool all = true;
+        for (const ComplexSelector& inner : *simple.list) {
+          if (!KeysOfComplex(inner, out, depth + 1)) { all = false; break; }
+        }
+        if (all) return true;
+        out.resize(before);
+      }
+    }
+  }
+  if (marker != 0) { out.push_back(marker); return true; }  // (a pseudo-element on its own: the pseudo-element is the key)
+  return false;
+}
+
+// The same index as BuildRuleIndex makes, with the keys above: more of the rules can be told by a key.
+void BuildFlatIndex(const std::vector<CssRule*>& rules, RuleIndex& index) {
+  std::vector<uint64_t> keys;
+  for (uint32_t i = 0; i < rules.size(); ++i) {
+    CssRule* rule = rules[i];
+    if (rule->kind != RuleKind::Style || !rule->selectors || !rule->style || !rule->rules.empty()) { index.always.push_back(i); continue; }
+    keys.clear();
+    bool all = !rule->selectors->empty();
+    for (const ComplexSelector& selector : *rule->selectors) {
+      if (!KeysOfComplex(selector, keys, 0)) { all = false; break; }
+    }
+    if (!all) { index.always.push_back(i); continue; }
+    std::sort(keys.begin(), keys.end());
+    keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+    for (uint64_t key : keys) index.buckets[key].push_back(i);
+  }
+}
+
 const RuleIndex& IndexOf(const std::vector<CssRule*>& rules) {
   static std::unordered_map<const void*, RuleIndex> indexes;
   const uint64_t version = dom::DocumentVersion() * 1000003 + g_authorVersion;
@@ -845,6 +904,9 @@ struct Gatherer {
           layerPath = savedPath;
           break;
         }
+        case RuleKind::Keyframes: case RuleKind::Keyframe: case RuleKind::FontFace: case RuleKind::Page: case RuleKind::Namespace: case RuleKind::CounterStyle:
+        case RuleKind::Property: case RuleKind::FontPaletteValues: case RuleKind::PositionTry: case RuleKind::NestedDeclarations:
+          break;  // (nothing in them is for an element: what is at the top of a list of rules does nothing)
         default:
           // (A layer with no name met inside what is asked of the element would be numbered by how many of those the element meets.)
           if (HoldsAnonymousLayer(rule)) unsafe = true;
@@ -869,6 +931,7 @@ struct Gatherer {
       };
       for (uint64_t key : keys.keys) take(key ^ marker);
       if (marker) take(marker);
+      for (const dom::Attr* attribute : element->AttributesInView()) take(KeyHash(5, attribute->localName, true) ^ marker);
       size_t total = 0;
       for (const Run& run : runs) total += static_cast<size_t>(run.end - run.at);
       positions.reserve(total);
@@ -1963,7 +2026,7 @@ void BuildUntimed(dom::Element* element, ElementStyle& style, const std::string&
         gatherer.anonymousLayers = 0;
         gatherer.layerPath.clear();
         if (!unsafe) {
-          BuildRuleIndex(list->rules, list->index);
+          BuildFlatIndex(list->rules, list->index);
           list->ancestorKey1.assign(list->rules.size(), 0);
           list->ancestorKey2.assign(list->rules.size(), 0);
           for (size_t i = 0; i < list->rules.size(); ++i) {
