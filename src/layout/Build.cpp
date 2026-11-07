@@ -832,11 +832,11 @@ class Builder {
   }
 
   // The style layout reads of an element: what was made of it before, while nothing it depends on has changed, and else worked out again.
-  std::shared_ptr<const BoxStyle> StyleFor(dom::Element* element, bool& recomputed, bool* attrChanged = nullptr) {
+  std::shared_ptr<const BoxStyle> StyleFor(dom::Element* element, bool& recomputed, bool* attrChanged = nullptr, bool* styleChanged = nullptr) {
     const dom::Node* parent = dom::ParentOf(element);
     const dom::Element* parentElement = parent && parent->IsElement() ? static_cast<const dom::Element*>(parent) : nullptr;
     dom::Element::LayoutStamp want;
-    want.author = css::SheetsVersion();
+    want.author = css::LayoutSheetsVersion();
     want.environment = environmentKey_;
     want.parent = parent;
     const dom::Element::Versions ev = element->VersionsInView();
@@ -856,6 +856,8 @@ class Builder {
       return std::static_pointer_cast<const BoxStyle>(element->layoutStyle);
     }
     std::shared_ptr<const BoxStyle> style = SharedBoxStyle(element);
+    // (What is under the element is made again for a style that is another one than it was; for its own children changing, the boxes of what is under them are as they were.)
+    if (styleChanged) *styleChanged = element->layoutStyle != style;
     element->layoutStyle = style;
     element->layoutStamp = want;
     recomputed = true;
@@ -899,8 +901,8 @@ class Builder {
       lc_.tree.truncated = true;
       return;
     }
-    bool recomputed = false, attrChanged = false;
-    std::shared_ptr<const BoxStyle> style = StyleFor(element, recomputed, &attrChanged);
+    bool recomputed = false, attrChanged = false, styleChanged = false;
+    std::shared_ptr<const BoxStyle> style = StyleFor(element, recomputed, &attrChanged, &styleChanged);
     ++g_visited;
     if (recomputed) ++g_recomputed;
     if ((style->containIntrinsicWidthAuto || style->containIntrinsicHeightAuto) && element->nodeDocument) element->nodeDocument->containIntrinsicAutoSeen = true;
@@ -910,7 +912,7 @@ class Builder {
       bool saved, savedLang;
       ~Below() { builder->dirtyBelow_ = saved; builder->langBelow_ = savedLang; }
     } below{this, dirtyBelow_, langBelow_};
-    dirtyBelow_ = dirtyBelow_ || recomputed;
+    dirtyBelow_ = dirtyBelow_ || styleChanged;
     langBelow_ = langBelow_ || attrChanged;
     if (style->display == Display::None) return;
     // Whether the box of the element depends on more than the DOM nodes under it: a shadow host and a slot are made of other trees, and what is in a shadow tree or

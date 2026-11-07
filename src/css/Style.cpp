@@ -49,6 +49,7 @@ std::string Lower(std::string_view text) {
 
 uint64_t g_styleVersion = 1;
 uint64_t g_animationVersion = 1;
+uint64_t g_layoutSheetsVersion = 1;  // the version of the sheets, but not for a sheet that was added and told which elements it is for (the styles of those are made again, and what is read of the others is as it was)
 bool g_styleContainerQueries = false;  // a container query asks about style() (the custom properties of the containers around an element tell its rules)
 bool g_loadThrottle = false;  // the program shows pages as they load (the window): see the bringing of layout in ComputedValue
 uint64_t g_layoutAnimationVersion = 1;  // the same, but not for what animations give that only changes how things are drawn
@@ -1292,12 +1293,17 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   }
   const dom::Element::Versions ev = element->VersionsInView();
   const dom::Element::Versions pv = parent ? parent->VersionsInView() : dom::Element::Versions();
-  const bool basic = reuse.allowed && !shadowed && !entry.shadowed && entry.serial == element->serial && entry.parent == parentNode && (coupled ? entry.parentEpoch == parentEpoch : entry.parentCascadeEpoch == parentCascade) && entry.attr == ev.attr && entry.animInherit == ev.animInherit;
+  const bool parentSame = coupled ? entry.parentEpoch == parentEpoch : entry.parentCascadeEpoch == parentCascade;
+  const bool basicButParent = reuse.allowed && !shadowed && !entry.shadowed && entry.serial == element->serial && entry.parent == parentNode && entry.attr == ev.attr && entry.animInherit == ev.animInherit;
+  const bool basic = basicButParent && parentSame;
   bool good = basic;
   bool goodButForHas = false;  // everything that makes a style good held except what :has() looks at below the element
+  bool goodButStructure = false;  // everything held except that the children of the element, or of its parent, are others than they were
   const bool animSame = entry.anim == ev.anim;
   if (good && reuse.structural) good = entry.children == ev.children && (!parent || entry.parentChildren == pv.children);
   if (good && reuse.sibling) good = !parent || (entry.parentChildAttr == pv.childAttr && entry.parentChildren == pv.children);
+  // (What the rules that apply are told by is other around the element, or its children are others: the rules are looked at again for it, and what is worked out stays where they come to the same.)
+  if (basicButParent && !good && entry.plain.built && !(reuse.has && entry.plain.has.any)) goodButStructure = true;
   if (good && reuse.has) {
     const bool before = good;
     HasUse use = entry.plain.has;
@@ -1388,7 +1394,7 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   // elements under it.
   // (What something below the element changed that a :has() may look at, and nothing else of it: the style is made again at once too, and if the same declarations
   // win nothing is different for the elements under it.)
-  const bool soft = ((good && animSame && !stateSame) || (goodButForHas && animSame) || (good && animSame && dirty)) && entry.plain.built;
+  const bool soft = ((good && animSame && !stateSame) || (goodButForHas && animSame) || (goodButStructure && animSame) || (good && animSame && dirty)) && entry.plain.built;
   entry.dirty = false;
   const uint64_t oldEpoch = entry.epoch, oldCascadeEpoch = entry.cascadeEpoch;
   const bool ruleSetOnly = dirty && good && animSame && stateSame;  // (rules came: what the elements under it are told by is the same)
@@ -1438,7 +1444,8 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
         entry.epoch = oldEpoch;
         entry.customEpoch = oldCustomEpoch;
       }
-      entry.cascadeEpoch = oldCascadeEpoch;
+      // (What the elements under it are told by is a new number where the tree around it is another: they look at the rules again, as it did.)
+      if (!goodButStructure) entry.cascadeEpoch = oldCascadeEpoch;
     } else if (!computedStale && !g_styleContainerQueries && oldEpoch != 0 && entry.others.empty() && oldOthers.empty() && SameCascadeButCustom(old, entry.plain) &&
                !UsesVar(old) && !UsesVar(entry.plain)) {
       // Only custom properties are others, and nothing of the element is worked out from them: what it was worked out to stays; the elements under it are told.
@@ -3307,6 +3314,12 @@ bool NoteSheetAdded(CssStyleSheet* sheet) {
   }
   ++g_styleVersion;
   ++g_authorVersion;
+  // (A sheet of a shadow tree styles its host and what is in it by more than the keys of its rules: what layout read of those is read again.)
+  {
+    const dom::Node* top = owner;
+    while (dom::ParentOf(top)) top = dom::ParentOf(top);
+    if (!top->IsDocument()) ++g_layoutSheetsVersion;
+  }
   sheet->additiveAnnounced = true;
   if (!registered.empty()) {
     // A registration changes what the custom property is for every element: what is worked out of a style with a var() in it is made again, and what was worked out for the
@@ -3409,6 +3422,7 @@ void NoteStyleChange() {
   ++g_styleVersion;
   ++g_cacheVersion;
   ++g_authorVersion;
+  ++g_layoutSheetsVersion;
 }
 void NoteStyleChangeForRegistry() { NoteStyleChange(); }
 
@@ -3591,6 +3605,7 @@ void NotePositionKeysOfRules(const std::vector<CssRule*>& rules, ShareFeatures& 
 }  // namespace
 
 uint64_t SheetsVersion() { return g_authorVersion; }
+uint64_t LayoutSheetsVersion() { return g_layoutSheetsVersion; }
 uint64_t StyleCacheVersion() { return g_cacheVersion; }
 
 uint64_t StyleEpochOf(dom::Element* element) {
