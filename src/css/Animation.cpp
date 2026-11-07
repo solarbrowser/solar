@@ -256,6 +256,9 @@ bool OnlyItself(const AnimatedValues& values) {
 }
 }  // namespace
 
+// The longhands of a color that is drawn (border-top-color, text-decoration-color...): nothing of the size of a box.
+bool DrawOnlyColor(const std::string& name) { return name.size() > 6 && name.compare(name.size() - 6, 6, "-color") == 0; }
+
 void SetAnimatedValues(dom::Element* element, const std::string& pseudo, AnimatedValues values) {
   if (!element) return;
   {
@@ -298,8 +301,8 @@ void SetAnimatedValues(dom::Element* element, const std::string& pseudo, Animate
   const auto now = element->animatedValues.find(pseudo);
   if (now != element->animatedValues.end()) {
     for (const auto& entry : now->second) {
-      sizing = sizing || !drawOnly.count(entry.first);
-      itself = itself && notInherited.count(entry.first);
+      sizing = sizing || !(drawOnly.count(entry.first) || DrawOnlyColor(entry.first));
+      itself = itself && (notInherited.count(entry.first) || (DrawOnlyColor(entry.first) && entry.first != "caret-color" && entry.first != "accent-color"));
     }
   } else {
     itself = false;  // (it ended: what was there before is what changes)
