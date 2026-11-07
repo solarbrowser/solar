@@ -241,7 +241,15 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
     css::ViewportScrollbars(ctx, document, barWidth, barHeight, &autos);
     if (std::getenv("SOLAR_LAYOUT_DEBUG")) std::fprintf(stderr, "  viewport scrollbars %.1f ms\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - v0).count());
     // An overflow of auto has a scrollbar when the contents overflow: the layout is done again with the room it takes.
+    // (Where the page had a scrollbar the last time it was laid out, it is laid out with it: that is what it comes to nearly always, and a layout without it that
+    // has to be done again with it was a second layout of every change of a page that is long.)
     double extraWidth = 0, extraHeight = 0;
+    bool seeded = false;
+    if (pass == 0 && previous && autos.thickness > 0 && (previous->extraWidth > 0 || previous->extraHeight > 0) && !std::getenv("SOLAR_NO_SEED_SCROLLBARS")) {
+      extraWidth = autos.y && barWidth == 0 ? previous->extraWidth : 0;
+      extraHeight = autos.x && barHeight == 0 ? previous->extraHeight : 0;
+      seeded = extraWidth > 0 || extraHeight > 0;
+    }
     for (int attempt = 0;; ++attempt) {
       if (attempt > 0) tree = std::make_shared<Tree>(), tree->keepScrollbars = pass > 0;
       tree->viewportWidth = environment.width - barWidth - extraWidth;
@@ -252,11 +260,20 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
       const auto t1 = std::chrono::steady_clock::now();
       LayoutRoot(lc);
       if (std::getenv("SOLAR_LAYOUT_DEBUG")) std::fprintf(stderr, "[%.0f ms] layout pass %d attempt %d [doc %llu style %llu cache %llu author %llu]: build %.1f ms, layout %.1f ms\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count() - 0, pass, attempt, (unsigned long long)dom::DocumentVersion(), (unsigned long long)css::StyleVersion(), (unsigned long long)css::StyleCacheVersion(), (unsigned long long)css::SheetsVersion(), std::chrono::duration<double, std::milli>(t1 - t0).count(), std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count());
+      tree->extraWidth = extraWidth;
+      tree->extraHeight = extraHeight;
       if (attempt >= 2 || autos.thickness <= 0 || (!autos.x && !autos.y) || !tree->root) break;
       const Rect overflow = ScrollableOverflow(*tree, *tree->root, document->DocumentElement());
       const bool needY = autos.y && barWidth == 0 && overflow.Bottom() > tree->viewportHeight + 0.01;
       const bool needX = autos.x && barHeight == 0 && overflow.Right() > tree->viewportWidth + 0.01;
       const double wantWidth = needY ? autos.thickness : 0, wantHeight = needX ? autos.thickness : 0;
+      if (seeded && attempt == 0) {
+        // Begun with the room the scrollbars took the time before: it stays, or it is what the contents ask for now (which may be less).
+        if (wantWidth == extraWidth && wantHeight == extraHeight) break;
+        extraWidth = wantWidth;
+        extraHeight = wantHeight;
+        continue;
+      }
       if (wantWidth <= extraWidth && wantHeight <= extraHeight) break;
       extraWidth = std::max(extraWidth, wantWidth);
       extraHeight = std::max(extraHeight, wantHeight);
