@@ -59,8 +59,17 @@ bool TimerHost::RunDue() {
   }
   for (qe::Task& task : due) {
     if (task.IsCancelled()) continue;
+    // A realm is one thread: a wait inside one of its tasks (a script blocked on a resource) does not run its other tasks, which would see (and drain)
+    // what the task on the stack is in the middle of. They stay for when it is over; the tasks of other realms run.
+    if (running_.count(task.GetRealm())) {
+      queue_.emplace(now, std::move(task));
+      continue;
+    }
     const auto began = Clock::now();
+    qe::Realm* realm = task.GetRealm();
+    running_.insert(realm);
     task.Run();
+    running_.erase(realm);
     ran = true;
     if (std::getenv("SOLAR_TASK_DEBUG")) {
       const double ms = std::chrono::duration<double, std::milli>(Clock::now() - began).count();
@@ -76,7 +85,7 @@ bool TimerHost::RunDue() {
 std::optional<int64_t> TimerHost::NextDelayMs() const {
   // Cancelled tasks are not waited for.
   for (const auto& [due, task] : queue_) {
-    if (task.IsCancelled()) continue;
+    if (task.IsCancelled() || running_.count(task.GetRealm())) continue;
     const auto wait = std::chrono::duration_cast<std::chrono::milliseconds>(due - Clock::now()).count();
     return std::max<int64_t>(0, wait);
   }

@@ -320,6 +320,7 @@ class TestEnvironment : public solar::html::FrameEnvironment, public solar::weba
       solar::webapi::InstallWorkerApis(realm);
       solar::webapi::InstallWebSocketNatives(realm);
       solar::webapi::InstallCryptoNatives(realm);
+      solar::webapi::InstallIndexedDbNatives(realm);
       solar::webapi::InstallCacheStoreNatives(realm);
       solar::webapi::InstallCompressionNatives(realm);
       solar::webapi::InstallWorkerScope(realm);

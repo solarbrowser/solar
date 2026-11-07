@@ -172,6 +172,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
       config.afterScript = [this] { events_.AfterScript(); };
       bundle->host = std::make_unique<solar::web::FetchHost>(realm.GetContext(), config);
       solar::webapi::InstallWorkerApis(realm);
+      solar::webapi::InstallIndexedDbNatives(realm);
       solar::webapi::InstallWebSocketNatives(realm);
       solar::webapi::InstallCryptoNatives(realm);
       solar::webapi::InstallCacheStoreNatives(realm);

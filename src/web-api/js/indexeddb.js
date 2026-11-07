@@ -288,7 +288,9 @@
   }
   function persist(def) {
     if (!persistent() || def.saveTimer) return;
-    def.saveTimer = setTimeout(() => save(def), 100);
+    // (A worker writes at once: the page that asks next, from another realm, reads the file.)
+    if (typeof document === "undefined") { save(def); return; }
+    def.saveTimer = setTimeout(() => save(def), 0);
   }
   function loadDef(name) {
     if (!persistent()) return null;
@@ -318,7 +320,7 @@
   const flushAll = () => { for (const def of databases.values()) if (def.saveTimer) { clearTimeout(def.saveTimer); save(def); } };
   if (typeof addEventListener === "function") {
     addEventListener("pagehide", flushAll);
-    addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushAll(); });
+    addEventListener("visibilitychange", () => { if (typeof document !== "undefined" && document.visibilityState === "hidden") flushAll(); });
   }
   const newStore = (name, keyPath, autoIncrement) => ({ name, keyPath, autoIncrement, records: [], nextKey: 1, indexes: new Map() });
   const newIndex = (name, keyPath, unique, multiEntry) => ({ name, keyPath, unique, multiEntry, entries: [] });
