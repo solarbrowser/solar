@@ -51,6 +51,7 @@ uint64_t g_authorVersion = 1;  // changed when the rules do
 bool g_anyContainerQueries = false;  // a rule with a container query has been looked at
 bool g_overlayScrollbars = false;
 int g_sheetParsing = 0;
+CssStyleSheet* g_additiveSheet = nullptr;  // the sheet of the outermost parse, when it had no rules before
 bool g_styleChangedInParse = false;
 bool g_wakeAfterParse = false;
 uint64_t g_cacheGeneration = 1;  // changed whenever the entries of the style cache are dropped (a reference to one is no longer good)
@@ -1127,6 +1128,7 @@ struct StyleEntry {
   uint32_t attr = 0, anim = 0, children = 0, parentChildren = 0, parentChildAttr = 0, state = 0;
   uint64_t treeVersion = 0;  // of the tree when the styles were begun
   uint32_t subtree = 0, parentSubtree = 0;
+  bool dirty = false;  // rules were added that may be for the element: its styles are made again, and kept as they are when the same declarations win
 };
 
 std::unordered_map<dom::Element*, StyleEntry>& Cache() {
@@ -1151,7 +1153,8 @@ uint64_t DocumentSignature(dom::Document* document) {
   uint64_t h = 1469598103934665603ull;
   const auto mix = [&](uint64_t v) { h = (h ^ v) * 1099511628211ull; };
   for (CssStyleSheet* sheet : SheetsOfTree(document, document->context)) {
-    mix(reinterpret_cast<uintptr_t>(sheet));
+    // (A sheet that came in as new rules was seen to by the elements it is for: it is not what the styles of the others were made from.)
+    mix(sheet->additiveAnnounced ? 5 : reinterpret_cast<uintptr_t>(sheet));
     mix(sheet->disabled ? 1 : 2);
   }
   const MediaEnvironment e = EnvironmentFor(document);
@@ -1256,10 +1259,11 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
     goodButForHas = before && !good && (byQuestions || !use.other);
   }
   const bool stateSame = entry.state == ev.state;
-  if (good && animSame && stateSame) return;
+  const bool dirty = entry.dirty;
+  if (good && animSame && stateSame && !dirty) return;
   // What animations give is read when a value is worked out, not when the rules that apply are collected: of an element whose style is good but for that, the
   // collected rules stay and only what was worked out from them is dropped (every tick of an animation was a new cascade for the element).
-  if (good && !animSame && stateSame && entry.plain.built) {
+  if (good && !animSame && stateSame && entry.plain.built && !dirty) {
     entry.anim = ev.anim;
     entry.plain.memo = std::make_shared<Memo>();
     entry.plain.resolving.clear();
@@ -1275,7 +1279,8 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   // elements under it.
   // (What something below the element changed that a :has() may look at, and nothing else of it: the style is made again at once too, and if the same declarations
   // win nothing is different for the elements under it.)
-  const bool soft = ((good && animSame && !stateSame) || (goodButForHas && animSame)) && entry.plain.built;
+  const bool soft = ((good && animSame && !stateSame) || (goodButForHas && animSame) || (good && animSame && dirty)) && entry.plain.built;
+  entry.dirty = false;
   const uint64_t oldEpoch = entry.epoch;
   ElementStyle old;
   std::map<std::string, ElementStyle> oldOthers;
@@ -2961,12 +2966,202 @@ void WakeAnimations() {
   g_inWake = false;
 }
 
-void BeginSheetParse() { ++g_sheetParsing; }
+namespace {
+
+// The keys of the subject of a selector (an id, a class, a type, the name of an attribute, root for :root; for :is() and :where() those of each selector): an element that
+// has none of them can not be what the selector is for. False when it has none.
+bool DirtyKeysOf(const ComplexSelector& selector, std::unordered_set<uint64_t>& keys, int depth) {
+  if (selector.compounds.empty() || depth > 3) return false;
+  const CompoundSelector& last = selector.compounds.back();
+  for (const SimpleSelector& simple : last.simples) {
+    if (simple.kind == SimpleSelector::Kind::Host || simple.kind == SimpleSelector::Kind::Unknown) return false;
+    // (What ::part() and ::slotted() are for is not the element of the compound: an element of another tree.)
+    if (simple.kind == SimpleSelector::Kind::PseudoElement && (simple.name == "part" || simple.name == "slotted")) return false;
+  }
+  for (const SimpleSelector& simple : last.simples) {
+    if (simple.kind == SimpleSelector::Kind::Id) { keys.insert(KeyHash(1, simple.name, false)); return true; }
+  }
+  for (const SimpleSelector& simple : last.simples) {
+    if (simple.kind == SimpleSelector::Kind::Class) { keys.insert(KeyHash(2, simple.name, false)); return true; }
+  }
+  for (const SimpleSelector& simple : last.simples) {
+    if (simple.kind == SimpleSelector::Kind::Type && !simple.name.empty() && simple.name != "*") { keys.insert(KeyHash(3, simple.name, true)); return true; }
+  }
+  for (const SimpleSelector& simple : last.simples) {
+    if (simple.kind == SimpleSelector::Kind::Attribute && !simple.namespaceName && !simple.namespaceUri && !simple.name.empty()) { keys.insert(KeyHash(5, simple.name, true)); return true; }
+  }
+  for (const SimpleSelector& simple : last.simples) {
+    if (simple.kind == SimpleSelector::Kind::Pseudo && simple.pseudo == PseudoClass::Root) { keys.insert(KeyHash(6, "root", false)); return true; }
+  }
+  for (const SimpleSelector& simple : last.simples) {
+    if ((simple.kind == SimpleSelector::Kind::Is || simple.kind == SimpleSelector::Kind::Where) && simple.list && !simple.list->empty()) {
+      std::unordered_set<uint64_t> inner;
+      bool all = true;
+      for (const ComplexSelector& alternative : *simple.list) {
+        if (!DirtyKeysOf(alternative, inner, depth + 1)) { all = false; break; }
+      }
+      if (all) { keys.insert(inner.begin(), inner.end()); return true; }
+    }
+  }
+  return false;
+}
+
+// The keys of the elements the rules can be for; `everything` is set when some can be for any element (a selector with no key). False when they change more than the
+// styles of elements. `layers` says whether the layers of the sheet may be left to the ranks as they are (see NoteSheetAdded).
+bool DirtyKeysOfRules(const std::vector<CssRule*>& rules, std::unordered_set<uint64_t>& keys, bool& everything, bool& usesLayers, std::vector<std::string>& registered, int depth, bool insideLayer) {
+  if (depth > 8) return false;
+  for (const CssRule* rule : rules) {
+    switch (rule->kind) {
+      case RuleKind::Style:
+        if (!rule->rules.empty()) { everything = true; break; }  // (nested rules are of the selectors they are nested in)
+        if (!rule->selectors) break;
+        for (const ComplexSelector& selector : *rule->selectors) {
+          if (!DirtyKeysOf(selector, keys, 0)) everything = true;
+        }
+        break;
+      case RuleKind::Media: case RuleKind::Supports: case RuleKind::Container:
+        if (!DirtyKeysOfRules(rule->rules, keys, everything, usesLayers, registered, depth + 1, insideLayer)) return false;
+        break;
+      case RuleKind::Import:
+        if (!rule->layerName.empty()) return false;
+        if (rule->importedSheet && !DirtyKeysOfRules(rule->importedSheet->rules, keys, everything, usesLayers, registered, depth + 1, insideLayer)) return false;
+        break;
+      case RuleKind::LayerBlock:
+        // (Whether what the layers do to the ranks of the ones there are is nothing is looked at by the caller.)
+        usesLayers = true;
+        if (rule->name.empty()) usesLayers = true;
+        if (!DirtyKeysOfRules(rule->rules, keys, everything, usesLayers, registered, depth + 1, true)) return false;
+        break;
+      case RuleKind::LayerStatement:
+        usesLayers = true;
+        break;
+      case RuleKind::Property:
+        registered.push_back(rule->name);  // (what it changes is for the elements whose styles mention the name: the caller looks)
+        break;
+      case RuleKind::Keyframes: case RuleKind::Keyframe: case RuleKind::FontFace: case RuleKind::Page: case RuleKind::FontPaletteValues: case RuleKind::NestedDeclarations: case RuleKind::PositionTry:
+        break;
+      default:
+        return false;  // (scopes, registered properties, counter styles...: what they change is more than the styles of some elements)
+    }
+  }
+  return true;
+}
+
+// Whether a declaration of the rules names one of the custom properties (to set it or to read it).
+bool MentionsAny(const std::vector<CssRule*>& rules, const std::vector<std::string>& names, int depth) {
+  if (depth > 8) return true;
+  for (const CssRule* rule : rules) {
+    if (rule->style) {
+      for (const DeclarationEntry& entry : rule->style->items) {
+        for (const std::string& name : names) {
+          if (entry.name == name || entry.value.find(name) != std::string::npos) return true;
+        }
+      }
+    }
+    if (MentionsAny(rule->rules, names, depth + 1)) return true;
+    if (rule->kind == RuleKind::Import && rule->importedSheet && MentionsAny(rule->importedSheet->rules, names, depth + 1)) return true;
+  }
+  return false;
+}
+
+// A sheet that was parsed into a document as new rules: the styles of the elements it can be for are made again, the others are kept. False (nothing done) when
+// that cannot be told.
+bool NoteSheetAdded(CssStyleSheet* sheet) {
+  static const bool off = std::getenv("SOLAR_NO_ADDITIVE") != nullptr;
+  if (off || !sheet || sheet->disabled || !sheet->ownerNode || sheet->constructed) return false;
+  const dom::Element* owner = dom::AsElement(sheet->ownerNode);
+  dom::Document* document = owner ? owner->nodeDocument : nullptr;
+  const auto connected = [](const dom::Element* e) { const dom::Node* top = dom::ShadowIncludingRoot(const_cast<dom::Element*>(e)); return top && top->IsDocument(); };
+  if (!document || document->mode == dom::Document::Mode::Quirks || !connected(owner)) return false;
+  std::unordered_set<uint64_t> keys;
+  bool everything = false;
+  bool usesLayers = false;
+  std::vector<std::string> registered;
+  if (!DirtyKeysOfRules(sheet->rules, keys, everything, usesLayers, registered, 0, false)) return false;
+  const std::vector<CssStyleSheet*> sheets = SheetsOfTree(document, document->context);
+  if (usesLayers && !(sheets.size() > 0 && sheets.back() == sheet && !sheet->parentSheet)) {
+    // The layers are ranked by where they are first named: the ones there are keep their ranks (and so the styles made from them stay good) when the sheet only adds
+    // layers after them. That is looked at by ranking them with the sheet and without it.
+    const auto ranks = [&](bool withSheet) {
+      std::map<std::string, Winner> none;
+      MatchContext context;
+      Gatherer g{const_cast<dom::Element*>(owner), context, none};
+      g.collecting = true;
+      for (CssStyleSheet* s : sheets) {
+        if ((!withSheet && s == sheet) || s->disabled || !MediaListMatches(s->media ? s->media->queries : std::vector<std::string>(), g.media)) continue;
+        g.Rules(s->rules, kUnlayered);
+      }
+      g.RankLayers();
+      return g.layerRank;
+    };
+    const std::map<std::string, int> before = ranks(false), after = ranks(true);
+    for (const auto& [path, rank] : before) {
+      const auto now = after.find(path);
+      if (now == after.end() || now->second != rank || path.find('\x01') != std::string::npos) return false;
+    }
+    for (const auto& entry : after) if (entry.first.find('\x01') != std::string::npos) return false;  // (the layers with no name are numbered by where they come)
+  }
+  if (!registered.empty()) {
+    // A registration changes what the custom property is for the elements whose styles mention it; where nothing does, nothing is different yet (the rules that come
+    // later are looked at when they come).
+    for (CssStyleSheet* other : sheets) {
+      if (other != sheet && !other->disabled && MentionsAny(other->rules, registered, 0)) return false;
+    }
+  }
+  ++g_styleVersion;
+  ++g_authorVersion;
+  sheet->additiveAnnounced = true;
+  const uint64_t rootKey = KeyHash(6, "root", false);
+  for (auto& [element, entry] : Cache()) {
+    bool touched = everything || !connected(element);
+    if (!touched && element == element->nodeDocument->DocumentElement()) touched = keys.count(rootKey) > 0;
+    if (!touched) touched = keys.count(KeyHash(3, element->localName, true)) > 0;
+    if (!touched) {
+      if (const dom::Attr* id = element->FindAttribute("id")) touched = keys.count(KeyHash(1, id->Value(), false)) > 0;
+    }
+    if (!touched) {
+      for (const dom::Attr* attribute : element->AttributesInView()) {
+        if (keys.count(KeyHash(5, attribute->localName, true))) { touched = true; break; }
+        if (attribute->localName == "class") {
+          const std::string& v = attribute->Value();
+          size_t i = 0;
+          while (i < v.size() && !touched) {
+            while (i < v.size() && (v[i] == ' ' || v[i] == '\t' || v[i] == '\n' || v[i] == '\r' || v[i] == '\f')) ++i;
+            size_t j = i;
+            while (j < v.size() && !(v[j] == ' ' || v[j] == '\t' || v[j] == '\n' || v[j] == '\r' || v[j] == '\f')) ++j;
+            if (j > i) touched = keys.count(KeyHash(2, std::string_view(v).substr(i, j - i), false)) > 0;
+            i = j;
+          }
+        }
+      }
+    }
+    if (touched) entry.dirty = true;
+  }
+  return true;
+}
+
+}  // namespace
+
+void NoteSheetAttached(CssStyleSheet* sheet) {
+  sheet->pendingAttach = false;
+  const bool kept = NoteSheetAdded(sheet);
+  if (!kept) NoteStyleChange();
+}
+
+void BeginSheetParse(CssStyleSheet* added) {
+  if (g_sheetParsing++ == 0) g_additiveSheet = added;
+  else g_additiveSheet = nullptr;  // (a sheet made while one is: nothing is told of what it changes)
+}
 // Script does not run in the middle of parsing a sheet (what is half made is not safe to collect): the call waits for the end of it.
 void EndSheetParse() {
-  if (--g_sheetParsing == 0 && g_styleChangedInParse) {
-    g_styleChangedInParse = false;
-    NoteStyleChange();
+  if (--g_sheetParsing == 0) {
+    CssStyleSheet* added = g_additiveSheet;
+    g_additiveSheet = nullptr;
+    if (g_styleChangedInParse) {
+      g_styleChangedInParse = false;
+      // A sheet that is made for an element is told of when the element has it (NoteSheetAttached): until then it is of nothing.
+      if (!(added && added->pendingAttach)) NoteStyleChange();
+    }
   }
   if (g_sheetParsing == 0 && g_wakeAfterParse) {
     g_wakeAfterParse = false;
@@ -3378,7 +3573,9 @@ bool PseudoMayHaveRulesFor(dom::Element* element, const std::string& pseudo, dom
 
 // Whether a rule of the document's sheets or of the user agent's could be for a pseudo-element of that name (a document with no shadow trees only).
 bool PseudoNameMayHaveRules(dom::Element* element, const std::string& pseudo) {
-  if (dom::HasShadowTrees() || !element->nodeDocument) return true;
+  if (!element->nodeDocument) return true;
+  // (An element that has a shadow tree or is assigned to a slot has the rules of other trees too; one in a shadow tree is of a tree that is not the document: below.)
+  if (dom::HasShadowTrees() && (element->ShadowRootInView() || dom::AssignedSlotOf(element))) return true;
   // (The root is the same for the children of one parent, which come one after the other.)
   static const dom::Node* lastParent = nullptr;
   static dom::Node* lastTree = nullptr;
@@ -3398,7 +3595,7 @@ bool PseudoNameMayHaveRules(dom::Element* element, const std::string& pseudo) {
     for (const UserAgentRule& rule : UserAgentRules()) NotePseudoNames(rule.selectors, names);
     return names;
   }();
-  if (ua.count(pseudo)) return true;
+  const bool inUserAgent = ua.count(pseudo) > 0;  // (which elements the rules of the user agent are for is looked at below, with the author's)
   static std::unordered_map<const dom::Node*, std::pair<uint64_t, std::unordered_set<std::string>>> cache;
   const uint64_t version = AuthorStyleVersion();
   auto found = cache.find(tree);
@@ -3408,7 +3605,7 @@ bool PseudoNameMayHaveRules(dom::Element* element, const std::string& pseudo) {
     if (cache.size() > 64) cache.clear();
     found = cache.insert_or_assign(tree, std::make_pair(version, std::move(names))).first;
   }
-  if (found->second.second.count(pseudo) == 0) return false;
+  if (found->second.second.count(pseudo) == 0 && !inUserAgent) return false;
   return PseudoMayHaveRulesFor(element, pseudo, tree);
 }
 
@@ -3421,7 +3618,11 @@ bool HasPseudoStyle(dom::Element* element, const std::string& pseudo) {
     Build(element, style, pseudo);
     if (!style.cascade.empty()) Share(element, style, pseudo);
   }
-  return !style.cascade.empty();
+  if (style.cascade.empty()) return false;
+  // ::before and ::after are only there with a content: where no rule gives one (a reset that is for every element says box-sizing of both) there is nothing to make a
+  // box of, and the style of it is not worth working out.
+  if ((pseudo == "before" || pseudo == "after") && !style.cascade.count("content") && !style.cascade.count("all")) return false;
+  return true;
 }
 
 void ViewportScrollbars(Quanta::Context& ctx, dom::Document* document, double& vertical, double& horizontal, ViewportAuto* autos) {

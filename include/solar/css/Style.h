@@ -86,8 +86,11 @@ std::vector<CssStyleSheet*> SheetsOfTreeRoot(dom::Node* root);
 void NoteStyleChange();
 // A style sheet is being parsed: script must not run until it is done (what is half made is not safe to collect).
 double SheetParseMillis();
-void BeginSheetParse();
+// `added` is a sheet that had no rules before this parse: what it adds can be told of the elements it is for, and the styles of the others are kept.
+void BeginSheetParse(CssStyleSheet* added = nullptr);
 void EndSheetParse();
+// A sheet made for an element has been given to it: the styles of the elements it can be for are made again, and the others are kept.
+void NoteSheetAttached(CssStyleSheet* sheet);
 // Whether any declaration for the element (or its pseudo-element) is about animations or transitions: what has none has nothing to start.
 bool DeclaresAnimation(dom::Element* element, const std::string& pseudo);
 // Whether a rule that could apply to the element (or its pseudo-element) is about animations or transitions, worked out without making the style: false is sure.

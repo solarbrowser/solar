@@ -203,6 +203,8 @@ struct CssStyleSheet : Quanta::DOMObject {
   MediaList* media = nullptr;
   bool disabled = false;
   bool alternate = false;
+  bool pendingAttach = false;      // made for an element (or an @import) that is to have it: what it changes is told when it has it (see NoteSheetAttached)
+  bool additiveAnnounced = false;  // it came into the document as new rules only, and style made what that changed for the elements it can be for (not for all of them)
   std::vector<CssRule*> rules;
   CssRuleList* ruleList = nullptr;
   std::string baseUrl;

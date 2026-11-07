@@ -1033,8 +1033,8 @@ Value ConstructSheet(Context& ctx, Value, qe::Args args, Value newTarget) {
 // ---- Style and link elements ----
 
 void UpdateStyleElement(Context& ctx, dom::Element* element) {
-  NoteStyleChange();
   const bool wasLinked = element->styleSheet != nullptr;
+  if (wasLinked) NoteStyleChange();  // (a sheet that goes: what it gave is not given; one that comes is told of when it has come)
   if (element->styleSheet) static_cast<CssStyleSheet*>(element->styleSheet)->ownerNode = nullptr;
   element->styleSheet = nullptr;
   if (!element->IsHtml("style")) return;
@@ -1049,6 +1049,7 @@ void UpdateStyleElement(Context& ctx, dom::Element* element) {
   CssStyleSheet* sheet = NewStyleSheet(ctx);
   sheet->ownerNode = element;
   sheet->baseUrl = dom::DocumentBaseUri(static_cast<dom::Document*>(root));
+  sheet->pendingAttach = true;
   if (const dom::Attr* media = element->FindAttribute("", "media")) sheet->media->SetText(media->value);
   if (const dom::Attr* title = element->FindAttribute("", "title")) {
     if (!title->value.empty()) {
@@ -1066,6 +1067,7 @@ void UpdateStyleElement(Context& ctx, dom::Element* element) {
   }
   element->styleSheet = sheet;
   element->NoteWrite();
+  NoteSheetAttached(sheet);
 }
 
 CssStyleSheet* StyleSheetOfElement(Context&, dom::Element* element) { return static_cast<CssStyleSheet*>(element->styleSheet); }

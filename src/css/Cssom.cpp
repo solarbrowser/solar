@@ -428,8 +428,8 @@ void CssDeclarations::Changed(Context& ctx) {
     updatingAttribute = true;
     dom::SetAttribute(ctx, ownerElement, "style", Serialize());
     updatingAttribute = false;
-  } else {
-    NoteStyleChange();
+  } else if (parentRule) {
+    NoteStyleChange();  // (declarations that belong to no rule and no element, a scratch one, are of nothing that style has)
   }
 }
 
@@ -1312,9 +1312,9 @@ void ParseSheetInto(Context& ctx, CssStyleSheet* sheet, std::string_view text) {
     ~Timing() { g_sheetParseMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(); }
   } timing{parseStart};
   struct Parsing {
-    Parsing() { BeginSheetParse(); }
+    explicit Parsing(CssStyleSheet* added) { BeginSheetParse(added); }
     ~Parsing() { EndSheetParse(); }
-  } parsing;
+  } parsing(sheet->pendingAttach ? sheet : nullptr);
   NoteStyleChange();
   struct ParsingBase {
     explicit ParsingBase(const std::string& base) { SetParsingBase(base); }
@@ -1567,6 +1567,7 @@ void ProcessImports(Context& ctx, CssStyleSheet* sheet, const SheetLoader& load,
     imported->hasHref = true;
     imported->baseUrl = address;
     if (rule->media) imported->media = rule->media;  // the same list
+    imported->pendingAttach = true;
     ParseSheetInto(ctx, imported, *text);
     rule->importedSheet = imported;
     rule->NoteWrite();
@@ -1580,6 +1581,7 @@ CssStyleSheet* NewLinkedSheet(Context& ctx, dom::Element* link, const std::strin
   sheet->href = address;
   sheet->hasHref = true;
   sheet->baseUrl = address;
+  sheet->pendingAttach = true;
   if (const dom::Attr* media = link->FindAttribute("", "media")) sheet->media->SetText(media->value);
   if (const dom::Attr* title = link->FindAttribute("", "title")) {
     if (!title->value.empty()) {

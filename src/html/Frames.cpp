@@ -556,7 +556,10 @@ bool HasToken(const std::string& list, std::string_view wanted) {
 // "update a style block" for a link element: the sheet at its href, loaded now (the loader answers at once) and its imports
 // with it; load or error follows as a task.
 void UpdateLink(dom::Element* link) {
-  if (link->styleSheet) static_cast<css::CssStyleSheet*>(link->styleSheet)->ownerNode = nullptr;
+  if (link->styleSheet) {
+    static_cast<css::CssStyleSheet*>(link->styleSheet)->ownerNode = nullptr;
+    css::NoteStyleChange();  // (the sheet it had is gone)
+  }
   link->styleSheet = nullptr;
   dom::Document* document = link->nodeDocument;
   if (!document || !document->context || !g_environment) return;
@@ -601,7 +604,7 @@ void UpdateLink(dom::Element* link) {
   }
   link->styleSheet = sheet;
   link->NoteWrite();
-  css::NoteStyleChange();
+  css::NoteSheetAttached(sheet);
   const bool counted = DelayLoad(document);
   QueueTask(document, "link load", link, [link, sheet, document, counted] {
     if (link->styleSheet == sheet) FireEvent(*link->nodeDocument->context, link, "load");  // not if it went away meanwhile
