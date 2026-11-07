@@ -463,7 +463,7 @@ class Builder {
     if (html) css::ComputedValue(lc_.ctx, html, "display");
     // The boxes of the tree before are kept for what has not changed, when nothing in the document makes a box depend on more than its own subtree.
     canReuse_ = previous_ && previous_->root && reuse_.allowed && !getenv("SOLAR_NOREUSE") && !document->contentVisibilityAutoSeen &&
-                !css::g_firstLetterSeen && !css::g_firstLineSeen && !dom::HasShadowTrees();
+                !(previous_ && (previous_->firstLetterApplied || previous_->firstLineApplied)) && !dom::HasShadowTrees();
     if (getenv("SOLAR_LAYOUT_DEBUG")) std::fprintf(stderr, "  build: previous %d allowed %d shadows %d cvauto %d firstLetter %d firstLine %d -> reuse %d\n", previous_ != nullptr, reuse_.allowed, dom::HasShadowTrees(), document->contentVisibilityAutoSeen, css::g_firstLetterSeen, css::g_firstLineSeen, canReuse_);
     if (canReuse_) {
       lc_.tree.boxesOf = std::move(previous_->boxesOf);

@@ -290,6 +290,7 @@ void ApplyFirstLines(LayoutContext& lc, Box& root) {
     dom::Element* element = box.element();
     if (!element || box.kind != Box::Kind::Block || box.replaced || box.formControl || !BlockContainer(box)) return;
     if (!solar::css::HasPseudoStyle(element, "first-line")) return;
+    lc.tree.firstLineApplied = true;
     std::shared_ptr<const BoxStyle> style = Logicalize(ReadStyle(lc.ctx, element, "first-line"));
     // The first line of the block is that of its first block child, if it starts with one.
     Box* target = &box;

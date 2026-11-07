@@ -191,6 +191,7 @@ void Walk(LayoutContext& lc, Box& box) {
   textBox.textOffset += length;
   auto at = parent->children.begin() + static_cast<std::ptrdiff_t>(place.index);
   at = parent->children.insert(at, std::move(pseudo));
+  lc.tree.firstLetterApplied = true;
   if (!before.empty()) {
     auto space = std::make_unique<Box>();
     space->kind = Box::Kind::Text;
