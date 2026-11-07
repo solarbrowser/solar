@@ -423,6 +423,7 @@ struct Document : Node {
   bool containerQueriesSeen = false;
   // Whether a style has been read with content-visibility: auto: only then is the relevance of such elements worked out after layout.
   bool contentVisibilityAutoSeen = false;
+  bool containIntrinsicAutoSeen = false;  // a box with contain-intrinsic-size: auto was made (it remembers the size it had)
   // The function that asks for a frame, which parsing something that declares animations or transitions calls.
   Quanta::Object* animationWake = nullptr;
   // The function that asks for a frame to send the contentvisibilityautostatechange events in.

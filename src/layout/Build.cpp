@@ -892,6 +892,7 @@ class Builder {
     std::shared_ptr<const BoxStyle> style = StyleFor(element, recomputed);
     ++g_visited;
     if (recomputed) ++g_recomputed;
+    if ((style->containIntrinsicWidthAuto || style->containIntrinsicHeightAuto) && element->nodeDocument) element->nodeDocument->containIntrinsicAutoSeen = true;
     // What an element's style is made again from, its children's is too (they inherit).
     struct Below {
       Builder* builder;

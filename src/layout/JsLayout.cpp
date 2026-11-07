@@ -362,7 +362,8 @@ Value CvTake(Context& ctx, Value, qe::Args, Value) {
   g_cvRequested = false;
   Value out = qe::NewArray(ctx);
   dom::Document* document = dom::AssociatedDocument(ctx);
-  if (!document || !(document->contentVisibilityAutoSeen || css::g_contentVisibilityAutoMentioned)) return out;
+  // (Nothing is asked of layout before a box that needs it has been made: a sheet that mentions the keyword is not that, and every poll was a layout of the page.)
+  if (!document || !(document->contentVisibilityAutoSeen || document->containIntrinsicAutoSeen)) return out;
   Tree* tree = UpdateLayout(ctx, document);
   if (!tree) return qe::Null();  // (layout is being made: what asks for it from inside it is told nothing)
   const auto walk = [&](auto&& self, const Box& box) -> void {
