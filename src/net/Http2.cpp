@@ -175,6 +175,7 @@ bool Http2Session::Start() {
 }
 
 std::optional<std::string> Http2Session::Receive(std::span<const uint8_t> data) {
+  totalReceived_ += data.size();
   std::optional<std::string> error;
   std::vector<std::function<void()>> events;
   events_ = &events;
@@ -237,6 +238,13 @@ void Http2Session::Forget(Http2Stream* stream) {
 void Http2Session::Shutdown() {
   nghttp2_session_terminate_session(session_, NGHTTP2_NO_ERROR);
   if (!receiving_) Flush();
+}
+
+std::string Http2Session::DebugState() const {
+  if (!session_) return "no session";
+  return "remote window " + std::to_string(nghttp2_session_get_remote_window_size(session_)) + ", local window " + std::to_string(nghttp2_session_get_local_window_size(session_)) + ", unacked recv " +
+         std::to_string(nghttp2_session_get_effective_recv_data_length(session_)) + ", streams " + std::to_string(streams_.size()) + ", want_write " + std::to_string(nghttp2_session_want_write(session_)) + ", want_read " +
+         std::to_string(nghttp2_session_want_read(session_)) + ", total received " + std::to_string(totalReceived_);
 }
 
 bool Http2Session::Available() const {

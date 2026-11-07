@@ -53,6 +53,9 @@ class FetchHandler {
   // Exactly one of OnEnd and OnError is called, and it is the last call.
   virtual void OnEnd() = 0;
   virtual void OnError(std::string_view message) = 0;
+  // The client wants to ask for the response again, from the start, because it stopped coming (no byte for a while). A handler that keeps what it was given in one place and
+  // can take it away says true after it has (OnResponseHead and OnBody come again); the default keeps what the handler has seen as it is: the fetch goes on to its end or its timeout.
+  virtual bool OnRestart() { return false; }
 };
 
 // What a redirect response does to a fetch (Fetch Standard, request's redirect mode).
@@ -73,6 +76,8 @@ struct FetchOptions {
   std::shared_ptr<const std::string> body;
   // For the whole fetch, redirects included.
   std::chrono::milliseconds timeout{30000};
+  // How long a response may be without a byte before the client asks for it again (twice at most), for a handler that takes that (see FetchHandler::OnRestart).
+  std::chrono::milliseconds stall{8000};
   // For https. Null means the shared context that trusts the system's roots.
   std::shared_ptr<TlsContext> tls;
   // Sent with every request. Host, Content-Length, Transfer-Encoding, Connection and Upgrade are

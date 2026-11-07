@@ -4,6 +4,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+#include <cstdio>
+#include <cstdlib>
 #include "solar/net/HttpClient.h"
 
 #include <algorithm>
@@ -154,6 +156,7 @@ struct HttpConnection : ConnectionHandler {
   bool established = false;
   bool dead = false;
   bool idle = false;
+  bool stalled = false;  // an exchange of it gave up waiting: its streams are asked for again on another connection
   Loop::TimerId idleTimer = 0;
 
   explicit HttpConnection(HttpClient::Impl& i) : impl(i) {}
@@ -234,6 +237,10 @@ struct Exchange : Http1ResponseParser::Sink, Http2Stream {
   std::optional<std::string> location;
   std::optional<HttpResponseHead> head;
   Loop::TimerId timer = 0;
+  Loop::TimerId stallTimer = 0;
+  int restarts = 0;
+  void ArmStall();
+  bool TryRestart();
 
   Exchange(HttpClient::Impl& i, uint64_t identifier, FetchHandler& h, FetchOptions o, const url::Url& u)
       : impl(i), id(identifier), handler(h), options(std::move(o)), current(u) {}
@@ -301,7 +308,10 @@ struct Exchange : Http1ResponseParser::Sink, Http2Stream {
     HandlerCall held(*this);
     handler.OnResponseHead(h, current);
   }
+  size_t bytesIn = 0;  // (for looking at what an exchange that times out had)
   void OnBody(std::span<const uint8_t> data) override {
+    bytesIn += data.size();
+    ArmStall();
     if (revalidated) return;
     if (collecting && !fromCache) {
       collected.append(reinterpret_cast<const char*>(data.data()), data.size());
@@ -508,6 +518,8 @@ void Exchange::Begin() {
 
   timer = impl.loop.PostDelayed(options.timeout, [this] {
     timer = 0;
+    if (std::getenv("SOLAR_NET_DEBUG")) std::fprintf(stderr, "  net: timed out %s: head %d, %zu body bytes, stream %d, connection %p, finished %d, hopComplete %d, inHandler %d, anyResponseByte %d\n", (current.host ? current.host->c_str() : "?"), head ? head->status : -1, bytesIn, streamId, static_cast<void*>(conn), (int)finished, (int)hopComplete, inHandler, (int)anyResponseByte);
+    if (std::getenv("SOLAR_NET_DEBUG") && conn && conn->h2) std::fprintf(stderr, "  net: h2 %s\n", conn->h2->DebugState().c_str());
     Fail("timed out");
   });
   StartHop(false);
@@ -575,6 +587,7 @@ void Exchange::SendRequest() {
 }
 
 void Exchange::StartHop(bool forceFresh) {
+  ArmStall();
   // A host that has asked for https is not spoken to in the clear, whatever the URL says. The port
   // stays as it is: a URL's default port is not in it, so port 80 was never there to change.
   if (current.scheme == "http" && current.host && impl.hsts->Covers(*current.host)) current.scheme = "https";
@@ -736,6 +749,7 @@ void Exchange::OnConnectionReady() {
 void Exchange::OnData(std::span<const uint8_t> data) {
   if (finished) return;
   anyResponseByte = true;
+  ArmStall();
   const std::optional<std::string> error = parser->Feed(data);
   if (finished) return;  // a decoding failure, or a handler that cancelled, ended it from inside Feed
   if (hopComplete) {
@@ -749,9 +763,11 @@ void Exchange::OnData(std::span<const uint8_t> data) {
 
 void Exchange::OnConnectionClosed(int error, const std::string& failure) {
   const bool http2 = conn && conn->h2;
+  const bool wasStalled = conn && conn->stalled;
   conn = nullptr;
   streamId = 0;
   if (finished) return;
+  if (wasStalled && TryRestart()) return;
   if (reusedConnection && !anyResponseByte && !staleRetried) {
     // An idle connection the server had already closed. Nothing of a response came, so it is very
     // likely the request was never looked at, and browsers ask again whatever the method.
@@ -880,12 +896,47 @@ void Exchange::FollowRedirect() {
   StartHop(false);
 }
 
+// A response that has not had a byte for a while is asked for again on another connection (a connection that stalls, as some paths do, stalls all that is on it).
+void Exchange::ArmStall() {
+  if (finished || options.stall.count() <= 0 || restarts >= 2) return;
+  if (stallTimer != 0) impl.loop.CancelTimer(stallTimer);
+  static const int overrideMs = std::getenv("SOLAR_NET_STALL_MS") ? std::atoi(std::getenv("SOLAR_NET_STALL_MS")) : 0;  // (for trying it out)
+  stallTimer = impl.loop.PostDelayed(overrideMs > 0 ? std::chrono::milliseconds(overrideMs) : options.stall, [this] {
+    stallTimer = 0;
+    TryRestart();
+  });
+}
+
+bool Exchange::TryRestart() {
+  if (finished || restarts >= 2 || (method != "GET" && method != "HEAD") || body || inHandler > 0) return false;
+  if (!handler.OnRestart()) return false;
+  ++restarts;
+  if (std::getenv("SOLAR_NET_DEBUG")) std::fprintf(stderr, "  net: no byte for %lld ms from %s, asked for again (%d)\n", static_cast<long long>(options.stall.count()), (current.host ? current.host->c_str() : "?"), restarts);
+  HttpConnection* old = conn;
+  conn = nullptr;
+  if (old) {
+    old->stalled = true;
+    impl.RemoveH2(old);  // (not taken for another exchange)
+    old->Detach(this);
+    if (old->h2 && streamId > 0) old->h2->Reset(streamId);
+  }
+  streamId = 0;
+  staleRetried = false;
+  StartHop(false);
+  if (old && old->users.empty() && !old->dead) old->Close();
+  return true;
+}
+
 void Exchange::Fail(const std::string& message) {
   if (finished) return;
   finished = true;
   if (timer != 0) {
     impl.loop.CancelTimer(timer);
     timer = 0;
+  }
+  if (stallTimer != 0) {
+    impl.loop.CancelTimer(stallTimer);
+    stallTimer = 0;
   }
   if (conn) {
     HttpConnection* used = conn;
@@ -917,6 +968,10 @@ void Exchange::Finish() {
     impl.loop.CancelTimer(timer);
     timer = 0;
   }
+  if (stallTimer != 0) {
+    impl.loop.CancelTimer(stallTimer);
+    stallTimer = 0;
+  }
   {
     HandlerCall held(*this);
     handler.OnEnd();
@@ -929,6 +984,7 @@ void Exchange::Finish() {
 HttpClient::Impl::~Impl() {
   for (auto& [id, exchange] : exchanges) {
     if (exchange->timer != 0) loop.CancelTimer(exchange->timer);
+    if (exchange->stallTimer != 0) loop.CancelTimer(exchange->stallTimer);
   }
   for (auto& connection : connections) {
     if (connection->idleTimer != 0) loop.CancelTimer(connection->idleTimer);

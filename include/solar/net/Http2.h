@@ -80,12 +80,15 @@ class Http2Session {
   void Shutdown();
 
   size_t active() const { return streams_.size(); }
+  // (For looking at a connection that stalls: the windows nghttp2 keeps.)
+  std::string DebugState() const;
   // Whether a new stream may start on this connection now.
   bool Available() const;
   // Nothing more can happen on it: it is going away and its streams are done.
   bool Finished() const;
 
- private:
+  private:
+  size_t totalReceived_ = 0;
   struct StreamState;
   struct Callbacks;
 

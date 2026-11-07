@@ -106,6 +106,12 @@ class Collector : public solar::net::FetchHandler {
   }
   void OnBody(std::span<const uint8_t> data) override { body.append(reinterpret_cast<const char*>(data.data()), data.size()); }
   void OnEnd() override { done = true; }
+  bool OnRestart() override {
+    body.clear();
+    status = 0;
+    contentType.clear();
+    return true;
+  }
   void OnError(std::string_view message) override {
     failed = true;
     done = true;
@@ -302,8 +308,16 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     }
     void OnBody(std::span<const uint8_t> data) override { body.append(reinterpret_cast<const char*>(data.data()), data.size()); }
     void OnEnd() override { Finish(); }
-    void OnError(std::string_view) override {
+    bool OnRestart() override {
+      body.clear();
+      status = 0;
+      contentType.clear();
+      return true;
+    }
+    std::string error;
+    void OnError(std::string_view message) override {
       failed = true;
+      error = std::string(message);
       Finish();
     }
     void Finish() {
@@ -483,7 +497,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     if (!resource) return std::nullopt;
     WaitFor(resource);
     if (resource->failed || resource->status < 200 || resource->status >= 300) {
-      std::fprintf(stderr, "  [%d%s] %s\n", resource->status, resource->failed ? " failed" : "", url.c_str());
+      std::fprintf(stderr, "  [%d%s] %s%s%s\n", resource->status, resource->failed ? " failed" : "", url.c_str(), resource->error.empty() ? "" : "  : ", resource->error.c_str());
       return std::nullopt;
     }
     return resource->body;
