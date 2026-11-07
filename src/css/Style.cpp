@@ -873,14 +873,14 @@ struct Gatherer {
 
   // The rules of a list put into a FlatList the way Rules would walk them for an element of no particular kind: a group whose condition does not hold is
   // left out, what a group holds comes in place of it. Anything that has to be asked of the element (a style rule, a container query, a scope) is kept as it is.
-  void Flatten(const std::vector<CssRule*>& rules, int layer, FlatList& out, bool& unsafe) {
+  void Flatten(const std::vector<CssRule*>& rules, int layer, FlatList& out, bool& unsafe, bool onlyTails = false) {
     for (CssRule* rule : rules) {
       switch (rule->kind) {
         case RuleKind::Media:
-          if (!rule->media || MediaListMatches(rule->media->queries, media)) Flatten(rule->rules, layer, out, unsafe);
+          if (!rule->media || MediaListMatches(rule->media->queries, media)) Flatten(rule->rules, layer, out, unsafe, onlyTails);
           break;
         case RuleKind::Supports:
-          if (SupportsText(rule->supportsText)) Flatten(rule->rules, layer, out, unsafe);
+          if (SupportsText(rule->supportsText)) Flatten(rule->rules, layer, out, unsafe, onlyTails);
           break;
         case RuleKind::StartingStyle: case RuleKind::LayerStatement: break;
         case RuleKind::Import: {
@@ -894,14 +894,14 @@ struct Gatherer {
             layerPath = Child(rule->layerName == "\x01" ? "\x01" + std::to_string(++anonymousLayers) : rule->layerName);
             id = RankOf(layerPath);
           }
-          if (imported) Flatten(imported->rules, id, out, unsafe);
+          if (imported) Flatten(imported->rules, id, out, unsafe, onlyTails);
           layerPath = savedPath;
           break;
         }
         case RuleKind::LayerBlock: {
           const std::string savedPath = layerPath;
           layerPath = Child(rule->name.empty() ? "\x01" + std::to_string(++anonymousLayers) : rule->name);
-          Flatten(rule->rules, RankOf(layerPath), out, unsafe);
+          Flatten(rule->rules, RankOf(layerPath), out, unsafe, onlyTails);
           layerPath = savedPath;
           break;
         }
@@ -909,6 +909,16 @@ struct Gatherer {
         case RuleKind::Property: case RuleKind::FontPaletteValues: case RuleKind::PositionTry: case RuleKind::NestedDeclarations:
           break;  // (nothing in them is for an element: what is at the top of a list of rules does nothing)
         default:
+          // (The rules for ::slotted() and ::part() are the only ones that are for an element from another tree: the rest are left out of that list.)
+          if (onlyTails && rule->kind == RuleKind::Style && rule->rules.empty() && rule->selectors) {
+            bool tail = false;
+            for (const ComplexSelector& selector : *rule->selectors) {
+              if (selector.compounds.empty() || selector.compounds.back().simples.empty()) continue;
+              const SimpleSelector& last = selector.compounds.back().simples.back();
+              if (last.kind == SimpleSelector::Kind::PseudoElement && (last.name == "slotted" || last.name == "part")) tail = true;
+            }
+            if (!tail) break;
+          }
           // (A layer with no name met inside what is asked of the element would be numbered by how many of those the element meets.)
           if (HoldsAnonymousLayer(rule)) unsafe = true;
           out.Push(rule, layer, layerPath);
@@ -955,6 +965,16 @@ struct Gatherer {
         const Bloom* above = AncestorBloom();
         if (!above || !above->Has(flat.ancestorKey1[position]) || (flat.ancestorKey2[position] && !above->Has(flat.ancestorKey2[position]))) continue;
       }
+      const std::string& path = flat.paths[flat.pathIds[position]];
+      if (layerPath != path) layerPath = path;
+      Rule(flat.rules[position], flat.layers[position], nullptr);
+    }
+    layerPath.clear();
+  }
+
+  // Every rule of a list (a short one: the rules for ::slotted() or ::part() of a tree).
+  void EveryRule(const FlatList& flat) {
+    for (size_t position = 0; position < flat.rules.size(); ++position) {
       const std::string& path = flat.paths[flat.pathIds[position]];
       if (layerPath != path) layerPath = path;
       Rule(flat.rules[position], flat.layers[position], nullptr);
@@ -2084,16 +2104,62 @@ void BuildUntimed(dom::Element* element, ElementStyle& style, const std::string&
       const std::vector<CssStyleSheet*> sheets = SheetsOfTree(tree, element->nodeDocument ? element->nodeDocument->context : nullptr);
       g.order = gatherer.order;
       g.ruleSerial = gatherer.ruleSerial + 2000000;
-      g.collecting = true;
-      for (CssStyleSheet* sheet : sheets) {
-        if (sheet->disabled || !MediaListMatches(sheet->media ? sheet->media->queries : std::vector<std::string>(), g.media)) continue;
-        g.Rules(sheet->rules, kUnlayered);
+      // What the rules of a tree for ::slotted() and ::part() are, and the layers of it, are the same for every element that asks (the other rules are for none of
+      // them): they are worked out once for the tree and the way it is asked.
+      struct Special {
+        uint64_t version = 0;
+        std::shared_ptr<const std::map<std::string, int>> rank;
+        std::shared_ptr<const FlatList> list;
+      };
+      static std::map<std::pair<const dom::Node*, int>, Special> specials;
+      uint64_t version = AuthorStyleVersion() * 1000003 + sheets.size();
+      {
+        const MediaEnvironment& m = g.media;
+        version = (version * 31 + static_cast<uint64_t>(m.width * 8)) * 31 + static_cast<uint64_t>(m.height * 8);
+        version = (version * 31 + static_cast<uint64_t>(m.resolution * 100)) * 31 + std::hash<std::string>()(m.colorScheme);
+        version = (version * 31 + static_cast<uint64_t>(m.deviceWidth)) * 31 + static_cast<uint64_t>(m.deviceHeight);
       }
-      g.RankLayers();
-      g.collecting = false;
-      for (CssStyleSheet* sheet : sheets) {
-        if (sheet->disabled || !MediaListMatches(sheet->media ? sheet->media->queries : std::vector<std::string>(), g.media)) continue;
-        g.Rules(sheet->rules, kUnlayered);
+      const auto key = std::make_pair(static_cast<const dom::Node*>(tree), static_cast<int>(g.mode));
+      auto found = specials.find(key);
+      if (found == specials.end() || found->second.version != version) {
+        Special made;
+        made.version = version;
+        g.collecting = true;
+        for (CssStyleSheet* sheet : sheets) {
+          if (sheet->disabled || !MediaListMatches(sheet->media ? sheet->media->queries : std::vector<std::string>(), g.media)) continue;
+          g.Rules(sheet->rules, kUnlayered);
+        }
+        g.RankLayers();
+        g.collecting = false;
+        made.rank = std::make_shared<const std::map<std::string, int>>(g.layerRank);
+        auto list = std::make_shared<FlatList>();
+        bool unsafe = false;
+        g.anonymousLayers = 0;
+        for (CssStyleSheet* sheet : sheets) {
+          if (sheet->disabled || !MediaListMatches(sheet->media ? sheet->media->queries : std::vector<std::string>(), g.media)) continue;
+          g.Flatten(sheet->rules, kUnlayered, *list, unsafe, true);
+        }
+        g.layerPath.clear();
+        if (!unsafe) made.list = list;
+        if (specials.size() > 256) specials.clear();
+        found = specials.insert_or_assign(key, std::move(made)).first;
+      }
+      if (found->second.list) {
+        g.sharedRank = found->second.rank;
+        g.anonymousLayers = 0;
+        g.EveryRule(*found->second.list);
+      } else {
+        g.collecting = true;
+        for (CssStyleSheet* sheet : sheets) {
+          if (sheet->disabled || !MediaListMatches(sheet->media ? sheet->media->queries : std::vector<std::string>(), g.media)) continue;
+          g.Rules(sheet->rules, kUnlayered);
+        }
+        g.RankLayers();
+        g.collecting = false;
+        for (CssStyleSheet* sheet : sheets) {
+          if (sheet->disabled || !MediaListMatches(sheet->media ? sheet->media->queries : std::vector<std::string>(), g.media)) continue;
+          g.Rules(sheet->rules, kUnlayered);
+        }
       }
       gatherer.order = std::max(gatherer.order, g.order);
       gatherer.ruleSerial = std::max(gatherer.ruleSerial, g.ruleSerial);
