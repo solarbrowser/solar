@@ -1139,7 +1139,9 @@ struct StyleEntry {
   std::map<std::string, ElementStyle> others;
   // What the styles were made from: they are kept while it is the same (see Validate).
   uint64_t serial = 0;
-  uint64_t epoch = 0;    // a number for each time the styles are made anew: the elements below compare with it
+  uint64_t epoch = 0;    // a number for each time the styles are made anew: the elements below compare with it (what they have worked out from it)
+  uint64_t cascadeEpoch = 0;  // the same for what the rules that apply to the elements below can be told by of this one: its attributes, its place, its states
+  uint64_t parentCascadeEpoch = 0;
   uint64_t checked = 0;  // the version of the tree it was last seen to be good at
   bool shadowed = false;  // it was made when the element was in a shadow tree, a host or assigned to a slot
   const dom::Node* parent = nullptr;
@@ -1220,12 +1222,16 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   const StyleReuse reuse = element->nodeDocument ? StyleReuseFor(element->nodeDocument) : StyleReuse();
   const dom::Node* parentNode = dom::ParentOf(element);
   dom::Element* parent = parentNode && parentNode->IsElement() ? const_cast<dom::Element*>(static_cast<const dom::Element*>(parentNode)) : nullptr;
-  uint64_t parentEpoch = 0;
+  uint64_t parentEpoch = 0, parentCascade = 0;
   if (parent) {
     StyleEntry& up = Cache()[parent];
     Validate(parent, up, treeVersion);
     parentEpoch = up.epoch;
+    parentCascade = up.cascadeEpoch;
   }
+  // The rules that apply to an element are told by the tree around it (the attributes and states of the elements above), not by their styles: but a container query asks
+  // what its container is, which is a style.
+  const bool coupled = element->nodeDocument && element->nodeDocument->containerQueriesSeen;
   // An element of a shadow tree, a shadow host and one assigned to a slot are styled by more than what is around them in the tree.
   bool shadowed = false;
   if (reuse.shadows) {
@@ -1238,7 +1244,7 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   }
   const dom::Element::Versions ev = element->VersionsInView();
   const dom::Element::Versions pv = parent ? parent->VersionsInView() : dom::Element::Versions();
-  const bool basic = reuse.allowed && !shadowed && !entry.shadowed && entry.serial == element->serial && entry.parent == parentNode && entry.parentEpoch == parentEpoch && entry.attr == ev.attr && entry.animInherit == ev.animInherit;
+  const bool basic = reuse.allowed && !shadowed && !entry.shadowed && entry.serial == element->serial && entry.parent == parentNode && (coupled ? entry.parentEpoch == parentEpoch : entry.parentCascadeEpoch == parentCascade) && entry.attr == ev.attr && entry.animInherit == ev.animInherit;
   bool good = basic;
   bool goodButForHas = false;  // everything that makes a style good held except what :has() looks at below the element
   const bool animSame = entry.anim == ev.anim;
@@ -1277,16 +1283,32 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   }
   const bool stateSame = entry.state == ev.state;
   const bool dirty = entry.dirty;
-  if (good && animSame && stateSame && !dirty) return;
-  // What animations give is read when a value is worked out, not when the rules that apply are collected: of an element whose style is good but for that, the
-  // collected rules stay and only what was worked out from them is dropped (every tick of an animation was a new cascade for the element).
-  if (good && !animSame && stateSame && entry.plain.built && !dirty) {
-    entry.anim = ev.anim;
+  // What the style of the element above gave changed, and nothing that tells which rules apply here: the rules that were collected stay, and what was worked out from
+  // them is dropped (the elements under it follow: a class on a container was a new cascade for everything in it).
+  const bool computedStale = entry.parentEpoch != parentEpoch;
+  const auto dropWorkedOut = [&] {
     entry.plain.memo = std::make_shared<Memo>();
     entry.plain.resolving.clear();
     for (auto& other : entry.others) {
       other.second.memo = std::make_shared<Memo>();
       other.second.resolving.clear();
+    }
+  };
+  if (good && animSame && stateSame && !dirty) {
+    if (!computedStale) return;
+    dropWorkedOut();
+    entry.parentEpoch = parentEpoch;
+    entry.epoch = ++g_styleEpoch;
+    return;
+  }
+  // What animations give is read when a value is worked out, not when the rules that apply are collected: of an element whose style is good but for that, the
+  // collected rules stay and only what was worked out from them is dropped (every tick of an animation was a new cascade for the element).
+  if (good && !animSame && stateSame && entry.plain.built && !dirty) {
+    entry.anim = ev.anim;
+    dropWorkedOut();
+    if (computedStale) {
+      entry.parentEpoch = parentEpoch;
+      entry.epoch = ++g_styleEpoch;
     }
     return;
   }
@@ -1298,7 +1320,8 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   // win nothing is different for the elements under it.)
   const bool soft = ((good && animSame && !stateSame) || (goodButForHas && animSame) || (good && animSame && dirty)) && entry.plain.built;
   entry.dirty = false;
-  const uint64_t oldEpoch = entry.epoch;
+  const uint64_t oldEpoch = entry.epoch, oldCascadeEpoch = entry.cascadeEpoch;
+  const bool ruleSetOnly = dirty && good && animSame && stateSame;  // (rules came: what the elements under it are told by is the same)
   ElementStyle old;
   std::map<std::string, ElementStyle> oldOthers;
   if (soft) {
@@ -1309,9 +1332,11 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   entry.others.clear();
   entry.serial = element->serial;
   entry.epoch = keptEpoch ? keptEpoch : ++g_styleEpoch;
+  entry.cascadeEpoch = ruleSetOnly ? oldCascadeEpoch : ++g_styleEpoch;
   entry.animInherit = ev.animInherit;
   entry.parent = parentNode;
   entry.parentEpoch = parentEpoch;
+  entry.parentCascadeEpoch = parentCascade;
   entry.attr = ev.attr;
   entry.anim = ev.anim;
   entry.children = ev.children;
@@ -1333,9 +1358,13 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
       same = SameCascade(it->second, fresh);
     }
     if (same) {
-      entry.plain.memo = old.memo;
-      for (auto& [key, style] : entry.others) style.memo = oldOthers[key].memo;
-      entry.epoch = oldEpoch;
+      // (The memo is good while what it was worked out from is: the style of the element above is the same too.)
+      if (!computedStale) {
+        entry.plain.memo = old.memo;
+        for (auto& [key, style] : entry.others) style.memo = oldOthers[key].memo;
+        entry.epoch = oldEpoch;
+      }
+      entry.cascadeEpoch = oldCascadeEpoch;
     }
   }
 }

@@ -454,7 +454,7 @@ class Builder {
     lc_.tree.root = std::move(root);
     dom::Element* html = document->DocumentElement();
     reuse_ = css::StyleReuseFor(document);
-    if (reuse_.shadows) reuse_.allowed = false;  // (the boxes are of the flat tree)
+    // (The boxes are of the flat tree: what a shadow host, a slot or an element of a shadow tree has is made again, and nothing above it is taken over as it was.)
     {
       // (What is kept of the styles is checked against the animations, which are brought up to date by asking for a style.)
       const css::MediaEnvironment env = css::EnvironmentFor(document);
@@ -463,7 +463,7 @@ class Builder {
     if (html) css::ComputedValue(lc_.ctx, html, "display");
     // The boxes of the tree before are kept for what has not changed, when nothing in the document makes a box depend on more than its own subtree.
     canReuse_ = previous_ && previous_->root && reuse_.allowed && !getenv("SOLAR_NOREUSE") && !document->contentVisibilityAutoSeen &&
-                !(previous_ && (previous_->firstLetterApplied || previous_->firstLineApplied)) && !dom::HasShadowTrees();
+                !(previous_ && (previous_->firstLetterApplied || previous_->firstLineApplied));
     if (getenv("SOLAR_LAYOUT_DEBUG")) std::fprintf(stderr, "  build: previous %d allowed %d shadows %d cvauto %d firstLetter %d firstLine %d -> reuse %d\n", previous_ != nullptr, reuse_.allowed, dom::HasShadowTrees(), document->contentVisibilityAutoSeen, css::g_firstLetterSeen, css::g_firstLineSeen, canReuse_);
     if (canReuse_) {
       lc_.tree.boxesOf = std::move(previous_->boxesOf);
@@ -901,7 +901,18 @@ class Builder {
     } below{this, dirtyBelow_};
     dirtyBelow_ = dirtyBelow_ || recomputed;
     if (style->display == Display::None) return;
-    if (!recomputed && style->display != Display::Contents) {
+    // Whether the box of the element depends on more than the DOM nodes under it: a shadow host and a slot are made of other trees, and what is in a shadow tree or
+    // slotted is where it is by the flat tree. Their boxes are made again each time, and so are those above them (volatileSubtree).
+    bool flat = false;
+    if (reuse_.shadows) {
+      flat = element->ShadowRootInView() || dom::IsSlot(element) || dom::AssignedSlotOf(element);
+      if (!flat) {
+        const dom::Node* top = element;
+        while (dom::ParentOf(top)) top = dom::ParentOf(top);
+        flat = !top->IsDocument();
+      }
+    }
+    if (!recomputed && !flat && style->display != Display::Contents) {
       if (std::unique_ptr<Box> old = TakeOld(parent, element)) {
         ++g_reused;
         parent.AddChild(std::move(old));
@@ -909,6 +920,7 @@ class Builder {
       }
     }
     const uint64_t volatileBefore = volatileEvents_;
+    if (flat) ++volatileEvents_;
     struct Seal {
       Builder* b;
       dom::Element* element;
