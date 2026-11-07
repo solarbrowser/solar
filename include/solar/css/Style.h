@@ -38,6 +38,8 @@ uint64_t StyleEpochOf(dom::Element* element);
 uint64_t SheetsVersion();
 // The same, but a sheet that was added and told which elements it is for does not change it (what layout made of the styles of the others stays good).
 uint64_t LayoutSheetsVersion();
+uint64_t BuildCountForDebug();
+std::string ValidateStatsForDebug();
 // Changes when what was kept of the styles is no longer good (animations count).
 uint64_t StyleCacheVersion();
 // The version that animations and transitions look at: changes with the tree, the sheets and the states of elements.
@@ -123,6 +125,8 @@ void SetLayoutHook(LayoutHook hook);
 // Something declared animation-* or transition-* was parsed: how many times, so that whatever watches for animations can know
 // whether there is a reason to.
 void NoteAnimationMention();
+// A declaration gave the property inherit, unset or revert: a change of that property of an element is one the elements under it may have from it.
+void NoteInheritKeyword(const std::string& name);
 // The document whose animationWake is called when there is one.
 void SetAnimationWake(Quanta::Context& ctx, dom::Document* document);
 uint64_t AnimationMentions();

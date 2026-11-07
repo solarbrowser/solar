@@ -50,6 +50,7 @@ std::string Lower(std::string_view text) {
 uint64_t g_styleVersion = 1;
 uint64_t g_animationVersion = 1;
 uint64_t g_layoutSheetsVersion = 1;  // the version of the sheets, but not for a sheet that was added and told which elements it is for (the styles of those are made again, and what is read of the others is as it was)
+std::unordered_set<std::string> g_inheritKeywordProps;  // the properties that a declaration gives inherit, unset or revert
 bool g_styleContainerQueries = false;  // a container query asks about style() (the custom properties of the containers around an element tell its rules)
 bool g_loadThrottle = false;  // the program shows pages as they load (the window): see the bringing of layout in ComputedValue
 uint64_t g_layoutAnimationVersion = 1;  // the same, but not for what animations give that only changes how things are drawn
@@ -1169,6 +1170,8 @@ struct StyleEntry {
   uint64_t parentEpoch = 0;
   // The same as the epoch, and a new number too when only the custom properties of the style changed (what is made of it by the elements below that use none, with var(), is as it was).
   uint64_t customEpoch = 0, parentCustomEpoch = 0;
+  // What the elements under are told by of the style: the epoch, except that it stays when what changed is none of what they have from it (a property that is not inherited).
+  uint64_t inheritEpoch = 0;
   uint32_t animInherit = 0;
   uint32_t attr = 0, anim = 0, children = 0, parentChildren = 0, parentChildAttr = 0, state = 0;
   uint64_t treeVersion = 0;  // of the tree when the styles were begun
@@ -1248,6 +1251,14 @@ bool UsesVar(const ElementStyle& style) {
   return false;
 }
 
+// Whether a style says something with an attr() in it (what it is worked out to depends on an attribute of the element).
+bool UsesAttr(const ElementStyle& style) {
+  for (const auto& [name, winner] : style.cascade) {
+    if (winner.entry && (winner.entry->value.find("attr(") != std::string::npos || winner.entry->pendingText.find("attr(") != std::string::npos)) return true;
+  }
+  return false;
+}
+
 // The same winners but for the custom properties (the declarations of --x are not looked at).
 bool SameCascadeButCustom(const ElementStyle& a, const ElementStyle& b) {
   if (a.hasLogical != b.hasLogical || !a.storage.empty() || !b.storage.empty()) return false;
@@ -1264,6 +1275,269 @@ bool SameCascadeButCustom(const ElementStyle& a, const ElementStyle& b) {
   }
 }
 
+
+// ---- Which attribute changes of an element reach the elements under it ----
+// The class, id and attribute names that a selector asks of an element that is not its subject (the ones before a combinator, and what is inside :is(), :not() and the like of
+// those), and for each the keys of the subjects of the rules that ask: a class that is in none of them cannot make another style for what is under an element that gets or
+// loses it, only for the element itself; one that is in some can, for the elements that those subjects are for.
+struct SubjectKeys {
+  std::unordered_set<uint64_t> keys;
+  bool any = false;  // a subject that has no key to tell it by: every element under is looked at
+};
+struct AncestorKeys {
+  std::unordered_map<uint64_t, SubjectKeys> subjects;
+  bool everything = false;  // something is in the rules that is not told by names (a scope, a shadow host): every change counts
+  bool Has(uint64_t key) const { return subjects.count(key) > 0; }
+};
+
+struct SubjectInfo {
+  bool known = false;
+  std::vector<uint64_t> keys;
+};
+
+void AddAllKeys(const SelectorList& list, AncestorKeys& out);
+
+void NoteKey(AncestorKeys& out, uint64_t key, const SubjectInfo* subject) {
+  SubjectKeys& entry = out.subjects[key];
+  if (!subject || !subject->known) entry.any = true;
+  else entry.keys.insert(subject->keys.begin(), subject->keys.end());
+}
+
+void AddCompoundKeys(const CompoundSelector& compound, AncestorKeys& out, const SubjectInfo* subject) {
+  for (const SimpleSelector& simple : compound.simples) {
+    switch (simple.kind) {
+      case SimpleSelector::Kind::Class: NoteKey(out, KeyHash(2, simple.name, false), subject); break;
+      case SimpleSelector::Kind::Id: NoteKey(out, KeyHash(1, simple.name, false), subject); break;
+      case SimpleSelector::Kind::Attribute: NoteKey(out, KeyHash(5, simple.name, true), subject); break;
+      case SimpleSelector::Kind::Host: out.everything = true; break;
+      default: break;
+    }
+    if (simple.list) AddAllKeys(*simple.list, out);
+  }
+}
+
+void AddAllKeys(const SelectorList& list, AncestorKeys& out) {
+  for (const ComplexSelector& complex : list) {
+    for (const CompoundSelector& compound : complex.compounds) AddCompoundKeys(compound, out, nullptr);
+  }
+}
+
+void CollectAncestorKeys(const SelectorList& list, AncestorKeys& out) {
+  for (const ComplexSelector& complex : list) {
+    if (complex.compounds.empty()) continue;
+    // What the elements these are asked of are told by: the keys of the subject, when it has some (a pseudo-element is another style of the element: it has none here).
+    SubjectInfo subject;
+    {
+      // (The keys of the element a pseudo-element is of: it is made again with the element.)
+      ComplexSelector stripped = complex;
+      auto& simples = stripped.compounds.back().simples;
+      simples.erase(std::remove_if(simples.begin(), simples.end(), [](const SimpleSelector& x) { return x.kind == SimpleSelector::Kind::PseudoElement; }), simples.end());
+      subject.known = !simples.empty() && KeysOfComplex(stripped, subject.keys, 0);
+      for (const SimpleSelector& simple : simples) {
+        if (simple.kind == SimpleSelector::Kind::Nesting) subject.known = false;
+      }
+    }
+    for (size_t i = 0; i + 1 < complex.compounds.size(); ++i) AddCompoundKeys(complex.compounds[i], out, &subject);
+    for (const SimpleSelector& simple : complex.compounds.back().simples) {
+      if (simple.kind == SimpleSelector::Kind::Host) out.everything = true;
+      if (!simple.list) continue;
+      if (simple.kind == SimpleSelector::Kind::Has) continue;  // (what is under the subject: told by the :has() of it)
+      if (simple.kind == SimpleSelector::Kind::Not || simple.kind == SimpleSelector::Kind::Is || simple.kind == SimpleSelector::Kind::Where) {
+        // (What is asked inside is of the same element, from further up: any element may be the one.)
+        for (const ComplexSelector& inner : *simple.list) {
+          for (size_t i = 0; i + 1 < inner.compounds.size(); ++i) AddCompoundKeys(inner.compounds[i], out, nullptr);
+          if (!inner.compounds.empty()) {
+            for (const SimpleSelector& s2 : inner.compounds.back().simples) if (s2.list && s2.kind != SimpleSelector::Kind::Has) AddAllKeys(*s2.list, out);
+          }
+        }
+      } else {
+        AddAllKeys(*simple.list, out);  // (a nested & is the rule around it; :nth-child(of S) counts what S says of the siblings)
+      }
+    }
+  }
+}
+
+void CollectRuleKeys(const std::vector<CssRule*>& rules, AncestorKeys& out, int depth) {
+  if (depth > 12) {
+    out.everything = true;
+    return;
+  }
+  for (const CssRule* rule : rules) {
+    switch (rule->kind) {
+      case RuleKind::Style:
+        if (rule->selectors) {
+          CollectAncestorKeys(*rule->selectors, out);
+          if (!rule->rules.empty()) AddAllKeys(*rule->selectors, out);  // (what is nested in it is under what it is for)
+        }
+        CollectRuleKeys(rule->rules, out, depth + 1);
+        break;
+      case RuleKind::Media: case RuleKind::Supports: case RuleKind::Container: case RuleKind::LayerBlock: case RuleKind::StartingStyle:
+        CollectRuleKeys(rule->rules, out, depth + 1);
+        break;
+      case RuleKind::Scope: out.everything = true; break;
+      case RuleKind::Import:
+        if (rule->importedSheet) CollectRuleKeys(rule->importedSheet->rules, out, depth + 1);
+        break;
+      default: break;
+    }
+  }
+}
+
+uint64_t SheetsSignature(const std::vector<CssStyleSheet*>& sheets);
+
+void MergeKeys(AncestorKeys& into, const AncestorKeys& from) {
+  into.everything = into.everything || from.everything;
+  for (const auto& [key, subject] : from.subjects) {
+    SubjectKeys& entry = into.subjects[key];
+    entry.any = entry.any || subject.any;
+    entry.keys.insert(subject.keys.begin(), subject.keys.end());
+  }
+}
+
+// The keys of the rules of the document's sheets and of the user agent's, kept while the rules are the same.
+const AncestorKeys& AncestorKeysOf(dom::Document* document) {
+  static const AncestorKeys ua = [] {
+    AncestorKeys keys;
+    for (const UserAgentRule& rule : UserAgentRules()) CollectAncestorKeys(rule.selectors, keys);
+    return keys;
+  }();
+  static AncestorKeys all;
+  static const dom::Document* forDocument = nullptr;
+  static uint64_t forVersion = 0;
+  const std::shared_ptr<const std::vector<CssStyleSheet*>> sheets = SheetsOfTreeShared(document, document->context);
+  const uint64_t version = (static_cast<uint64_t>(g_authorVersion) * 1000003 + g_styleVersion) * 1000003 + SheetsSignature(*sheets);
+  if (forDocument != document || forVersion != version) {
+    all = AncestorKeys();
+    MergeKeys(all, ua);
+    for (const CssStyleSheet* sheet : *sheets) {
+      if (!sheet->disabled) CollectRuleKeys(sheet->rules, all, 0);
+    }
+    forDocument = document;
+    forVersion = version;
+  }
+  return all;
+}
+
+std::vector<std::string_view> ClassTokens(std::string_view text) {
+  std::vector<std::string_view> out;
+  size_t i = 0;
+  while (i < text.size()) {
+    while (i < text.size() && (text[i] == ' ' || text[i] == '\t' || text[i] == '\n' || text[i] == '\r' || text[i] == '\f')) ++i;
+    size_t j = i;
+    while (j < text.size() && !(text[j] == ' ' || text[j] == '\t' || text[j] == '\n' || text[j] == '\r' || text[j] == '\f')) ++j;
+    if (j > i) out.push_back(text.substr(i, j - i));
+    i = j;
+  }
+  return out;
+}
+
+enum class AttrEffect { Stays, Reaches, Unknown };
+
+bool KeyDebug() {
+  static const bool on = std::getenv("SOLAR_KEY_DEBUG") != nullptr;
+  return on;
+}
+
+// What the changes of the attributes of the element from one count to another (see Element::attrLog) do to the elements under it: nothing (the classes that came and went, the
+// id, the data and aria attributes, none of them asked of an element above by any rule), something that is for the elements `subjects` are the keys of, or not known.
+AttrEffect AttrChangesEffect(dom::Element* element, uint32_t from, uint32_t to, std::unordered_set<uint64_t>& subjects) {
+  static const bool off = std::getenv("SOLAR_NO_KEYED_ATTRS") != nullptr;
+  if (off || to <= from || to - from > 12) return AttrEffect::Unknown;
+  dom::Document* document = element->nodeDocument;
+  if (!document || document->mode == dom::Document::Mode::Quirks) return AttrEffect::Unknown;
+  if (StyleReuseFor(document).shadows) return AttrEffect::Unknown;
+  const AncestorKeys& set = AncestorKeysOf(document);
+  if (set.everything) return AttrEffect::Unknown;
+  uint32_t found = 0;
+  bool reaches = false;
+  const auto ask = [&](uint64_t key) {
+    const auto at = set.subjects.find(key);
+    if (at == set.subjects.end()) return true;
+    if (at->second.any) return false;
+    subjects.insert(at->second.keys.begin(), at->second.keys.end());
+    reaches = true;
+    return true;
+  };
+  for (const dom::Element::AttrChange& change : element->attrLog) {
+    if (change.version <= from || change.version > to) continue;
+    ++found;
+    const std::string& name = change.name;
+    if (name == "class") {
+      if (!ask(KeyHash(5, "class", true))) return AttrEffect::Unknown;
+      const std::vector<std::string_view> before = ClassTokens(change.oldValue), after = ClassTokens(change.newValue);
+      for (const std::string_view token : before) {
+        if (std::find(after.begin(), after.end(), token) == after.end() && !ask(KeyHash(2, token, false))) { if (KeyDebug()) std::fprintf(stderr, "  unkeyed subject for removed class %.*s\n", (int)token.size(), token.data()); return AttrEffect::Unknown; }
+      }
+      for (const std::string_view token : after) {
+        if (std::find(before.begin(), before.end(), token) == before.end() && !ask(KeyHash(2, token, false))) { if (KeyDebug()) std::fprintf(stderr, "  unkeyed subject for added class %.*s\n", (int)token.size(), token.data()); return AttrEffect::Unknown; }
+      }
+    } else if (name == "id") {
+      if (!ask(KeyHash(5, "id", true)) || !ask(KeyHash(1, change.oldValue, false)) || !ask(KeyHash(1, change.newValue, false))) return AttrEffect::Unknown;
+    } else if (name == "style" || name.rfind("data-", 0) == 0 || name.rfind("aria-", 0) == 0) {
+      if (!ask(KeyHash(5, name, true))) return AttrEffect::Unknown;
+    } else {
+      return AttrEffect::Unknown;  // (a language, a direction, a table's attributes, whether something is disabled: what is under an element reads them)
+    }
+  }
+  if (found != to - from) return AttrEffect::Unknown;
+  return reaches ? AttrEffect::Reaches : AttrEffect::Stays;
+}
+
+uint64_t g_vs[12] = {0};  // (for looking at what the styles are made again for)
+size_t g_marked = 0;
+// The elements under `element` that the subjects are for have their styles made again (they are kept where the same declarations win).
+void MarkSubjectsDirty(dom::Element* element, const std::unordered_set<uint64_t>& subjects) {
+  for (dom::Node* node = element->NextInTree(element); node; node = node->NextInTree(element)) {
+    dom::Element* below = dom::AsElement(node);
+    if (!below) continue;
+    const auto at = Cache().find(below);
+    if (at == Cache().end()) continue;
+    bool touched = subjects.count(KeyHash(3, below->localName, true)) > 0;
+    if (!touched) {
+      if (const dom::Attr* id = below->FindAttribute("id")) touched = subjects.count(KeyHash(1, id->Value(), false)) > 0;
+    }
+    if (!touched) {
+      for (const dom::Attr* attribute : below->AttributesInView()) {
+        if (subjects.count(KeyHash(5, attribute->localName, true))) { touched = true; break; }
+        if (attribute->localName == "class") {
+          for (const std::string_view token : ClassTokens(attribute->Value())) {
+            if (subjects.count(KeyHash(2, token, false))) { touched = true; break; }
+          }
+          if (touched) break;
+        }
+      }
+    }
+    if (touched) { at->second.dirty = true; ++g_marked; }
+  }
+  if (KeyDebug()) std::fprintf(stderr, "  marked dirty %zu\n", g_marked), g_marked = 0;
+}
+
+
+// Whether what changed between two cascades of an element is something the elements under it have from it: a property that is inherited, a custom property, one some rule gives
+// inherit or unset (for the property of the element above), what container queries ask of a container.
+bool InheritRelevantChange(const ElementStyle& before, const ElementStyle& after, bool coupled) {
+  static const bool off = std::getenv("SOLAR_NO_INHERIT_EPOCH") != nullptr;
+  if (off || coupled) return true;  // (what container queries ask of a container is the size layout found as well: every change counts)
+  const auto relevant = [&](const std::string& name, const Winner* winner) {
+    if (name.size() > 1 && name[0] == '-' && name[1] == '-') return true;
+    if (name == "all") return true;
+    if (winner && winner->entry && !winner->entry->pendingShorthand.empty()) return true;
+    const PropertyDefinition* definition = FindProperty(name);
+    if (!definition || definition->inherited || IsShorthand(*definition)) return true;
+    if (g_inheritKeywordProps.count(name)) return true;
+    if (coupled && (name == "display" || name == "container-type" || name == "container-name" || name == "writing-mode" || name == "direction")) return true;
+    return false;
+  };
+  for (const auto& [name, winner] : after.cascade) {
+    const auto at = before.cascade.find(name);
+    if ((at == before.cascade.end() || !SameWinners(at->second, winner)) && relevant(name, &winner)) return true;
+  }
+  for (const auto& [name, winner] : before.cascade) {
+    if (!after.cascade.count(name) && relevant(name, &winner)) return true;
+  }
+  return false;
+}
+
 void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   if (entry.checked == treeVersion) return;
   entry.checked = treeVersion;
@@ -1274,7 +1548,7 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   if (parent) {
     StyleEntry& up = Cache()[parent];
     Validate(parent, up, treeVersion);
-    parentEpoch = up.epoch;
+    parentEpoch = up.inheritEpoch;
     parentCascade = up.cascadeEpoch;
     parentCustom = up.customEpoch;
   }
@@ -1294,8 +1568,16 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   const dom::Element::Versions ev = element->VersionsInView();
   const dom::Element::Versions pv = parent ? parent->VersionsInView() : dom::Element::Versions();
   const bool parentSame = coupled ? entry.parentEpoch == parentEpoch : entry.parentCascadeEpoch == parentCascade;
-  const bool basicButParent = reuse.allowed && !shadowed && !entry.shadowed && entry.serial == element->serial && entry.parent == parentNode && entry.attr == ev.attr && entry.animInherit == ev.animInherit;
-  const bool basic = basicButParent && parentSame;
+  // (An attribute of the element is another than it was, and none of them is one that what is under it is told by: its own rules are looked at again, the elements under it are not.)
+  const bool attrSame = entry.attr == ev.attr;
+  std::unordered_set<uint64_t> reachedSubjects;
+  const AttrEffect attrEffect = !attrSame && entry.plain.built ? AttrChangesEffect(element, entry.attr, ev.attr, reachedSubjects) : AttrEffect::Unknown;
+  const bool attrReaches = attrEffect == AttrEffect::Reaches;
+  const bool attrStays = attrEffect != AttrEffect::Unknown;  // (it stays, or it reaches only what the keys are for: that is looked at below)
+  const bool basicButParent = reuse.allowed && !shadowed && !entry.shadowed && entry.serial == element->serial && entry.parent == parentNode && (attrSame || attrStays) && entry.animInherit == ev.animInherit;
+  const bool basic = basicButParent && parentSame && attrSame;
+  const bool structureOk = (!reuse.structural || (entry.children == ev.children && (!parent || entry.parentChildren == pv.children))) &&
+                           (!reuse.sibling || !parent || (entry.parentChildAttr == pv.childAttr && entry.parentChildren == pv.children));
   bool good = basic;
   bool goodButForHas = false;  // everything that makes a style good held except what :has() looks at below the element
   bool goodButStructure = false;  // everything held except that the children of the element, or of its parent, are others than they were
@@ -1358,6 +1640,7 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
       entry.parentCustomEpoch = parentCustom;
       entry.epoch = ++g_styleEpoch;
       entry.customEpoch = entry.epoch;
+      entry.inheritEpoch = entry.epoch;
       return;
     }
     entry.parentCustomEpoch = parentCustom;
@@ -1367,6 +1650,7 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
       dropWorkedOut();
       entry.epoch = ++g_styleEpoch;
       entry.customEpoch = entry.epoch;
+      entry.inheritEpoch = entry.epoch;
     } else {
       // (A memo can be shared with the style of an element beside it: the custom properties are made again by both.)
       entry.plain.memo->custom.clear();
@@ -1385,6 +1669,7 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
       entry.parentCustomEpoch = parentCustom;
       entry.epoch = ++g_styleEpoch;
       entry.customEpoch = entry.epoch;
+      entry.inheritEpoch = entry.epoch;
     }
     return;
   }
@@ -1396,8 +1681,14 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   // win nothing is different for the elements under it.)
   const bool soft = ((good && animSame && !stateSame) || (goodButForHas && animSame) || (goodButStructure && animSame) || (good && animSame && dirty)) && entry.plain.built;
   entry.dirty = false;
+  ++g_vs[0];
+  if (soft) { ++g_vs[1]; if (good && animSame && dirty) ++g_vs[9]; else if (goodButStructure && animSame) ++g_vs[10]; else ++g_vs[11]; } else ++g_vs[2];
+  if (!soft) { if (!basicButParent) ++g_vs[3]; else if (!parentSame) ++g_vs[4]; else if (!attrSame) ++g_vs[5]; else if (!structureOk) ++g_vs[6]; else if (!animSame) ++g_vs[7]; else ++g_vs[8]; }
+  if (KeyDebug() && !attrSame) { std::string names; for (const auto& c : element->attrLog) if (c.version > entry.attr && c.version <= ev.attr) names += c.name + " "; std::fprintf(stderr, "attr change <%s>: effect %d subjects %zu soft %d built %d names: %s\n", element->localName.c_str(), (int)attrEffect, reachedSubjects.size(), (int)soft, (int)entry.plain.built, names.c_str()); }
+  if (soft && attrReaches) MarkSubjectsDirty(element, reachedSubjects);
   const uint64_t oldEpoch = entry.epoch, oldCascadeEpoch = entry.cascadeEpoch;
   const bool ruleSetOnly = dirty && good && animSame && stateSame;  // (rules came: what the elements under it are told by is the same)
+  const bool keepCascade = soft && goodButStructure && attrStays && parentSame && structureOk;  // (only an attribute that the elements under it are not told by: what they are told by is the same)
   ElementStyle old;
   std::map<std::string, ElementStyle> oldOthers;
   if (soft) {
@@ -1407,11 +1698,12 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   entry.plain = ElementStyle();
   entry.others.clear();
   entry.serial = element->serial;
-  const uint64_t oldCustomEpoch = entry.customEpoch;
+  const uint64_t oldCustomEpoch = entry.customEpoch, oldInheritEpoch = entry.inheritEpoch;
   entry.epoch = keptEpoch ? keptEpoch : ++g_styleEpoch;
   entry.customEpoch = entry.epoch;
+  entry.inheritEpoch = entry.epoch;
   entry.parentCustomEpoch = parentCustom;
-  entry.cascadeEpoch = ruleSetOnly ? oldCascadeEpoch : ++g_styleEpoch;
+  entry.cascadeEpoch = (ruleSetOnly || keepCascade) ? oldCascadeEpoch : ++g_styleEpoch;
   entry.animInherit = ev.animInherit;
   entry.parent = parentNode;
   entry.parentEpoch = parentEpoch;
@@ -1438,25 +1730,32 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
     }
     if (same) {
       // (The memo is good while what it was worked out from is: the style of the element above is the same too.)
-      if (!computedStale && !customStale) {
+      if (!computedStale && !customStale && !(attrStays && (UsesAttr(old) || UsesAttr(entry.plain)))) {
         entry.plain.memo = old.memo;
         for (auto& [key, style] : entry.others) style.memo = oldOthers[key].memo;
         entry.epoch = oldEpoch;
         entry.customEpoch = oldCustomEpoch;
+        entry.inheritEpoch = oldInheritEpoch;
       }
       // (What the elements under it are told by is a new number where the tree around it is another: they look at the rules again, as it did.)
-      if (!goodButStructure) entry.cascadeEpoch = oldCascadeEpoch;
+      if (!goodButStructure || keepCascade) entry.cascadeEpoch = oldCascadeEpoch;
     } else if (!computedStale && !g_styleContainerQueries && oldEpoch != 0 && entry.others.empty() && oldOthers.empty() && SameCascadeButCustom(old, entry.plain) &&
-               !UsesVar(old) && !UsesVar(entry.plain)) {
+               !UsesVar(old) && !UsesVar(entry.plain) && !(attrStays && (UsesAttr(old) || UsesAttr(entry.plain)))) {
       // Only custom properties are others, and nothing of the element is worked out from them: what it was worked out to stays; the elements under it are told.
       entry.plain.memo = old.memo;
       entry.plain.memo->custom.clear();
       entry.epoch = oldEpoch;
+      entry.inheritEpoch = oldInheritEpoch;
       entry.customEpoch = ++g_styleEpoch;
       entry.cascadeEpoch = oldCascadeEpoch;
+    } else if (!computedStale && !customStale && entry.others.empty() && oldOthers.empty() && !InheritRelevantChange(old, entry.plain, coupled)) {
+      // What changed is none of what the elements under it have from it (a property that is not inherited): its own style is a new one, theirs are as they were.
+      entry.inheritEpoch = oldInheritEpoch;
+      entry.customEpoch = oldCustomEpoch;
     }
   }
 }
+
 
 ElementStyle& StyleOf(dom::Element* element, const std::string& pseudo = "") {
   static uint64_t cachedStyleVersion = 0;
@@ -2024,6 +2323,15 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
 }
 
 uint64_t g_buildCount = 0, g_shareCount = 0;
+}  // namespace
+uint64_t BuildCountForDebug() { return g_buildCount; }
+std::string ValidateStatsForDebug() {
+  char buffer[300];
+  std::snprintf(buffer, sizeof buffer, "validate rebuilds %llu soft %llu full %llu (not basic %llu, parent %llu, attr %llu, structure %llu, anim %llu, other %llu; soft by dirty %llu structure %llu state-or-has %llu)", (unsigned long long)g_vs[0], (unsigned long long)g_vs[1], (unsigned long long)g_vs[2], (unsigned long long)g_vs[3], (unsigned long long)g_vs[4], (unsigned long long)g_vs[5], (unsigned long long)g_vs[6], (unsigned long long)g_vs[7], (unsigned long long)g_vs[8], (unsigned long long)g_vs[9], (unsigned long long)g_vs[10], (unsigned long long)g_vs[11]);
+  for (auto& v : g_vs) v = 0;
+  return buffer;
+}
+namespace {
 void BuildUntimed(dom::Element* element, ElementStyle& style, const std::string& pseudo) {
   if (style.built) return;
   style.built = true;
@@ -3337,6 +3645,7 @@ bool NoteSheetAdded(CssStyleSheet* sheet) {
         }
         entry.epoch = ++g_styleEpoch;
         entry.customEpoch = entry.epoch;
+        entry.inheritEpoch = entry.epoch;
       } else {
         entry.plain.memo->custom.clear();
         for (auto& other : entry.others) other.second.memo->custom.clear();
@@ -3425,6 +3734,7 @@ void NoteStyleChange() {
   ++g_layoutSheetsVersion;
 }
 void NoteStyleChangeForRegistry() { NoteStyleChange(); }
+void NoteInheritKeyword(const std::string& name) { g_inheritKeywordProps.insert(name); }
 
 uint64_t AnimationVersion() { return g_animationVersion; }
 uint64_t LayoutAnimationVersion() { return g_layoutAnimationVersion; }

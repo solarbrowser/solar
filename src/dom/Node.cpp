@@ -842,7 +842,19 @@ void NotifyChildrenParsed(Node* parent) {
   if (g_hooks.childrenChanged) g_hooks.childrenChanged(parent);
 }
 
+namespace {
+// What attributes did, for style to tell which of the changes the elements under an element are told by (see Element::attrLog). Called just before the damage is noted, which gives
+// the element the next number.
+void RecordAttrChange(Element* element, const Attr& attribute, const std::string& oldValue, const std::string& newValue) {
+  constexpr size_t kKept = 12;
+  if (element->attrLog.size() >= kKept) element->attrLog.erase(element->attrLog.begin());
+  element->attrLog.push_back({element->attrVersion + 1, attribute.namespaceUri.empty() ? attribute.localName : "\x01" + attribute.localName, oldValue, newValue});
+}
+}  // namespace
+
 void NotifyParsedAttribute(Element* element, const std::string& name) {
+  if (const Attr* attribute = element->FindAttribute("", name)) RecordAttrChange(element, *attribute, "", attribute->value);
+  else element->attrLog.clear();  // (not known which: the numbers that follow have no record, and are taken as any attribute)
   NoteDamage(element, kDamageAttributes);
   if (g_hooks.attributeChanged) g_hooks.attributeChanged(element, name);
 }
@@ -1064,7 +1076,10 @@ void SetAttrValue(Attr* attribute, std::string value) {
   if (owner && HasShadowTrees()) ShadowAttributeChanged(owner, attribute->localName, attribute->namespaceUri, old, attribute->value);
   if (owner) {
     CustomAttributeChanged(owner, attribute->localName, attribute->namespaceUri, old, attribute->value);
-    if (!same) NoteDamage(owner, kDamageAttributes);
+    if (!same) {
+      RecordAttrChange(owner, *attribute, old, attribute->value);
+      NoteDamage(owner, kDamageAttributes);
+    }
     if (g_hooks.attributeChanged) g_hooks.attributeChanged(owner, attribute->localName);
   }
 }
@@ -1080,6 +1095,7 @@ void AppendAttr(Element* element, Attr* attribute) {
   if (HasMutationObservers()) QueueAttributeRecord(element, attribute->localName, attribute->namespaceUri, std::nullopt);
   if (HasShadowTrees()) ShadowAttributeChanged(element, attribute->localName, attribute->namespaceUri, std::nullopt, attribute->value);
   CustomAttributeChanged(element, attribute->localName, attribute->namespaceUri, std::nullopt, attribute->value);
+  RecordAttrChange(element, *attribute, "", attribute->value);
   NoteDamage(element, kDamageAttributes);
   if (g_hooks.attributeChanged) g_hooks.attributeChanged(element, attribute->localName);
 }
@@ -1428,6 +1444,7 @@ std::optional<DomError> SetAttributeNode(Element* element, Attr* attribute, Attr
     if (HasMutationObservers()) QueueAttributeRecord(element, attribute->localName, attribute->namespaceUri, old->value);
     if (HasShadowTrees()) ShadowAttributeChanged(element, attribute->localName, attribute->namespaceUri, old->value, attribute->value);
     CustomAttributeChanged(element, attribute->localName, attribute->namespaceUri, old->value, attribute->value);
+    RecordAttrChange(element, *attribute, old->value, attribute->value);
     NoteDamage(element, kDamageAttributes);
     if (g_hooks.attributeChanged) g_hooks.attributeChanged(element, attribute->localName);
   } else {
@@ -1446,6 +1463,7 @@ void RemoveAttributeNode(Element* element, Attr* attribute) {
   NoteTreeChangeAt(element);
   if (HasShadowTrees()) ShadowAttributeChanged(element, attribute->localName, attribute->namespaceUri, attribute->value, std::nullopt);
   CustomAttributeChanged(element, attribute->localName, attribute->namespaceUri, attribute->value, std::nullopt);
+  RecordAttrChange(element, *attribute, attribute->value, "");
   NoteDamage(element, kDamageAttributes);
   if (g_hooks.attributeChanged) g_hooks.attributeChanged(element, attribute->localName);
 }

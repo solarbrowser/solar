@@ -848,12 +848,36 @@ class Builder {
     want.parentChildAttr = reuse_.sibling && parentElement ? pv.childAttr : 0;
     want.epoch = reuse_.allowed ? css::StyleEpochOf(element) : 0;
     const dom::Element::LayoutStamp& have = element->layoutStamp;
-    if (attrChanged) *attrChanged = have.attr != want.attr || have.parent != want.parent;
+    if (attrChanged) {
+      // (What is read of the style of what is under the element is the language it is in: other attributes than lang change nothing of it.)
+      bool language = have.parent != want.parent;
+      if (!language && have.attr != want.attr) {
+        language = true;
+        if (want.attr > have.attr && want.attr - have.attr <= 12) {
+          uint32_t found = 0;
+          bool lang = false;
+          for (const dom::Element::AttrChange& change : element->attrLog) {
+            if (change.version <= have.attr || change.version > want.attr) continue;
+            ++found;
+            if (change.name == "lang" || change.name == "\x01lang" || change.name == "xml:lang") lang = true;
+          }
+          language = lang || found != want.attr - have.attr;
+        }
+      }
+      *attrChanged = language;
+    }
     if (reuse_.allowed && !langBelow_ && element->layoutStyle && have.author == want.author && have.environment == want.environment && have.parent == want.parent &&
         have.attr == want.attr && have.anim == want.anim && have.children == want.children && have.parentChildren == want.parentChildren && have.parentChildAttr == want.parentChildAttr && have.epoch == want.epoch) {
       // (What is read of the style is as it was; the box of it is made again when an element above was (see dirtyBelow_).)
       recomputed = dirtyBelow_;
       return std::static_pointer_cast<const BoxStyle>(element->layoutStyle);
+    }
+    static const bool stampDebug = std::getenv("SOLAR_STAMP_DEBUG") != nullptr;
+    if (stampDebug && !dirtyBelow_ && !langBelow_) {
+      const int r = !reuse_.allowed ? 0 : !element->layoutStyle ? 2 : have.author != want.author ? 3 : have.environment != want.environment ? 4 : have.parent != want.parent ? 5 : have.attr != want.attr ? 6 : have.anim != want.anim ? 7 : (have.children != want.children || have.parentChildren != want.parentChildren || have.parentChildAttr != want.parentChildAttr) ? 8 : have.epoch != want.epoch ? 9 : 10;
+      static const char* names[] = {"notallowed","langBelow","nostyle","author","env","parent","attr","anim","children","epoch","other"};
+      static int shown = 0;
+      if (shown++ < 60) std::fprintf(stderr, "restyle root-cause <%s%s%s> reason %s\n", element->localName.c_str(), element->FindAttribute("id") ? "#" : "", element->FindAttribute("id") ? element->FindAttribute("id")->Value().c_str() : "", names[r]);
     }
     std::shared_ptr<const BoxStyle> style = SharedBoxStyle(element);
     // (What is under the element is made again for a style that is another one than it was; for its own children changing, the boxes of what is under them are as they were.)

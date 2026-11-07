@@ -327,6 +327,13 @@ struct Element : Node {
   bool scrollbarSeen[2] = {false, false};  // the scrollbars the last layout gave it: kept while container queries are settled, so they do not flicker
   // What changed in and around the element, counted: what layout keeps of its style is good while the counts are what they were.
   uint32_t attrVersion = 0;       // an attribute of it changed
+  // Which attribute it was, and what it was and is, for the last few changes (each has the number attrVersion got with it): style looks at them to tell what the elements under
+  // the element are not told by (a class that no selector asks of an element above).
+  struct AttrChange {
+    uint32_t version;
+    std::string name, oldValue, newValue;
+  };
+  std::vector<AttrChange> attrLog;
   uint32_t stateVersion = 0;      // a state of it (hover, focus, pressed), or of an element under it, changed
   uint32_t childrenVersion = 0;   // its children changed, or the text in them
   uint32_t childAttrVersion = 0;  // an attribute of a child of it changed

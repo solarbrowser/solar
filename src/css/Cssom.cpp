@@ -79,6 +79,12 @@ void AddOrReplace(std::vector<DeclarationEntry>& items, DeclarationEntry entry) 
       entry.name.rfind("-webkit-transition", 0) == 0) {
     NoteAnimationMention();
   }
+  {
+    std::string value = entry.value;
+    value.erase(0, value.find_first_not_of(" \t\n"));
+    for (char& c : value) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (value == "inherit" || value == "unset" || value == "revert" || value == "revert-layer" || value == "inherit !important") NoteInheritKeyword(entry.name);
+  }
   if ((entry.name == "content-visibility" || entry.name.rfind("contain-intrinsic", 0) == 0) && entry.value.find("auto") != std::string::npos) g_contentVisibilityAutoMentioned = true;
   for (DeclarationEntry& existing : items) {
     if (existing.name == entry.name) {
