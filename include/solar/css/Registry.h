@@ -39,7 +39,10 @@ bool RegisterProperty(dom::Document* document, const RegisteredProperty& propert
 
 // The registration in effect for a name in a document: one made with CSS.registerProperty, or else the last valid @property
 // rule of the document's sheets.
-std::optional<RegisteredProperty> LookupRegistered(dom::Document* document, const std::string& name);
+// What the @property rules of the document's sheets register (the last valid one for a name).
+std::map<std::string, RegisteredProperty> RegisteredFromSheets(dom::Document* document);
+// `fromSheets`: RegisteredFromSheets of the document if the caller has it (it walks the tree and every sheet).
+std::optional<RegisteredProperty> LookupRegistered(dom::Document* document, const std::string& name, const std::map<std::string, RegisteredProperty>* fromSheets = nullptr);
 
 // The names of the registered properties of a document.
 std::vector<std::string> RegisteredNames(dom::Document* document);

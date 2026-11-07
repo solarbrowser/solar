@@ -1929,10 +1929,12 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
   (void)shares;
 }
 
+uint64_t g_buildCount = 0, g_shareCount = 0;
 void BuildUntimed(dom::Element* element, ElementStyle& style, const std::string& pseudo) {
   if (style.built) return;
   style.built = true;
-  if (pseudo.empty() && ShareFromSibling(element, style)) return;
+  ++g_buildCount;
+  if (pseudo.empty() && ShareFromSibling(element, style)) { ++g_shareCount; return; }
   const HasUse hasOfOuter = TakeHasUse();  // (another style may be under way, which asked for this one)
   const dom::Element* subjectOfOuter = SetHasSubject(element);
   dom::Node* root = dom::ShadowIncludingRoot(element);
@@ -2423,16 +2425,20 @@ std::optional<std::string> Resolver::Substitute(dom::Element* element, const std
 // The registration of a custom property in the element's document, remembered until style changes.
 std::optional<RegisteredProperty> RegistrationOf(dom::Element* element, const std::string& name) {
   static std::map<std::pair<dom::Document*, std::string>, std::optional<RegisteredProperty>> cache;
+  static std::map<dom::Document*, std::map<std::string, RegisteredProperty>> sheetRegistrations;  // (what the sheets register: made once for each version, not for each name)
   static uint64_t cachedVersion = 0;
   const uint64_t version = dom::DocumentVersion() * 1000003 + g_styleVersion;
   if (version != cachedVersion) {
     cache.clear();
+    sheetRegistrations.clear();
     cachedVersion = version;
   }
   const auto key = std::make_pair(element->nodeDocument, name);
   const auto found = cache.find(key);
   if (found != cache.end()) return found->second;
-  std::optional<RegisteredProperty> registration = LookupRegistered(element->nodeDocument, name);
+  auto sheets = sheetRegistrations.find(element->nodeDocument);
+  if (sheets == sheetRegistrations.end()) sheets = sheetRegistrations.emplace(element->nodeDocument, RegisteredFromSheets(element->nodeDocument)).first;
+  std::optional<RegisteredProperty> registration = LookupRegistered(element->nodeDocument, name, &sheets->second);
   cache[key] = registration;
   return registration;
 }
@@ -3883,6 +3889,7 @@ struct AskedStats {
   std::map<std::string, std::pair<uint64_t, double>> byProperty;
   ~AskedStats() {
     if (!std::getenv("SOLAR_TASK_DEBUG")) return;
+    std::fprintf(stderr, "cascades built %llu (shared from a sibling %llu)\n", (unsigned long long)g_buildCount, (unsigned long long)g_shareCount);
     std::fprintf(stderr, "style asked for %llu times (%llu over 1 ms), %.0f ms in all; %llu of them from layout and painting (%.0f ms), %llu inside another ask\n", (unsigned long long)calls, (unsigned long long)slow, ms, (unsigned long long)fromLayout, layoutMs, (unsigned long long)nested);
     std::vector<std::pair<double, std::string>> top;
     for (const auto& [name, v] : byProperty) top.push_back({v.second, name + " x" + std::to_string(v.first)});

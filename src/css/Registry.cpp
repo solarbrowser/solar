@@ -157,15 +157,9 @@ void CollectRules(const std::vector<CssRule*>& rules, std::map<std::string, Regi
 
 }  // namespace
 
-std::optional<RegisteredProperty> LookupRegistered(dom::Document* document, const std::string& name) {
-  if (!document) return std::nullopt;
-  // The API wins over @property.
-  const auto api = Registered().find(document);
-  if (api != Registered().end()) {
-    const auto found = api->second.find(name);
-    if (found != api->second.end()) return found->second;
-  }
+std::map<std::string, RegisteredProperty> RegisteredFromSheets(dom::Document* document) {
   std::map<std::string, RegisteredProperty> fromRules;
+  if (!document) return fromRules;
   for (dom::Node* node = document; node; node = node->NextInTree(document)) {
     dom::Element* element = dom::AsElement(node);
     if (element && element->styleSheet) {
@@ -173,6 +167,20 @@ std::optional<RegisteredProperty> LookupRegistered(dom::Document* document, cons
       if (!sheet->disabled) CollectRules(sheet->rules, fromRules);
     }
   }
+  return fromRules;
+}
+
+std::optional<RegisteredProperty> LookupRegistered(dom::Document* document, const std::string& name, const std::map<std::string, RegisteredProperty>* fromSheets) {
+  if (!document) return std::nullopt;
+  // The API wins over @property.
+  const auto api = Registered().find(document);
+  if (api != Registered().end()) {
+    const auto found = api->second.find(name);
+    if (found != api->second.end()) return found->second;
+  }
+  std::map<std::string, RegisteredProperty> own;
+  if (!fromSheets) own = RegisteredFromSheets(document);
+  const std::map<std::string, RegisteredProperty>& fromRules = fromSheets ? *fromSheets : own;
   const auto found = fromRules.find(name);
   if (found == fromRules.end()) return std::nullopt;
   return found->second;
