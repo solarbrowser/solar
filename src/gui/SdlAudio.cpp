@@ -52,6 +52,8 @@ class SdlAudioOutput final : public media::AudioOutput {
 
 }  // namespace
 
+std::unique_ptr<media::AudioOutput> MakeSdlAudioOutput() { return std::make_unique<SdlAudioOutput>(); }
+
 void InstallSdlAudio() {
   media::SetAudioOutputFactory([]() -> std::unique_ptr<media::AudioOutput> { return std::make_unique<SdlAudioOutput>(); });
 }

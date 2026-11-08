@@ -67,6 +67,7 @@
 #include "solar/paint/Paint.h"
 #include "solar/gui/Wire.h"
 #include "Navigation.h"
+#include "RemoteAudio.h"
 #include "Services.h"
 #include "solar/gui/Sandbox.h"
 #include "Renderer.h"
@@ -947,6 +948,7 @@ int RendererMain(int fd, int networkFd, int argc, char** argv, bool sandboxed = 
   solar::net::ipc::Channel link(fd);
   Shared shared;
   shared.sandboxed = sandboxed;
+  solar::gui::InstallRemoteAudio(link);
   shared.networkFd = networkFd;
   shared.browserLink = &link;
   // The window says how large it is first: the page starts knowing it.
@@ -1108,7 +1110,6 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
     return 1;
   }
-  solar::gui::InstallSdlAudio();
   // (SOLAR_GUI_SIZE=2560x1600: the window made this size, for timing what a big one costs.)
   int windowW = 1280, windowH = 800;
   if (const char* given = std::getenv("SOLAR_GUI_SIZE")) std::sscanf(given, "%dx%d", &windowW, &windowH);

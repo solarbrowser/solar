@@ -15,4 +15,7 @@ namespace solar::gui {
 // Makes the media elements play their sound through SDL's audio (the window program does this; the others play without sound).
 void InstallSdlAudio();
 
+// A stream of SDL's audio, for whoever plays the sound of a page (the browser: the pages' processes are not let near the sound devices, they send the samples).
+std::unique_ptr<media::AudioOutput> MakeSdlAudioOutput();
+
 }  // namespace solar::gui

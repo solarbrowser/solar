@@ -8,13 +8,16 @@
 
 #include <unistd.h>
 
+#include <cstring>
 #include <deque>
 #include <map>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "solar/gui/FrameBuffer.h"
+#include "solar/gui/SdlAudio.h"
 #include "solar/gui/Wire.h"
 
 namespace solar::gui {
@@ -77,6 +80,11 @@ void RunWindow(net::ipc::Channel& link, SDL_Window* window, SDL_Renderer* render
     SDL_PushEvent(&wake);
   });
 
+  // The sound of the page: a stream of the sound device for each the page opened (a few at most), played as the page sends it; how much is not yet played is told to the page now and then.
+  std::map<uint32_t, std::unique_ptr<media::AudioOutput>> audio;
+  std::map<uint32_t, int> audioRate, audioChannels;
+  SDL_TimerID audioTimer = 0;
+  constexpr size_t kMostStreams = 16;
   std::map<uint32_t, SharedMemory> buffers;  // the pictures the page can make, mapped to be read
   std::map<uint32_t, wire::NewBuffer> shapes;
   SDL_Texture* texture = nullptr;
@@ -160,6 +168,66 @@ void RunWindow(net::ipc::Channel& link, SDL_Window* window, SDL_Renderer* render
         if (in.ok()) tab.Committed(address);
         break;
       }
+      case wire::ToBrowser::AudioOpen: {
+        const uint32_t id = in.U32();
+        const int rate = in.I32(), channels = in.I32();
+        if (!in.ok() || audio.size() >= kMostStreams || audio.count(id) || rate < 8000 || rate > 192000 || channels < 1 || channels > 8) break;
+        std::unique_ptr<media::AudioOutput> output = MakeSdlAudioOutput();
+        if (!output->Start(rate, channels)) break;
+        audio[id] = std::move(output);
+        audioRate[id] = rate;
+        audioChannels[id] = channels;
+        if (!audioTimer) {
+          // (Every so often the window tells the page how much sound it holds: a timer on another thread asks for it.)
+          audioTimer = SDL_AddTimer(15, [](void*, SDL_TimerID, Uint32 interval) -> Uint32 {
+            SDL_Event tick{};
+            tick.type = SDL_EVENT_USER;
+            tick.user.code = 1;
+            SDL_PushEvent(&tick);
+            return interval;
+          }, nullptr);
+        }
+        break;
+      }
+      case wire::ToBrowser::AudioData: {
+        const uint32_t id = in.U32();
+        const std::string samples = in.String(size_t{4} << 20);
+        const auto stream = audio.find(id);
+        if (!in.ok() || stream == audio.end()) break;
+        const size_t frameBytes = sizeof(float) * static_cast<size_t>(audioChannels[id]);
+        const size_t frames = samples.size() / frameBytes;
+        // (A page that sends sound faster than it is played is not let fill the memory: what is more than a few seconds ahead is dropped.)
+        if (frames == 0 || stream->second->QueuedFrames() > static_cast<size_t>(audioRate[id]) * 5) break;
+        std::vector<float> aligned(frames * static_cast<size_t>(audioChannels[id]));
+        std::memcpy(aligned.data(), samples.data(), aligned.size() * sizeof(float));
+        stream->second->Queue(aligned.data(), frames);
+        break;
+      }
+      case wire::ToBrowser::AudioPause: {
+        const uint32_t id = in.U32();
+        const bool paused = in.Bool();
+        const auto stream = audio.find(id);
+        if (in.ok() && stream != audio.end()) stream->second->Pause(paused);
+        break;
+      }
+      case wire::ToBrowser::AudioClear: {
+        const uint32_t id = in.U32();
+        const auto stream = audio.find(id);
+        if (in.ok() && stream != audio.end()) stream->second->Clear();
+        break;
+      }
+      case wire::ToBrowser::AudioClose: {
+        const uint32_t id = in.U32();
+        if (!in.ok()) break;
+        audio.erase(id);
+        audioRate.erase(id);
+        audioChannels.erase(id);
+        if (audio.empty() && audioTimer) {
+          SDL_RemoveTimer(audioTimer);
+          audioTimer = 0;
+        }
+        break;
+      }
       case wire::ToBrowser::Quit: running = false; break;
       default: break;
     }
@@ -183,6 +251,17 @@ void RunWindow(net::ipc::Channel& link, SDL_Window* window, SDL_Renderer* render
         case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED: SendGeometry(link, window); forward = false; break;
         case SDL_EVENT_WINDOW_EXPOSED: present(); forward = false; break;
         case SDL_EVENT_USER: {
+          if (event.user.code == 1) {
+            // (The timer of the sound: the page is told how much each stream has not played.)
+            for (const auto& [id, stream] : audio) {
+              Writer out;
+              out.U32(id);
+              out.U64(stream->QueuedFrames());
+              Send(link, wire::ToRenderer::AudioQueued, out.bytes());
+            }
+            forward = false;
+            break;
+          }
           std::deque<Message> mine;
           {
             std::lock_guard<std::mutex> lock(mutex);
@@ -239,6 +318,8 @@ void RunWindow(net::ipc::Channel& link, SDL_Window* window, SDL_Renderer* render
   Send(link, wire::ToRenderer::Shutdown, "");
   link.Shutdown();
   reader.join();
+  if (audioTimer) SDL_RemoveTimer(audioTimer);
+  audio.clear();
   if (texture) SDL_DestroyTexture(texture);
 }
 

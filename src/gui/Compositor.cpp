@@ -23,6 +23,7 @@
 #include "solar/media/Player.h"
 #include "solar/paint/SkiaPainter.h"
 #include "Renderer.h"
+#include "RemoteAudio.h"
 
 namespace solar::gui {
 
@@ -474,6 +475,12 @@ std::thread StartWindowLink(Shared& shared, net::ipc::Channel& link) {
         case wire::ToRenderer::NavEnd:
         case wire::ToRenderer::NavError:
         case wire::ToRenderer::NavRestart: shared.DeliverNavigation(static_cast<wire::ToRenderer>(type), bytes); break;
+        case wire::ToRenderer::AudioQueued: {
+          const uint32_t id = in.U32();
+          const uint64_t frames = in.U64();
+          if (in.ok()) DeliverAudioQueued(id, frames);
+          break;
+        }
         case wire::ToRenderer::Shutdown: shared.quit = true; break;
         default: break;  // (A message that is none is not taken.)
       }
