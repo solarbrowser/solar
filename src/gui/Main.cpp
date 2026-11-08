@@ -68,6 +68,7 @@
 #include "solar/gui/Wire.h"
 #include "Navigation.h"
 #include "Services.h"
+#include "solar/gui/Sandbox.h"
 #include "Renderer.h"
 #include "Window.h"
 #include "solar/paint/SkiaPainter.h"
@@ -942,9 +943,10 @@ size_t LineEndAt(const std::string& s, size_t at) {
 int PageMain(Shared& shared, int argc, char** argv);
 
 // The renderer: the page and the compositor, which speak to the window through `fd`. It is a thread of the program for now (a process of its own to come); it ends with the page.
-int RendererMain(int fd, int networkFd, int argc, char** argv) {
+int RendererMain(int fd, int networkFd, int argc, char** argv, bool sandboxed = false) {
   solar::net::ipc::Channel link(fd);
   Shared shared;
+  shared.sandboxed = sandboxed;
   shared.networkFd = networkFd;
   shared.browserLink = &link;
   // The window says how large it is first: the page starts knowing it.
@@ -1011,6 +1013,46 @@ int RendererMain(int fd, int networkFd, int argc, char** argv) {
 }
 }  // namespace
 
+// What the page's process may read and write once it is shut in. Fonts, libraries and the few files of the system a program of this kind reads; the engine's data; the place the page's
+// own storage is kept (for now: it is a directory of the user's and not the browser's, which is to change); and, for a page that was asked for by a file, the directory of that file.
+solar::gui::SandboxPolicy RendererPolicy(const std::string& given) {
+  solar::gui::SandboxPolicy policy;
+  const char* home = std::getenv("HOME");
+  const std::string user = home ? home : "";
+  for (const char* path : {"/usr", "/lib", "/lib64", "/etc/ld.so.cache", "/etc/localtime", "/etc/ssl", "/etc/gnutls", "/etc/fonts", "/sys/devices/system/cpu", "/sys/kernel/mm", "/proc/sys/vm",
+                           "/dev/urandom", "/dev/null"}) {
+    policy.readable.push_back(path);
+  }
+  if (!user.empty()) {
+    policy.readable.push_back(user + "/.fonts");
+    policy.readable.push_back(user + "/.local/share/fonts");
+    policy.writable.push_back(user + "/.local/share/solar");
+    policy.readable.push_back(user + "/.cache/solar/fonts-v2.cache");  // (what the documents' font lists read; the list is written before the process is shut in)
+  }
+  if (const char* cache = std::getenv("XDG_CACHE_HOME")) policy.readable.push_back(std::string(cache) + "/solar/fonts-v2.cache");
+  if (const char* data = std::getenv("XDG_DATA_HOME")) policy.readable.push_back(std::string(data) + "/fonts");
+  // The engine's data next to the program.
+  std::error_code error;
+  const std::filesystem::path self = std::filesystem::read_symlink("/proc/self/exe", error);
+  if (!error) {
+    const std::filesystem::path directory = self.parent_path();
+    for (const char* name : {"quanta-icu.postcard"}) {
+      policy.readable.push_back((directory / name).string());
+      policy.readable.push_back((directory.parent_path() / name).string());
+      policy.readable.push_back((directory.parent_path() / "share" / "quanta" / name).string());
+    }
+  }
+  if (const char* icu = std::getenv("QUANTA_ICU_DATA")) policy.readable.push_back(icu);
+  // A page that was asked for by a file may read the files around it.
+  const std::string address = given.empty() ? std::string() : AddressOf(given);
+  if (address.starts_with("file://")) policy.readable.push_back(std::filesystem::path(solar::gui::FileOfAddress(address)).parent_path().string());
+  // (What the program writes when it is told to, for looking at what it does: a picture, the documents that came.)
+  if (const char* shot = std::getenv("SOLAR_GUI_SHOT")) policy.writable.push_back(std::filesystem::path(shot).parent_path().string());
+  if (const char* dump = std::getenv("SOLAR_DUMP_DOC")) policy.writable.push_back(dump);
+  if (const char* inject = std::getenv("SOLAR_INJECT_HEAD")) policy.readable.push_back(inject);
+  return policy;
+}
+
 // The renderer as a process of its own: the program started again with its two connections (the window's and the network's) as descriptors 3 and 4, and nothing else of the browser's
 // (every other descriptor is closed for it). It ends when the browser does.
 pid_t SpawnRenderer(int windowFd, int networkFd, int argc, char** argv) {
@@ -1046,7 +1088,21 @@ int main(int argc, char** argv) {
     ::prctl(PR_SET_PDEATHSIG, SIGKILL);
     ::signal(SIGPIPE, SIG_IGN);
     char* pageArguments[] = {argv[0], argc > 2 ? argv[2] : nullptr, nullptr};
-    return RendererMain(3, 4, argc > 2 ? 2 : 1, pageArguments);
+    const solar::gui::SandboxMode mode = solar::gui::SandboxModeFromEnvironment();
+    if (mode != solar::gui::SandboxMode::Off) {
+      // What is to be had from the machine is had now, and then the process is shut in: it is then given what it needs to read and nothing it can start, open, or connect to.
+      solar::font::Database::System().Families();  // (the fonts of the system are found now, and the list kept for the next run: that is written to the user's cache)
+      std::tm local{};
+      const std::time_t now = std::time(nullptr);
+      ::localtime_r(&now, &local);
+      const solar::gui::SandboxResult result = solar::gui::EnterSandbox(RendererPolicy(argc > 2 ? argv[2] : ""), mode);
+      if (!result.problems.empty()) std::fprintf(stderr, "sandbox: %s\n", result.problems.c_str());
+      if (!result.seccomp) {
+        std::fprintf(stderr, "sandbox: the page's process will not run without it (SOLAR_SANDBOX=off to run it without)\n");
+        return 1;
+      }
+    }
+    return RendererMain(3, 4, argc > 2 ? 2 : 1, pageArguments, true);
   }
   if (!SDL_Init(SDL_INIT_VIDEO)) {
     std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
@@ -1143,7 +1199,8 @@ int PageMain(Shared& shared, int argc, char** argv) {
   isolate->SetUncaughtExceptionHandler(solar::html::MakeUncaughtExceptionHandler());
   isolate->SetPromiseRejectionHandler(solar::html::MakeRejectionHandler());
   if (std::getenv("SOLAR_GUI_POSITIONS")) isolate->SetSourcePositionTracking(true);
-  auto loop = solar::net::Loop::Create();
+  // (A page that is shut in does not have io_uring: its loop waits with epoll.)
+  auto loop = solar::net::Loop::Create(shared.sandboxed ? solar::net::LoopBackend::Readiness : solar::net::LoopBackend::Automatic);
   if (!loop) {
     std::fprintf(stderr, "cannot start the event loop\n");
     return 1;

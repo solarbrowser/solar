@@ -38,6 +38,13 @@ check "it has few descriptors ($fds)" "$([ "$fds" -le 12 ] && echo ok)"
 leaked=$(ls -l /proc/$renderer/fd 2>/dev/null | grep -c -E 'x11|wayland|/dev/dri|X11-unix')
 check "none of the window's" "$([ "$leaked" = 0 ] && echo ok)"
 
+# It is shut in: no new privileges, no capabilities, a filter on its system calls, and a network and a user of its own.
+status=$(cat /proc/$renderer/status 2>/dev/null)
+check "it has a system call filter" "$(echo "$status" | grep -q '^Seccomp:[[:space:]]*2' && echo ok)"
+check "it has no new privileges" "$(echo "$status" | grep -q '^NoNewPrivs:[[:space:]]*1' && echo ok)"
+check "it has no capabilities" "$(echo "$status" | grep -q '^CapEff:[[:space:]]*0000000000000000' && echo ok)"
+check "it is in a network namespace of its own" "$([ "$(readlink /proc/$renderer/ns/net)" != "$(readlink /proc/$browser/ns/net)" ] && echo ok)"
+
 # A page that goes ends the browser.
 kill -9 $renderer
 for i in $(seq 1 20); do kill -0 $browser 2>/dev/null || break; sleep 0.25; done
