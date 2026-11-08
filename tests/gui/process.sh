@@ -39,7 +39,7 @@ leaked=$(ls -l /proc/$renderer/fd 2>/dev/null | grep -c -E 'x11|wayland|/dev/dri
 check "none of the window's" "$([ "$leaked" = 0 ] && echo ok)"
 
 # The browser's own interface (the bar) is a page in a process of its own, shut in as the pages are, with no network to go to.
-ui=$(pgrep -P $browser -f -- '--renderer solar://' | head -1)
+ui=$(pgrep -P $browser -f -- '--renderer solar://chrome/' | head -1)
 check "the interface is another process" "$([ -n "$ui" ] && [ "$ui" != "$renderer" ] && echo ok)"
 uistatus=$(cat /proc/$ui/status 2>/dev/null)
 check "the interface has a system call filter and no capabilities" "$(echo "$uistatus" | grep -q '^Seccomp:[[:space:]]*2' && echo "$uistatus" | grep -q '^CapEff:[[:space:]]*0000000000000000' && echo ok)"

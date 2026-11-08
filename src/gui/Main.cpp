@@ -73,6 +73,7 @@
 #include "solar/gui/RemoteGl.h"
 #include "solar/paint/GlRuntime.h"
 #include "solar/gui/Services.h"
+#include "solar/gui/Chrome.h"
 #include "solar/gui/Sandbox.h"
 #include "solar/gui/UiNatives.h"
 #include "solar/gui/Renderer.h"
@@ -265,7 +266,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
       solar::webapi::InstallMediaNatives(realm);
       solar::webapi::InstallWebAudioNatives(realm);
       // (The browser's own interface page, and no other, can ask the browser for things.)
-      if (uiLink_ && pageUrl_.rfind("solar://", 0) == 0) solar::gui::InstallUiNatives(realm, *uiLink_);
+      if (uiLink_ && pageUrl_.rfind(solar::gui::kChromeAddress, 0) == 0) solar::gui::InstallUiNatives(realm, *uiLink_);
       solar::webapi::InstallCanvasNatives(realm);
       solar::webapi::InstallWebGlNatives(realm);
       solar::webapi::InstallImageLoadNatives(realm);
@@ -1168,7 +1169,7 @@ int main(int argc, char** argv) {
     ::signal(SIGPIPE, SIG_IGN);
     char* pageArguments[] = {argv[0], argc > 2 ? argv[2] : nullptr, nullptr};
     // (The interface's process is not the page: what is set for looking at the page, a picture of it and what a user would do in it, is not for the interface.)
-    if (argc > 2 && std::strncmp(argv[2], "solar://", 8) == 0) {
+    if (argc > 2 && std::strcmp(argv[2], solar::gui::kChromeAddress) == 0) {
       ::unsetenv("SOLAR_GUI_SHOT");
       ::unsetenv("SOLAR_GUI_SCRIPT");
       ::unsetenv("SOLAR_GUI_SETTLE");
