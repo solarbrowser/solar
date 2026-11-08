@@ -187,7 +187,10 @@ PSL_URL = https://publicsuffix.org/list/public_suffix_list.dat
 PSL_FILE = $(BUILD_DIR)/psl/public_suffix_list.dat
 
 .DEFAULT_GOAL := all
-.PHONY: all test test-gc asan-test idna-tables public-suffix-tables html-tables clean quanta
+test-gui-process: solar
+	@./tests/gui/process.sh
+
+.PHONY: all test test-gui-process test-gc asan-test idna-tables public-suffix-tables html-tables clean quanta
 
 all: solar solar-cli
 

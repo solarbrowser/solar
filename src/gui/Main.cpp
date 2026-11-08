@@ -8,6 +8,13 @@
 // sheets fetched as it asks), laid out for the size of the window, painted as a display list and drawn by Skia into a texture SDL shows.
 #include <SDL3/SDL.h>
 
+#include <fcntl.h>
+#include <signal.h>
+#include <spawn.h>
+#include <sys/prctl.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -1004,8 +1011,43 @@ int RendererMain(int fd, int networkFd, int argc, char** argv) {
 }
 }  // namespace
 
+// The renderer as a process of its own: the program started again with its two connections (the window's and the network's) as descriptors 3 and 4, and nothing else of the browser's
+// (every other descriptor is closed for it). It ends when the browser does.
+pid_t SpawnRenderer(int windowFd, int networkFd, int argc, char** argv) {
+  char self[4096];
+  const ssize_t length = ::readlink("/proc/self/exe", self, sizeof(self) - 1);
+  if (length <= 0) return -1;
+  self[length] = 0;
+  // (The descriptors are moved out of the way of 3 and 4 first, so that putting them there does not close one of them.)
+  const int high1 = ::fcntl(windowFd, F_DUPFD_CLOEXEC, 10), high2 = ::fcntl(networkFd, F_DUPFD_CLOEXEC, 10);
+  if (high1 < 0 || high2 < 0) return -1;
+  posix_spawn_file_actions_t actions;
+  posix_spawn_file_actions_init(&actions);
+  posix_spawn_file_actions_adddup2(&actions, high1, 3);
+  posix_spawn_file_actions_adddup2(&actions, high2, 4);
+  posix_spawn_file_actions_addclosefrom_np(&actions, 5);
+  std::vector<std::string> words = {"solar", "--renderer"};
+  if (argc > 1) words.push_back(argv[1]);
+  std::vector<char*> arguments;
+  for (std::string& word : words) arguments.push_back(word.data());
+  arguments.push_back(nullptr);
+  pid_t child = -1;
+  const int status = ::posix_spawn(&child, self, &actions, nullptr, arguments.data(), environ);
+  posix_spawn_file_actions_destroy(&actions);
+  ::close(high1);
+  ::close(high2);
+  return status == 0 ? child : -1;
+}
+
 int main(int argc, char** argv) {
   std::setbuf(stdout, nullptr);
+  if (argc >= 2 && std::strcmp(argv[1], "--renderer") == 0) {
+    // The renderer process: it ends if the browser does, and a connection that is shut is not a signal.
+    ::prctl(PR_SET_PDEATHSIG, SIGKILL);
+    ::signal(SIGPIPE, SIG_IGN);
+    char* pageArguments[] = {argv[0], argc > 2 ? argv[2] : nullptr, nullptr};
+    return RendererMain(3, 4, argc > 2 ? 2 : 1, pageArguments);
+  }
   if (!SDL_Init(SDL_INIT_VIDEO)) {
     std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
     return 1;
@@ -1036,7 +1078,20 @@ int main(int argc, char** argv) {
     return 1;
   }
   int result = 0;
-  std::thread rendererThread([&, pageEnd = pageEnd, pageNetworkEnd = pageNetworkEnd] { result = RendererMain(pageEnd, pageNetworkEnd, argc, argv); });
+  // The page is a process of its own (SOLAR_RENDERER_THREAD=1: a thread of this one, for looking into it with the tools that follow threads).
+  pid_t child = -1;
+  std::thread rendererThread;
+  if (std::getenv("SOLAR_RENDERER_THREAD")) {
+    rendererThread = std::thread([&, pageEnd = pageEnd, pageNetworkEnd = pageNetworkEnd] { result = RendererMain(pageEnd, pageNetworkEnd, argc, argv); });
+  } else {
+    child = SpawnRenderer(pageEnd, pageNetworkEnd, argc, argv);
+    ::close(pageEnd);
+    ::close(pageNetworkEnd);
+    if (child < 0) {
+      std::fprintf(stderr, "cannot start the page's process\n");
+      return 1;
+    }
+  }
   {
     solar::gui::BrowserServices services;
     solar::net::ipc::Channel link(windowEnd);
@@ -1048,7 +1103,21 @@ int main(int argc, char** argv) {
       solar::gui::RunWindow(link, window, renderer, *tab);
     }
   }
-  rendererThread.join();
+  if (rendererThread.joinable()) rendererThread.join();
+  if (child > 0) {
+    // (The page was told the window is gone: it is waited for for a moment, then ended.)
+    int status = 0;
+    bool done = false;
+    for (int i = 0; i < 200 && !done; ++i) {
+      done = ::waitpid(child, &status, WNOHANG) == child;
+      if (!done) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (!done) {
+      ::kill(child, SIGKILL);
+      ::waitpid(child, &status, 0);
+    }
+    result = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+  }
   SDL_DestroyRenderer(renderer);
   SDL_DestroyWindow(window);
   SDL_Quit();
