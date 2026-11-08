@@ -43,6 +43,15 @@ class FetchHandler {
     (void)headers;
     return true;
   }
+  // A handler that cannot answer OnRedirect at once (it is in another thread, or another process, from the fetch) says so here, and is told of the redirect by OnReceiveRedirect
+  // instead, with the headers the next hop would carry; the fetch waits, and goes on when the answer comes by NetworkService::FollowRedirect (the headers it gives are the
+  // next hop's), or ends with an error when the answer is no. Nothing else of the fetch waits with it.
+  virtual bool DefersRedirects() const { return false; }
+  virtual void OnReceiveRedirect(const HttpResponseHead& redirect, const url::Url& next, const std::vector<std::pair<std::string, std::string>>& headers) {
+    (void)redirect;
+    (void)next;
+    (void)headers;
+  }
 
   // `finalUrl` is where the response came from after any redirects, with the fragment the
   // standard carries across them. `head` is the response as the server sent it, so a body that
@@ -124,39 +133,62 @@ struct HttpClientOptions {
   std::shared_ptr<HttpCache> cache;
 };
 
+class NetworkService;
 class HttpClient;
 
+// What a fetch in flight is held by: Cancel() ends it with OnError("aborted") and closes its connection, unless it has already finished. Safe to call again, and safe once the
+// fetch is over.
 class FetchHandle {
  public:
   FetchHandle() = default;
-  // Ends the fetch with OnError("aborted") and closes its connection, unless it has already
-  // finished. Safe to call again, and safe once the fetch is over.
   void Cancel();
 
  private:
+  friend class NetworkService;
   friend class HttpClient;
-  FetchHandle(HttpClient* client, uint64_t id) : client_(client), id_(id) {}
-  HttpClient* client_ = nullptr;
+  FetchHandle(NetworkService* service, uint64_t id) : service_(service), id_(id) {}
+  NetworkService* service_ = nullptr;
   uint64_t id_ = 0;
+};
+
+// What the pages ask the network for: the one thing that stands between them and the connections, the cookies, the cache and the rules of fetching. Everything a page needs of the
+// network goes through it, as messages in one direction (the request: a url, a handler to hear of the answer, and the options, which are data) and in the other (the answer, which
+// the handler is told of from the loop the call was made from, never from inside the call). It is what the network will be behind when it is a thread of its own, and then a process.
+class NetworkService {
+ public:
+  virtual ~NetworkService() = default;
+  // A fetch. `handler` must outlive it.
+  virtual FetchHandle Fetch(const url::Url& url, FetchHandler& handler, FetchOptions options = {}) = 0;
+  // Ends the fetch with that number (what FetchHandle::Cancel does).
+  virtual void Cancel(uint64_t id) = 0;
+  // The answer to OnReceiveRedirect of the fetch with that number: go on to the redirect's address with `headers`, or (`follow` false) end the fetch.
+  virtual void FollowRedirect(uint64_t id, bool follow, std::vector<std::pair<std::string, std::string>> headers = {}) = 0;
+  // Closes the connections waiting in the pool.
+  virtual void CloseIdleConnections() = 0;
+  // (Until WebSocket goes through the service as well: the client whose loop, lookups and cookies it makes its connections with. Null for a service that has none.)
+  virtual HttpClient* Http() { return nullptr; }
 };
 
 // Fetches over HTTP/1.1 (through TLS for https), following redirects as the Fetch Standard says,
 // and keeps connections between requests. It must outlive the Loop::Run calls that serve its
 // fetches, and be destroyed before the Loop.
-class HttpClient {
+class HttpClient : public NetworkService {
  public:
   explicit HttpClient(Loop& loop, HttpClientOptions options = {});
-  ~HttpClient();
+  ~HttpClient() override;
 
   HttpClient(const HttpClient&) = delete;
   HttpClient& operator=(const HttpClient&) = delete;
 
   // A GET. Everything is reported from Loop::Run, never from inside this call. `handler` must
   // outlive the fetch.
-  FetchHandle Fetch(const url::Url& url, FetchHandler& handler, FetchOptions options = {});
+  FetchHandle Fetch(const url::Url& url, FetchHandler& handler, FetchOptions options = {}) override;
+  void Cancel(uint64_t id) override;
+  void FollowRedirect(uint64_t id, bool follow, std::vector<std::pair<std::string, std::string>> headers = {}) override;
+  HttpClient* Http() override { return this; }
 
   // Closes the connections waiting in the pool.
-  void CloseIdleConnections();
+  void CloseIdleConnections() override;
 
   // What the client shares with whatever else makes connections for the same browser (WebSocket): the loop, the lookups, the cookies, the sites that
   // are https only, and the User-Agent it sends.

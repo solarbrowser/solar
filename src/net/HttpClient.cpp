@@ -203,6 +203,8 @@ struct Exchange : Http1ResponseParser::Sink, Http2Stream {
   FetchOptions options;
   url::Url current;
   int redirects = 0;
+  bool awaitingRedirect = false;           // the handler is to say whether the redirect is followed (see FetchHandler::DefersRedirects)
+  std::optional<url::Url> pendingNext;     // where it goes
   std::string method;                      // as sent: normalized, and changed by a redirect that turns a POST into a GET
   std::shared_ptr<const std::string> body;  // dropped by that redirect too
   bool crossSite = false;  // this request, or a request it was redirected from, is cross-site
@@ -883,6 +885,13 @@ void Exchange::FollowRedirect() {
   if (url::SerializeOrigin(*next) != url::SerializeOrigin(current)) {
     std::erase_if(options.headers, [](const auto& header) { return EqualsIgnoreCase(header.first, "authorization"); });
   }
+  if (handler.DefersRedirects()) {
+    awaitingRedirect = true;
+    pendingNext = std::move(*next);
+    HandlerCall held(*this);
+    handler.OnReceiveRedirect(*head, *pendingNext, options.headers);
+    return;
+  }
   bool allowed;
   {
     HandlerCall held(*this);
@@ -1109,10 +1118,29 @@ void HttpClient::CloseIdleConnections() {
   }
 }
 
+void HttpClient::Cancel(uint64_t id) {
+  auto it = impl_->exchanges.find(id);
+  if (it != impl_->exchanges.end()) it->second->Fail("aborted");
+}
+
+void HttpClient::FollowRedirect(uint64_t id, bool follow, std::vector<std::pair<std::string, std::string>> headers) {
+  auto it = impl_->exchanges.find(id);
+  if (it == impl_->exchanges.end()) return;
+  internal::Exchange& exchange = *it->second;
+  if (exchange.finished || !exchange.awaitingRedirect || !exchange.pendingNext) return;
+  exchange.awaitingRedirect = false;
+  if (!follow) {
+    exchange.Fail("the redirect was refused");
+    return;
+  }
+  exchange.options.headers = std::move(headers);
+  exchange.current = std::move(*exchange.pendingNext);
+  exchange.pendingNext.reset();
+  exchange.StartHop(false);
+}
+
 void FetchHandle::Cancel() {
-  if (!client_) return;
-  auto it = client_->impl_->exchanges.find(id_);
-  if (it != client_->impl_->exchanges.end()) it->second->Fail("aborted");
+  if (service_) service_->Cancel(id_);
 }
 
 }  // namespace solar::net

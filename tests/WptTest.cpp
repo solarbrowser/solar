@@ -291,7 +291,7 @@ PyAnswer RunPythonHandler(const std::string& file, const std::string& method, co
 
 class TestEnvironment : public solar::html::FrameEnvironment, public solar::webapi::WorkerHost {
  public:
-  TestEnvironment(qe::Isolate& isolate, solar::net::Loop& loop, solar::net::HttpClient& client, solar::web::JsEventLoop& events)
+  TestEnvironment(qe::Isolate& isolate, solar::net::Loop& loop, solar::net::NetworkService& client, solar::web::JsEventLoop& events)
       : isolate_(isolate), loop_(loop), client_(client), events_(events) {
     solar::webapi::SetWorkerHost(this);
   }
@@ -782,7 +782,7 @@ class TestEnvironment : public solar::html::FrameEnvironment, public solar::weba
   qe::Isolate& isolate_;
   std::map<std::string, std::pair<std::string, std::shared_ptr<qe::Script>>> scripts_;
   solar::net::Loop& loop_;
-  solar::net::HttpClient& client_;
+  solar::net::NetworkService& client_;
   solar::web::JsEventLoop& events_;
   std::vector<std::unique_ptr<RealmBundle>> bundles_;
 };

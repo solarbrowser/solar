@@ -156,7 +156,7 @@ struct RealmBundle {
 // What the pages get from the program: realms of one isolate, and the resources of the network and of the disk.
 class Browser : public solar::html::FrameEnvironment, public solar::webapi::WorkerHost {
  public:
-  Browser(qe::Isolate& isolate, solar::net::Loop& loop, solar::net::HttpClient& client, solar::web::JsEventLoop& events)
+  Browser(qe::Isolate& isolate, solar::net::Loop& loop, solar::net::NetworkService& client, solar::web::JsEventLoop& events)
       : isolate_(isolate), loop_(loop), client_(client), events_(events) {
     solar::webapi::SetWorkerHost(this);
   }
@@ -697,7 +697,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
   bool scanImages_ = false;
   qe::Isolate& isolate_;
   solar::net::Loop& loop_;
-  solar::net::HttpClient& client_;
+  solar::net::NetworkService& client_;
   solar::web::JsEventLoop& events_;
   std::string pageUrl_;
   std::map<std::string, std::string> types_;

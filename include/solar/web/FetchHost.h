@@ -28,7 +28,7 @@ class FetchHost {
  public:
   struct Config {
     net::Loop* loop = nullptr;
-    net::HttpClient* client = nullptr;
+    net::NetworkService* client = nullptr;  // (what the page asks the network of)
     // The page's URL: relative URLs in script resolve against it, and its origin is the origin of the
     // requests. A realm with no page can use about:blank, and then only absolute URLs work.
     url::Url pageUrl;

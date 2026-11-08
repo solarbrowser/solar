@@ -207,7 +207,78 @@ std::string Sample() {
 
 }  // namespace
 
+// A handler that is told of a redirect and answers it later, as a handler in another thread would.
+class Deferring : public solar::net::FetchHandler {
+ public:
+  bool DefersRedirects() const override { return true; }
+  void OnReceiveRedirect(const HttpResponseHead&, const solar::url::Url& next, const std::vector<std::pair<std::string, std::string>>& headers) override {
+    ++redirects;
+    lastNext = solar::url::Serialize(next);
+    lastHeaders = headers;
+    if (onRedirect) onRedirect();
+  }
+  bool OnRedirect(const HttpResponseHead&, const solar::url::Url&, std::vector<std::pair<std::string, std::string>>&) override {
+    ++syncCalls;  // (not asked of a handler that defers)
+    return true;
+  }
+  void OnResponseHead(const HttpResponseHead& head, const solar::url::Url& url) override {
+    status = head.status;
+    finalUrl = solar::url::Serialize(url);
+  }
+  void OnBody(std::span<const uint8_t> data) override { body.append(reinterpret_cast<const char*>(data.data()), data.size()); }
+  void OnEnd() override { ended = true; }
+  void OnError(std::string_view message) override { error = std::string(message); }
+  int redirects = 0, syncCalls = 0, status = 0;
+  std::string lastNext, finalUrl, body;
+  std::vector<std::pair<std::string, std::string>> lastHeaders;
+  bool ended = false;
+  std::optional<std::string> error;
+  std::function<void()> onRedirect;
+};
+
 int main() {
+  // ---- A redirect answered later ----
+  {
+    Log log;
+    TestServer server(Serves(log, [](const std::string& path) {
+      if (path == "/a") return Redirect("302 Found", "/b");
+      return Response("200 OK", path == "/b" ? "arrived" : "other");
+    }));
+    {
+      Session s;
+      Deferring handler;
+      solar::net::FetchHandle handle;
+      FetchOptions options;
+      options.headers = {{"X-Keep", "1"}};
+      handler.onRedirect = [&] {
+        // (Answered from a task of the loop, after the call that told of it has returned.)
+        s.loop->Post([&] { s.client->FollowRedirect(1, true, {{"X-Keep", "1"}, {"X-Added", "by the page"}}); });
+      };
+      handle = s.client->Fetch(*solar::url::Parse(Origin(server) + "/a"), handler, options);
+      s.loop->Run();
+      Check("a redirect is told to a handler that defers, and not asked of it", handler.redirects == 1 && handler.syncCalls == 0, std::to_string(handler.redirects));
+      Check("it is told where it goes and with which headers", handler.lastNext == Origin(server) + "/b" && Has(handler.lastHeaders.empty() ? std::string() : handler.lastHeaders[0].first + ": " + handler.lastHeaders[0].second, "X-Keep: 1"));
+      Check("the fetch goes on when it is answered", handler.ended && handler.body == "arrived" && handler.finalUrl == Origin(server) + "/b", handler.error.value_or(handler.finalUrl));
+      Check("the headers it gave are the next hop's", Has(log.Head(1), "X-Added: by the page") && Has(log.Head(1), "X-Keep: 1"), log.Head(1));
+    }
+    {
+      Session s;
+      Deferring handler;
+      handler.onRedirect = [&] { s.loop->Post([&] { s.client->FollowRedirect(1, false); }); };
+      s.client->Fetch(*solar::url::Parse(Origin(server) + "/a"), handler);
+      s.loop->Run();
+      Check("a redirect that is refused ends the fetch", !handler.ended && handler.error == std::optional<std::string>("the redirect was refused"), handler.error.value_or("followed"));
+    }
+    {
+      Session s;
+      Deferring handler;
+      solar::net::FetchHandle handle;
+      handler.onRedirect = [&] { s.loop->Post([&] { handle.Cancel(); }); };
+      handle = s.client->Fetch(*solar::url::Parse(Origin(server) + "/a"), handler);
+      s.loop->Run();
+      Check("a fetch that is waiting for the answer can be cancelled", !handler.ended && handler.error == std::optional<std::string>("aborted"), handler.error.value_or(""));
+    }
+  }
   // ---- Redirects ----
   {
     Log log;
