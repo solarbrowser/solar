@@ -107,6 +107,8 @@ class Collector : public solar::net::FetchHandler {
   void OnBody(std::span<const uint8_t> data) override { body.append(reinterpret_cast<const char*>(data.data()), data.size()); }
   void OnEnd() override { done = true; }
   bool OnRestart() override {
+    // (A page that is being parsed as it comes cannot be given again from the start.)
+    if (streaming) return false;
     body.clear();
     status = 0;
     contentType.clear();
@@ -119,6 +121,7 @@ class Collector : public solar::net::FetchHandler {
   }
   int status = 0;
   bool failed = false, done = false;
+  bool streaming = false;  // the page is parsed as it comes: the bytes that came are not taken back
   std::string body, contentType, address, error;
 };
 
@@ -548,11 +551,42 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
   // What the page will ask for as it is parsed, found in the markup before that: stylesheets, scripts and pictures are started at once, so that
   // the network does them together (https://html.spec.whatwg.org/multipage/parsing.html#preload-scanner).
   void Prefetch(const std::string& markup, const std::string& baseAddress) {
+    scanStarted_ = 0;
+    scanImages_ = false;
+    ScanForResources(markup, baseAddress);
+  }
+  // The same for a page that comes in pieces: what came since is looked at, as far as the last tag that is all there (a tag cut in two is looked at when the rest comes).
+  void BeginStreamScan() { scanFrom_ = 0, scanStarted_ = 0, scanImagesStarted_ = 0, scanImages_ = !std::getenv("SOLAR_NO_IMG_SCAN"); }
+  void StreamScan(const std::string& body, const std::string& baseAddress, bool final) {
+    if (scanFrom_ >= body.size()) return;
+    std::string segment = body.substr(scanFrom_);
+    if (!final) {
+      const size_t lastEnd = segment.rfind('>');
+      if (lastEnd == std::string::npos) return;
+      segment.resize(lastEnd + 1);
+    }
+    scanFrom_ += segment.size();
+    ScanForResources(segment, baseAddress);
+  }
+
+  // Waits for the document to have more than `have` bytes, or to be all here (the page's own tasks run meanwhile, and what the page has so far is shown).
+  void WaitForDocument(const Collector& collector, size_t have) {
+    solar::dom::CommittedViewSuspend suspend;
+    const auto waitStart = Clock::now();
+    while (collector.body.size() <= have && !collector.done) {
+      events_.Step(std::chrono::milliseconds(std::getenv("SOLAR_SLICE") ? std::atoi(std::getenv("SOLAR_SLICE")) : 8));
+      if (pump_) pump_();
+      if (idle_ && collector.body.size() <= have && !collector.done && !solar::html::LoadingStyleSheet()) idle_();
+    }
+    waited_ += std::chrono::duration<double, std::milli>(Clock::now() - waitStart).count();
+  }
+
+  void ScanForResources(const std::string& markup, const std::string& baseAddress) {
     std::optional<solar::url::Url> base = solar::url::Parse(baseAddress);
     if (!base) return;
     std::string lower = markup;
     for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    int started = 0;
+    int& started = scanStarted_;
     const auto attribute = [&](const std::string& tag, const std::string& tagLower, const char* name) -> std::string {
       size_t at = 0;
       const std::string key = std::string(name);
@@ -582,7 +616,9 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
       std::optional<solar::url::Url> url = solar::url::Parse(value, &*base);
       return url ? solar::url::Serialize(*url) : std::string();
     };
-    for (const char* name : {"<link", "<script"}) {  // (pictures wait: what the page needs to be made goes first)
+    // (Pictures wait: what the page needs to be made goes first. In a page that comes in pieces they are asked for too, as far as the network has room, the ones that are not lazy.)
+    for (const char* name : {"<link", "<script", "<img"}) {
+      if (std::string_view(name) == "<img" && !scanImages_) continue;
       size_t at = 0;
       const std::string needle = name;
       while ((at = lower.find(needle, at)) != std::string::npos && started < 80) {
@@ -612,6 +648,14 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
         if (target.empty() || target.starts_with("data:")) continue;
         const std::string absolute = resolve(target);
         if (absolute.empty()) continue;
+        if (needle == "<img") {
+          if (attribute(tag, tagLower, "loading") == "lazy" || scanImagesStarted_ >= 24) continue;
+          int inFlight = 0;
+          for (const auto& entry : resources_) inFlight += entry.second->done ? 0 : 1;
+          if (inFlight >= 8) continue;
+          if (Start(absolute)) ++scanImagesStarted_;
+          continue;
+        }
         if (Start(absolute)) ++started;
       }
     }
@@ -641,6 +685,9 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
   void SetContentType(const std::string& url, const std::string& type) { types_[url] = type; }
 
  private:
+  size_t scanFrom_ = 0;  // how far a page that comes in pieces has been looked at for what it asks for
+  int scanStarted_ = 0, scanImagesStarted_ = 0;
+  bool scanImages_ = false;
   qe::Isolate& isolate_;
   solar::net::Loop& loop_;
   solar::net::HttpClient& client_;
@@ -1447,7 +1494,8 @@ int PageMain(Shared& shared, int argc, char** argv) {
   solar::dom::Element* pressTarget = nullptr;
   int pressButton = 0;
   const bool timing_log = std::getenv("SOLAR_GUI_TIMES") != nullptr;
-  const auto commit = [&](const std::string& where, std::string markup, std::string type, const Clock::time_point& started) {
+  // `stream`: the page is parsed as it comes from this fetch (`markup` is what came first), not once all of it is here.
+  const auto commit = [&](const std::string& where, std::string markup, std::string type, const Clock::time_point& started, Collector* stream = nullptr) {
     // (SOLAR_INJECT_HEAD=file: the text of the file is put right after <head> of each page that comes, for looking into what a page's scripts do.)
     if (const char* inject = std::getenv("SOLAR_INJECT_HEAD")) {
       std::ifstream in(inject, std::ios::binary);
@@ -1479,7 +1527,12 @@ int PageMain(Shared& shared, int argc, char** argv) {
     {
       const auto parsedAddress = solar::url::Parse(address);
       const bool hasWorker = parsedAddress && solar::webapi::HasServiceWorkerFor(solar::url::SerializeOrigin(*parsedAddress), address);
-      if (!hasWorker) browser.Prefetch(markup, address);
+      if (stream) {
+        browser.BeginStreamScan();
+        browser.StreamScan(markup, address, false);
+      } else if (!hasWorker) {
+        browser.Prefetch(markup, address);
+      }
     }
     realm = browser.CreateRealm();
     solar::html::RunInRealm(*realm, [&] {
@@ -1492,7 +1545,23 @@ int PageMain(Shared& shared, int argc, char** argv) {
     loadingPage = true;
     firstEarly = true;
     nextEarly = Clock::now() + std::chrono::milliseconds(150);
-    solar::html::LoadPage(*realm, document, markup, type);
+    if (stream) {
+      // (What came is given to the parser a piece at a time, as it asks for more; the scanner looks ahead of it at what is in each piece.)
+      size_t taken = 0;  // (the first piece is in the body already: the parser gets it with the rest, from the start)
+      solar::html::LoadPageStreaming(*realm, document, [&, taken](std::string& out) mutable -> bool {
+        browser.WaitForDocument(*stream, taken);
+        out.assign(stream->body, taken, std::string::npos);
+        taken = stream->body.size();
+        browser.StreamScan(stream->body, address, stream->done);
+        if (stream->failed) std::fprintf(stderr, "fetch failed: %s\n", stream->error.c_str());
+        return !stream->done;
+      });
+    } else {
+      solar::html::LoadPage(*realm, document, markup, type);
+    }
+    if (std::getenv("SOLAR_DOC_SIZE")) {
+      solar::html::RunInRealm(*realm, [&] { realm->Evaluate("console.log('doc elements ' + document.querySelectorAll('*').length + ' html ' + document.documentElement.outerHTML.length + ' links ' + document.querySelectorAll('link[rel=stylesheet]').length + ' hash ' + Array.from(document.documentElement.outerHTML).reduce((h, c) => (h * 31 + c.codePointAt(0)) | 0, 7) + ' title ' + document.title + ' bodychildren ' + document.body.children.length + ' head ' + document.head.children.length + ' htmlkids ' + Array.from(document.documentElement.children).map(e => e.localName).join(',') + ' firstbody ' + Array.from(document.body.children).slice(0, 12).map(e => e.localName + (e.id ? '#' + e.id : '')).join(','))", "size"); });
+    }
     if (timing_log) std::fprintf(stderr, "[%.0f ms] LoadPage ends\n", std::chrono::duration<double, std::milli>(Clock::now().time_since_epoch()).count());
     if (timing_log) std::fprintf(stderr, "  LoadPage took %.0f ms (%.0f ms of it waiting; scripts %.0f ms, style sheets parsed %.0f ms, layout %.0f ms)\n", std::chrono::duration<double, std::milli>(Clock::now() - loadStart).count(), browser.waited_, solar::html::ScriptMillis(), solar::css::SheetParseMillis(), solar::layout::LayoutMillis());
     const auto stepStart = Clock::now();
@@ -1602,8 +1671,18 @@ int PageMain(Shared& shared, int argc, char** argv) {
     if (shared.quit.load()) std::_Exit(0);
   };
   // The document that came: it is put in a realm, unless a newer address was asked for since.
+  // A page of HTML in UTF-8 that is coming is parsed as it comes (not for a page that is changed on its way, or whose encoding is not known from its headers).
+  const auto streamable = [&](const Collector& c) {
+    static const bool off = std::getenv("SOLAR_NO_STREAM") != nullptr || std::getenv("SOLAR_INJECT_HEAD") != nullptr || std::getenv("SOLAR_DUMP_DOC") != nullptr;
+    if (off || c.done || c.failed || c.status != 200 || c.body.empty()) return false;
+    std::string type = c.contentType;
+    for (char& ch : type) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    if (type.find("text/html") == std::string::npos) return false;
+    return type.find("charset=utf-8") != std::string::npos || type.find("charset=\"utf-8\"") != std::string::npos;
+  };
   const auto settleNavigation = [&] {
-    if (!current || !current->collector.done) return;
+    if (!current) return;
+    if (!current->collector.done && !streamable(current->collector)) return;
     Navigation* arrived = current;
     current = nullptr;
     Collector& collector = arrived->collector;
@@ -1613,6 +1692,14 @@ int PageMain(Shared& shared, int argc, char** argv) {
       title.kind = UiCommand::Kind::Title;
       title.text = "Solar - " + address;
       shared.Post(std::move(title));
+      return;
+    }
+    if (!collector.done) {
+      // It is not all here: the page is parsed as the rest comes.
+      collector.streaming = true;
+      if (std::getenv("SOLAR_GUI_TIMES")) std::fprintf(stderr, "  document begins at %.0f ms (%zu bytes so far)\n", std::chrono::duration<double, std::milli>(Clock::now() - arrived->started).count(), collector.body.size());
+      const std::string first = collector.body;
+      commit(collector.address.empty() ? arrived->where : collector.address, first, "text/html", arrived->started, &collector);
       return;
     }
     if (std::getenv("SOLAR_GUI_TIMES")) std::fprintf(stderr, "  document fetched at %.0f ms (%zu bytes)\n", std::chrono::duration<double, std::milli>(Clock::now() - arrived->started).count(), collector.body.size());
@@ -1751,7 +1838,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
   timers.afterTask = paintEarly;
   if (!navigate(address)) return 1;
   // (The first page is waited for, as a program that starts with one.)
-  while (current && !current->collector.done) {
+  while (current && !current->collector.done && !streamable(current->collector)) {
     events.Step(std::chrono::milliseconds(8));
     browser.pump_();
   }

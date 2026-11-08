@@ -2,6 +2,7 @@
 // the web-platform-tests' copy of html5lib's) through the parser, and compares the DOM it makes with theirs.
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -132,6 +133,31 @@ int main(int argc, char** argv) {
   }
   auto runtime = Runtime::Create();
   Quanta::Context& ctx = runtime->GetContext();
+  // (SOLAR_COMPARE_FILE=page.html: the page parsed at once and in pieces of SOLAR_STREAM_CHUNK bytes (4096 if none), and whether the two trees are the same.)
+  if (const char* path = std::getenv("SOLAR_COMPARE_FILE")) {
+    std::ifstream in(path, std::ios::binary);
+    const std::string markup((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const size_t size = std::getenv("SOLAR_STREAM_CHUNK") ? std::max<size_t>(1, std::strtoul(std::getenv("SOLAR_STREAM_CHUNK"), nullptr, 10)) : 4096;
+    dom::Document* whole = dom::NewDocument(ctx, true);
+    html::ParseDocument(ctx, whole, markup, html::ScriptingMode::Normal, nullptr, std::getenv("SOLAR_COMPARE_HANDLER") ? html::ScriptHandler([](dom::Element*) {}) : html::ScriptHandler());
+    dom::Document* pieces = dom::NewDocument(ctx, true);
+    size_t at = 0;
+    html::ParseDocumentStreaming(ctx, pieces, [&](std::string& out) {
+      out = markup.substr(at, size);
+      at += out.size();
+      return at < markup.size();
+    }, html::ScriptingMode::Normal, std::getenv("SOLAR_COMPARE_HANDLER") ? html::ScriptHandler([](dom::Element*) {}) : html::ScriptHandler());
+    std::string a, b;
+    Dump(whole, 0, a);
+    Dump(pieces, 0, b);
+    std::printf("%s: %zu bytes, chunk %zu: %s (%zu vs %zu characters of tree)\n", path, markup.size(), size, a == b ? "same" : "DIFFERENT", a.size(), b.size());
+    if (a != b) {
+      size_t i = 0;
+      while (i < a.size() && i < b.size() && a[i] == b[i]) ++i;
+      std::printf("first difference at %zu:\n  whole : %.200s\n  pieces: %.200s\n", i, a.substr(i > 80 ? i - 80 : 0, 200).c_str(), b.substr(i > 80 ? i - 80 : 0, 200).c_str());
+    }
+    return a == b ? 0 : 1;
+  }
   int passed = 0, failed = 0;
   for (const std::string& file : files) {
     // The scripted tests need scripts to run, which the parser does not do yet.
@@ -144,7 +170,18 @@ int main(int argc, char** argv) {
       std::string actual;
       if (test.fragmentContext.empty()) {
         dom::Document* document = dom::NewDocument(ctx, true);
-        html::ParseDocument(ctx, document, test.data, scripting);
+        if (const char* chunk = std::getenv("SOLAR_STREAM_CHUNK")) {
+          // (The same markup given in pieces of that many bytes: the tree has to be the one of all of it at once.)
+          const size_t size = std::max<size_t>(1, std::strtoul(chunk, nullptr, 10));
+          size_t at = 0;
+          html::ParseDocumentStreaming(ctx, document, [&](std::string& out) {
+            out = test.data.substr(at, size);
+            at += out.size();
+            return at < test.data.size();
+          }, scripting);
+        } else {
+          html::ParseDocument(ctx, document, test.data, scripting);
+        }
         Dump(document, 0, actual);
       } else {
         std::string name = test.fragmentContext, ns(dom::kHtmlNamespace);

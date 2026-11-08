@@ -154,6 +154,9 @@ bool ValidityQuery(const dom::Element* element, int which);
 // Parses `markup` into `document`, a document made in `realm` that has had InstallWindow, runs its scripts, and
 // fires DOMContentLoaded and, once the frames in it have loaded, load. Returns whether every script ran.
 bool LoadPage(Quanta::Embed::Realm& realm, dom::Document* document, std::string_view markup, std::string_view contentType = "text/html");
+// The same for a page of HTML in UTF-8 whose markup comes in pieces from the network: it is parsed as it comes, and `next` (asked for the next piece, which it may wait for) gives false
+// when the piece it gave is the last. What the page needs is asked for as the parser meets it (and by the preload scanner before that), not once all of it is here.
+bool LoadPageStreaming(Quanta::Embed::Realm& realm, dom::Document* document, std::function<bool(std::string&)> next);
 
 // The address that relative ones in a document are resolved against, and the loader's answer for an address (a blob:
 // URL's bytes included).

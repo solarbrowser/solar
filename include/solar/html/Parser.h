@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -21,6 +22,12 @@ namespace solar::html {
 // parser waits for it.
 void ParseDocument(Quanta::Context& ctx, dom::Document* document, std::string_view markup, ScriptingMode scripting = ScriptingMode::Disabled,
                    std::vector<std::string>* errors = nullptr, ScriptHandler scriptHandler = nullptr, bool allowDeclarativeShadowRoots = true);
+
+// The same for markup that comes in pieces, as a page does from the network: `next` is asked for the next piece (and may wait for it); it returns false when the piece it gave is the
+// last (or there is none). The tree is made as far as what has come goes, and goes on when the next piece is here; a piece may end anywhere (a character or a token cut in two is
+// held until the rest comes).
+void ParseDocumentStreaming(Quanta::Context& ctx, dom::Document* document, const std::function<bool(std::string&)>& next, ScriptingMode scripting = ScriptingMode::Disabled,
+                            ScriptHandler scriptHandler = nullptr, bool allowDeclarativeShadowRoots = true);
 
 // The HTML fragment parsing algorithm: the nodes `markup` is, in the context of `context`, as the children of
 // a new DocumentFragment. It is what innerHTML and insertAdjacentHTML are made of.

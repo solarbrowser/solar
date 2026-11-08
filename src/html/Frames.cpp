@@ -161,7 +161,7 @@ void QueueTask(dom::Document* document, const char* label, dom::Element* element
 
 // ---- Loading a page ----
 
-bool LoadPageIn(Quanta::Embed::Realm& realm, dom::Document* document, const std::string& markup, const std::string& contentType);
+bool LoadPageIn(Quanta::Embed::Realm& realm, dom::Document* document, const std::string& markup, const std::string& contentType, const std::function<bool(std::string&)>* stream = nullptr);
 void CompleteLoad(Quanta::Embed::Realm& realm, dom::Document* document, bool notifyFrame);
 
 // What kind of script an element is, as the standard works it out from type and language: "module", "importmap", "text/javascript" for a classic script (any of the types that are JavaScript's), or
@@ -903,6 +903,13 @@ bool LoadPage(Quanta::Embed::Realm& realm, dom::Document* document, std::string_
   return ok;
 }
 
+bool LoadPageStreaming(Quanta::Embed::Realm& realm, dom::Document* document, std::function<bool(std::string&)> next) {
+  bool ok = true;
+  document->characterSet = "UTF-8";
+  RunAs(realm, [&] { ok = LoadPageIn(realm, document, std::string(), "text/html", &next); });
+  return ok;
+}
+
 namespace {
 
 // The end of parsing: the document is interactive, DOMContentLoaded, and load once the frames in it have loaded.
@@ -923,7 +930,7 @@ void CompleteLoad(Quanta::Embed::Realm& realm, dom::Document* document, bool not
   else document->whenFramesLoaded = finish;
 }
 
-bool LoadPageIn(Quanta::Embed::Realm& realm, dom::Document* document, const std::string& markup, const std::string& contentType) {
+bool LoadPageIn(Quanta::Embed::Realm& realm, dom::Document* document, const std::string& markup, const std::string& contentType, const std::function<bool(std::string&)>* stream) {
   Context& ctx = realm.GetContext();
   document->readyState = "loading";
   bool ok = true;
@@ -956,7 +963,8 @@ bool LoadPageIn(Quanta::Embed::Realm& realm, dom::Document* document, const std:
     if (!RunScript(realm, document, script)) ok = false;
   };
   if (contentType == "text/html") {
-    ParseDocument(ctx, document, markup, ScriptingMode::Normal, nullptr, run);
+    if (stream) ParseDocumentStreaming(ctx, document, *stream, ScriptingMode::Normal, run);
+    else ParseDocument(ctx, document, markup, ScriptingMode::Normal, nullptr, run);
   } else {
     // An XML document: a page of its own kind of parser, which stops at the first thing wrong.
     document->isHtml = false;
