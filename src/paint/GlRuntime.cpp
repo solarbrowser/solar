@@ -1030,6 +1030,7 @@ std::unique_ptr<Context> Context::Create(int version, const std::string& attribu
     if (at == std::string::npos) return fallback;
     return attributes.compare(at + std::strlen(key) + 3, 4, "true") == 0;
   };
+  if (std::getenv("SOLAR_GL_DEBUG")) std::fprintf(stderr, "gl: a context is asked for, version %d, attributes %s, %dx%d\n", version, attributes.c_str(), width, height);
   g->antialias = flag("antialias", true);
   g->alpha = flag("alpha", true);
   g->depth = flag("depth", true);
@@ -1117,7 +1118,16 @@ Result Context::Call(size_t operation, Args args) {
   paint::GlContext& g = *impl_->g;
   paint::MakeCurrent(g);
   paint::Ctx ctx;
-  return operations[operation].second(g, ctx, args);
+  Result result = operations[operation].second(g, ctx, args);
+  if (std::getenv("SOLAR_GL_DEBUG") && operations[operation].first.rfind("create", 0) == 0 && result.kind == Result::Kind::Number && result.number == 0) {
+    using GetReset = unsigned (*)();
+    auto reset = reinterpret_cast<GetReset>(g.egl->getProc ? g.egl->getProc("glGetGraphicsResetStatusEXT") : nullptr);
+    using EglGetError = int (*)();
+    auto eglError = reinterpret_cast<EglGetError>(paint::Proc<void*>(*g.egl, "eglGetError"));
+    static int shown = 0;
+    if (shown++ < 3) std::fprintf(stderr, "gl: %s gave 0 (GL error 0x%x, reset status 0x%x, EGL error 0x%x, context %p)\n", operations[operation].first.c_str(), g.gl->GetError(), reset ? reset() : 0, eglError ? eglError() : 0, g.context);
+  }
+  return result;
 }
 
 bool Context::shares() const { return impl_->g->shared; }
@@ -1138,6 +1148,11 @@ bool Context::Publish(Snapshot& out) {
     glApi.GetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
     glApi.GetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDraw);
     glApi.GenTextures(1, &g.snapshotTexture);
+    if (g.snapshotTexture == 0 && std::getenv("SOLAR_GL_DEBUG")) {
+      using GetReset = unsigned (*)();
+      auto reset = reinterpret_cast<GetReset>(g.egl->getProc ? g.egl->getProc("glGetGraphicsResetStatusEXT") : nullptr);
+      std::fprintf(stderr, "gl: no texture could be made for the snapshot (GL error 0x%x, reset status 0x%x, %dx%d, version %d, antialias %d, stencil %d, depth %d)\n", glApi.GetError(), reset ? reset() : 0, w, h, g.version, g.antialias, g.stencil, g.depth);
+    }
     glApi.BindTexture(GL_TEXTURE_2D, g.snapshotTexture);
     glApi.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     glApi.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -1343,7 +1358,11 @@ bool CreateRasterContext(RasterEgl& out, std::string* why) {
   };
   out.makeCurrent = [](void* display, void* context) -> bool {
     paint::Egl& e = paint::TheEgl();
-    return paint::Proc<EGLBoolean (*)(EGLDisplay, EGLSurface, EGLSurface, EGLContext)>(e, "eglMakeCurrent")(display, EGL_NO_SURFACE, EGL_NO_SURFACE, context ? context : EGL_NO_CONTEXT);
+    // (What WebGL's contexts remember of which is current in the thread is told: the page's drawing and they are in one thread, and a context that is thought to be current when it is not
+    // makes its calls go nowhere: names come back as 0 and nothing is drawn.)
+    paint::g_current = EGL_NO_CONTEXT;
+    const bool made = paint::Proc<EGLBoolean (*)(EGLDisplay, EGLSurface, EGLSurface, EGLContext)>(e, "eglMakeCurrent")(display, EGL_NO_SURFACE, EGL_NO_SURFACE, context ? context : EGL_NO_CONTEXT);
+    return made;
   };
   // (WebGL's contexts are made to share their textures with it.)
   SetShare(out.display, out.context);

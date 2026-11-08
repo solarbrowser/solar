@@ -258,6 +258,7 @@ void ServeGl(int fd, uint64_t token) {
         for (uint32_t i = 0; i < count && good; ++i) {
           glwire::Call call;
           if (!glwire::ReadCall(in, call, names.size(), names)) {
+            std::fprintf(stderr, "gpu process: a call of a page's WebGL was not good (call %u of %u, operation %u %s): the page is let go of\n", i, count, call.operation, call.operation < names.size() ? names[call.operation].c_str() : "?");
             good = false;
             break;
           }
