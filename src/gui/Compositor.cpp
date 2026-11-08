@@ -24,6 +24,7 @@
 #include "solar/paint/SkiaPainter.h"
 #include "Renderer.h"
 #include "RemoteAudio.h"
+#include "RemoteStorage.h"
 
 namespace solar::gui {
 
@@ -481,6 +482,7 @@ std::thread StartWindowLink(Shared& shared, net::ipc::Channel& link) {
           if (in.ok()) DeliverAudioQueued(id, frames);
           break;
         }
+        case wire::ToRenderer::StorageReply: DeliverStorageReply(bytes); break;
         case wire::ToRenderer::Shutdown: shared.quit = true; break;
         default: break;  // (A message that is none is not taken.)
       }

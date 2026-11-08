@@ -18,6 +18,7 @@
 #include "solar/net/Ipc.h"
 #include "solar/net/PageFetch.h"
 #include "solar/url/Parser.h"
+#include "solar/web-api/Storage.h"
 #include "support/TestServer.h"
 
 using namespace solar;
@@ -48,6 +49,9 @@ struct Page {
   std::mutex mutex;
   std::map<uint32_t, Heard> heard;
   std::atomic<int> fetchResponses{0}, fetchErrors{0};
+  struct StorageAnswer { bool ok = false; std::string data; bool arrived = false; };
+  std::map<uint32_t, StorageAnswer> storage;
+  uint32_t nextStorage = 1;
   net::ipc::Channel windowEnd, networkEnd;
   std::thread windowReader, networkReader;
 
@@ -72,6 +76,15 @@ struct Page {
           case gui::wire::ToRenderer::NavBody: {
             const uint32_t id = in.U32();
             heard[id].body += in.String();
+            break;
+          }
+          case gui::wire::ToRenderer::StorageReply: {
+            const uint32_t id = in.U32();
+            const bool ok = in.Bool();
+            StorageAnswer& answer = storage[id];
+            answer.ok = ok;
+            answer.data = in.String();
+            answer.arrived = true;
             break;
           }
           case gui::wire::ToRenderer::NavEnd: heard[in.U32()].ended = true; break;
@@ -115,6 +128,31 @@ struct Page {
     net::ipc::Writer out;
     out.String(url);
     windowEnd.SendRaw(static_cast<uint8_t>(gui::wire::ToBrowser::NavCommitted), out.bytes());
+  }
+  // A storage request, answered.
+  StorageAnswer Store(gui::wire::StorageRequest::Op op, uint8_t area, const std::string& origin, const std::string& file, const std::string& data = "", uint32_t maxBytes = 0) {
+    gui::wire::StorageRequest request;
+    request.op = op;
+    request.area = area;
+    request.origin = origin;
+    request.file = file;
+    request.data = data;
+    request.maxBytes = maxBytes;
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      request.id = nextStorage++;
+    }
+    net::ipc::Writer out;
+    gui::wire::Write(out, request);
+    windowEnd.SendRaw(static_cast<uint8_t>(gui::wire::ToBrowser::Storage), out.bytes());
+    for (int i = 0; i < 300; ++i) {
+      {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (storage[request.id].arrived) return storage[request.id];
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return {};
   }
   bool WaitEnded(uint32_t id) {
     for (int i = 0; i < 300; ++i) {
@@ -161,6 +199,9 @@ struct BrowserSide {
         if (type == static_cast<uint8_t>(gui::wire::ToBrowser::Navigate)) {
           gui::wire::Navigate request;
           if (gui::wire::Read(in, request)) tab.Navigate(std::move(request));
+        } else if (type == static_cast<uint8_t>(gui::wire::ToBrowser::Storage)) {
+          gui::wire::StorageRequest request;
+          if (gui::wire::Read(in, request)) tab.Storage(std::move(request));
         } else if (type == static_cast<uint8_t>(gui::wire::ToBrowser::NavCommitted)) {
           const std::string address = in.String();
           if (in.ok()) tab.Committed(address);
@@ -231,6 +272,26 @@ int main() {
     Check("when the page commits to one, the others are taken back", page.Ask(6, Origin(b) + "/", Origin(b) + "/y") && !page.Ask(7, Origin(a) + "/", Origin(a) + "/z"));
     page.Committed("http://never-allowed.test/");
     Check("a commit to an origin it was not let have takes nothing", page.Ask(8, Origin(b) + "/", Origin(b) + "/w"));
+
+    {
+      // What the page stores: for the origin it has, not for another, and no path.
+      using Op = gui::wire::StorageRequest::Op;
+      const std::string mine = Origin(b), other = Origin(a);
+      const std::string idbFile = webapi::StorageId(webapi::StorageArea::IndexedDb, "db");
+      Check("a file is stored for the origin the page has", page.Store(Op::Write, 0, mine, idbFile, "header\nbody").ok);
+      const auto read = page.Store(Op::Read, 0, mine, idbFile);
+      Check("and read back", read.ok && read.data == "header\nbody");
+      Check("and read by its head", page.Store(Op::Read, 0, mine, idbFile, "", 6).data == "header");
+      Check("and listed", page.Store(Op::List, 0, mine, "").data == idbFile + "\n");
+      Check("an origin the page has not is refused", !page.Store(Op::Write, 0, other, idbFile, "x").ok && !page.Store(Op::Read, 0, other, idbFile).ok && !page.Store(Op::List, 0, other, "").ok);
+      Check("an origin that is made up is refused", !page.Store(Op::Read, 0, "https://victim.test", idbFile).ok);
+      Check("an id that is a path is refused", !page.Store(Op::Write, 0, mine, "../../escape.idb", "x").ok && !page.Store(Op::Read, 0, mine, "../" + idbFile).ok);
+      Check("an area that is none is not taken", !page.Store(Op::Read, 9, mine, idbFile).ok);
+      Check("a file is removed", page.Store(Op::Remove, 0, mine, idbFile).ok && !page.Store(Op::Read, 0, mine, idbFile).ok);
+      // (The registrations of the workers of an origin are read for any, to see whether a navigation to it is for one.)
+      const std::string registrations = webapi::StorageId(webapi::StorageArea::Kv, "sw-registrations");
+      Check("the registrations of another origin may be read (and nothing else of it)", page.Store(Op::Write, 2, mine, registrations, "[]").ok && !page.Store(Op::Read, 2, other, registrations).ok == true && !page.Store(Op::Write, 2, other, registrations, "[]").ok);
+    }
 
     page.Go(4, Origin(a) + "/form", "POST", "a=1&b=2");
     Check("a POST is sent with its body", page.WaitEnded(4) && page.Get(4).body == "posted");

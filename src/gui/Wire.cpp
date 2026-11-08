@@ -119,4 +119,25 @@ bool Read(Reader& in, NavHead& h) {
   return in.ok();
 }
 
+void Write(Writer& out, const StorageRequest& r) {
+  out.U8(static_cast<uint8_t>(r.op));
+  out.U32(r.id);
+  out.U8(r.area);
+  out.String(r.origin);
+  out.String(r.file);
+  out.U32(r.maxBytes);
+  out.String(r.data);
+}
+
+bool Read(Reader& in, StorageRequest& r) {
+  r.op = in.EnumUpTo(StorageRequest::Op::List);
+  r.id = in.U32();
+  r.area = in.U8();
+  r.origin = in.String(1 << 12);
+  r.file = in.String(64);
+  r.maxBytes = in.U32();
+  r.data = in.String(kMaxStorageFile);
+  return in.ok() && r.area <= 2;
+}
+
 }  // namespace solar::gui::wire

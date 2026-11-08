@@ -68,6 +68,7 @@
 #include "solar/gui/Wire.h"
 #include "Navigation.h"
 #include "RemoteAudio.h"
+#include "RemoteStorage.h"
 #include "Services.h"
 #include "solar/gui/Sandbox.h"
 #include "Renderer.h"
@@ -949,6 +950,7 @@ int RendererMain(int fd, int networkFd, int argc, char** argv, bool sandboxed = 
   Shared shared;
   shared.sandboxed = sandboxed;
   solar::gui::InstallRemoteAudio(link);
+  solar::gui::InstallRemoteStorage(link);
   shared.networkFd = networkFd;
   shared.browserLink = &link;
   // The window says how large it is first: the page starts knowing it.
@@ -1015,8 +1017,7 @@ int RendererMain(int fd, int networkFd, int argc, char** argv, bool sandboxed = 
 }
 }  // namespace
 
-// What the page's process may read and write once it is shut in. Fonts, libraries and the few files of the system a program of this kind reads; the engine's data; the place the page's
-// own storage is kept (for now: it is a directory of the user's and not the browser's, which is to change); and, for a page that was asked for by a file, the directory of that file.
+// What the page's process may read and write once it is shut in. Fonts, libraries and the few files of the system a program of this kind reads; the engine's data; and, for a page that was asked for by a file, the directory of that file.
 solar::gui::SandboxPolicy RendererPolicy(const std::string& given) {
   solar::gui::SandboxPolicy policy;
   const char* home = std::getenv("HOME");
@@ -1028,7 +1029,6 @@ solar::gui::SandboxPolicy RendererPolicy(const std::string& given) {
   if (!user.empty()) {
     policy.readable.push_back(user + "/.fonts");
     policy.readable.push_back(user + "/.local/share/fonts");
-    policy.writable.push_back(user + "/.local/share/solar");
     policy.readable.push_back(user + "/.cache/solar/fonts-v2.cache");  // (what the documents' font lists read; the list is written before the process is shut in)
   }
   if (const char* cache = std::getenv("XDG_CACHE_HOME")) policy.readable.push_back(std::string(cache) + "/solar/fonts-v2.cache");

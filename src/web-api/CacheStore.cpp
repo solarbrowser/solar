@@ -21,13 +21,13 @@
 #include <vector>
 
 #include "solar/web-api/IndexedDb.h"
+#include "solar/web-api/Storage.h"
 
 namespace solar::webapi {
 
 namespace qe = Quanta::Embed;
 using Quanta::Context;
 using Quanta::Value;
-namespace fs = std::filesystem;
 
 namespace {
 
@@ -54,29 +54,10 @@ std::map<std::string, Origin>& Origins() {
   return origins;
 }
 
-std::string HexOf(const std::string& text) {
-  uint64_t hash = 1469598103934665603ull;  // FNV-1a
-  for (unsigned char c : text) {
-    hash ^= c;
-    hash *= 1099511628211ull;
-  }
-  char buffer[17];
-  std::snprintf(buffer, sizeof buffer, "%016llx", static_cast<unsigned long long>(hash));
-  return buffer;
-}
+constexpr StorageArea kCache = StorageArea::Cache;
+constexpr StorageArea kKv = StorageArea::Kv;
 
-fs::path RootOf(const char* kind) { return fs::path(IndexedDbDirectory() + "-" + kind); }
-
-fs::path OriginDir(const char* kind, const std::string& origin) {
-  std::string readable;
-  for (char c : origin) {
-    if (readable.size() >= 40) break;
-    readable += (std::isalnum(static_cast<unsigned char>(c)) || c == '.' || c == '-') ? c : '_';
-  }
-  return RootOf(kind) / (HexOf(origin) + "-" + readable);
-}
-
-bool Persistent(const std::string& origin) { return origin != "null" && !origin.empty() && !IndexedDbDirectory().empty(); }
+bool Persistent(const std::string& origin) { return origin != "null" && !origin.empty() && !StorageDirectory().empty(); }
 
 void PutU32(std::string& out, uint32_t v) { out.append(reinterpret_cast<const char*>(&v), 4); }
 void PutU64(std::string& out, uint64_t v) { out.append(reinterpret_cast<const char*>(&v), 8); }
@@ -86,14 +67,11 @@ void Load(const std::string& origin, Origin& o) {
   if (o.loaded) return;
   o.loaded = true;
   if (!Persistent(origin)) return;
-  std::error_code error;
   std::vector<std::pair<uint64_t, std::pair<std::string, Cache>>> found;
-  for (fs::directory_iterator it(OriginDir("cache", origin), error), end; !error && it != end; it.increment(error)) {
-    if (it->path().extension() != ".cache") continue;
-    std::ifstream in(it->path(), std::ios::binary);
-    std::stringstream buffer;
-    buffer << in.rdbuf();
-    const std::string data = buffer.str();
+  for (const std::string& id : CurrentStorage().List(kCache, origin)) {
+    const std::optional<std::string> file = CurrentStorage().Read(kCache, origin, id);
+    if (!file) continue;
+    const std::string& data = *file;
     size_t at = 0;
     auto u32 = [&](uint32_t& v) { if (at + 4 > data.size()) return false; std::memcpy(&v, data.data() + at, 4); at += 4; return true; };
     auto u64 = [&](uint64_t& v) { if (at + 8 > data.size()) return false; std::memcpy(&v, data.data() + at, 8); at += 8; return true; };
@@ -135,8 +113,6 @@ Origin& Get(const std::string& origin) {
   Load(origin, o);
   return o;
 }
-
-fs::path FileOf(const std::string& origin, const std::string& name) { return OriginDir("cache", origin) / (HexOf(name) + ".cache"); }
 
 std::string Escape(const std::string& s) {
   std::string out = "\"";
@@ -255,8 +231,7 @@ Value Flush(Context&, Value, qe::Args, Value) {
   std::lock_guard lock(g_mutex);
   for (auto& [origin, o] : Origins()) {
     if (!Persistent(origin)) continue;
-    std::error_code error;
-    for (const std::string& name : o.removed) fs::remove(FileOf(origin, name), error);
+    for (const std::string& name : o.removed) CurrentStorage().Remove(kCache, origin, StorageId(kCache, name));
     o.removed.clear();
     uint64_t made = 0;
     for (const std::string& name : o.order) {
@@ -275,14 +250,8 @@ Value Flush(Context&, Value, qe::Args, Value) {
         PutU64(data, e.body.size());
         data += e.body;
       }
-      fs::create_directories(OriginDir("cache", origin), error);
-      const fs::path path = FileOf(origin, name);
-      const fs::path temporary = path.string() + ".tmp";
-      {
-        std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
-        out << data;
-      }
-      fs::rename(temporary, path, error);
+      // (A cache that could not be written is written again with the next flush.)
+      if (!CurrentStorage().Write(kCache, origin, StorageId(kCache, name), data)) cache.dirty = true;
     }
   }
   return qe::Undefined();
@@ -290,54 +259,33 @@ Value Flush(Context&, Value, qe::Args, Value) {
 
 // ---- a few keyed texts (a service worker's registrations) ----
 
-fs::path KvFile(const std::string& origin, const std::string& key) { return OriginDir("kv", origin) / (HexOf(key) + ".kv"); }
-
 Value KvRead(Context& ctx, Value, qe::Args args, Value) {
   if (args.size() < 2) return qe::Undefined();
   const std::string origin = qe::ToWtf8(ctx, args[0]);
   if (!Persistent(origin)) return qe::Undefined();
-  std::ifstream in(KvFile(origin, qe::ToWtf8(ctx, args[1])), std::ios::binary);
-  if (!in) return qe::Undefined();
-  std::stringstream buffer;
-  buffer << in.rdbuf();
-  return qe::FromWtf8(ctx, buffer.str());
+  const std::optional<std::string> text = CurrentStorage().Read(kKv, origin, StorageId(kKv, qe::ToWtf8(ctx, args[1])));
+  if (!text) return qe::Undefined();
+  return qe::FromWtf8(ctx, *text);
 }
 
 Value KvWrite(Context& ctx, Value, qe::Args args, Value) {
   if (args.size() < 3) return qe::FromBool(false);
   const std::string origin = qe::ToWtf8(ctx, args[0]);
   if (!Persistent(origin)) return qe::FromBool(false);
-  const fs::path path = KvFile(origin, qe::ToWtf8(ctx, args[1]));
-  std::error_code error;
-  fs::create_directories(path.parent_path(), error);
-  const fs::path temporary = path.string() + ".tmp";
-  {
-    std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
-    out << qe::ToWtf8(ctx, args[2]);
-    if (!out) return qe::FromBool(false);
-  }
-  fs::rename(temporary, path, error);
-  return qe::FromBool(!error);
+  return qe::FromBool(CurrentStorage().Write(kKv, origin, StorageId(kKv, qe::ToWtf8(ctx, args[1])), qe::ToWtf8(ctx, args[2])));
 }
 
 }  // namespace
 
 std::optional<std::string> ReadKv(const std::string& origin, const std::string& key) {
   if (!Persistent(origin)) return std::nullopt;
-  std::ifstream in(KvFile(origin, key), std::ios::binary);
-  if (!in) return std::nullopt;
-  std::stringstream buffer;
-  buffer << in.rdbuf();
-  return buffer.str();
+  return CurrentStorage().Read(kKv, origin, StorageId(kKv, key));
 }
 
 bool HasServiceWorkerFor(const std::string& origin, const std::string& url) {
-  if (!Persistent(origin)) return false;
-  std::ifstream in(KvFile(origin, "sw-registrations"), std::ios::binary);
-  if (!in) return false;
-  std::stringstream buffer;
-  buffer << in.rdbuf();
-  const std::string text = buffer.str();
+  const std::optional<std::string> kept = ReadKv(origin, "sw-registrations");
+  if (!kept) return false;
+  const std::string& text = *kept;
   // (The scopes are the "scope" strings of the file; one that begins the address is a registration for it.)
   for (size_t at = text.find("\"scope\":\""); at != std::string::npos; at = text.find("\"scope\":\"", at + 1)) {
     const size_t from = at + 9, end = text.find('"', from);

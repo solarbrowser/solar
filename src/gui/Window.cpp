@@ -228,6 +228,11 @@ void RunWindow(net::ipc::Channel& link, SDL_Window* window, SDL_Renderer* render
         }
         break;
       }
+      case wire::ToBrowser::Storage: {
+        wire::StorageRequest request;
+        if (wire::Read(in, request)) tab.Storage(std::move(request));
+        break;
+      }
       case wire::ToBrowser::Quit: running = false; break;
       default: break;
     }

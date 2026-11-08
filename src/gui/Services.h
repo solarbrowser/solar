@@ -34,6 +34,9 @@ class BrowserServices {
     void Navigate(wire::Navigate request);
     // The page says it is now on `address`: where that is an origin it was let have, the others are taken back.
     void Committed(const std::string& address);
+    // A file of what the page stores, asked for (answered on `link`): done for an origin the page was let have, and refused for another (a service worker's registrations of an origin
+    // may be read: whether a navigation is for a worker is asked before the page is there).
+    void Storage(wire::StorageRequest request);
 
     struct Impl;
 

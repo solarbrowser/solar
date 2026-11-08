@@ -207,7 +207,7 @@ $(QUANTA_LIBS): | quanta
 # The browser: a page in a window (src/gui), and solar-cli, the command line for what is under it (addresses, fetches), which the tests and tools use.
 $(OBJ_DIR)/src/paint/SkiaPainter.o $(OBJ_DIR)/src/paint/Canvas.o $(OBJ_DIR)/src/paint/CanvasNatives.o $(OBJ_DIR)/src/paint/WebGl.o $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/gui/Compositor.o $(OBJ_DIR)/src/gui/Window.o $(OBJ_DIR)/src/gui/GpuSurface.o $(OBJ_DIR)/src/gui/VulkanSurface.o $(OBJ_DIR)/src/gui/SdlAudio.o: CXXFLAGS += $(SKIA_CFLAGS) $(SDL_CFLAGS)
 
-solar: $(OBJ_DIR)/src/paint/Canvas.o $(OBJ_DIR)/src/paint/CanvasNatives.o $(OBJ_DIR)/src/paint/WebGl.o $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/gui/Compositor.o $(OBJ_DIR)/src/gui/Window.o $(OBJ_DIR)/src/gui/SdlAudio.o $(OBJ_DIR)/src/gui/GpuSurface.o $(OBJ_DIR)/src/gui/VulkanSurface.o $(OBJ_DIR)/src/gui/Wire.o $(OBJ_DIR)/src/gui/FrameBuffer.o $(OBJ_DIR)/src/gui/Navigation.o $(OBJ_DIR)/src/gui/RemoteAudio.o $(OBJ_DIR)/src/gui/Services.o $(OBJ_DIR)/src/gui/Sandbox.o $(OBJ_DIR)/src/paint/SkiaPainter.o $(PAINT_OBJECTS) $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
+solar: $(OBJ_DIR)/src/paint/Canvas.o $(OBJ_DIR)/src/paint/CanvasNatives.o $(OBJ_DIR)/src/paint/WebGl.o $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/gui/Compositor.o $(OBJ_DIR)/src/gui/Window.o $(OBJ_DIR)/src/gui/SdlAudio.o $(OBJ_DIR)/src/gui/GpuSurface.o $(OBJ_DIR)/src/gui/VulkanSurface.o $(OBJ_DIR)/src/gui/Wire.o $(OBJ_DIR)/src/gui/FrameBuffer.o $(OBJ_DIR)/src/gui/Navigation.o $(OBJ_DIR)/src/gui/RemoteAudio.o $(OBJ_DIR)/src/gui/RemoteStorage.o $(OBJ_DIR)/src/gui/Services.o $(OBJ_DIR)/src/gui/Sandbox.o $(OBJ_DIR)/src/paint/SkiaPainter.o $(PAINT_OBJECTS) $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS) $(SKIA_LIBS) $(SDL_LIBS)
 
@@ -255,11 +255,15 @@ $(BUILD_DIR)/WireTest: $(OBJ_DIR)/tests/WireTest.o $(OBJ_DIR)/src/gui/Wire.o $(O
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS)
 
-$(BUILD_DIR)/ServicesTest: $(OBJ_DIR)/tests/ServicesTest.o $(OBJ_DIR)/src/gui/Services.o $(OBJ_DIR)/src/gui/Wire.o $(OBJ_DIR)/tests/support/TestServer.o $(URL_OBJECTS) $(NET_OBJECTS)
+$(BUILD_DIR)/ServicesTest: $(OBJ_DIR)/tests/ServicesTest.o $(OBJ_DIR)/src/web-api/Storage.o $(OBJ_DIR)/src/gui/Services.o $(OBJ_DIR)/src/gui/Wire.o $(OBJ_DIR)/tests/support/TestServer.o $(URL_OBJECTS) $(NET_OBJECTS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS)
 
 $(BUILD_DIR)/SandboxTest: $(OBJ_DIR)/tests/SandboxTest.o $(OBJ_DIR)/src/gui/Sandbox.o $(OBJ_DIR)/src/gui/FrameBuffer.o
+	@echo "[LINK] $@"
+	@$(CXX) $(CXXFLAGS) -o $@ $^ -lpthread
+
+$(BUILD_DIR)/StorageTest: $(OBJ_DIR)/tests/StorageTest.o $(OBJ_DIR)/src/web-api/Storage.o
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^ -lpthread
 
@@ -377,7 +381,7 @@ $(BUILD_DIR)/GenIdnaTables: tools/GenIdnaTables.cpp
 WPT_ANY = $(shell cat tests/wpt-solar/anyjs-passing.txt)
 
 PORTABLE_TESTS = FontTest BidiTest CssValuesTest HtmlTokenizerTest UrlTest SearchParamsTest ValidationErrorTest NormalizerTest PublicSuffixTest CookiesTest HttpCacheTest FetchHeadersTest CorsTest Http1ParserTest ContentDecoderTest AddressRaceTest HstsTest
-NET_TESTS = LoopTest ResolverTest NetTest HttpClientTest TlsTest Http2Test NetworkThreadTest PageFetchTest IpcTest WireTest ServicesTest SandboxTest
+NET_TESTS = LoopTest ResolverTest NetTest HttpClientTest TlsTest Http2Test NetworkThreadTest PageFetchTest IpcTest WireTest ServicesTest SandboxTest StorageTest
 QUANTA_TESTS = UrlBindingsTest UrlRealmsTest FetchBindingsTest DomTest HtmlTreeTest
 ifeq ($(PLATFORM),linux)
 TESTS = $(PORTABLE_TESTS) $(NET_TESTS) $(QUANTA_TESTS)

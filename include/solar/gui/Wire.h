@@ -23,6 +23,8 @@ enum class ToRenderer : uint8_t {
   NavHead = 8, NavBody, NavEnd, NavError, NavRestart,
   // How much sound the window has been given and not played, of a stream (U32 id, U64 frames): the page keeps time by it.
   AudioQueued = 16,
+  // The answer to a storage request (U32 id, bool ok, then the bytes that were asked for).
+  StorageReply = 24,
 };
 enum class ToBrowser : uint8_t {
   NewBuffer = 32, Frame, Title, Clipboard, Fullscreen, PointerLock, Quit,
@@ -32,6 +34,8 @@ enum class ToBrowser : uint8_t {
   // The sound of the page's media, played by the window: a stream is opened (U32 id, I32 rate, I32 channels), given samples (U32 id, then 32-bit floats, a frame after a frame), paused (U32 id,
   // bool), cleared (U32 id) and closed (U32 id).
   AudioOpen = 48, AudioData, AudioPause, AudioClear, AudioClose,
+  // What the page stores is kept by the browser (the page's process has no disk): a StorageRequest, answered by StorageReply.
+  Storage = 56,
 };
 
 // A document to take: the browser is trusted to fetch it, the page is not trusted to say what it is, so the address is checked there.
@@ -53,8 +57,23 @@ struct NavHead {
 void Write(net::ipc::Writer& out, const NavHead& head);
 bool Read(net::ipc::Reader& in, NavHead& head);
 
+// A file of what the page stores (IndexedDB, the Cache API, a service worker's registrations), asked of the browser: the origin it is of is the page's (the browser checks it is one the page
+// was let have), the id is of the file and not a path. For a list the answer is the ids, a line each.
+struct StorageRequest {
+  enum class Op : uint8_t { Read, Write, Remove, List } op = Op::Read;
+  uint32_t id = 0;
+  uint8_t area = 0;  // StorageArea
+  std::string origin, file;
+  uint32_t maxBytes = 0;  // for a read: the first so many bytes (0: all)
+  std::string data;       // for a write
+};
+void Write(net::ipc::Writer& out, const StorageRequest& request);
+bool Read(net::ipc::Reader& in, StorageRequest& request);
+
 // The most a navigation's body may be, as the page sends it (a form).
 constexpr size_t kMaxNavigationBody = size_t{32} << 20;
+// The most a file of storage may be in a message.
+constexpr size_t kMaxStorageFile = size_t{60} << 20;
 
 // How large the window is: in points, in pixels, and the pixels a point comes to.
 struct Geometry {
