@@ -60,6 +60,9 @@ void RemoteNavigation::Deliver(wire::ToRenderer type, std::string bytes) {
 void RemoteNavigation::Handle(wire::ToRenderer type, const std::string& bytes) {
   net::ipc::Reader in(bytes);
   switch (type) {
+    case wire::ToRenderer::UiState:
+      if (ui_) ui_(bytes);
+      return;
     case wire::ToRenderer::NavHead: {
       wire::NavHead head;
       if (!wire::Read(in, head)) return;

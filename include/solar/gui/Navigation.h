@@ -33,6 +33,8 @@ class RemoteNavigation {
   void HistoryGo(int delta);
   // The browser asks the page to go to an address (as a step along the history for an entry, or as a new navigation for -1), on the page's thread.
   void SetGoTo(std::function<void(std::string, int)> goTo) { goTo_ = std::move(goTo); }
+  // The interface page's: the state of the browser, as a JSON text, on the page's thread.
+  void SetUiHandler(std::function<void(std::string)> handler) { ui_ = std::move(handler); }
   // What a navigation that went to another process ends with (the page stays where it is).
   static constexpr const char* kTransferred = "navigation moved to another process";
   // What the browser said (from any thread: it is put on the loop of the page).
@@ -44,6 +46,7 @@ class RemoteNavigation {
   net::Loop& loop_;
   net::ipc::Channel& link_;
   std::function<void(std::string, int)> goTo_;
+  std::function<void(std::string)> ui_;
   uint32_t next_ = 1;
   std::map<uint32_t, net::FetchHandler*> pending_;  // (the page's thread)
 };

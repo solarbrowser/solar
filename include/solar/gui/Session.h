@@ -36,7 +36,7 @@ class Session {
     std::function<void(uint32_t host, uint8_t type, std::string bytes, int fd)> message;
     // A renderer is gone, from a thread of the session's. `fatal`: it was the one the window showed, or the window shows none and there is none to come.
     std::function<void(uint32_t host, bool fatal)> gone;
-    // The window shows this renderer now.
+    // The window shows this renderer now (0: a tab that has no page yet, or none).
     std::function<void(uint32_t host)> shown;
   };
 
@@ -52,6 +52,26 @@ class Session {
   void Go(const std::string& url);
   void Back();
   void Forward();
+  void Reload();
+  // The tabs: a new one (for an address, or the browser's page for a new tab when it is empty) which is shown at once, the one with this number ended (the last one ends the window: `gone` is told
+  // with `fatal`), the one with this number shown, and the next or the one before it shown (`delta` 1 or -1).
+  void NewTab(const std::string& address);
+  void CloseTab(uint32_t tab);
+  // The number of the tab that is shown (0: none).
+  uint32_t activeTab() const;
+  void Activate(uint32_t tab);
+  void CycleTab(int delta);
+  // Whether the interface draws the window's own buttons (the system's bar is not there), and whether the window is maximized: the interface is told.
+  void SetWindowFlags(bool controls, bool maximized);
+  // The browser's interface: its renderer is started (`geometry` is the size it is told first, a Resize message's bytes) and told the state of the browser as it changes. It is not a page of
+  // the window's history; what it says (Handle) is the window's to act on. 0 while there is none.
+  void OpenChrome(const std::string& geometry);
+  uint32_t chrome() const;
+  void SendChrome(wire::ToRenderer type, const std::string& bytes);
+  // The title the shown page has (for the interface).
+  void SetTitle(uint32_t host, const std::string& title);
+  // The interface asks to be told the state again (it has just started).
+  void PushState();
 
   // The renderer the window shows (0: none yet).
   uint32_t current() const;

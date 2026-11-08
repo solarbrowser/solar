@@ -549,6 +549,45 @@ int main() {
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     Check("(gone) a renderer that cannot be started leaves things as they are", true);
   }
+  // Tabs: each has its own history and its own renderer, one is shown, and the last one closed ends the window.
+  {
+    gui::BrowserServices services;
+    World world;
+    std::atomic<int> fatal{0};
+    gui::Session::Events events;
+    events.message = [&](uint32_t host, uint8_t type, std::string bytes, int fd) {
+      if (fd >= 0) ::close(fd);
+      world.session->Handle(host, type, bytes);
+    };
+    events.gone = [&](uint32_t, bool isFatal) { if (isFatal) ++fatal; };
+    events.shown = [](uint32_t) {};
+    world.session = std::make_unique<gui::Session>(services, world.Launcher(), std::move(events), false);
+    gui::Session& session = *world.session;
+    const auto until = [](const std::function<bool()>& condition) {
+      for (int i = 0; i < 150 && !condition(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      return condition();
+    };
+    session.Open(A + "/doc");
+    Fake* one = world.FakeStartedFor(0);
+    Check("(tabs) the first tab has a page", one && one->Ended(1) && world.WaitCurrent(one) && session.activeTab() == 1);
+    session.NewTab(B + "/page");
+    Fake* two = world.FakeStartedFor(1);
+    Check("(tabs) a new tab is a renderer of its own", two && world.started.size() == 2 && world.started[1] == B + "/page");
+    Check("(tabs) and is shown once it has its page", two && two->Ended(1) && world.WaitCurrent(two) && session.activeTab() == 2);
+    Check("(tabs) the history is the shown tab's", until([&] { return session.Entries() == std::vector<std::string>{B + "/page"}; }) && session.Index() == 0);
+    session.Activate(1);
+    Check("(tabs) the first tab is shown again with its page and history", until([&] { return session.current() == 1; }) && session.Entries() == std::vector<std::string>{A + "/doc"});
+    session.CycleTab(1);
+    Check("(tabs) the next tab is the second", until([&] { return session.activeTab() == 2 && session.current() == 2; }));
+    session.CycleTab(1);
+    Check("(tabs) and after the last is the first", until([&] { return session.activeTab() == 1; }));
+    session.Activate(2);
+    session.CloseTab(2);
+    Check("(tabs) closing the shown tab shows the one beside it", until([&] { return session.activeTab() == 1 && session.current() == 1; }) && world.WaitFinished(101));
+    Check("(tabs) and the window goes on", fatal.load() == 0);
+    session.CloseTab(1);
+    Check("(tabs) closing the last tab ends the window", until([&] { return fatal.load() >= 1; }));
+  }
   std::printf("session: %d/%d passed\n", total - failed, total);
   return failed == 0 ? 0 : 1;
 }

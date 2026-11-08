@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include <condition_variable>
+#include <cstdio>
 #include <deque>
 #include <future>
 #include <fstream>
@@ -19,6 +20,7 @@
 #include <sstream>
 #include <thread>
 
+#include "solar/gui/Chrome.h"
 #include "solar/net/HttpClient.h"
 #include "solar/url/Origin.h"
 #include "solar/url/Parser.h"
@@ -30,6 +32,12 @@ namespace {
 
 constexpr size_t kMostNavigations = 64;
 constexpr size_t kLargestFile = size_t{256} << 20;
+
+// The site of an address: the web's registrable domain, and for the browser's own pages (solar://newtab/) the page.
+std::string SiteFor(const url::Url& address) {
+  if (address.scheme == "solar") return "solar:" + url::Serialize(address);
+  return url::SiteOf(address);
+}
 
 std::string NormalAddress(const std::string& text) {
   std::optional<url::Url> parsed = url::Parse(text);
@@ -46,8 +54,10 @@ struct Host {
   long child = -1;
   std::string site;  // the one it is made for
   std::unique_ptr<net::ipc::Channel> link;
-  std::unique_ptr<BrowserServices::Tab> tab;
+  std::unique_ptr<BrowserServices::Tab> tab_;  // (what the network service of the renderer is)
   std::thread reader;
+  bool chrome = false;       // the browser's interface, not a page
+  uint32_t tab = 0;          // the tab it is a renderer of
   bool current = false;      // (the loop's thread)
   bool gone = false;         // (the loop's thread)
 
@@ -77,10 +87,22 @@ struct Session::Impl : std::enable_shared_from_this<Session::Impl> {
   mutable std::mutex mutex;  // the hosts, the history and what is kept for the ones to come
   std::map<uint32_t, std::shared_ptr<Host>> hosts;
   uint32_t nextHost = 1;
-  std::atomic<uint32_t> current{0};
-  uint32_t pending = 0;
-  std::vector<std::string> entries;
-  int index = -1;
+  std::atomic<uint32_t> chromeId{0};
+  // A tab: its own history, the renderer that has its page now, and the one that is on its way to it.
+  struct TabState {
+    uint32_t id = 0;
+    uint32_t current = 0, pending = 0;  // renderers
+    std::vector<std::string> entries;
+    int index = -1;
+    std::string title;      // what the page is called
+    bool loading = false;   // an address is being gone to
+  };
+  std::map<uint32_t, TabState> tabs;
+  std::vector<uint32_t> order;  // the tabs, as they are shown from left to right
+  uint32_t active = 0;
+  uint32_t nextTab = 1;
+  std::atomic<uint32_t> shownHost{0};  // the renderer of the active tab's page: what the window shows
+  bool windowControls = false, maximized = false;  // the interface draws the buttons of the window (the system's bar is not there)
   std::optional<std::string> resize;  // the last size the window said (the ones that come are told it)
   int exitCode = 0;
   bool closing = false;
@@ -141,16 +163,36 @@ struct Session::Impl : std::enable_shared_from_this<Session::Impl> {
     SendTo(host, wire::ToRenderer::NavError, out.bytes());
   }
 
-  std::shared_ptr<Host> StartHost(const std::string& site, const std::string& url, std::optional<Host::Expected> expected);
+  std::shared_ptr<Host> StartHost(uint32_t tab, const std::string& site, const std::string& url, std::optional<Host::Expected> expected, bool chrome = false);
+  void StartChrome(const std::string& geometry);
+  void OnChromeNavigate(const std::shared_ptr<Host>& host, const wire::Navigate& request);
+  void OnInternalNavigate(const std::shared_ptr<Host>& host, const wire::Navigate& request);
+  void Serve(Host& host, uint32_t id, const char* address, const std::string& document);
+  void SetLoading(uint32_t tab, bool value);
+  void PushState();
+  uint32_t NewTab(const std::string& address, bool activate);
+  // The icons of the pages: asked for by the renderer of a tab, fetched here, kept, and given to the interface for the tab.
+  void OnFavicon(const std::shared_ptr<Host>& host, const std::string& address);
+  void PushIcon(uint32_t tab, const std::string& address, const std::string& data);
+  std::map<std::string, std::string> icons;  // the address -> a data: address of the picture (the loop's thread)
+  std::map<std::string, std::vector<uint32_t>> iconsWaiting;  // the fetches that are going on, and the tabs that wait for them
+  std::vector<std::shared_ptr<struct IconFetch>> iconFetches;
+  void CloseTab(uint32_t tab);
+  void Activate(uint32_t tab);
+  // (the lock is held by the caller)
+  TabState* ActiveTab() {
+    const auto found = tabs.find(active);
+    return found == tabs.end() ? nullptr : &found->second;
+  }
   void Retire(const std::shared_ptr<Host>& host, bool takeCode = false);
   void OnNavigate(const std::shared_ptr<Host>& host, wire::Navigate request);
   void OnCommitted(const std::shared_ptr<Host>& host, const std::string& address, uint32_t id);
   void OnHistoryGo(const std::shared_ptr<Host>& host, int delta);
-  void GoToEntry(int entry);
-  void GoNew(const std::string& address);
+  void GoToEntry(uint32_t tab, int entry);
+  void GoNew(uint32_t tab, const std::string& address);
   void OnGone(uint32_t id);
   void StartNavigation(const std::shared_ptr<Host>& host, uint32_t id, const url::Url& address, const std::string& method, const std::string& body, const std::string& bodyType, wire::Navigate::Kind kind, int entry);
-  void Transfer(const std::shared_ptr<Host>& from, uint32_t id, Host::Expected expected);
+  void Transfer(uint32_t tab, const std::shared_ptr<Host>& from, uint32_t id, Host::Expected expected);
   void Swap(const std::shared_ptr<Host>& host);
 };
 
@@ -200,6 +242,7 @@ struct Navigation : net::FetchHandler {
         out.String(event.text);
         session->SendTo(host, wire::ToRenderer::NavError, out.bytes());
         host.active.erase(id);
+        if (host.current) session->SetLoading(host.tab, false);
         break;
     }
   }
@@ -218,7 +261,7 @@ struct Navigation : net::FetchHandler {
     std::vector<Event> kept = std::move(buffered);
     buffered.clear();
     for (Event& event : kept) {
-      if (event.type == Event::Type::Head) host->tab->AllowOrigin(url::SerializeOrigin(*url::Parse(event.address)));
+      if (event.type == Event::Type::Head) host->tab_->AllowOrigin(url::SerializeOrigin(*url::Parse(event.address)));
       Emit(std::move(event));
     }
   }
@@ -227,7 +270,7 @@ struct Navigation : net::FetchHandler {
     std::string type;
     if (auto value = head.Header("content-type")) type = std::string(*value);
     Event event{Event::Type::Head, head.status, type, url::Serialize(finalUrl)};
-    if (target && url::SiteOf(finalUrl) != target->site) {
+    if (target && SiteFor(finalUrl) != target->site) {
       // The server sent the page to another site: the renderer does not have the document; the one that is made for that site does.
       std::shared_ptr<Host> from = target;
       const uint32_t fromId = id;
@@ -240,10 +283,10 @@ struct Navigation : net::FetchHandler {
       expected.kind = kind;
       expected.entry = entry;
       expected.buffered = session->navigations[serial];
-      session->Transfer(from, fromId, std::move(expected));
+      session->Transfer(from->tab, from, fromId, std::move(expected));
       return;
     }
-    if (target) target->tab->AllowOrigin(url::SerializeOrigin(finalUrl));
+    if (target) target->tab_->AllowOrigin(url::SerializeOrigin(finalUrl));
     Emit(std::move(event));
   }
   void OnBody(std::span<const uint8_t> data) override {
@@ -268,14 +311,55 @@ struct Navigation : net::FetchHandler {
   }
 };
 
+// The fetch of an icon: it is small (at most 128 KiB), and an image.
+struct IconFetch : net::FetchHandler {
+  Session::Impl* session = nullptr;
+  std::string address, type, body;
+  int status = 0;
+  bool tooLarge = false;
+  net::FetchHandle handle;
+  void OnResponseHead(const net::HttpResponseHead& head, const url::Url&) override {
+    status = head.status;
+    if (auto value = head.Header("content-type")) type = std::string(*value);
+  }
+  void OnBody(std::span<const uint8_t> data) override {
+    if (body.size() + data.size() > (size_t{128} << 10)) {
+      tooLarge = true;
+      return;
+    }
+    body.append(reinterpret_cast<const char*>(data.data()), data.size());
+  }
+  void OnEnd() override;
+  void OnError(std::string_view) override { Done(""); }
+  void Done(const std::string& data);
+};
+
+namespace {
+std::string Base64(const std::string& in) {
+  static const char* table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  std::string out;
+  out.reserve((in.size() + 2) / 3 * 4);
+  for (size_t i = 0; i < in.size(); i += 3) {
+    const uint32_t n = (static_cast<uint8_t>(in[i]) << 16) | (i + 1 < in.size() ? static_cast<uint8_t>(in[i + 1]) << 8 : 0) | (i + 2 < in.size() ? static_cast<uint8_t>(in[i + 2]) : 0);
+    out += table[(n >> 18) & 63];
+    out += table[(n >> 12) & 63];
+    out += i + 1 < in.size() ? table[(n >> 6) & 63] : '=';
+    out += i + 2 < in.size() ? table[n & 63] : '=';
+  }
+  return out;
+}
+}  // namespace
+
 // ---- Hosts ----
 
-std::shared_ptr<Host> Session::Impl::StartHost(const std::string& site, const std::string& url, std::optional<Host::Expected> expected) {
+std::shared_ptr<Host> Session::Impl::StartHost(uint32_t tab, const std::string& site, const std::string& url, std::optional<Host::Expected> expected, bool chrome) {
   auto windowPair = net::ipc::Channel::MakePair();
   auto networkPair = net::ipc::Channel::MakePair();
   if (windowPair.first < 0 || networkPair.first < 0) return nullptr;
   auto host = std::make_shared<Host>();
   host->site = site;
+  host->chrome = chrome;
+  host->tab = tab;
   host->expected = std::move(expected);
   // (The renderer's ends go to the launcher, which takes them over.)
   host->child = launcher.start(windowPair.second, networkPair.second, url);
@@ -285,7 +369,7 @@ std::shared_ptr<Host> Session::Impl::StartHost(const std::string& site, const st
     return nullptr;
   }
   host->link = std::make_unique<net::ipc::Channel>(windowPair.first);
-  host->tab = services.OpenTab(networkPair.first, *host->link);
+  host->tab_ = services.OpenTab(networkPair.first, *host->link);
   std::optional<std::string> size;
   {
     std::lock_guard<std::mutex> lock(mutex);
@@ -293,7 +377,7 @@ std::shared_ptr<Host> Session::Impl::StartHost(const std::string& site, const st
     hosts[host->id] = host;
     size = resize;
   }
-  if (size) SendTo(*host, wire::ToRenderer::Resize, *size);
+  if (size && !chrome) SendTo(*host, wire::ToRenderer::Resize, *size);
   host->reader = std::thread([this, raw = host.get(), id = host->id] {
     uint8_t type = 0;
     std::string bytes;
@@ -329,13 +413,14 @@ void Session::Impl::Retire(const std::shared_ptr<Host>& host, bool takeCode) {
   {
     std::lock_guard<std::mutex> lock(mutex);
     hosts.erase(host->id);
-    if (pending == host->id) pending = 0;
+    const auto found = tabs.find(host->tab);
+    if (found != tabs.end() && found->second.pending == host->id) found->second.pending = 0;
   }
   SendTo(*host, wire::ToRenderer::Shutdown, "");
   Janitor([this, host, takeCode] {
     host->link->Shutdown();
     if (host->reader.joinable()) host->reader.join();
-    host->tab.reset();
+    host->tab_.reset();
     const int code = launcher.finish(host->child);
     if (takeCode) {
       std::lock_guard<std::mutex> lock(mutex);
@@ -349,31 +434,136 @@ void Session::Impl::OnGone(uint32_t id) {
   if (!host || host->gone) return;
   const bool wasCurrent = host->current;
   Retire(host, wasCurrent);
-  bool fatal = wasCurrent;
-  if (!wasCurrent && current.load() == 0) {
-    // (A renderer that goes before there is any page: there is none to show, and none to come, unless another is on its way.)
-    std::lock_guard<std::mutex> lock(mutex);
-    fatal = pending == 0;
+  if (host->chrome) {
+    // (The interface's process is gone: the window goes on without a bar.)
+    chromeId.store(0);
+    events.gone(id, false);
+    return;
   }
-  if (fatal) events.gone(id, true);
-  else events.gone(id, false);
+  const uint32_t tab = host->tab;
+  bool closeTab = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    const auto found = tabs.find(tab);
+    if (found != tabs.end()) {
+      if (found->second.current == id) {
+        found->second.current = 0;
+        closeTab = true;
+      } else if (found->second.pending == id) {
+        found->second.pending = 0;
+        // (A renderer that goes before there is any page in the tab: there is nothing to show, and nothing to come.)
+        closeTab = found->second.current == 0;
+      }
+    }
+  }
+  if (!closeTab) {
+    SetLoading(tab, false);
+    events.gone(id, false);
+    return;
+  }
+  CloseTab(tab);
+  bool last;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    last = tabs.empty();
+  }
+  events.gone(id, last);
 }
 
 void Session::Impl::Swap(const std::shared_ptr<Host>& host) {
-  std::shared_ptr<Host> old = Find(current.load());
-  host->current = true;
-  current.store(host->id);
+  std::shared_ptr<Host> old;
+  bool shown = false;
   {
     std::lock_guard<std::mutex> lock(mutex);
-    if (pending == host->id) pending = 0;
+    const auto found = tabs.find(host->tab);
+    if (found == tabs.end()) return;
+    TabState& t = found->second;
+    const auto before = hosts.find(t.current);
+    if (before != hosts.end()) old = before->second;
+    t.current = host->id;
+    if (t.pending == host->id) t.pending = 0;
+    t.title.clear();
+    shown = active == t.id;
+    if (shown) shownHost.store(host->id);
   }
-  events.shown(host->id);
+  host->current = true;
+  if (shown) events.shown(host->id);
   if (old && old != host) Retire(old);
+}
+
+uint32_t Session::Impl::NewTab(const std::string& address, bool activate) {
+  std::string text = address.empty() ? kNewTabAddress : address;
+  std::optional<url::Url> parsed = url::Parse(text);
+  if (!parsed) {
+    text = kNewTabAddress;
+    parsed = url::Parse(text);
+  }
+  uint32_t id;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    id = nextTab++;
+    tabs[id].id = id;
+    order.push_back(id);
+  }
+  if (activate) Activate(id);
+  else PushState();
+  Host::Expected expected;
+  expected.url = url::Serialize(*parsed);
+  Transfer(id, nullptr, 0, std::move(expected));
+  return id;
+}
+
+void Session::Impl::Activate(uint32_t tab) {
+  uint32_t shown;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    const auto found = tabs.find(tab);
+    if (found == tabs.end()) return;
+    active = tab;
+    shown = found->second.current;
+    shownHost.store(shown);
+  }
+  events.shown(shown);
+  PushState();
+}
+
+void Session::Impl::CloseTab(uint32_t tab) {
+  std::vector<std::shared_ptr<Host>> mine;
+  uint32_t next = 0;
+  bool wasActive = false, last = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    const auto where = std::find(order.begin(), order.end(), tab);
+    if (where == order.end()) return;
+    for (auto& [id, host] : hosts) {
+      if (host->tab == tab && !host->chrome) mine.push_back(host);
+    }
+    const size_t position = static_cast<size_t>(where - order.begin());
+    order.erase(where);
+    tabs.erase(tab);
+    wasActive = active == tab;
+    last = order.empty();
+    if (wasActive && !order.empty()) next = order[std::min(position, order.size() - 1)];
+  }
+  for (auto& host : mine) Retire(host, host->current && last);
+  if (wasActive) {
+    if (next) {
+      Activate(next);
+    } else {
+      {
+        std::lock_guard<std::mutex> lock(mutex);
+        active = 0;
+        shownHost.store(0);
+      }
+      events.shown(0);
+    }
+  }
+  PushState();
 }
 
 // ---- Navigation ----
 
-void Session::Impl::Transfer(const std::shared_ptr<Host>& from, uint32_t id, Host::Expected expected) {
+void Session::Impl::Transfer(uint32_t tab, const std::shared_ptr<Host>& from, uint32_t id, Host::Expected expected) {
   // The page that asked stays as it is; the one made for the site gets the navigation as its first.
   if (from && !from->gone) {
     net::ipc::Writer out;
@@ -386,17 +576,27 @@ void Session::Impl::Transfer(const std::shared_ptr<Host>& from, uint32_t id, Hos
   std::shared_ptr<Host> before;
   {
     std::lock_guard<std::mutex> lock(mutex);
-    if (pending) {
-      const auto found = hosts.find(pending);
-      if (found != hosts.end()) before = found->second;
+    const auto found = tabs.find(tab);
+    if (found == tabs.end()) return;
+    if (found->second.pending) {
+      const auto pending = hosts.find(found->second.pending);
+      if (pending != hosts.end()) before = pending->second;
     }
   }
   if (before && before != from) Retire(before);
   const std::string address = expected.url;
-  std::shared_ptr<Host> host = StartHost(url::SiteOf(*parsed), address, std::move(expected));
+  std::shared_ptr<Host> host = StartHost(tab, SiteFor(*parsed), address, std::move(expected));
   if (!host) return;
-  std::lock_guard<std::mutex> lock(mutex);
-  pending = host->id;
+  bool kept = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    const auto found = tabs.find(tab);
+    if (found != tabs.end()) {
+      found->second.pending = host->id;
+      kept = true;
+    }
+  }
+  if (!kept) Retire(host);  // (the tab was closed meanwhile)
 }
 
 void Session::Impl::StartNavigation(const std::shared_ptr<Host>& host, uint32_t id, const url::Url& address, const std::string& method, const std::string& body, const std::string& bodyType,
@@ -419,7 +619,7 @@ void Session::Impl::StartNavigation(const std::shared_ptr<Host>& host, uint32_t 
     contents << file.rdbuf();
     const std::string data = contents.str();
     if (data.size() > kLargestFile) return navigation->OnError("the file is too large");
-    host->tab->AllowOrigin(url::SerializeOrigin(address));
+    host->tab_->AllowOrigin(url::SerializeOrigin(address));
     navigation->Emit({Navigation::Event::Type::Head, 200, "text/html", text});
     if (!data.empty()) navigation->OnBody(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(data.data()), data.size()));
     navigation->OnEnd();
@@ -436,6 +636,8 @@ void Session::Impl::StartNavigation(const std::shared_ptr<Host>& host, uint32_t 
 
 void Session::Impl::OnNavigate(const std::shared_ptr<Host>& host, wire::Navigate request) {
   if (host->gone) return;
+  if (host->chrome) return OnChromeNavigate(host, request);
+  if (host->current) SetLoading(host->tab, true);
   if (host->active.size() >= kMostNavigations || host->active.count(request.id)) return NavError(*host, request.id, "too many navigations");
   std::optional<url::Url> parsed = url::Parse(request.url);
   if (!parsed) return NavError(*host, request.id, "invalid address");
@@ -458,6 +660,14 @@ void Session::Impl::OnNavigate(const std::shared_ptr<Host>& host, wire::Navigate
       entry = expected.entry;
     }
   }
+  if (parsed->scheme == "solar") {
+    // The browser's own pages are served from its memory, to the renderer that was made for them and to no other.
+    if (url::Serialize(*parsed) != kNewTabAddress || SiteFor(*parsed) != host->site) return NavError(*host, request.id, "unsupported scheme");
+    host->infos[request.id] = {kind, entry};
+    request.kind = kind;
+    request.entry = entry;
+    return OnInternalNavigate(host, request);
+  }
   if (parsed->scheme == "file") {
     if (!allowFiles) return NavError(*host, request.id, "this page may not open files");
   } else if (parsed->scheme != "http" && parsed->scheme != "https") {
@@ -466,12 +676,13 @@ void Session::Impl::OnNavigate(const std::shared_ptr<Host>& host, wire::Navigate
   if (kind == wire::Navigate::Kind::Traversal) {
     // (A step along the history is to an entry there is, for the address the entry has.)
     std::lock_guard<std::mutex> lock(mutex);
-    if (entry < 0 || entry >= static_cast<int>(entries.size()) || entries[entry] != url::Serialize(*parsed)) {
+    const auto found = tabs.find(host->tab);
+    if (found == tabs.end() || entry < 0 || entry >= static_cast<int>(found->second.entries.size()) || found->second.entries[static_cast<size_t>(entry)] != url::Serialize(*parsed)) {
       kind = wire::Navigate::Kind::New;
       entry = -1;
     }
   }
-  const std::string site = url::SiteOf(*parsed);
+  const std::string site = SiteFor(*parsed);
   if (site.empty() || site != host->site) {
     Host::Expected expected;
     expected.url = url::Serialize(*parsed);
@@ -480,7 +691,7 @@ void Session::Impl::OnNavigate(const std::shared_ptr<Host>& host, wire::Navigate
     expected.bodyType = bodyType;
     expected.kind = kind;
     expected.entry = entry;
-    Transfer(host, request.id, std::move(expected));
+    Transfer(host->tab, host, request.id, std::move(expected));
     return;
   }
   StartNavigation(host, request.id, *parsed, method, body, bodyType, kind, entry);
@@ -490,7 +701,7 @@ void Session::Impl::OnCommitted(const std::shared_ptr<Host>& host, const std::st
   if (host->gone) return;
   std::optional<url::Url> parsed = url::Parse(address);
   // (A renderer commits to documents of its own site: what it says it is on is checked.)
-  if (!parsed || url::SiteOf(*parsed) != host->site) return;
+  if (!parsed || SiteFor(*parsed) != host->site) return;
   const auto found = host->infos.find(id);
   Host::Info info{wire::Navigate::Kind::New, -1};  // (a page that did it itself, as a service worker's answer: a new entry)
   if (found != host->infos.end()) {
@@ -499,43 +710,51 @@ void Session::Impl::OnCommitted(const std::shared_ptr<Host>& host, const std::st
   } else if (id != 0) {
     return;
   }
-  host->tab->KeepOnlyOrigin(url::SerializeOrigin(*parsed));
+  if (host->tab_) host->tab_->KeepOnlyOrigin(url::SerializeOrigin(*parsed));
   const std::string text = url::Serialize(*parsed);
   {
     std::lock_guard<std::mutex> lock(mutex);
+    const auto tabFound = tabs.find(host->tab);
+    if (tabFound == tabs.end()) return;
+    TabState& t = tabFound->second;
     switch (info.kind) {
       case wire::Navigate::Kind::New:
-        if (index < 0 || entries[index] != text) {
-          entries.resize(static_cast<size_t>(index + 1));
-          entries.push_back(text);
-          index = static_cast<int>(entries.size()) - 1;
+        if (t.index < 0 || t.entries[static_cast<size_t>(t.index)] != text) {
+          t.entries.resize(static_cast<size_t>(t.index + 1));
+          t.entries.push_back(text);
+          t.index = static_cast<int>(t.entries.size()) - 1;
         }
         break;
       case wire::Navigate::Kind::Reload:
-        if (index >= 0) entries[index] = text;
+        if (t.index >= 0) t.entries[static_cast<size_t>(t.index)] = text;
         break;
       case wire::Navigate::Kind::Traversal:
-        if (info.entry >= 0 && info.entry < static_cast<int>(entries.size())) {
-          index = info.entry;
-          entries[index] = text;
+        if (info.entry >= 0 && info.entry < static_cast<int>(t.entries.size())) {
+          t.index = info.entry;
+          t.entries[static_cast<size_t>(t.index)] = text;
         }
         break;
     }
   }
   if (!host->current) Swap(host);
+  SetLoading(host->tab, false);
 }
 
-void Session::Impl::GoToEntry(int entry) {
+void Session::Impl::GoToEntry(uint32_t tab, int entry) {
   std::string address;
+  std::shared_ptr<Host> now;
   {
     std::lock_guard<std::mutex> lock(mutex);
-    if (entry < 0 || entry >= static_cast<int>(entries.size())) return;
-    address = entries[entry];
+    const auto found = tabs.find(tab);
+    if (found == tabs.end() || entry < 0 || entry >= static_cast<int>(found->second.entries.size())) return;
+    address = found->second.entries[static_cast<size_t>(entry)];
+    const auto host = hosts.find(found->second.current);
+    if (host != hosts.end()) now = host->second;
   }
   std::optional<url::Url> parsed = url::Parse(address);
-  std::shared_ptr<Host> now = Find(current.load());
   if (!parsed) return;
-  if (now && url::SiteOf(*parsed) == now->site) {
+  SetLoading(tab, true);
+  if (now && SiteFor(*parsed) == now->site) {
     net::ipc::Writer out;
     out.String(address);
     out.I32(entry);
@@ -546,14 +765,22 @@ void Session::Impl::GoToEntry(int entry) {
   expected.url = address;
   expected.kind = wire::Navigate::Kind::Traversal;
   expected.entry = entry;
-  Transfer(nullptr, 0, std::move(expected));
+  Transfer(tab, nullptr, 0, std::move(expected));
 }
 
-void Session::Impl::GoNew(const std::string& address) {
+void Session::Impl::GoNew(uint32_t tab, const std::string& address) {
   std::optional<url::Url> parsed = url::Parse(address);
   if (!parsed) return;
-  std::shared_ptr<Host> now = Find(current.load());
-  if (now && url::SiteOf(*parsed) == now->site) {
+  std::shared_ptr<Host> now;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    const auto found = tabs.find(tab);
+    if (found == tabs.end()) return;
+    const auto host = hosts.find(found->second.current);
+    if (host != hosts.end()) now = host->second;
+  }
+  SetLoading(tab, true);
+  if (now && SiteFor(*parsed) == now->site) {
     net::ipc::Writer out;
     out.String(url::Serialize(*parsed));
     out.I32(-1);
@@ -562,7 +789,7 @@ void Session::Impl::GoNew(const std::string& address) {
   }
   Host::Expected expected;
   expected.url = url::Serialize(*parsed);
-  Transfer(nullptr, 0, std::move(expected));
+  Transfer(tab, nullptr, 0, std::move(expected));
 }
 
 void Session::Impl::OnHistoryGo(const std::shared_ptr<Host>& host, int delta) {
@@ -570,9 +797,149 @@ void Session::Impl::OnHistoryGo(const std::shared_ptr<Host>& host, int delta) {
   int target;
   {
     std::lock_guard<std::mutex> lock(mutex);
-    target = index + delta;
+    const auto found = tabs.find(host->tab);
+    if (found == tabs.end()) return;
+    target = found->second.index + delta;
   }
-  GoToEntry(target);
+  GoToEntry(host->tab, target);
+}
+
+// ---- The interface ----
+
+namespace {
+std::string JsonString(const std::string& text) {
+  std::string out = "\"";
+  for (unsigned char c : text) {
+    if (c == '"' || c == '\\') { out += '\\'; out += static_cast<char>(c); }
+    else if (c < 0x20) { char b[8]; std::snprintf(b, sizeof b, "\\u%04x", c); out += b; }
+    else out += static_cast<char>(c);
+  }
+  return out + "\"";
+}
+}  // namespace
+
+void IconFetch::OnEnd() {
+  std::string lower;
+  for (char c : type.substr(0, type.find(';'))) lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  while (!lower.empty() && lower.back() == ' ') lower.pop_back();
+  const bool image = lower.rfind("image/", 0) == 0 || lower == "application/octet-stream" || lower.empty();
+  if (status != 200 || tooLarge || body.empty() || !image) return Done("");
+  Done("data:" + (lower.rfind("image/", 0) == 0 ? lower : std::string("image/x-icon")) + ";base64," + Base64(body));
+}
+
+void IconFetch::Done(const std::string& data) {
+  const std::string key = address;
+  const std::string text = data;
+  session->services.Post([impl = session->shared_from_this(), key, text, self = this] {
+    // (What is kept is for the next tab that has the same icon; a miss is kept too, so that a site with none is not asked again and again.)
+    if (impl->icons.size() > 96) impl->icons.clear();
+    impl->icons[key] = text;
+    const auto waiting = impl->iconsWaiting.find(key);
+    if (waiting != impl->iconsWaiting.end()) {
+      if (!text.empty()) {
+        for (uint32_t tab : waiting->second) impl->PushIcon(tab, key, text);
+      }
+      impl->iconsWaiting.erase(waiting);
+    }
+    impl->iconFetches.erase(std::remove_if(impl->iconFetches.begin(), impl->iconFetches.end(), [self](const std::shared_ptr<IconFetch>& f) { return f.get() == self; }), impl->iconFetches.end());
+  });
+}
+
+void Session::Impl::OnFavicon(const std::shared_ptr<Host>& host, const std::string& address) {
+  if (host->gone || !host->current || host->chrome) return;
+  std::optional<url::Url> parsed = url::Parse(address);
+  if (!parsed || (parsed->scheme != "http" && parsed->scheme != "https")) return;
+  const std::string key = url::Serialize(*parsed);
+  const auto kept = icons.find(key);
+  if (kept != icons.end()) {
+    if (!kept->second.empty()) PushIcon(host->tab, key, kept->second);
+    return;
+  }
+  auto& waiting = iconsWaiting[key];
+  const bool started = !waiting.empty();
+  if (std::find(waiting.begin(), waiting.end(), host->tab) == waiting.end()) waiting.push_back(host->tab);
+  if (started) return;
+  auto fetch = std::make_shared<IconFetch>();
+  fetch->session = this;
+  fetch->address = key;
+  iconFetches.push_back(fetch);
+  fetch->handle = services.Fetch(*parsed, *fetch, net::FetchOptions());
+}
+
+void Session::Impl::PushIcon(uint32_t tab, const std::string& address, const std::string& data) {
+  std::shared_ptr<Host> bar = Find(chromeId.load());
+  if (!bar || bar->gone) return;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (!tabs.count(tab)) return;
+  }
+  SendTo(*bar, wire::ToRenderer::UiState, "{\"icon\":{\"tab\":" + std::to_string(tab) + ",\"url\":" + JsonString(address) + ",\"data\":" + JsonString(data) + "}}");
+}
+
+void Session::Impl::StartChrome(const std::string& geometry) {
+  std::shared_ptr<Host> host = StartHost(0, "solar", kChromeAddress, std::nullopt, true);
+  if (!host) return;
+  SendTo(*host, wire::ToRenderer::Resize, geometry);
+  chromeId.store(host->id);
+}
+
+void Session::Impl::OnChromeNavigate(const std::shared_ptr<Host>& host, const wire::Navigate& request) {
+  // The interface's process is given its one document, from the browser's own memory, and nothing else: it has no network to ask for more.
+  if (request.url != kChromeAddress) return NavError(*host, request.id, "the interface may not go anywhere");
+  Serve(*host, request.id, kChromeAddress, ChromeDocument());
+}
+
+void Session::Impl::OnInternalNavigate(const std::shared_ptr<Host>& host, const wire::Navigate& request) {
+  host->active.insert(request.id);
+  Serve(*host, request.id, kNewTabAddress, NewTabDocument());
+  host->active.erase(request.id);
+}
+
+void Session::Impl::Serve(Host& host, uint32_t id, const char* address, const std::string& document) {
+  net::ipc::Writer head;
+  wire::Write(head, wire::NavHead{id, 200, "text/html; charset=utf-8", address});
+  SendTo(host, wire::ToRenderer::NavHead, head.bytes());
+  net::ipc::Writer body;
+  body.U32(id);
+  body.String(document);
+  SendTo(host, wire::ToRenderer::NavBody, body.bytes());
+  net::ipc::Writer end;
+  end.U32(id);
+  SendTo(host, wire::ToRenderer::NavEnd, end.bytes());
+}
+
+void Session::Impl::SetLoading(uint32_t tab, bool value) {
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    const auto found = tabs.find(tab);
+    if (found != tabs.end()) found->second.loading = value;
+  }
+  PushState();
+}
+
+void Session::Impl::PushState() {
+  std::shared_ptr<Host> bar = Find(chromeId.load());
+  if (!bar || bar->gone) return;
+  std::string json;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    const auto addressOf = [](const TabState& t) { return t.index >= 0 && t.index < static_cast<int>(t.entries.size()) ? t.entries[static_cast<size_t>(t.index)] : std::string(); };
+    json = "{\"tabs\":[";
+    bool first = true;
+    for (uint32_t id : order) {
+      const TabState& t = tabs.at(id);
+      if (!first) json += ",";
+      first = false;
+      json += "{\"id\":" + std::to_string(id) + ",\"title\":" + JsonString(t.title) + ",\"url\":" + JsonString(addressOf(t)) + ",\"loading\":" + (t.loading ? "true" : "false") + "}";
+    }
+    json += "],\"active\":" + std::to_string(active);
+    if (const TabState* t = ActiveTab()) {
+      json += ",\"url\":" + JsonString(addressOf(*t)) + ",\"title\":" + JsonString(t->title) + ",\"back\":" + (t->index > 0 ? "true" : "false") + ",\"forward\":" + (t->index + 1 < static_cast<int>(t->entries.size()) ? "true" : "false") +
+              ",\"loading\":" + (t->loading ? "true" : "false");
+    }
+    json += std::string(",\"controls\":") + (windowControls ? "true" : "false") + ",\"maximized\":" + (maximized ? "true" : "false") + "}";
+  }
+  SendTo(*bar, wire::ToRenderer::UiState, json);
 }
 
 // ---- Session ----
@@ -581,43 +948,146 @@ Session::Session(BrowserServices& services, Launcher launcher, Events events, bo
 
 Session::~Session() { Close(); }
 
-uint32_t Session::current() const { return impl_->current.load(); }
+uint32_t Session::current() const { return impl_->shownHost.load(); }
 
 void Session::Open(const std::string& address) {
   impl_->services.Post([impl = impl_, address] {
-    std::optional<url::Url> parsed = url::Parse(address);
-    if (!parsed) return;
-    Host::Expected expected;
-    expected.url = url::Serialize(*parsed);
-    impl->Transfer(nullptr, 0, std::move(expected));
+    if (!url::Parse(address)) return;
+    impl->NewTab(address, true);
+  });
+}
+
+void Session::NewTab(const std::string& address) {
+  impl_->services.Post([impl = impl_, address] { impl->NewTab(address, true); });
+}
+
+void Session::CloseTab(uint32_t tab) {
+  impl_->services.Post([impl = impl_, tab] {
+    {
+      std::lock_guard<std::mutex> lock(impl->mutex);
+      if (!impl->tabs.count(tab)) return;
+    }
+    impl->CloseTab(tab);
+    bool none;
+    {
+      std::lock_guard<std::mutex> lock(impl->mutex);
+      none = impl->tabs.empty();
+    }
+    // (The last tab closed is the window: nothing is left to show.)
+    if (none) impl->events.gone(0, true);
+  });
+}
+
+void Session::Activate(uint32_t tab) {
+  impl_->services.Post([impl = impl_, tab] { impl->Activate(tab); });
+}
+
+uint32_t Session::activeTab() const {
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  return impl_->active;
+}
+
+void Session::CycleTab(int delta) {
+  impl_->services.Post([impl = impl_, delta] {
+    uint32_t next = 0;
+    {
+      std::lock_guard<std::mutex> lock(impl->mutex);
+      if (impl->order.size() < 2) return;
+      const auto where = std::find(impl->order.begin(), impl->order.end(), impl->active);
+      const int count = static_cast<int>(impl->order.size());
+      const int at = where == impl->order.end() ? 0 : static_cast<int>(where - impl->order.begin());
+      next = impl->order[static_cast<size_t>(((at + delta) % count + count) % count)];
+    }
+    impl->Activate(next);
   });
 }
 
 void Session::Go(const std::string& address) {
-  impl_->services.Post([impl = impl_, address] { impl->GoNew(address); });
+  impl_->services.Post([impl = impl_, address] {
+    uint32_t tab;
+    {
+      std::lock_guard<std::mutex> lock(impl->mutex);
+      tab = impl->active;
+    }
+    impl->GoNew(tab, address);
+  });
 }
 
 void Session::Back() {
   impl_->services.Post([impl = impl_] {
+    uint32_t tab;
     int target;
     {
       std::lock_guard<std::mutex> lock(impl->mutex);
-      target = impl->index - 1;
+      const Impl::TabState* t = impl->ActiveTab();
+      if (!t) return;
+      tab = t->id;
+      target = t->index - 1;
     }
-    impl->GoToEntry(target);
+    impl->GoToEntry(tab, target);
   });
 }
 
 void Session::Forward() {
   impl_->services.Post([impl = impl_] {
+    uint32_t tab;
     int target;
     {
       std::lock_guard<std::mutex> lock(impl->mutex);
-      target = impl->index + 1;
+      const Impl::TabState* t = impl->ActiveTab();
+      if (!t) return;
+      tab = t->id;
+      target = t->index + 1;
     }
-    impl->GoToEntry(target);
+    impl->GoToEntry(tab, target);
   });
 }
+
+void Session::Reload() {
+  impl_->services.Post([impl = impl_] {
+    uint32_t tab;
+    int target;
+    {
+      std::lock_guard<std::mutex> lock(impl->mutex);
+      const Impl::TabState* t = impl->ActiveTab();
+      if (!t) return;
+      tab = t->id;
+      target = t->index;
+    }
+    impl->GoToEntry(tab, target);
+  });
+}
+
+void Session::OpenChrome(const std::string& geometry) { impl_->services.Post([impl = impl_, geometry] { impl->StartChrome(geometry); }); }
+
+uint32_t Session::chrome() const { return impl_->chromeId.load(); }
+
+void Session::SendChrome(wire::ToRenderer type, const std::string& bytes) { Send(impl_->chromeId.load(), type, bytes); }
+
+void Session::SetTitle(uint32_t host, const std::string& text) {
+  impl_->services.Post([impl = impl_, host, text] {
+    {
+      std::lock_guard<std::mutex> lock(impl->mutex);
+      for (auto& [id, t] : impl->tabs) {
+        if (t.current == host) t.title = text;
+      }
+    }
+    impl->PushState();
+  });
+}
+
+void Session::SetWindowFlags(bool controls, bool maximized) {
+  impl_->services.Post([impl = impl_, controls, maximized] {
+    {
+      std::lock_guard<std::mutex> lock(impl->mutex);
+      impl->windowControls = controls;
+      impl->maximized = maximized;
+    }
+    impl->PushState();
+  });
+}
+
+void Session::PushState() { impl_->services.Post([impl = impl_] { impl->PushState(); }); }
 
 bool Session::Send(uint32_t host, wire::ToRenderer type, const std::string& bytes) {
   std::shared_ptr<Host> found = impl_->Find(host);
@@ -631,7 +1101,7 @@ void Session::Broadcast(wire::ToRenderer type, const std::string& bytes) {
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     if (type == wire::ToRenderer::Resize) impl_->resize = bytes;
-    for (auto& [id, host] : impl_->hosts) all.push_back(host);
+    for (auto& [id, host] : impl_->hosts) if (!host->chrome) all.push_back(host);
   }
   for (auto& host : all) impl_->SendTo(*host, type, bytes);
 }
@@ -641,6 +1111,20 @@ bool Session::Handle(uint32_t hostId, uint8_t type, const std::string& bytes) {
   if (!host) return type == static_cast<uint8_t>(wire::ToBrowser::Navigate) || type == static_cast<uint8_t>(wire::ToBrowser::NavCommitted) || type == static_cast<uint8_t>(wire::ToBrowser::HistoryGo) ||
                     type == static_cast<uint8_t>(wire::ToBrowser::Storage);
   net::ipc::Reader in(bytes);
+  if (host->chrome) {
+    // The interface's process may navigate to its document, and commits to it; the rest is for the window (a command) or nothing.
+    switch (static_cast<wire::ToBrowser>(type)) {
+      case wire::ToBrowser::Navigate: {
+        wire::Navigate request;
+        if (wire::Read(in, request)) impl_->services.Post([impl = impl_, host, request = std::move(request)] { impl->OnChromeNavigate(host, request); });
+        return true;
+      }
+      case wire::ToBrowser::NavCommitted:
+      case wire::ToBrowser::HistoryGo:
+      case wire::ToBrowser::Storage: return true;
+      default: return false;
+    }
+  }
   switch (static_cast<wire::ToBrowser>(type)) {
     case wire::ToBrowser::Navigate: {
       wire::Navigate request;
@@ -660,7 +1144,12 @@ bool Session::Handle(uint32_t hostId, uint8_t type, const std::string& bytes) {
     }
     case wire::ToBrowser::Storage: {
       wire::StorageRequest request;
-      if (wire::Read(in, request)) host->tab->Storage(std::move(request));
+      if (wire::Read(in, request)) host->tab_->Storage(std::move(request));
+      return true;
+    }
+    case wire::ToBrowser::Favicon: {
+      const std::string address = bytes.substr(0, 4096);
+      impl_->services.Post([impl = impl_, host, address] { impl->OnFavicon(host, address); });
       return true;
     }
     default: return false;
@@ -694,12 +1183,14 @@ int Session::Close() {
 
 std::vector<std::string> Session::Entries() const {
   std::lock_guard<std::mutex> lock(impl_->mutex);
-  return impl_->entries;
+  const auto found = impl_->tabs.find(impl_->active);
+  return found == impl_->tabs.end() ? std::vector<std::string>() : found->second.entries;
 }
 
 int Session::Index() const {
   std::lock_guard<std::mutex> lock(impl_->mutex);
-  return impl_->index;
+  const auto found = impl_->tabs.find(impl_->active);
+  return found == impl_->tabs.end() ? -1 : found->second.index;
 }
 
 }  // namespace solar::gui

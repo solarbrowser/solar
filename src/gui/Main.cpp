@@ -74,6 +74,7 @@
 #include "solar/paint/GlRuntime.h"
 #include "solar/gui/Services.h"
 #include "solar/gui/Sandbox.h"
+#include "solar/gui/UiNatives.h"
 #include "solar/gui/Renderer.h"
 #include "solar/gui/Window.h"
 #include "solar/paint/SkiaPainter.h"
@@ -224,6 +225,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     bypassWorker_ = was;
     return text;
   }
+  solar::net::ipc::Channel* uiLink_ = nullptr;
   std::function<void(qe::Realm*)> dropTimers_;  // (set where the timers are: the tasks of a worker that is let go are not to run)
 
   // A page that is left: its realm goes, and with it what only it kept.
@@ -262,6 +264,8 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
       solar::webapi::InstallCompressionNatives(realm);
       solar::webapi::InstallMediaNatives(realm);
       solar::webapi::InstallWebAudioNatives(realm);
+      // (The browser's own interface page, and no other, can ask the browser for things.)
+      if (uiLink_ && pageUrl_.rfind("solar://", 0) == 0) solar::gui::InstallUiNatives(realm, *uiLink_);
       solar::webapi::InstallCanvasNatives(realm);
       solar::webapi::InstallWebGlNatives(realm);
       solar::webapi::InstallImageLoadNatives(realm);
@@ -950,6 +954,70 @@ size_t LineEndAt(const std::string& s, size_t at) {
 int PageMain(Shared& shared, int argc, char** argv);
 
 // The renderer: the page and the compositor, which speak to the window through `fd`. It is a thread of the program for now (a process of its own to come); it ends with the page.
+// What the document says it is called: the text of its first title element, with the white space gathered.
+std::string DocumentTitle(solar::dom::Document* document) {
+  if (!document) return "";
+  std::vector<solar::dom::Node*> stack{document->firstChild};
+  while (!stack.empty()) {
+    solar::dom::Node* node = stack.back();
+    stack.pop_back();
+    for (; node; node = node->nextSibling) {
+      if (node->IsElement() && static_cast<solar::dom::Element*>(node)->IsHtml("title")) {
+        std::string raw = node->DescendantText(), out;
+        bool space = true;
+        for (char c : raw) {
+          if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f') {
+            if (!space) out += ' ';
+            space = true;
+          } else {
+            out += c;
+            space = false;
+          }
+        }
+        while (!out.empty() && out.back() == ' ') out.pop_back();
+        return out;
+      }
+      if (node->firstChild) stack.push_back(node->firstChild);
+    }
+  }
+  return "";
+}
+
+// The icon a document says it has (its first link with rel icon), or the one at the root of the site; empty for what is not the web.
+std::string FaviconAddress(solar::dom::Document* document, const std::string& address) {
+  std::optional<solar::url::Url> base = solar::url::Parse(address);
+  if (!document || !base || (base->scheme != "http" && base->scheme != "https")) return "";
+  std::vector<solar::dom::Node*> stack{document->firstChild};
+  while (!stack.empty()) {
+    solar::dom::Node* node = stack.back();
+    stack.pop_back();
+    for (; node; node = node->nextSibling) {
+      if (node->IsElement() && static_cast<solar::dom::Element*>(node)->IsHtml("link")) {
+        const auto* link = static_cast<solar::dom::Element*>(node);
+        const std::optional<std::string> rel = solar::dom::GetAttribute(link, "rel"), href = solar::dom::GetAttribute(link, "href");
+        if (rel && href && !href->empty()) {
+          std::string lower;
+          for (char c : *rel) lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+          bool icon = false;
+          size_t at = 0;
+          while (at < lower.size()) {
+            size_t end = lower.find_first_of(" \t\n\r\f", at);
+            if (end == std::string::npos) end = lower.size();
+            if (lower.compare(at, end - at, "icon") == 0 && end - at == 4) icon = true;
+            at = end + 1;
+          }
+          if (icon) {
+            if (std::optional<solar::url::Url> where = solar::url::Parse(*href, &*base)) return solar::url::Serialize(*where);
+          }
+        }
+      }
+      if (node->firstChild) stack.push_back(node->firstChild);
+    }
+  }
+  if (std::optional<solar::url::Url> root = solar::url::Parse("/favicon.ico", &*base)) return solar::url::Serialize(*root);
+  return "";
+}
+
 int RendererMain(int fd, int networkFd, int argc, char** argv, bool sandboxed = false, int gpuFd = -1) {
   solar::net::ipc::Channel link(fd);
   Shared shared;
@@ -1099,6 +1167,12 @@ int main(int argc, char** argv) {
     ::prctl(PR_SET_PDEATHSIG, SIGKILL);
     ::signal(SIGPIPE, SIG_IGN);
     char* pageArguments[] = {argv[0], argc > 2 ? argv[2] : nullptr, nullptr};
+    // (The interface's process is not the page: what is set for looking at the page, a picture of it and what a user would do in it, is not for the interface.)
+    if (argc > 2 && std::strncmp(argv[2], "solar://", 8) == 0) {
+      ::unsetenv("SOLAR_GUI_SHOT");
+      ::unsetenv("SOLAR_GUI_SCRIPT");
+      ::unsetenv("SOLAR_GUI_SETTLE");
+    }
     const solar::gui::SandboxMode mode = solar::gui::SandboxModeFromEnvironment();
     if (mode != solar::gui::SandboxMode::Off) {
       // What is to be had from the machine is had now, and then the process is shut in: it is then given what it needs to read and nothing it can start, open, or connect to.
@@ -1128,7 +1202,10 @@ int main(int argc, char** argv) {
   int windowW = 1280, windowH = 800;
   if (const char* given = std::getenv("SOLAR_GUI_SIZE")) std::sscanf(given, "%dx%d", &windowW, &windowH);
   // The window shows the pictures the page makes (the page draws them with the CPU for now; a process for the GPU to come), through a texture SDL puts on the screen.
-  SDL_Window* window = SDL_CreateWindow("Solar", windowW, windowH, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+  // (The window has no bar of the system's: the interface draws the tabs where it would be, and the buttons of the window. SOLAR_SYSTEM_TITLE=1 keeps the system's bar.)
+  const char* systemTitle = std::getenv("SOLAR_SYSTEM_TITLE");
+  const bool systemBar = systemTitle && *systemTitle && std::strcmp(systemTitle, "0") != 0;
+  SDL_Window* window = SDL_CreateWindow("Solar", windowW, windowH, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | (systemBar ? 0 : SDL_WINDOW_BORDERLESS));
   SDL_Renderer* renderer = window ? SDL_CreateRenderer(window, nullptr) : nullptr;
   if (!renderer) {
     std::fprintf(stderr, "window: %s\n", SDL_GetError());
@@ -1223,6 +1300,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
   solar::web::JsEventLoop events(*loop, {[&] { isolate->PerformMicrotaskCheckpoint(); }, [&] { timers.RunDue(); }, [&] { return timers.NextDelayMs(); }});
   Browser browser(*isolate, *loop, client, events);
   browser.navigator_ = &navigator;
+  browser.uiLink_ = shared.browserLink;
   browser.timing_ = std::getenv("SOLAR_GUI_TIMES") != nullptr;
   browser.dropTimers_ = [&](qe::Realm* realm) { timers.DropRealm(realm); };
   solar::layout::SetImageRequestHandler([&](const std::string& absolute) { return browser.RequestImage(absolute); });
@@ -1243,6 +1321,11 @@ int PageMain(Shared& shared, int argc, char** argv) {
   // Puts the document that came for `where` in a new realm, and runs its scripts (what it fetches is waited for, with the window kept alive).
   qe::Realm* realm = nullptr;
   solar::dom::Document* document = nullptr;
+  // (The browser tells its interface page how things are: the state is handed to a function the page has.)
+  navigator.SetUiHandler([&realm](std::string state) {
+    if (!realm) return;
+    solar::html::RunInRealm(*realm, [&] { realm->Evaluate("globalThis.__solarUiState && globalThis.__solarUiState(" + state + ")", "ui"); });
+  });
   bool dirty = true;
   bool loadingPage = false, firstEarly = true;  // (see paintEarly)
   Clock::time_point nextEarly = Clock::now();
@@ -1352,8 +1435,10 @@ int PageMain(Shared& shared, int argc, char** argv) {
     {
       UiCommand title;
       title.kind = UiCommand::Kind::Title;
-      title.text = "Solar - " + address;
+      title.text = DocumentTitle(document).empty() ? "Solar - " + address : DocumentTitle(document);
       shared.Post(std::move(title));
+      // (The browser fetches the page's icon and shows it on the tab.)
+      if (const std::string icon = FaviconAddress(document, address); !icon.empty() && shared.browserLink) shared.browserLink->SendRaw(static_cast<uint8_t>(solar::gui::wire::ToBrowser::Favicon), icon);
       // (A page that came is at the top; the window's scroll is put there.)
       UiCommand top;
       top.kind = UiCommand::Kind::ScrollTo;
@@ -1573,7 +1658,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
       shared.Post(std::move(top));
       UiCommand title;
       title.kind = UiCommand::Kind::Title;
-      title.text = "Solar - " + address;
+      title.text = DocumentTitle(document).empty() ? "Solar - " + address : DocumentTitle(document);
       shared.Post(std::move(title));
     }
     const double cost = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();

@@ -53,7 +53,8 @@ void RunCompositor(Shared& shared, net::ipc::Channel& link, int gpuFd) {
   bool stalledForBuffer = false;
   Frame frame;
   // Scrolling goes toward where it was asked to, a part of the way each frame (it eases out), so that a wheel step is a glide and not a jump.
-  double x = 0, y = 0, targetX = 0, targetY = 0;
+  // (Two steps, one after the other: the point that follows the target is itself followed, so the speed rises and falls smoothly and the steps of a wheel that turns run into each other.)
+  double x = 0, y = 0, targetX = 0, targetY = 0, midX = 0, midY = 0;
   bool gliding = false;
   Clock::time_point lastGlide = Clock::now();
   Clock::time_point scrollActive = Clock::now() - std::chrono::seconds(10);
@@ -90,8 +91,8 @@ void RunCompositor(Shared& shared, net::ipc::Channel& link, int gpuFd) {
   };
   const auto scrollBy = [&](double dx, double dy, bool instant) {
     if (!gliding) {
-      targetX = x;
-      targetY = y;
+      targetX = midX = x;
+      targetY = midY = y;
     }
     targetX += dx;
     targetY += dy;
@@ -99,8 +100,8 @@ void RunCompositor(Shared& shared, net::ipc::Channel& link, int gpuFd) {
     scrollActive = Clock::now();
     shared.scrollInputNs = NowNs();
     if (instant) {
-      x = targetX;
-      y = targetY;
+      x = midX = targetX;
+      y = midY = targetY;
       gliding = false;
       publish();
     } else {
@@ -111,8 +112,8 @@ void RunCompositor(Shared& shared, net::ipc::Channel& link, int gpuFd) {
     dirty = true;
   };
   const auto scrollTo = [&](double nx, double ny) {
-    targetX = x = std::clamp(nx, 0.0, std::max(0.0, frame.maxX));
-    targetY = y = std::clamp(ny, 0.0, std::max(0.0, frame.maxY));
+    targetX = midX = x = std::clamp(nx, 0.0, std::max(0.0, frame.maxX));
+    targetY = midY = y = std::clamp(ny, 0.0, std::max(0.0, frame.maxY));
     gliding = false;
     publish();
     dirty = true;
@@ -275,12 +276,14 @@ void RunCompositor(Shared& shared, net::ipc::Channel& link, int gpuFd) {
       const auto now = Clock::now();
       const double dt = std::chrono::duration<double>(now - lastGlide).count();
       lastGlide = now;
-      const double k = 1 - std::exp(-dt / 0.07);
-      x += (targetX - x) * k;
-      y += (targetY - y) * k;
-      if (std::abs(targetX - x) < 0.5 && std::abs(targetY - y) < 0.5) {
-        x = targetX;
-        y = targetY;
+      const double k = 1 - std::exp(-dt / 0.045);
+      midX += (targetX - midX) * k;
+      midY += (targetY - midY) * k;
+      x += (midX - x) * k;
+      y += (midY - y) * k;
+      if (std::abs(targetX - x) < 0.5 && std::abs(targetY - y) < 0.5 && std::abs(targetX - midX) < 0.5 && std::abs(targetY - midY) < 0.5) {
+        x = midX = targetX;
+        y = midY = targetY;
         gliding = false;
       }
       publish();
@@ -291,6 +294,13 @@ void RunCompositor(Shared& shared, net::ipc::Channel& link, int gpuFd) {
 
     const int pixelW = shared.pixelWidth.load(), pixelH = shared.pixelHeight.load();
     if (pixelW <= 0 || pixelH <= 0) continue;
+    // One picture is on its way to the window at a time: the window lets it go once it has put it on the screen (at the vsync), and the next is made then, with the scroll of that time. A picture made
+    // ahead, while the window waits for the screen, would be of a time that is past when it is shown, and the scrolling would not move evenly.
+    if (std::any_of(slots.begin(), slots.end(), [](const Slot& s) { return s.held; })) {
+      stalledForBuffer = true;
+      dirty = true;
+      continue;
+    }
     // A picture of the right size that the window is not showing; one of another size that it does not have is let go of.
     Slot* slot = nullptr;
     size_t slotIndex = 0;
@@ -386,6 +396,7 @@ void RunCompositor(Shared& shared, net::ipc::Channel& link, int gpuFd) {
       if (!link.SendRaw(static_cast<uint8_t>(wire::ToBrowser::Frame), out.bytes())) running = false;
     }
     const auto uploadEnd = Clock::now();
+    if (std::getenv("SOLAR_FRAME_LOG")) std::fprintf(stderr, "scroll %.1f at %.0f\n", y, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count());
     if (std::getenv("SOLAR_GUI_TIMES")) {
       // (Where a frame goes, in ms: the page painted onto the surface by the CPU, the surface sent to the texture, and the present, which waits for vsync.)
       const auto ms = [](Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
@@ -497,6 +508,7 @@ std::thread StartWindowLink(Shared& shared, net::ipc::Channel& link) {
         case wire::ToRenderer::NavError:
         case wire::ToRenderer::NavRestart:
         case wire::ToRenderer::NavTransferred:
+        case wire::ToRenderer::UiState:
         case wire::ToRenderer::GoTo: shared.DeliverNavigation(static_cast<wire::ToRenderer>(type), bytes); break;
         case wire::ToRenderer::AudioQueued: {
           const uint32_t id = in.U32();

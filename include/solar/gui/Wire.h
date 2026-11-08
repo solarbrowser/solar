@@ -26,6 +26,8 @@ enum class ToRenderer : uint8_t {
   NavTransferred = 13, GoTo = 14,
   // How much sound the window has been given and not played, of a stream (U32 id, U64 frames): the page keeps time by it.
   AudioQueued = 16,
+  // What the window's own page (the browser's interface, a renderer of its own) is told: the state of the browser (a JSON text), when it changes.
+  UiState = 18,
   // The answer to a storage request (U32 id, bool ok, then the bytes that were asked for).
   StorageReply = 24,
 };
@@ -41,6 +43,10 @@ enum class ToBrowser : uint8_t {
   AudioOpen = 48, AudioData, AudioPause, AudioClear, AudioClose,
   // What the page stores is kept by the browser (the page's process has no disk): a StorageRequest, answered by StorageReply.
   Storage = 56,
+  // What the interface page asks of the browser (a text: a verb, and a tab and what it is for); only the interface's process is heard on it.
+  UiCommand = 64,
+  // The address of the icon the page has (a text): the browser fetches it, as the page is not to be trusted with what the interface shows.
+  Favicon = 65,
 };
 
 // A document to take: the browser is trusted to fetch it, the page is not trusted to say what it is, so the address is checked there.

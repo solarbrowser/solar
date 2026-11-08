@@ -23,7 +23,7 @@ while pos < len(d):
 raw = zlib.decompress(idat)
 bpp = 4
 stride = w * bpp
-print("ok" if (w, h) == (1280, 800) and len(raw) == h * (stride + 1) else "no")
+print("ok" if (w, h) == (1280, 712) and len(raw) == h * (stride + 1) else "no")
 P
 )"
 
@@ -31,12 +31,19 @@ P
 ./solar "file://$dir/page.html" > "$dir/out2.txt" 2>&1 &
 browser=$!
 sleep 2.5
-renderer=$(pgrep -P $browser -f -- --renderer | head -1)
+renderer=$(pgrep -P $browser -f -- '--renderer file://' | head -1)
 check "the page is another process" "$([ -n "$renderer" ] && [ "$renderer" != "$browser" ] && echo ok)"
 fds=$(ls /proc/$renderer/fd 2>/dev/null | wc -l)
 check "it has few descriptors ($fds)" "$([ "$fds" -le 12 ] && echo ok)"
 leaked=$(ls -l /proc/$renderer/fd 2>/dev/null | grep -c -E 'x11|wayland|/dev/dri|X11-unix')
 check "none of the window's" "$([ "$leaked" = 0 ] && echo ok)"
+
+# The browser's own interface (the bar) is a page in a process of its own, shut in as the pages are, with no network to go to.
+ui=$(pgrep -P $browser -f -- '--renderer solar://' | head -1)
+check "the interface is another process" "$([ -n "$ui" ] && [ "$ui" != "$renderer" ] && echo ok)"
+uistatus=$(cat /proc/$ui/status 2>/dev/null)
+check "the interface has a system call filter and no capabilities" "$(echo "$uistatus" | grep -q '^Seccomp:[[:space:]]*2' && echo "$uistatus" | grep -q '^CapEff:[[:space:]]*0000000000000000' && echo ok)"
+check "the interface has a network namespace of its own" "$([ "$(readlink /proc/$ui/ns/net)" != "$(readlink /proc/$browser/ns/net)" ] && echo ok)"
 
 # It is shut in: no new privileges, no capabilities, a filter on its system calls, and a network and a user of its own.
 status=$(cat /proc/$renderer/status 2>/dev/null)
@@ -64,7 +71,7 @@ wait $browser 2>/dev/null
 ./solar "file://$dir/page.html" > "$dir/out3.txt" 2>&1 &
 browser=$!
 sleep 2.5
-renderer=$(pgrep -P $browser -f -- --renderer | head -1)
+renderer=$(pgrep -P $browser -f -- '--renderer file://' | head -1)
 kill -9 $browser
 sleep 1
 check "the page's process ends when the browser does" "$(kill -0 $renderer 2>/dev/null || echo ok)"
@@ -74,7 +81,7 @@ wait $browser 2>/dev/null
 ./solar "file://$dir/page.html" > "$dir/out4.txt" 2>&1 &
 browser=$!
 sleep 2.5
-renderer=$(pgrep -P $browser -f -- --renderer | head -1)
+renderer=$(pgrep -P $browser -f -- '--renderer file://' | head -1)
 kill -TERM $browser
 for i in $(seq 1 20); do kill -0 $browser 2>/dev/null || break; sleep 0.25; done
 check "closing the window ends the browser" "$(kill -0 $browser 2>/dev/null || echo ok)"
