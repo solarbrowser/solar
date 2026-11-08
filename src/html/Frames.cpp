@@ -493,8 +493,9 @@ std::vector<dom::Element*> HtmlElementsIn(dom::Node* root, std::string_view name
   for (dom::Node* node = root; node; node = node->NextInTree(root)) {
     if (dom::Element* element = dom::AsElement(node)) {
       if (element->IsHtml(name)) found.push_back(element);
-      if (element->shadowRoot) {
-        for (dom::Element* inner : HtmlElementsIn(element->shadowRoot, name)) found.push_back(inner);
+      // (The shadow root of the view the walk is in: the tree is walked as it was committed, and a shadow root that came since is not in it, nor what it holds.)
+      if (dom::ShadowRoot* shadow = element->ShadowRootInView()) {
+        for (dom::Element* inner : HtmlElementsIn(shadow, name)) found.push_back(inner);
       }
     }
   }

@@ -477,6 +477,13 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     waiting_ = resource;
     const auto waitStart = Clock::now();
     while (!resource->done) {
+      // (In the middle of working out a style nothing of the page runs: its script would change what the computation holds.)
+      static const bool tasksInStyle = std::getenv("SOLAR_TASKS_IN_STYLE") != nullptr;
+      if (!tasksInStyle && solar::css::StyleComputationActive()) {
+        events_.StepNetworkOnly(std::chrono::milliseconds(8));
+        if (pump_) pump_();
+        continue;
+      }
       events_.Step(std::chrono::milliseconds(std::getenv("SOLAR_SLICE") ? std::atoi(std::getenv("SOLAR_SLICE")) : 8));
       if (pump_) pump_();
       // (What the page has so far can be shown while what it waits for comes, unless that is a style sheet.)

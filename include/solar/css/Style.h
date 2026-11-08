@@ -113,6 +113,9 @@ bool MayDeclareAnimation(dom::Element* element, const std::string& pseudo);
 void SetOverlayScrollbars(bool overlay);
 // A document that is gone (a page that was left): what style kept for it is let go.
 void ForgetDocument(dom::Document* document);
+// Whether a computed style is being worked out (and holds references into what is kept of the styles): nothing that may run script or change the tree may run meanwhile, a font
+// that is waited for in the middle of it is waited for by the network's loop alone.
+bool StyleComputationActive();
 uint64_t StyleVersion();
 // An animation changed the values it gives: computed values are made again, but nothing that was declared is different.
 void NoteAnimatedStyleChange(bool affectsSizes = true, bool onlyItself = false);

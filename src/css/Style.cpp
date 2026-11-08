@@ -61,6 +61,12 @@ int g_sheetParsing = 0;
 CssStyleSheet* g_additiveSheet = nullptr;  // the sheet of the outermost parse, when it had no rules before
 bool g_styleChangedInParse = false;
 bool g_wakeAfterParse = false;
+int g_styleHolds = 0;           // computations of a style that are under way: the cache is not emptied while they hold references into it
+bool g_clearDeferred = false;    // it was to be emptied while one was
+struct StyleHold {
+  StyleHold() { ++g_styleHolds; }
+  ~StyleHold() { --g_styleHolds; }
+};
 uint64_t g_cacheGeneration = 1;  // changed whenever the entries of the style cache are dropped (a reference to one is no longer good)
 uint64_t g_sizingAnimation = 1;  // changed when what animations give changes the size of something
 uint64_t g_cacheVersion = 1;   // changed when what the kept styles were made from is (not for the values animations give: each element has its own number for those)
@@ -1795,11 +1801,14 @@ ElementStyle& StyleOf(dom::Element* element, const std::string& pseudo = "") {
   static Last last;
   const bool plainAsk = pseudo.empty() && !AnimatedValuesSuppressed() && !StartingStyleFor(element, pseudo);
   if (plainAsk && last.element == element && last.serial == element->serial && last.generation == g_cacheGeneration && last.cacheVersion == g_cacheVersion && last.treeVersion == treeVersion) return *last.style;
-  if (cachedStyleVersion != g_cacheVersion || Cache().size() > 60000) {
+  if ((cachedStyleVersion != g_cacheVersion || Cache().size() > 60000 || g_clearDeferred) && g_styleHolds == 0) {
     ClearShared();
     Cache().clear();
     ++g_cacheGeneration;
     cachedStyleVersion = g_cacheVersion;
+    g_clearDeferred = false;
+  } else if (cachedStyleVersion != g_cacheVersion || Cache().size() > 60000) {
+    g_clearDeferred = true;  // (a computation holds a reference into the cache: it is emptied when none does)
   }
   // The elements that share what was worked out are found anew when anything changes (what is kept of an element is still good for it).
   static uint64_t sharedVersion = 0;
@@ -1829,9 +1838,13 @@ ElementStyle& StyleOf(dom::Element* element, const std::string& pseudo = "") {
       if (kept != state.sheets.size()) sheetsSame = false;
       if (state.signature != signature || !sheetsSame) {
         if (state.signature != 0) {
-          ClearShared();
-          Cache().clear();
-          ++g_cacheGeneration;
+          if (g_styleHolds > 0) {
+            g_clearDeferred = true;
+          } else {
+            ClearShared();
+            Cache().clear();
+            ++g_cacheGeneration;
+          }
         }
         state.signature = signature;
       }
@@ -3233,6 +3246,7 @@ std::string Resolver::ComputeInner(dom::Element* element, const std::string& pro
     if (InDocumentTree(element)) Prepare(element);
   }
   ElementStyle& style = StyleOf(element, pseudo);
+  const StyleHold hold;  // (what is computed from here on holds `style`: the cache is not emptied under it)
   if (!initialOnly) {
     const auto cached = style.memo->computed.find(name);
     if (cached != style.memo->computed.end()) {
@@ -4583,6 +4597,8 @@ MediaEnvironment EnvironmentFor(const dom::Document* document) {
 }  // namespace solar::css
 
 namespace solar::css {
+
+bool StyleComputationActive() { return g_styleHolds > 0; }
 
 void ForgetDocument(dom::Document* document) {
   DocumentStates().erase(document);

@@ -927,6 +927,12 @@ void InsertImpl(Node* node, Node* parent, Node* child, bool suppress) {
   Document* document = DocumentOf(parent);
   const std::vector<Node*> nodes = NodesOf(node);
   if (nodes.empty()) return;
+  // (The nodes of a fragment are taken out of it first and put in after: in between only this list holds them, and what the removal runs (a reaction of a custom element, a hook)
+  // can let the collector go by: they are kept alive for the collector here.)
+  qe::ValueList keep;
+  if (node->IsFragment()) {
+    for (Node* n : nodes) keep.Append(qe::FromObject(n));
+  }
   Node* previous = child ? child->previousSibling : parent->lastChild;
   if (child && HasLiveRanges()) RangesBeforeInsert(parent, static_cast<uint32_t>(child->IndexInParent()), static_cast<uint32_t>(nodes.size()));
   if (node->IsFragment()) {

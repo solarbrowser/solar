@@ -58,6 +58,16 @@ class JsEventLoop {
     networkMs += std::chrono::duration<double, std::milli>(t1 - t0).count();
     scriptMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count();
   }
+  // The same for a program that must not run script meanwhile (a font is waited for in the middle of working out a style, which holds references that script would undo): the
+  // network's loop alone, and no timer of the page fires while it runs.
+  void StepNetworkOnly(std::chrono::milliseconds slice) {
+    if (armed_) loop_.CancelTimer(armed_);
+    armed_ = 0;
+    const net::Loop::TimerId stopper = loop_.PostDelayed(slice, [this] { loop_.Stop(); }, /*background=*/true);
+    loop_.Run();
+    loop_.CancelTimer(stopper);
+    Arm();
+  }
   // Where the time of Step went (for looking at it): in the network's loop, and in script (promise jobs and timers).
   double networkMs = 0, scriptMs = 0;
 
