@@ -5,6 +5,7 @@
  */
 
 // The Unicode Bidirectional Algorithm (UAX #9): the embedding levels of a paragraph, and the visual order of a line.
+#include <unordered_map>
 #include <algorithm>
 #include <cstdint>
 
@@ -224,7 +225,30 @@ void ResolveSequence(const std::u32string& text, const std::vector<BidiClass>& o
 
 }  // namespace
 
+BidiResult ResolveBidiUncached(const std::u32string& text, int baseLevel);
+
+// (The same paragraphs come again with every layout of a page: what is made of one is kept.)
 BidiResult ResolveBidi(const std::u32string& text, int baseLevel) {
+  if (text.size() > 4096) return ResolveBidiUncached(text, baseLevel);
+  struct Kept {
+    std::unordered_map<std::u32string, BidiResult> byText[3];
+    size_t bytes = 0;
+  };
+  thread_local Kept kept;
+  auto& table = kept.byText[baseLevel < 0 ? 0 : baseLevel > 2 ? 2 : baseLevel];
+  const auto found = table.find(text);
+  if (found != table.end()) return found->second;
+  if (kept.bytes > (static_cast<size_t>(24) << 20)) {
+    for (auto& t : kept.byText) t.clear();
+    kept.bytes = 0;
+  }
+  BidiResult result = ResolveBidiUncached(text, baseLevel);
+  kept.bytes += text.size() * 8 + 64;
+  table.emplace(text, result);
+  return result;
+}
+
+BidiResult ResolveBidiUncached(const std::u32string& text, int baseLevel) {
   const size_t n = text.size();
   BidiResult result;
   result.levels.assign(n, 0);

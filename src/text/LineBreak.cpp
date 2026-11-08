@@ -5,6 +5,7 @@
  */
 
 // Line breaking (https://www.unicode.org/reports/tr14/), with the tailoring CSS asks for (https://drafts.csswg.org/css-text-3/#line-break-property).
+#include <unordered_map>
 #include "solar/text/Unicode.h"
 
 namespace solar::text {
@@ -31,7 +32,30 @@ bool IsInseparable(char32_t c) { return LineBreakOf(c) == C::IN; }
 
 }  // namespace
 
+std::vector<char> FindLineBreaksUncached(std::string_view text, const LineBreakOptions& options);
+
+// The same text is laid out again and again (every layout of a page that is made again): where its lines may break is kept for the text and the options.
 std::vector<char> FindLineBreaks(std::string_view text, const LineBreakOptions& options) {
+  if (text.size() > 8192) return FindLineBreaksUncached(text, options);
+  struct Kept {
+    std::unordered_map<std::string, std::vector<char>> byText[4][3][2];
+    size_t bytes = 0;
+  };
+  thread_local Kept kept;
+  auto& table = kept.byText[static_cast<int>(options.strictness)][static_cast<int>(options.words)][options.japaneseOrChinese ? 1 : 0];
+  const auto found = table.find(std::string(text));
+  if (found != table.end()) return found->second;
+  if (kept.bytes > (static_cast<size_t>(24) << 20)) {
+    for (auto& a : kept.byText) for (auto& b : a) for (auto& c : b) c.clear();
+    kept.bytes = 0;
+  }
+  std::vector<char> result = FindLineBreaksUncached(text, options);
+  kept.bytes += text.size() * 2 + 64;
+  table.emplace(std::string(text), result);
+  return result;
+}
+
+std::vector<char> FindLineBreaksUncached(std::string_view text, const LineBreakOptions& options) {
   std::vector<char> result(text.size() + 1, 0);
   std::u32string cp;
   std::vector<size_t> end;  // the byte offset after each code point
