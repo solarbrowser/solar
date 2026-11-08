@@ -60,7 +60,8 @@ GpuRaster::~GpuRaster() = default;
 
 GpuRaster::Scope::Scope(GpuRaster& raster) : raster_(raster) {
   raster_.impl_->mutex.lock();
-  raster_.impl_->egl.makeCurrent(raster_.impl_->egl.display, raster_.impl_->egl.context);
+  const bool made = raster_.impl_->egl.makeCurrent(raster_.impl_->egl.display, raster_.impl_->egl.context);
+  if (!made && std::getenv("SOLAR_GL_DEBUG")) { using EglGetError = int (*)(); auto err = reinterpret_cast<EglGetError>(raster_.impl_->egl.getProc("eglGetError")); std::fprintf(stderr, "gpu raster: the context could not be made current in this thread (EGL error 0x%x)\n", err ? err() : 0); }
 }
 
 GpuRaster::Scope::~Scope() {
@@ -110,7 +111,14 @@ bool GpuRaster::Draw(paint::SkiaPainter& painter, const paint::DisplayList& list
     impl.surface = SkSurfaces::RenderTarget(impl.direct.get(), skgpu::Budgeted::kNo, SkImageInfo::MakeN32Premul(pixelWidth, pixelHeight), 0, kTopLeft_GrSurfaceOrigin, nullptr);
     impl.width = pixelWidth;
     impl.height = pixelHeight;
-    if (!impl.surface) return false;
+    if (!impl.surface) {
+      if (std::getenv("SOLAR_GL_DEBUG")) {
+        using GetError = unsigned (*)();
+        auto getError = reinterpret_cast<GetError>(impl.egl.getProc("glGetError"));
+        std::fprintf(stderr, "gpu raster: no surface of %dx%d (GL error 0x%x, context lost %d)\n", pixelWidth, pixelHeight, getError ? getError() : 0, impl.direct->abandoned() ? 1 : 0);
+      }
+      return false;
+    }
   }
   SkCanvas* canvas = impl.surface->getCanvas();
   canvas->resetMatrix();
@@ -139,6 +147,11 @@ bool GpuRaster::Draw(paint::SkiaPainter& painter, const paint::DisplayList& list
       std::fprintf(stderr, "gpu process: over 30 frames, per frame: record %.2f ms, GPU %.2f ms, read back %.2f ms\n", record / 30, gpu / 30, read / 30);
       record = gpu = read = 0;
     }
+  }
+  if (!ok && std::getenv("SOLAR_GL_DEBUG")) {
+    using GetError = unsigned (*)();
+    auto getError = reinterpret_cast<GetError>(impl.egl.getProc("glGetError"));
+    std::fprintf(stderr, "gpu raster: the picture could not be read (GL error 0x%x, abandoned %d)\n", getError ? getError() : 0, impl.direct->abandoned() ? 1 : 0);
   }
   return ok;
 }

@@ -19,6 +19,9 @@
 #include <cstring>
 #include <functional>
 #include <algorithm>
+#include <condition_variable>
+#include <deque>
+#include <thread>
 #include <atomic>
 #include <map>
 #include <optional>
@@ -1248,12 +1251,74 @@ Backend& CurrentBackend() {
 void SetBackend(Backend* backend) { g_backend.store(backend); }
 
 namespace {
-std::mutex g_sharedLock;
+std::recursive_mutex g_sharedLock;
 std::map<std::pair<uint64_t, uint32_t>, Context*>& Registered() {
   static std::map<std::pair<uint64_t, uint32_t>, Context*> registered;
   return registered;
 }
 }  // namespace
+
+namespace {
+// The thread the GPU's work is on.
+class GlThread {
+ public:
+  GlThread() : thread_([this] { Loop(); }) {}
+  ~GlThread() {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      stop_ = true;
+    }
+    wake_.notify_all();
+    thread_.join();
+  }
+  void Run(const std::function<void()>& work) {
+    if (std::this_thread::get_id() == thread_.get_id()) {
+      work();
+      return;
+    }
+    std::mutex done;
+    std::condition_variable finished;
+    bool over = false;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      jobs_.push_back([&] {
+        work();
+        std::lock_guard<std::mutex> guard(done);
+        over = true;
+        finished.notify_all();
+      });
+    }
+    wake_.notify_one();
+    std::unique_lock<std::mutex> lock(done);
+    finished.wait(lock, [&] { return over; });
+  }
+
+ private:
+  void Loop() {
+    for (;;) {
+      std::function<void()> job;
+      {
+        std::unique_lock<std::mutex> lock(mutex_);
+        wake_.wait(lock, [&] { return stop_ || !jobs_.empty(); });
+        if (jobs_.empty()) return;
+        job = std::move(jobs_.front());
+        jobs_.pop_front();
+      }
+      job();
+    }
+  }
+  std::mutex mutex_;
+  std::condition_variable wake_;
+  std::deque<std::function<void()>> jobs_;
+  bool stop_ = false;
+  std::thread thread_;
+};
+}  // namespace
+
+void RunOnGlThread(const std::function<void()>& work) {
+  static GlThread* thread = new GlThread();  // (it lives as long as the process)
+  thread->Run(work);
+}
 
 bool CreateRasterContext(RasterEgl& out, std::string* why) {
   if (!paint::EnsureEgl()) {
@@ -1297,7 +1362,7 @@ void SetShare(void* display, void* context) {
   paint::g_shareContext.store(context);
 }
 
-std::mutex& SharedLock() { return g_sharedLock; }
+std::recursive_mutex& SharedLock() { return g_sharedLock; }
 
 void RegisterShared(uint64_t token, uint32_t id, Context* context) { Registered()[{token, id}] = context; }
 void UnregisterShared(uint64_t token, uint32_t id) { Registered().erase({token, id}); }

@@ -116,9 +116,12 @@ void Serve(GpuRaster& raster, int fd, uint64_t token, const std::vector<std::str
           bar.windowWidth = draw.windowWidth;
           bar.windowHeight = draw.windowHeight;
           // (The textures of the page's WebGL are not changed or deleted while they are drawn from.)
-          std::lock_guard<std::mutex> shared(paint::gl::SharedLock());
-          drawn = raster.Draw(*painter, *list, draw.pixelWidth, draw.pixelHeight, draw.density, draw.scrollX, draw.scrollY, bar, slot->second.memory.data(), static_cast<size_t>(slot->second.shape.stride));
+          std::lock_guard<std::recursive_mutex> shared(paint::gl::SharedLock());
+          paint::gl::RunOnGlThread([&] {
+            drawn = raster.Draw(*painter, *list, draw.pixelWidth, draw.pixelHeight, draw.density, draw.scrollX, draw.scrollY, bar, slot->second.memory.data(), static_cast<size_t>(slot->second.shape.stride));
+          });
         }
+        if (!drawn && std::getenv("SOLAR_GL_DEBUG")) std::fprintf(stderr, "gpu: a draw failed: buffer %s, list %s, asked %dx%d, buffer is %dx%d\n", slot != buffers.end() ? "there" : "missing", list ? "there" : "missing", draw.pixelWidth, draw.pixelHeight, slot != buffers.end() ? slot->second.shape.width : 0, slot != buffers.end() ? slot->second.shape.height : 0);
         net::ipc::Writer out;
         out.U32(draw.index);
         out.U64(draw.serial);
@@ -131,8 +134,10 @@ void Serve(GpuRaster& raster, int fd, uint64_t token, const std::vector<std::str
     }
   }
   // (What the page had on the GPU goes with its painter, with the context to hand.)
-  GpuRaster::Scope scope(raster);
-  painter.reset();
+  paint::gl::RunOnGlThread([&] {
+    GpuRaster::Scope scope(raster);
+    painter.reset();
+  });
   buffers.clear();
 }
 
@@ -166,6 +171,8 @@ void ServeGl(int fd, uint64_t token) {
     net::ipc::Reader in(bytes);
     const auto kind = static_cast<glwire::ToGl>(type);
     if (kind != glwire::ToGl::Buffer && descriptor >= 0) ::close(descriptor);
+    // (The GPU is used from one thread: the drawing of the pages and WebGL's contexts are on one EGL, which does not take being used from the several threads of the connections.)
+    paint::gl::RunOnGlThread([&] {
     switch (kind) {
       case glwire::ToGl::Create: {
         const uint64_t request = in.U64();
@@ -188,7 +195,7 @@ void ServeGl(int fd, uint64_t token) {
         contexts[id].width = width;
         contexts[id].height = height;
         {
-          std::lock_guard<std::mutex> shared(paint::gl::SharedLock());
+          std::lock_guard<std::recursive_mutex> shared(paint::gl::SharedLock());
           paint::gl::RegisterShared(token, id, contexts[id].context.get());
         }
         out.U32(id);
@@ -217,7 +224,7 @@ void ServeGl(int fd, uint64_t token) {
           break;
         }
         if (found != contexts.end()) {
-          std::lock_guard<std::mutex> shared(paint::gl::SharedLock());
+          std::lock_guard<std::recursive_mutex> shared(paint::gl::SharedLock());
           found->second.context->Resize(width, height);
           found->second.width = width;
           found->second.height = height;
@@ -300,7 +307,7 @@ void ServeGl(int fd, uint64_t token) {
         paint::gl::Context::Snapshot snapshot;
         bool ok = false;
         if (in.ok() && found != contexts.end()) {
-          std::lock_guard<std::mutex> shared(paint::gl::SharedLock());
+          std::lock_guard<std::recursive_mutex> shared(paint::gl::SharedLock());
           ok = found->second.context->Publish(snapshot);
           if (std::getenv("SOLAR_GL_DEBUG")) std::fprintf(stderr, "gpu: publish context %u: %s (texture %u, %dx%d, shares %d)\n", id, ok ? "done" : "not done", snapshot.texture, snapshot.width, snapshot.height, found->second.context->shares() ? 1 : 0);
         }
@@ -310,7 +317,7 @@ void ServeGl(int fd, uint64_t token) {
       case glwire::ToGl::Destroy: {
         const uint32_t id = in.U32();
         if (in.ok() && contexts.count(id)) {
-          std::lock_guard<std::mutex> shared(paint::gl::SharedLock());
+          std::lock_guard<std::recursive_mutex> shared(paint::gl::SharedLock());
           paint::gl::UnregisterShared(token, id);
           contexts.erase(id);
         }
@@ -318,11 +325,14 @@ void ServeGl(int fd, uint64_t token) {
       }
       default: break;
     }
+    });
   }
   // (The page is gone: its contexts are let go of, where nothing is drawing from them.)
-  std::lock_guard<std::mutex> shared(paint::gl::SharedLock());
-  for (auto& [id, held] : contexts) paint::gl::UnregisterShared(token, id);
-  contexts.clear();
+  paint::gl::RunOnGlThread([&] {
+    std::lock_guard<std::recursive_mutex> shared(paint::gl::SharedLock());
+    for (auto& [id, held] : contexts) paint::gl::UnregisterShared(token, id);
+    contexts.clear();
+  });
 }
 
 }  // namespace
@@ -365,38 +375,51 @@ int GpuMain(int controlFd) {
   ::prctl(PR_SET_PDEATHSIG, SIGKILL);
   ::signal(SIGPIPE, SIG_IGN);
   net::ipc::Channel control(controlFd);
+  // (The namespaces cannot be entered once the process has threads, and the GPU's thread and the driver's make some.)
+  const SandboxMode mode = SandboxModeFromEnvironment();
+  std::string namespaceProblems;
+  bool namespacesDone = false;
+  if (mode != SandboxMode::Off) namespacesDone = EnterNamespaces(namespaceProblems);
   std::string why;
-  std::unique_ptr<GpuRaster> raster = GpuRaster::Create(&why);
+  std::unique_ptr<GpuRaster> raster;
+  paint::gl::RunOnGlThread([&] { raster = GpuRaster::Create(&why); });
   if (!raster) {
     control.SendRaw(static_cast<uint8_t>(gpu::Control::Unavailable), why);
     return 1;
   }
   // It is shut in before it is told what pages to draw (and is shown to draw when it is: a driver that needs what the policy does not give is found out now, and the pages draw by themselves).
-  const SandboxMode mode = SandboxModeFromEnvironment();
   if (mode != SandboxMode::Off) {
-    {
+    // (All of it that touches the GPU is on its thread.)
+    paint::gl::RunOnGlThread([&] {
       paint::SkiaPainter warm;
       paint::DisplayList empty;
       std::vector<uint8_t> pixels(64 * 64 * 4);
       raster->Draw(warm, empty, 64, 64, 1.f, 0, 0, ScrollbarShape{}, pixels.data(), 64 * 4);
-    }
-    // (WebGL's libraries and driver are loaded before the process is shut in, with a context made and drawn from.)
-    if (paint::gl::Available()) {
-      if (auto context = paint::gl::Context::Create(2, "{}", 16, 16)) context->Present();
-    }
-    const SandboxResult result = EnterSandbox(GpuPolicy(), mode);
+      // (WebGL's libraries and driver are loaded before the process is shut in, with a context made and drawn from.)
+      if (paint::gl::Available()) {
+        if (auto context = paint::gl::Context::Create(2, "{}", 16, 16)) context->Present();
+      }
+    });
+    SandboxPolicy policy = GpuPolicy();
+    policy.namespacesDone = namespacesDone;
+    SandboxResult result = EnterSandbox(policy, mode);
+    result.problems += namespaceProblems;
     if (!result.problems.empty()) std::fprintf(stderr, "gpu sandbox: %s\n", result.problems.c_str());
     if (!result.seccomp) {
       control.SendRaw(static_cast<uint8_t>(gpu::Control::Unavailable), "the GPU's process could not be shut in");
       return 1;
     }
-    if (paint::gl::Available()) {
-      if (auto context = paint::gl::Context::Create(2, "{}", 16, 16)) context->Present();
-    }
-    paint::SkiaPainter check;
-    paint::DisplayList list;
-    std::vector<uint8_t> pixels(64 * 64 * 4);
-    if (!raster->Draw(check, list, 64, 64, 1.f, 0, 0, ScrollbarShape{}, pixels.data(), 64 * 4)) {
+    bool works = false;
+    paint::gl::RunOnGlThread([&] {
+      if (paint::gl::Available()) {
+        if (auto context = paint::gl::Context::Create(2, "{}", 16, 16)) context->Present();
+      }
+      paint::SkiaPainter check;
+      paint::DisplayList list;
+      std::vector<uint8_t> pixels(64 * 64 * 4);
+      works = raster->Draw(check, list, 64, 64, 1.f, 0, 0, ScrollbarShape{}, pixels.data(), 64 * 4);
+    });
+    if (!works) {
       control.SendRaw(static_cast<uint8_t>(gpu::Control::Unavailable), "the GPU does not draw once the process is shut in");
       return 1;
     }

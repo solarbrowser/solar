@@ -260,7 +260,7 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
   // (SOLAR_BROWSER_SCRIPT="wait:ms;go:address;back;forward": what the user would do with the history and the address bar, for trying the browser's side without a window to click in.)
   std::thread script;
   if (const char* steps = std::getenv("SOLAR_BROWSER_SCRIPT")) {
-    script = std::thread([&session, steps = std::string(steps)] {
+    script = std::thread([&session, window, steps = std::string(steps)] {
       size_t at = 0;
       while (at < steps.size()) {
         size_t end = steps.find(';', at);
@@ -269,6 +269,12 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
         at = end + 1;
         if (step.rfind("wait:", 0) == 0) std::this_thread::sleep_for(std::chrono::milliseconds(std::atoi(step.c_str() + 5)));
         else if (step.rfind("go:", 0) == 0) session.Go(step.substr(3));
+        else if (step.rfind("size:", 0) == 0) {
+          // (A window that is made another size, as the user does: the pages are told as they are.)
+          int w = 0, h = 0;
+          std::sscanf(step.c_str() + 5, "%dx%d", &w, &h);
+          if (w > 0 && h > 0) SDL_SetWindowSize(window, w, h);
+        }
         else if (step == "back") session.Back();
         else if (step == "forward") session.Forward();
         else if (step == "entries") {

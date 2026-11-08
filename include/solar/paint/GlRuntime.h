@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -91,6 +92,10 @@ class Context {
   std::unique_ptr<Impl> impl_;
 };
 
+// Runs `work` on the thread that all the GPU's work is on, and waits for it: what is made on one EGL (ANGLE's) is used from one thread, as the GPU's process of a browser does, because its
+// contexts do not take being used from the several threads of the connections.
+void RunOnGlThread(const std::function<void()>& work);
+
 // A context for the drawing of the page (Skia's), made on the EGL that WebGL's contexts are made on (ANGLE where there is one, else the machine's), and shared with them: the two draw
 // into one another's textures only on one EGL. `makeCurrent(display, context)` makes it current in the calling thread (a null context lets go).
 struct RasterEgl {
@@ -106,7 +111,7 @@ void DestroyRasterContext(RasterEgl& egl);
 // drawn into the page without being read: a context that cannot share is made without it.
 void SetShare(void* display, void* context);
 // Held by whoever draws with the shared textures, and by whoever changes or ends them (a publish, a resize, a destroy): so that a texture is not deleted while it is being drawn.
-std::mutex& SharedLock();
+std::recursive_mutex& SharedLock();
 // The contexts that a page's connection (`token`) has, by number, for the drawing of the page to find the texture of one (with SharedLock held).
 void RegisterShared(uint64_t token, uint32_t id, Context* context);
 void UnregisterShared(uint64_t token, uint32_t id);

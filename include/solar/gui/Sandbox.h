@@ -30,6 +30,8 @@ struct SandboxPolicy {
   // Programs the process may start (and only these: a process is made the way a library does, with the child sharing the memory until it executes), for what a driver runs when its
   // devices are not as it likes (they stay as shut in as the process is: nothing is gained by it).
   std::vector<std::string> executable;
+  // The namespaces were entered already (EnterNamespaces, while the process had one thread: they cannot be after).
+  bool namespacesDone = false;
 };
 
 enum class SandboxMode {
@@ -48,6 +50,10 @@ struct SandboxResult {
 // Enters the sandbox for this process. To be called before any thread other than the calling one is made (what restricts a thread is inherited by the threads it makes, not given to the
 // ones that exist). The seccomp layer is not optional: where it cannot be made `seccomp` is false and the caller is to end the process; the others are made where the kernel has them.
 SandboxResult EnterSandbox(const SandboxPolicy& policy, SandboxMode mode);
+
+// Only the namespaces and the loss of the capabilities (what cannot be done once the process has threads): for a process that makes its threads before it can be shut in. `problems` says what
+// could not be done.
+bool EnterNamespaces(std::string& problems);
 
 // SOLAR_SANDBOX=off|report|on (on if it is not set).
 SandboxMode SandboxModeFromEnvironment();

@@ -48,7 +48,7 @@ bool WriteFile(const char* path, const std::string& text) {
 }
 
 // New user, network, IPC and host name namespaces, the user made the same one inside (so that the files it may open are the same), and every capability dropped.
-bool EnterNamespaces(std::string& problems) {
+bool EnterNamespacesImpl(std::string& problems) {
   const uid_t uid = ::geteuid();
   const gid_t gid = ::getegid();
   if (::unshare(CLONE_NEWUSER | CLONE_NEWNET | CLONE_NEWIPC | CLONE_NEWUTS) != 0) {
@@ -303,6 +303,8 @@ bool EnterSeccomp(SandboxMode mode, const SandboxPolicy& policy, std::string& pr
 
 }  // namespace
 
+bool EnterNamespaces(std::string& problems) { return EnterNamespacesImpl(problems); }
+
 SandboxMode SandboxModeFromEnvironment() {
   const char* value = std::getenv("SOLAR_SANDBOX");
   if (!value) return SandboxMode::On;
@@ -314,7 +316,7 @@ SandboxMode SandboxModeFromEnvironment() {
 SandboxResult EnterSandbox(const SandboxPolicy& policy, SandboxMode mode) {
   SandboxResult result;
   if (mode == SandboxMode::Off) return result;
-  result.namespaces = EnterNamespaces(result.problems);
+  result.namespaces = policy.namespacesDone ? true : EnterNamespacesImpl(result.problems);
   result.noNewPrivileges = ::prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0;
   if (!result.noNewPrivileges) {
     result.problems += "no new privileges: not set; ";
@@ -330,6 +332,8 @@ SandboxResult EnterSandbox(const SandboxPolicy& policy, SandboxMode mode) {
 #else
 
 namespace solar::gui {
+
+bool EnterNamespaces(std::string&) { return false; }
 
 SandboxMode SandboxModeFromEnvironment() {
   const char* value = std::getenv("SOLAR_SANDBOX");

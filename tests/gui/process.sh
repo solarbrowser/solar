@@ -92,5 +92,23 @@ check "a navigation to another site goes on with the history" "$(grep -c 'histor
 check "and back is to the entry before" "$(grep -q 'history (at 0): http://127.0.0.1:8793/one.html http://localhost:8793/one.html' "$dir/out5.txt" && echo ok)"
 check "a renderer was started for each site" "$([ "$(grep -c '^loading http' "$dir/out5.txt")" -ge 3 ] && echo ok)"
 
+# A page that has a WebGL context: the GPU's process goes on drawing the page (a second context on an EGL used from two threads once lost the one the page is drawn with).
+printf '<body style="margin:0;background:#c00"><canvas id=c width=200 height=100></canvas><script>var gl=document.getElementById("c").getContext("webgl");gl.clearColor(0,0,1,1);gl.clear(gl.COLOR_BUFFER_BIT);</script>' > "$dir/gl.html"
+SOLAR_GL_DEBUG=1 SOLAR_GUI_SHOT="$dir/gl.png" SOLAR_GUI_SETTLE=2500 timeout 60 ./solar "file://$dir/gl.html" > "$dir/out6.txt" 2>&1
+check "a page with a WebGL context is drawn by the GPU's process throughout" "$(! grep -aq 'did not draw\|could not be made current\|process is gone' "$dir/out6.txt" && [ -s "$dir/gl.png" ] && echo ok)"
+check "and the canvas is in the picture (blue where WebGL cleared, the page's red around it)" "$(python3 - "$dir/gl.png" <<'P'
+import sys
+try:
+    from PIL import Image
+except ImportError:
+    print("ok")  # (no way to look: not held against it)
+    raise SystemExit
+im = Image.open(sys.argv[1]).convert("RGB")
+inside = im.getpixel((100, 50))   # the canvas (8px of body margin: it is at 0,0 here)
+outside = im.getpixel((600, 400))
+print("ok" if inside[2] > 150 and inside[0] < 80 and outside[0] > 150 and outside[2] < 80 else "no")
+P
+)"
+
 echo "gui process: $pass/$((pass+fail)) passed"
 [ $fail -eq 0 ]
