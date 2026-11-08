@@ -7,6 +7,8 @@
 #include "solar/net/Ipc.h"
 
 #include <cerrno>
+#include <cmath>
+#include <sys/uio.h>
 #include <cstring>
 
 #include <sys/socket.h>
@@ -21,6 +23,11 @@ namespace solar::net::ipc {
 
 void Writer::U32(uint32_t v) {
   for (int i = 0; i < 4; ++i) bytes_.push_back(static_cast<char>((v >> (8 * i)) & 0xFF));
+}
+void Writer::F32(float v) {
+  uint32_t bits;
+  std::memcpy(&bits, &v, 4);
+  U32(bits);
 }
 void Writer::U64(uint64_t v) {
   for (int i = 0; i < 8; ++i) bytes_.push_back(static_cast<char>((v >> (8 * i)) & 0xFF));
@@ -48,6 +55,13 @@ uint32_t Reader::U32() {
   for (int i = 0; i < 4; ++i) v |= static_cast<uint32_t>(static_cast<uint8_t>(bytes_[pos_ + i])) << (8 * i);
   pos_ += 4;
   return v;
+}
+float Reader::F32() {
+  const uint32_t bits = U32();
+  float v;
+  std::memcpy(&v, &bits, 4);
+  // (A number that is not one is none.)
+  return std::isfinite(v) ? v : 0.f;
 }
 uint64_t Reader::U64() {
   if (!ok_ || pos_ + 8 > bytes_.size()) { ok_ = false; return 0; }
@@ -196,7 +210,7 @@ void Channel::Shutdown() {
   if (fd_ >= 0) ::shutdown(fd_, SHUT_RDWR);
 }
 
-bool Channel::Send(Message type, std::string_view bytes) {
+bool Channel::SendRaw(uint8_t type, std::string_view bytes, int fd) {
   if (bytes.size() > kMaxMessage) return false;
   std::lock_guard<std::mutex> lock(sendMutex_);
   if (fd_ < 0) return false;
@@ -208,7 +222,25 @@ bool Channel::Send(Message type, std::string_view bytes) {
   frame.append(bytes);
   size_t sent = 0;
   while (sent < frame.size()) {
-    const ssize_t n = ::send(fd_, frame.data() + sent, frame.size() - sent, MSG_NOSIGNAL);
+    ssize_t n;
+    if (fd >= 0 && sent == 0) {
+      // (The descriptor goes with the first bytes of the message.)
+      iovec vector{frame.data(), frame.size()};
+      alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int))] = {};
+      msghdr message{};
+      message.msg_iov = &vector;
+      message.msg_iovlen = 1;
+      message.msg_control = control;
+      message.msg_controllen = sizeof(control);
+      cmsghdr* header = CMSG_FIRSTHDR(&message);
+      header->cmsg_level = SOL_SOCKET;
+      header->cmsg_type = SCM_RIGHTS;
+      header->cmsg_len = CMSG_LEN(sizeof(int));
+      std::memcpy(CMSG_DATA(header), &fd, sizeof(int));
+      n = ::sendmsg(fd_, &message, MSG_NOSIGNAL);
+    } else {
+      n = ::send(fd_, frame.data() + sent, frame.size() - sent, MSG_NOSIGNAL);
+    }
     if (n < 0) {
       if (errno == EINTR) continue;
       return false;
@@ -218,28 +250,53 @@ bool Channel::Send(Message type, std::string_view bytes) {
   return true;
 }
 
-bool Channel::Receive(Message& type, std::string& bytes) {
-  const auto readAll = [this](char* into, size_t size) {
+bool Channel::ReceiveRaw(uint8_t& type, std::string& bytes, int* fd) {
+  if (fd) *fd = -1;
+  int received = -1;
+  const auto closeReceived = [&] {
+    if (received >= 0) ::close(received);
+    received = -1;
+  };
+  const auto readAll = [&](char* into, size_t size) {
     size_t got = 0;
     while (got < size) {
-      const ssize_t n = ::recv(fd_, into + got, size - got, 0);
+      iovec vector{into + got, size - got};
+      alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int))] = {};
+      msghdr message{};
+      message.msg_iov = &vector;
+      message.msg_iovlen = 1;
+      message.msg_control = control;
+      message.msg_controllen = sizeof(control);
+      const ssize_t n = ::recvmsg(fd_, &message, MSG_CMSG_CLOEXEC);
       if (n == 0) return false;
       if (n < 0) {
         if (errno == EINTR) continue;
         return false;
+      }
+      for (cmsghdr* header = CMSG_FIRSTHDR(&message); header; header = CMSG_NXTHDR(&message, header)) {
+        if (header->cmsg_level != SOL_SOCKET || header->cmsg_type != SCM_RIGHTS) continue;
+        const size_t count = (header->cmsg_len - CMSG_LEN(0)) / sizeof(int);
+        for (size_t i = 0; i < count; ++i) {
+          int one;
+          std::memcpy(&one, CMSG_DATA(header) + i * sizeof(int), sizeof(int));
+          // (Only the first is kept: the others are not asked for, and are closed.)
+          if (received < 0) received = one; else ::close(one);
+        }
       }
       got += static_cast<size_t>(n);
     }
     return true;
   };
   char header[5];
-  if (!readAll(header, 5)) return false;
+  if (!readAll(header, 5)) { closeReceived(); return false; }
   uint32_t size = 0;
   for (int i = 0; i < 4; ++i) size |= static_cast<uint32_t>(static_cast<uint8_t>(header[i])) << (8 * i);
-  if (size > kMaxMessage) return false;
-  type = static_cast<Message>(static_cast<uint8_t>(header[4]));
+  if (size > kMaxMessage) { closeReceived(); return false; }
+  type = static_cast<uint8_t>(header[4]);
   bytes.resize(size);
-  return size == 0 || readAll(bytes.data(), size);
+  if (size != 0 && !readAll(bytes.data(), size)) { closeReceived(); return false; }
+  if (fd) *fd = received; else closeReceived();
+  return true;
 }
 
 }  // namespace solar::net::ipc

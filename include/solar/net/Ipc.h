@@ -28,6 +28,8 @@ class Writer {
   void U8(uint8_t v) { bytes_.push_back(static_cast<char>(v)); }
   void U32(uint32_t v);
   void U64(uint64_t v);
+  void I32(int32_t v) { U32(static_cast<uint32_t>(v)); }
+  void F32(float v);
   void Bool(bool v) { U8(v ? 1 : 0); }
   void String(std::string_view text);
   void Url(const url::Url& address);
@@ -46,6 +48,8 @@ class Reader {
   uint8_t U8();
   uint32_t U32();
   uint64_t U64();
+  int32_t I32() { return static_cast<int32_t>(U32()); }
+  float F32();
   bool Bool() { return U8() != 0; }
   // The enumerator (0 .. last) a number stands for, or the first when it is more.
   template <typename Enum>
@@ -91,9 +95,18 @@ class Channel {
   Channel& operator=(const Channel&) = delete;
 
   // False where the other end has gone, or the message is too large.
-  bool Send(Message type, std::string_view bytes);
+  bool Send(Message type, std::string_view bytes) { return SendRaw(static_cast<uint8_t>(type), bytes); }
   // Waits for the next message. False at the end of the connection (or when it was Shutdown), or for a message that is too large.
-  bool Receive(Message& type, std::string& bytes);
+  bool Receive(Message& type, std::string& bytes) {
+    uint8_t raw = 0;
+    const bool ok = ReceiveRaw(raw, bytes);
+    type = static_cast<Message>(raw);
+    return ok;
+  }
+  // The same with a type of the caller's own (the window and the renderer talk through this too), and a descriptor that goes with the message (shared memory, say): it is
+  // sent along and arrives with the message, as a new descriptor the receiver owns (-1 where none came). One at most.
+  bool SendRaw(uint8_t type, std::string_view bytes, int fd = -1);
+  bool ReceiveRaw(uint8_t& type, std::string& bytes, int* fd = nullptr);
   // Wakes a Receive that waits, and ends the connection: for the thread that receives to be joined.
   void Shutdown();
   // A pair of connected descriptors, or -1 -1.
