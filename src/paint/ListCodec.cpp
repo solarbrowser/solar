@@ -7,6 +7,8 @@
 #include "solar/paint/ListCodec.h"
 
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 
@@ -263,8 +265,13 @@ class RemoteVideo final : public media::VideoSource {
 class RemoteCanvas final : public CanvasSurface {
  public:
   RemoteCanvas() : CanvasSurface(1, 1) {}
-  sk_sp<SkImage> Latest() const override { return image; }
+  sk_sp<SkImage> Latest() const override {
+    if (glContext && resolver && *resolver) return (*resolver)(glContext);
+    return image;
+  }
   sk_sp<SkImage> image;
+  uint32_t glContext = 0;
+  std::shared_ptr<std::function<sk_sp<SkImage>(uint32_t)>> resolver;
 };
 
 }  // namespace
@@ -418,7 +425,20 @@ std::vector<EncodedMessage> ListEncoder::Encode(const DisplayList& list) {
         if (v.surface) {
           bool isNew = false;
           id = IdOf(v.surface.get(), v.surface, isNew);
-          canvases_.push_back({id, v.surface, 0});
+          if (const uint32_t gl = v.surface->remoteGl.load()) {
+            // (Its picture is a texture where the contexts are: it is said which context, not given.)
+            const auto sent = glSent_.find(id);
+            if (isNew || sent == glSent_.end() || sent->second != gl) {
+              Writer d;
+              d.U64(id);
+              d.U32(gl);
+              messages.push_back({ListMessage::DefineGlCanvas, d.Take()});
+              if (std::getenv("SOLAR_GL_DEBUG")) std::fprintf(stderr, "list: canvas %llu is WebGL context %u of the GPU's process\n", static_cast<unsigned long long>(id), gl);
+              glSent_[id] = gl;
+            }
+          } else {
+            canvases_.push_back({id, v.surface, 0});
+          }
         }
         w.U64(id);
         WriteRounded(w, v.clip);
@@ -457,6 +477,7 @@ std::vector<EncodedMessage> ListEncoder::Encode(const DisplayList& list) {
   Writer ids;
   for (auto it = known_.begin(); it != known_.end();) {
     if (it->second.alive.expired()) {
+      glSent_.erase(it->second.id);
       ids.U64(it->second.id);
       ++count;
       it = known_.erase(it);
@@ -524,6 +545,7 @@ struct ListDecoder::Impl {
   std::map<uint64_t, std::shared_ptr<RemoteVideo>> videos;
   std::map<uint64_t, std::shared_ptr<RemoteCanvas>> canvases;
   std::vector<std::string> fontDirectories;
+  std::shared_ptr<std::function<sk_sp<SkImage>(uint32_t)>> resolver = std::make_shared<std::function<sk_sp<SkImage>(uint32_t)>>();
   std::shared_ptr<const DisplayList> current;
   size_t bytes = 0;  // (what is held, for the bound)
 
@@ -547,6 +569,8 @@ ListDecoder::ListDecoder() : impl_(std::make_unique<Impl>()) {}
 ListDecoder::~ListDecoder() = default;
 
 std::shared_ptr<const DisplayList> ListDecoder::list() const { return impl_->current; }
+
+void ListDecoder::SetGlResolver(std::function<sk_sp<SkImage>(uint32_t)> resolver) { *impl_->resolver = std::move(resolver); }
 
 void ListDecoder::AllowFontDirectories(std::vector<std::string> directories) { impl_->fontDirectories = std::move(directories); }
 
@@ -614,6 +638,16 @@ bool ListDecoder::Apply(ListMessage type, const std::string& data) {
         if (!canvas) canvas = std::make_shared<RemoteCanvas>();
         canvas->image = SkImages::RasterFromPixmapCopy(SkPixmap(info, pixels.data(), static_cast<size_t>(width) * 4));
       }
+      return true;
+    }
+    case ListMessage::DefineGlCanvas: {
+      const uint64_t id = r.U64();
+      const uint32_t context = r.U32();
+      if (!r.ok() || id == 0 || context == 0) return false;
+      auto& canvas = s.canvases[id];
+      if (!canvas) canvas = std::make_shared<RemoteCanvas>();
+      canvas->glContext = context;
+      canvas->resolver = s.resolver;
       return true;
     }
     case ListMessage::VideoState: {

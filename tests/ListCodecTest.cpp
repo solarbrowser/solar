@@ -206,6 +206,39 @@ int main() {
     for (const EncodedMessage& m : fresh.Encode(empty)) if (m.type == ListMessage::Release) released = true;
     Check("a picture that nothing has is told to be let go of", released);
   }
+  // A canvas that is a WebGL context's is said to be, not given: the list draws from what the resolver gives.
+  {
+    auto glCanvas = std::make_shared<FakeCanvas>();
+    glCanvas->remoteGl = 7;
+    DisplayList withGl;
+    DrawCanvas c;
+    c.surface = glCanvas;
+    c.clip = Box(10, 10, 20, 20);
+    withGl.items.push_back(c);
+    ListEncoder glEncoder;
+    ListDecoder glDecoder;
+    uint32_t asked = 0;
+    glDecoder.SetGlResolver([&](uint32_t context) -> sk_sp<SkImage> {
+      asked = context;
+      SkBitmap bitmap;
+      bitmap.allocPixels(SkImageInfo::MakeN32Premul(4, 4));
+      bitmap.eraseColor(SK_ColorMAGENTA);
+      return bitmap.asImage();
+    });
+    bool said = false, given = false;
+    for (const EncodedMessage& m : glEncoder.Encode(withGl)) {
+      said |= m.type == ListMessage::DefineGlCanvas;
+      Check("the message is taken", glDecoder.Apply(m.type, m.bytes));
+    }
+    for (const EncodedMessage& m : glEncoder.Dynamic()) given |= m.type == ListMessage::DefineBitmap;
+    Check("a canvas of WebGL is said to be, and no pixels are given", said && !given);
+    const auto carriedGl = glDecoder.list();
+    const SkBitmap picture = carriedGl ? Render(*carriedGl) : SkBitmap();
+    Check("it is drawn from what the resolver gives (and asked for that context)", carriedGl && asked == 7 && picture.width() > 0 && *picture.getAddr32(15, 15) == SK_ColorMAGENTA);
+    size_t again = 0;
+    for (const EncodedMessage& m : glEncoder.Encode(withGl)) if (m.type == ListMessage::DefineGlCanvas) ++again;
+    Check("it is not said again", again == 0);
+  }
   // What is not good is not taken.
   {
     ListDecoder strict;
@@ -226,7 +259,7 @@ int main() {
     for (int i = 0; i < 4000; ++i) {
       std::string junk(random() % 120, '\0');
       for (char& c : junk) c = static_cast<char>(random());
-      for (ListMessage type : {ListMessage::DefineFace, ListMessage::DefineImage, ListMessage::DefineBitmap, ListMessage::VideoState, ListMessage::Release, ListMessage::SetList}) taken += strict.Apply(type, junk);
+      for (ListMessage type : {ListMessage::DefineFace, ListMessage::DefineImage, ListMessage::DefineBitmap, ListMessage::VideoState, ListMessage::Release, ListMessage::SetList, ListMessage::DefineGlCanvas}) taken += strict.Apply(type, junk);
     }
     Check("garbage is read without a crash", taken >= 0);
     // A list cut short.

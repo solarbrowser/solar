@@ -64,7 +64,10 @@ void* OpenLibrary(const char* const* names) {
     directory.resize(directory.rfind('/') + 1);
   }
   if (!directory.empty()) {
+    // (SOLAR_GL_NATIVE=1: the machine's own EGL, not ANGLE: the GPU's process has the page's drawing share textures with WebGL, which is on one EGL only.)
+    const bool native = std::getenv("SOLAR_GL_NATIVE") != nullptr;
     for (const char* sub : {"angle/", ""}) {
+      if (native && sub[0] == 'a') continue;
       for (const char* const* name = names; *name; ++name) {
         if (void* handle = dlopen((directory + sub + *name).c_str(), RTLD_NOW | RTLD_LOCAL)) return handle;
       }
@@ -197,11 +200,19 @@ struct GlContext {
   GLuint drawFbo = 0, readFbo = 0;  // what is bound (0 is the default, which is defaultFbo)
   uint32_t surfaceId = 0;
   bool dirtySinceRead = true;  // something was drawn since the surface was filled
+  GLuint snapshotTexture = 0, snapshotFbo = 0;
+  int snapshotWidth = 0, snapshotHeight = 0;
+  uint64_t generation = 0;
+  bool shared = false;
+  gl::Context::Snapshot last;
   std::map<uint32_t, GLsync> syncs;
   uint32_t nextSync = 1;
   std::string renderer, vendor, glVersion;
   std::vector<std::string> extensions;
 };
+
+std::atomic<void*> g_shareDisplay{nullptr}, g_shareContext{nullptr};
+std::atomic<bool> g_compositionOff{false};
 
 thread_local EGLContext g_current = EGL_NO_CONTEXT;  // (a worker has its contexts on its own thread)
 
@@ -1025,7 +1036,12 @@ std::unique_ptr<Context> Context::Create(int version, const std::string& attribu
   g->width = std::clamp(width, 1, 16384);
   g->height = std::clamp(height, 1, 16384);
   const EGLint contextAttributes[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 0, EGL_NONE};
-  g->context = paint::Proc<EGLContext (*)(EGLDisplay, EGLConfig, EGLContext, const EGLint*)>(egl, "eglCreateContext")(egl.display, egl.config, EGL_NO_CONTEXT, contextAttributes);
+  // (Textures are shared with the drawing of the page where that is made on the same display.)
+  EGLContext shareWith = EGL_NO_CONTEXT;
+  if (paint::g_shareContext.load() && paint::g_shareDisplay.load() == egl.display) shareWith = static_cast<EGLContext>(paint::g_shareContext.load());
+  g->context = paint::Proc<EGLContext (*)(EGLDisplay, EGLConfig, EGLContext, const EGLint*)>(egl, "eglCreateContext")(egl.display, egl.config, shareWith, contextAttributes);
+  g->shared = shareWith != EGL_NO_CONTEXT && g->context != EGL_NO_CONTEXT;
+  if (std::getenv("SOLAR_GL_DEBUG")) std::fprintf(stderr, "gl: context shares %d (display %p, shared display %p, context %p)\n", g->shared ? 1 : 0, egl.display, paint::g_shareDisplay.load(), g->context);
   if (g->context == EGL_NO_CONTEXT) return nullptr;
   paint::MakeCurrent(*g);
   GlApi& glApi = *g->gl;
@@ -1042,6 +1058,7 @@ std::unique_ptr<Context> Context::Create(int version, const std::string& attribu
     const GLubyte* e = glApi.GetStringi(GL_EXTENSIONS, static_cast<GLuint>(i));
     if (e) g->extensions.emplace_back(reinterpret_cast<const char*>(e));
   }
+  if (std::getenv("SOLAR_GL_DEBUG")) std::fprintf(stderr, "gl: renderer %s\n", g->renderer.c_str());
   paint::BuildBuffers(*g);
   glApi.Viewport(0, 0, g->width, g->height);
   glApi.Disable(GL_SCISSOR_TEST);
@@ -1054,6 +1071,8 @@ Context::~Context() {
   if (!impl_ || !impl_->g) return;
   paint::GlContext& g = *impl_->g;
   paint::MakeCurrent(g);
+  if (g.snapshotFbo) g.gl->DeleteFramebuffers(1, &g.snapshotFbo);
+  if (g.snapshotTexture) g.gl->DeleteTextures(1, &g.snapshotTexture);
   paint::Egl& egl = *g.egl;
   paint::Proc<EGLBoolean (*)(EGLDisplay, EGLSurface, EGLSurface, EGLContext)>(egl, "eglMakeCurrent")(egl.display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
   paint::g_current = EGL_NO_CONTEXT;
@@ -1096,6 +1115,61 @@ Result Context::Call(size_t operation, Args args) {
   paint::MakeCurrent(g);
   paint::Ctx ctx;
   return operations[operation].second(g, ctx, args);
+}
+
+bool Context::shares() const { return impl_->g->shared; }
+
+Context::Snapshot Context::LastSnapshot() const { return impl_->g->last; }
+
+bool Context::Publish(Snapshot& out) {
+  paint::GlContext& g = *impl_->g;
+  if (!g.shared) return false;
+  paint::MakeCurrent(g);
+  GlApi& glApi = *g.gl;
+  const int w = std::max(1, g.width), h = std::max(1, g.height);
+  if (!g.snapshotTexture || g.snapshotWidth != w || g.snapshotHeight != h) {
+    if (g.snapshotFbo) glApi.DeleteFramebuffers(1, &g.snapshotFbo);
+    if (g.snapshotTexture) glApi.DeleteTextures(1, &g.snapshotTexture);
+    g.snapshotTexture = g.snapshotFbo = 0;
+    GLint previousTexture = 0, previousDraw = 0;
+    glApi.GetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+    glApi.GetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDraw);
+    glApi.GenTextures(1, &g.snapshotTexture);
+    glApi.BindTexture(GL_TEXTURE_2D, g.snapshotTexture);
+    glApi.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glApi.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glApi.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glApi.BindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+    glApi.GenFramebuffers(1, &g.snapshotFbo);
+    glApi.BindFramebuffer(GL_DRAW_FRAMEBUFFER, g.snapshotFbo);
+    glApi.FramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g.snapshotTexture, 0);
+    glApi.BindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previousDraw));
+    g.snapshotWidth = w;
+    g.snapshotHeight = h;
+    ++g.generation;
+  }
+  GLint previousRead = 0, previousDraw = 0;
+  glApi.GetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousRead);
+  glApi.GetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDraw);
+  const GLboolean scissor = glApi.IsEnabled(GL_SCISSOR_TEST);
+  glApi.Disable(GL_SCISSOR_TEST);
+  glApi.BindFramebuffer(GL_READ_FRAMEBUFFER, g.defaultFbo);
+  glApi.BindFramebuffer(GL_DRAW_FRAMEBUFFER, g.snapshotFbo);
+  glApi.BlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+  glApi.BindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousRead));
+  glApi.BindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previousDraw));
+  if (scissor) glApi.Enable(GL_SCISSOR_TEST);
+  // (What the other context draws from it is to be done: the blit is waited for here.)
+  glApi.Finish();
+  dirty = false;
+  if (!g.preserve) paint::ClearAfterPresent(g);
+  g.last.texture = g.snapshotTexture;
+  g.last.width = w;
+  g.last.height = h;
+  g.last.premultiplied = g.premultiplied;
+  g.last.generation = g.generation;
+  out = g.last;
+  return true;
 }
 
 std::vector<uint8_t> Context::Present() {
@@ -1172,5 +1246,37 @@ Backend& CurrentBackend() {
 }
 
 void SetBackend(Backend* backend) { g_backend.store(backend); }
+
+namespace {
+std::mutex g_sharedLock;
+std::map<std::pair<uint64_t, uint32_t>, Context*>& Registered() {
+  static std::map<std::pair<uint64_t, uint32_t>, Context*> registered;
+  return registered;
+}
+}  // namespace
+
+void SetShare(void* display, void* context) {
+  paint::g_shareDisplay.store(display);
+  paint::g_shareContext.store(context);
+}
+
+std::mutex& SharedLock() { return g_sharedLock; }
+
+void RegisterShared(uint64_t token, uint32_t id, Context* context) { Registered()[{token, id}] = context; }
+void UnregisterShared(uint64_t token, uint32_t id) { Registered().erase({token, id}); }
+
+bool LookupSnapshot(uint64_t token, uint32_t id, Context::Snapshot& out) {
+  const auto found = Registered().find({token, id});
+  if (found == Registered().end() || !found->second) return false;
+  out = found->second->LastSnapshot();
+  return out.texture != 0;
+}
+
+bool CompositionEnabled() {
+  static const bool wanted = std::getenv("SOLAR_GL_READBACK") == nullptr;
+  return wanted && !paint::g_compositionOff.load();
+}
+
+void DisableComposition() { paint::g_compositionOff.store(true); }
 
 }  // namespace solar::paint::gl

@@ -118,9 +118,17 @@ Value OpsCall(Context& ctx, Value, qe::Args, Value) {
 }
 
 // What the drawing buffer has is copied into the surface just before the surface is published.
-void Read(Natives* n, Held& held) {
+void Read(Natives* n, Held& held, bool composite) {
   held.dirtySinceRead = false;
   gl::Backend& backend = gl::CurrentBackend();
+  const auto surfaceOf = n->surfaces.find(held.surfaceId);
+  // Where the contexts are shared with the drawing of the page, what was drawn is not read: the drawing draws from the texture the context publishes.
+  if (composite && gl::CompositionEnabled() && backend.Publish(held.backendId)) {
+    if (surfaceOf != n->surfaces.end()) surfaceOf->second->remoteGl = held.backendId;
+    if (std::getenv("SOLAR_GL_DEBUG")) static int shown = (std::fprintf(stderr, "gl: the canvas is drawn from the context's texture (surface %s)\n", surfaceOf != n->surfaces.end() ? "there" : "missing"), 0);
+    return;
+  }
+  if (surfaceOf != n->surfaces.end()) surfaceOf->second->remoteGl = 0;
   const auto t0 = std::chrono::steady_clock::now();
   int width = 0, height = 0;
   const std::vector<uint8_t> pixels = backend.Present(held.backendId, width, height);
@@ -162,7 +170,7 @@ Value CreateCall(Context& ctx, Value, qe::Args a, Value) {
   n->beforePublish[surface] = [n, id, surface] {
     WebGlState& s = StateFor(*n);
     const auto found = s.contexts.find(id);
-    if (found != s.contexts.end()) Read(n, found->second);
+    if (found != s.contexts.end()) Read(n, found->second, true);
   };
   Value list = qe::NewArray(ctx);
   qe::ArrayPush(ctx, list, qe::FromNumber(id));
@@ -198,7 +206,7 @@ Value PresentCall(Context& ctx, Value, qe::Args a, Value) {
   if (!n || a.empty()) return qe::Undefined();
   Held* g = HeldOf(*n, ctx, a[0]);
   if (!g) return qe::Undefined();
-  if (g->dirtySinceRead) Read(n, *g);
+  if (g->dirtySinceRead) Read(n, *g, false);
   return qe::Undefined();
 }
 

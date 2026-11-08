@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -136,6 +137,9 @@ class CanvasSurface {
   sk_sp<SkImage> Snapshot() { return surface_ ? surface_->makeImageSnapshot() : nullptr; }
   // Set when something was drawn since the last Publish.
   bool dirty = false;
+  // The number of the WebGL context, in the process that draws the page, whose published texture is this canvas's picture (0: the picture is the surface's own). Set by the page's thread, read by
+  // whoever makes the list for the process that draws.
+  std::atomic<uint32_t> remoteGl{0};
 
  private:
   struct State {

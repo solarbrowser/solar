@@ -21,6 +21,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <random>
 #include <thread>
 #include <vector>
 
@@ -41,9 +42,20 @@ namespace solar::gui {
 namespace {
 
 // What the GPU's process does for one page: it keeps the display list the page sent (and what that has), and the memory the pictures go in, and draws when it is asked to.
-void Serve(GpuRaster& raster, int fd, const std::vector<std::string>& fontDirectories) {
+void Serve(GpuRaster& raster, int fd, uint64_t token, const std::vector<std::string>& fontDirectories) {
   net::ipc::Channel channel(fd);
   paint::ListDecoder decoder;
+  // A canvas that is a WebGL context's is drawn from the texture the context published (the contexts of this page, by its token: another page's are not to be found).
+  decoder.SetGlResolver([token](uint32_t context) -> sk_sp<SkImage> {
+    paint::gl::Context::Snapshot snapshot;
+    if (!paint::gl::LookupSnapshot(token, context, snapshot)) {
+      if (std::getenv("SOLAR_GL_DEBUG")) std::fprintf(stderr, "gpu: no texture published for context %u of the page\n", context);
+      return nullptr;
+    }
+    sk_sp<SkImage> image = GpuRaster::TextureImage(snapshot.texture, snapshot.width, snapshot.height, snapshot.premultiplied);
+    if (!image && std::getenv("SOLAR_GL_DEBUG")) std::fprintf(stderr, "gpu: Skia cannot draw from texture %u (%dx%d)\n", snapshot.texture, snapshot.width, snapshot.height);
+    return image;
+  });
   decoder.AllowFontDirectories(fontDirectories);
   auto painter = std::make_unique<paint::SkiaPainter>();
   struct Slot {
@@ -58,7 +70,7 @@ void Serve(GpuRaster& raster, int fd, const std::vector<std::string>& fontDirect
   while (good && channel.ReceiveRaw(type, bytes, &received)) {
     const int descriptor = received;
     received = -1;
-    if (type >= static_cast<uint8_t>(paint::ListMessage::DefineFace) && type <= static_cast<uint8_t>(paint::ListMessage::SetList)) {
+    if (type >= static_cast<uint8_t>(paint::ListMessage::DefineFace) && type <= static_cast<uint8_t>(paint::ListMessage::DefineGlCanvas)) {
       if (descriptor >= 0) ::close(descriptor);
       // (A message that is not good ends the page's connection: a page that sends one is not to be trusted with a GPU.)
       good = decoder.Apply(static_cast<paint::ListMessage>(type), bytes);
@@ -103,6 +115,8 @@ void Serve(GpuRaster& raster, int fd, const std::vector<std::string>& fontDirect
           bar.height = draw.barHeight;
           bar.windowWidth = draw.windowWidth;
           bar.windowHeight = draw.windowHeight;
+          // (The textures of the page's WebGL are not changed or deleted while they are drawn from.)
+          std::lock_guard<std::mutex> shared(paint::gl::SharedLock());
           drawn = raster.Draw(*painter, *list, draw.pixelWidth, draw.pixelHeight, draw.density, draw.scrollX, draw.scrollY, bar, slot->second.memory.data(), static_cast<size_t>(slot->second.shape.stride));
         }
         net::ipc::Writer out;
@@ -123,7 +137,7 @@ void Serve(GpuRaster& raster, int fd, const std::vector<std::string>& fontDirect
 }
 
 // What the GPU's process does for one page's WebGL: the contexts the page asks for, the calls its script makes (in batches), and the pictures of what it drew, made in memory the page gave.
-void ServeGl(int fd) {
+void ServeGl(int fd, uint64_t token) {
   net::ipc::Channel channel(fd);
   struct Held {
     std::unique_ptr<paint::gl::Context> context;
@@ -173,6 +187,10 @@ void ServeGl(int fd) {
         contexts[id].context = std::move(context);
         contexts[id].width = width;
         contexts[id].height = height;
+        {
+          std::lock_guard<std::mutex> shared(paint::gl::SharedLock());
+          paint::gl::RegisterShared(token, id, contexts[id].context.get());
+        }
         out.U32(id);
         answer(request, true, out);
         break;
@@ -199,6 +217,7 @@ void ServeGl(int fd) {
           break;
         }
         if (found != contexts.end()) {
+          std::lock_guard<std::mutex> shared(paint::gl::SharedLock());
           found->second.context->Resize(width, height);
           found->second.width = width;
           found->second.height = height;
@@ -273,14 +292,37 @@ void ServeGl(int fd) {
         answer(request, true, out);
         break;
       }
+      case glwire::ToGl::Publish: {
+        const uint64_t request = in.U64();
+        const uint32_t id = in.U32();
+        const auto found = contexts.find(id);
+        net::ipc::Writer out;
+        paint::gl::Context::Snapshot snapshot;
+        bool ok = false;
+        if (in.ok() && found != contexts.end()) {
+          std::lock_guard<std::mutex> shared(paint::gl::SharedLock());
+          ok = found->second.context->Publish(snapshot);
+          if (std::getenv("SOLAR_GL_DEBUG")) std::fprintf(stderr, "gpu: publish context %u: %s (texture %u, %dx%d, shares %d)\n", id, ok ? "done" : "not done", snapshot.texture, snapshot.width, snapshot.height, found->second.context->shares() ? 1 : 0);
+        }
+        answer(request, ok, out);
+        break;
+      }
       case glwire::ToGl::Destroy: {
         const uint32_t id = in.U32();
-        if (in.ok()) contexts.erase(id);
+        if (in.ok() && contexts.count(id)) {
+          std::lock_guard<std::mutex> shared(paint::gl::SharedLock());
+          paint::gl::UnregisterShared(token, id);
+          contexts.erase(id);
+        }
         break;
       }
       default: break;
     }
   }
+  // (The page is gone: its contexts are let go of, where nothing is drawing from them.)
+  std::lock_guard<std::mutex> shared(paint::gl::SharedLock());
+  for (auto& [id, held] : contexts) paint::gl::UnregisterShared(token, id);
+  contexts.clear();
 }
 
 }  // namespace
@@ -320,6 +362,8 @@ SandboxPolicy GpuPolicy() {
 }
 
 int GpuMain(int controlFd) {
+  // WebGL here runs on the machine's own EGL, as the drawing of the pages does: their textures are shared, which two EGLs cannot.
+  if (!std::getenv("SOLAR_GL_ANGLE")) ::setenv("SOLAR_GL_NATIVE", "1", 1);
   ::prctl(PR_SET_PDEATHSIG, SIGKILL);
   ::signal(SIGPIPE, SIG_IGN);
   net::ipc::Channel control(controlFd);
@@ -371,10 +415,12 @@ int GpuMain(int controlFd) {
   std::string bytes;
   int fd = -1;
   while (control.ReceiveRaw(type, bytes, &fd)) {
+    net::ipc::Reader token(bytes);
+    const uint64_t pageToken = token.U64();
     if (static_cast<gpu::Control>(type) == gpu::Control::NewClient && fd >= 0) {
-      clients.emplace_back([&raster, fd, &fonts] { Serve(*raster, fd, fonts); });
+      clients.emplace_back([&raster, fd, pageToken, &fonts] { Serve(*raster, fd, pageToken, fonts); });
     } else if (static_cast<gpu::Control>(type) == gpu::Control::NewGlClient && fd >= 0) {
-      clients.emplace_back([fd] { ServeGl(fd); });
+      clients.emplace_back([fd, pageToken] { ServeGl(fd, pageToken); });
     } else if (fd >= 0) {
       ::close(fd);
     }
@@ -466,11 +512,16 @@ std::unique_ptr<GpuHost> GpuHost::Start(std::string* why) {
 
 int GpuHost::NewClient(int* glFd) {
   std::lock_guard<std::mutex> lock(impl_->clientMutex);
+  // (What names a page to the GPU's process: not to be guessed by another.)
+  static std::random_device device;
+  const uint64_t token = (static_cast<uint64_t>(device()) << 32) | device();
+  net::ipc::Writer tokenBytes;
+  tokenBytes.U64(token);
   if (glFd) {
     *glFd = -1;
     const auto gl = net::ipc::Channel::MakePair();
     if (gl.first >= 0) {
-      if (impl_->control->SendRaw(static_cast<uint8_t>(gpu::Control::NewGlClient), "", gl.first)) *glFd = gl.second;
+      if (impl_->control->SendRaw(static_cast<uint8_t>(gpu::Control::NewGlClient), tokenBytes.bytes(), gl.first)) *glFd = gl.second;
       else ::close(gl.second);
       ::close(gl.first);
     }
@@ -478,7 +529,7 @@ int GpuHost::NewClient(int* glFd) {
   const auto pair = net::ipc::Channel::MakePair();
   if (pair.first < 0) return -1;
   // (The GPU's end goes to the GPU's process; the page gets the other.)
-  if (!impl_->control->SendRaw(static_cast<uint8_t>(gpu::Control::NewClient), "", pair.first)) {
+  if (!impl_->control->SendRaw(static_cast<uint8_t>(gpu::Control::NewClient), tokenBytes.bytes(), pair.first)) {
     ::close(pair.first);
     ::close(pair.second);
     return -1;

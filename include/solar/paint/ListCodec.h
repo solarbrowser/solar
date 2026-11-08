@@ -7,12 +7,14 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
+#include "include/core/SkImage.h"
 #include "solar/paint/DisplayList.h"
 
 // A display list as bytes, so that what draws it can be in another process (the GPU's): the list itself, and what it refers to that is not in it (the fonts, the pictures, a video's frames,
@@ -27,6 +29,7 @@ enum class ListMessage : uint8_t {
   VideoState,        // id, the state of a video as the controls and the captions show it
   Release,           // ids that no list has any more
   SetList,           // the list
+  DefineGlCanvas,    // id, the number of a WebGL context whose published texture is the canvas's picture (drawn from where the context is)
 };
 
 struct EncodedMessage {
@@ -66,6 +69,7 @@ class ListEncoder {
   std::vector<Video> videos_;
   std::vector<Canvas> canvases_;
   std::vector<uint64_t> live_;
+  std::unordered_map<uint64_t, uint32_t> glSent_;  // (the WebGL context a canvas was said to have)
 };
 
 class ListDecoder {
@@ -76,6 +80,8 @@ class ListDecoder {
   bool Apply(ListMessage type, const std::string& bytes);
   // The list that was last set (null before any), with what it refers to.
   std::shared_ptr<const DisplayList> list() const;
+  // How a canvas that is a WebGL context's is drawn: the picture of the texture the context last published (null where there is none). Set by whoever has the contexts.
+  void SetGlResolver(std::function<sk_sp<SkImage>(uint32_t glContext)> resolver);
   // The fonts may be opened from files in these directories only (a path the sender gives that is not in one is not opened).
   void AllowFontDirectories(std::vector<std::string> directories);
 

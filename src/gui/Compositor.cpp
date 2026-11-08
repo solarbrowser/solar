@@ -24,6 +24,7 @@
 #include "solar/paint/SkiaPainter.h"
 #include "Renderer.h"
 #include "GpuClient.h"
+#include "solar/paint/GlRuntime.h"
 #include "RemoteAudio.h"
 #include "Scrollbar.h"
 #include "RemoteStorage.h"
@@ -352,6 +353,7 @@ void RunCompositor(Shared& shared, net::ipc::Channel& link, int gpuFd) {
       if (!drawn && !gpu->ok()) {
         std::fprintf(stderr, "the GPU's process is gone: the page draws by itself\n");
         gpu.reset();
+        paint::gl::DisableComposition();  // (a canvas of WebGL is then read into the page again)
       } else if (!drawn) {
         std::fprintf(stderr, "the GPU's process did not draw: this picture is drawn by the page\n");
       }

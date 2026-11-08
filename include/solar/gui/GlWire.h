@@ -27,6 +27,7 @@ enum class ToGl : uint8_t {
   Destroy = 5,  // context
   Buffer = 6,   // context, width, height (sent with the descriptor of the memory): where its pictures go
   Info = 7,     // request, context
+  Publish = 8,  // request, context: what was drawn is made a texture, drawn from by the drawing of the page (the contexts share with it)
 };
 // GPU to renderer: the answer to a request (the number that was given).
 enum class FromGl : uint8_t { Answer = 32 };

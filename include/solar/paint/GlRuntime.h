@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <vector>
@@ -70,12 +71,38 @@ class Context {
   // Something was drawn since Present.
   bool dirty = false;
 
+  // The drawing buffer, made a texture that is kept (the one this context last published), for what draws it where the contexts are shared with the drawing of the page (the GPU's
+  // process): it is not read into memory. The drawing buffer is cleared after, unless the page keeps it. False where the context is not one that shares.
+  struct Snapshot {
+    uint32_t texture = 0;
+    int width = 0, height = 0;
+    bool premultiplied = true;
+    uint64_t generation = 0;  // (it changes with the texture)
+  };
+  bool Publish(Snapshot& out);
+  bool shares() const;
+  // What was last published (its texture is valid until the next Publish at another size, a Resize or the end of the context: with SharedLock held).
+  Snapshot LastSnapshot() const;
+
   struct Impl;
 
  private:
   Context();
   std::unique_ptr<Impl> impl_;
 };
+
+// Contexts made after this share their textures with `context` of `display` (EGL's handles; the GPU's process gives the one Skia draws with), so that what a page's WebGL drew is
+// drawn into the page without being read: a context that cannot share is made without it.
+void SetShare(void* display, void* context);
+// Held by whoever draws with the shared textures, and by whoever changes or ends them (a publish, a resize, a destroy): so that a texture is not deleted while it is being drawn.
+std::mutex& SharedLock();
+// The contexts that a page's connection (`token`) has, by number, for the drawing of the page to find the texture of one (with SharedLock held).
+void RegisterShared(uint64_t token, uint32_t id, Context* context);
+void UnregisterShared(uint64_t token, uint32_t id);
+bool LookupSnapshot(uint64_t token, uint32_t id, Context::Snapshot& out);
+// Whether the page's WebGL is drawn from textures (it is, unless the drawing could not be done by the GPU's process, or SOLAR_GL_READBACK says it is not to be).
+bool CompositionEnabled();
+void DisableComposition();
 
 // Where the contexts are: in this process (the default), or in another (the GPU's), asked by number. What the script's natives call; contexts are numbered by the backend.
 class Backend {
@@ -91,6 +118,9 @@ class Backend {
   virtual void Destroy(uint32_t context) = 0;
   // One call; `answer` is whether the script waits for what it gives back (the others may be sent on).
   virtual Result Call(uint32_t context, size_t operation, Args args, bool answer) = 0;
+  // What was drawn is published as a texture in the process that draws the page (where that is another): true where it was, and the page then refers to the context in the drawing of its
+  // canvas instead of giving the picture.
+  virtual bool Publish(uint32_t context) { (void)context; return false; }
 };
 
 // The contexts of this process, made with EGL here.

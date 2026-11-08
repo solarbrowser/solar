@@ -8,6 +8,8 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <mutex>
@@ -134,6 +136,16 @@ class Remote final : public Backend {
     FlushLocked();
     channel_.SendRaw(static_cast<uint8_t>(glwire::ToGl::Destroy), out.bytes());
     contexts_.erase(id);
+  }
+
+  bool Publish(uint32_t id) override {
+    if (!CompositionEnabled()) return false;
+    Writer out;
+    out.U32(id);
+    std::string payload;
+    const bool ok = Ask(glwire::ToGl::Publish, out, payload);
+    if (!ok && std::getenv("SOLAR_GL_DEBUG")) std::fprintf(stderr, "gl: the GPU's process did not publish context %u\n", id);
+    return ok;
   }
 
   Result Call(uint32_t id, size_t operation, Args args, bool answer) override {

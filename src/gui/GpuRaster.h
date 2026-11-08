@@ -13,6 +13,7 @@
 #include <string>
 
 #include "Scrollbar.h"
+#include "include/core/SkImage.h"
 #include "solar/paint/DisplayList.h"
 
 namespace solar::paint {
@@ -50,6 +51,13 @@ class GpuRaster {
    private:
     GpuRaster& raster_;
   };
+
+  // The EGL display and context Skia draws with (what WebGL's contexts are made to share textures with).
+  void* eglDisplay() const;
+  void* eglContext() const;
+  // A picture drawn from a texture of a context that shares with this one, valid for the draw that is going on in the calling thread (null where none is). The texture's first row is at the
+  // bottom, as OpenGL has it.
+  static sk_sp<SkImage> TextureImage(uint32_t texture, int width, int height, bool premultiplied);
 
   // What the GPU holds, in bytes.
   size_t ResourceBytes() const;

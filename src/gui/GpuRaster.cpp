@@ -17,14 +17,21 @@
 #include "include/core/SkColorSpace.h"
 #include "include/core/SkImageInfo.h"
 #include "include/core/SkSurface.h"
+#include "include/gpu/ganesh/GrBackendSurface.h"
 #include "include/gpu/ganesh/GrDirectContext.h"
+#include "include/gpu/ganesh/SkImageGanesh.h"
+#include "include/gpu/ganesh/gl/GrGLBackendSurface.h"
+#include "include/gpu/ganesh/gl/GrGLTypes.h"
 #include "include/gpu/ganesh/SkSurfaceGanesh.h"
 #include "include/gpu/ganesh/gl/GrGLAssembleInterface.h"
 #include "include/gpu/ganesh/gl/GrGLDirectContext.h"
 #include "include/gpu/ganesh/gl/GrGLInterface.h"
+#include "solar/paint/GlRuntime.h"
 #include "solar/paint/SkiaPainter.h"
 
 namespace solar::gui {
+
+thread_local GpuRaster::Impl* g_drawing = nullptr;
 
 namespace {
 
@@ -72,8 +79,9 @@ bool LoadEgl(Egl& egl) {
   egl.destroyContext = reinterpret_cast<decltype(egl.destroyContext)>(sym("eglDestroyContext"));
   egl.queryString = reinterpret_cast<decltype(egl.queryString)>(sym("eglQueryString"));
   egl.getDisplay = reinterpret_cast<decltype(egl.getDisplay)>(sym("eglGetDisplay"));
-  egl.getPlatformDisplay = reinterpret_cast<decltype(egl.getPlatformDisplay)>(egl.getProc ? egl.getProc("eglGetPlatformDisplayEXT") : nullptr);
-  egl.queryDevices = reinterpret_cast<decltype(egl.queryDevices)>(egl.getProc ? egl.getProc("eglQueryDevicesEXT") : nullptr);
+  // (By name in the library first, as WebGL does: the extension's functions are exported by it.)
+  egl.getPlatformDisplay = reinterpret_cast<decltype(egl.getPlatformDisplay)>(sym("eglGetPlatformDisplayEXT") ? sym("eglGetPlatformDisplayEXT") : (egl.getProc ? egl.getProc("eglGetPlatformDisplayEXT") : nullptr));
+  egl.queryDevices = reinterpret_cast<decltype(egl.queryDevices)>(sym("eglQueryDevicesEXT") ? sym("eglQueryDevicesEXT") : (egl.getProc ? egl.getProc("eglQueryDevicesEXT") : nullptr));
   return egl.getProc && egl.initialize && egl.bindApi && egl.chooseConfig && egl.createContext && egl.makeCurrent && egl.queryString && egl.getDisplay;
 }
 
@@ -104,7 +112,7 @@ struct GpuRaster::Impl {
     int major = 0, minor = 0;
     if (!candidate || !egl.initialize(candidate, &major, &minor)) return false;
     egl.bindApi(kEglOpenGlEsApi);
-    const int attributes[] = {kEglRenderableType, kEglOpenGlEs3Bit, kEglSurfaceType, 0, kEglRedSize, 8, kEglGreenSize, 8, kEglBlueSize, 8, kEglAlphaSize, 8, kEglNone};
+    const int attributes[] = {kEglRenderableType, kEglOpenGlEs3Bit, kEglSurfaceType, 0x0001 /* EGL_PBUFFER_BIT: the device that GPU has is found by it (as WebGL finds it), though no surface is made */, kEglRedSize, 8, kEglGreenSize, 8, kEglBlueSize, 8, kEglAlphaSize, 8, kEglNone};
     EGLConfigT config = nullptr;
     int count = 0;
     if (!egl.chooseConfig(candidate, attributes, &config, 1, &count) || count < 1) return false;
@@ -154,6 +162,7 @@ std::unique_ptr<GpuRaster> GpuRaster::Create(std::string* why) {
       for (int i = 0; i < count && !ok; ++i) ok = impl.TryDisplay(impl.egl.getPlatformDisplay(kEglPlatformDevice, devices[i], nullptr));
     }
   }
+  if (std::getenv("SOLAR_GL_DEBUG")) std::fprintf(stderr, "gpu raster: device enumeration %s, ok %d, extensions have it %d, query %p, getPlatform %p\n", impl.egl.queryDevices ? "there" : "missing", ok, extensions.find("EGL_EXT_device_enumeration") != std::string::npos, reinterpret_cast<void*>(impl.egl.queryDevices), reinterpret_cast<void*>(impl.egl.getPlatformDisplay));
   if (!ok) ok = impl.TryDisplay(impl.egl.getDisplay(nullptr));
   if (!ok) return fail("no EGL display with an OpenGL ES 3 context");
   const sk_sp<const GrGLInterface> interface = GrGLMakeAssembledInterface(&impl.egl, [](void* context, const char* name) -> GrGLFuncPtr {
@@ -171,6 +180,8 @@ std::unique_ptr<GpuRaster> GpuRaster::Create(std::string* why) {
   }
   // (The context is let go of: whoever draws makes it current for itself.)
   impl.egl.makeCurrent(impl.display, nullptr, nullptr, nullptr);
+  // WebGL's contexts are made to share their textures with it.
+  paint::gl::SetShare(impl.display, impl.context);
   return raster;
 }
 
@@ -190,7 +201,9 @@ bool GpuRaster::Draw(paint::SkiaPainter& painter, const paint::DisplayList& list
   canvas->clear(SK_ColorWHITE);
   canvas->scale(density, density);
   const auto t0 = std::chrono::steady_clock::now();
+  g_drawing = &impl;
   painter.Draw(list, *canvas, scrollX, scrollY);
+  g_drawing = nullptr;
   DrawScrollbar(*canvas, bar);
   const auto t1 = std::chrono::steady_clock::now();
   // (SOLAR_GUI_TIMES: the drawing is waited for before the picture is read, to tell what the GPU took from what the reading did.)
@@ -212,6 +225,20 @@ bool GpuRaster::Draw(paint::SkiaPainter& painter, const paint::DisplayList& list
     }
   }
   return ok;
+}
+
+void* GpuRaster::eglDisplay() const { return impl_->display; }
+void* GpuRaster::eglContext() const { return impl_->context; }
+
+sk_sp<SkImage> GpuRaster::TextureImage(uint32_t texture, int width, int height, bool premultiplied) {
+  Impl* impl = g_drawing;
+  if (!impl || !impl->direct || texture == 0 || width <= 0 || height <= 0) return nullptr;
+  GrGLTextureInfo info;
+  info.fTarget = 0x0DE1;  // GL_TEXTURE_2D
+  info.fID = texture;
+  info.fFormat = 0x8058;  // GL_RGBA8
+  const GrBackendTexture backend = GrBackendTextures::MakeGL(width, height, skgpu::Mipmapped::kNo, info);
+  return SkImages::BorrowTextureFrom(impl->direct.get(), backend, kBottomLeft_GrSurfaceOrigin, kRGBA_8888_SkColorType, premultiplied ? kPremul_SkAlphaType : kUnpremul_SkAlphaType, nullptr);
 }
 
 size_t GpuRaster::ResourceBytes() const {
