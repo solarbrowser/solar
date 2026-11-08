@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-#include "FfmpegApi.h"
+#include "solar/media/FfmpegApi.h"
 
 #include <mutex>
 #include <string>

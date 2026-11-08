@@ -6,7 +6,7 @@
 
 #include "solar/media/Player.h"
 
-#include "FfmpegApi.h"
+#include "solar/media/FfmpegApi.h"
 
 #include <algorithm>
 #include <chrono>
@@ -15,7 +15,7 @@
 #include <optional>
 #include <thread>
 
-#include "PlayerImpl.h"
+#include "solar/media/PlayerImpl.h"
 
 namespace solar::media {
 
@@ -27,6 +27,7 @@ std::atomic<int> g_playing{0};
 std::atomic<uint64_t> g_frames{0};
 
 void SetAudioOutputFactory(AudioOutputFactory factory) { Factory() = std::move(factory); }
+std::unique_ptr<AudioOutput> MakeAudioOutput() { return Factory() ? Factory()() : nullptr; }
 int PlayingCount() { return g_playing.load(); }
 uint64_t FrameCounter() { return g_frames.load(); }
 // ---- ByteStream ----

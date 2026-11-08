@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-#include "GpuRaster.h"
+#include "solar/gui/GpuRaster.h"
 
 #include <chrono>
 #include <cstdio>

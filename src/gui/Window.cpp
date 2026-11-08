@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-#include "Window.h"
+#include "solar/gui/Window.h"
 
 #include <unistd.h>
 

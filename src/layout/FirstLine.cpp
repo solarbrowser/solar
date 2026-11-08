@@ -11,7 +11,7 @@
 #include <functional>
 #include <map>
 
-#include "Internal.h"
+#include "solar/layout/Internal.h"
 #include "solar/css/Selectors.h"
 #include "solar/css/Style.h"
 

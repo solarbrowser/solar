@@ -66,16 +66,16 @@
 #include "solar/net/PageFetch.h"
 #include "solar/paint/Paint.h"
 #include "solar/gui/Wire.h"
-#include "Navigation.h"
-#include "RemoteAudio.h"
-#include "RemoteStorage.h"
-#include "GpuProcess.h"
-#include "RemoteGl.h"
+#include "solar/gui/Navigation.h"
+#include "solar/gui/RemoteAudio.h"
+#include "solar/gui/RemoteStorage.h"
+#include "solar/gui/GpuProcess.h"
+#include "solar/gui/RemoteGl.h"
 #include "solar/paint/GlRuntime.h"
-#include "Services.h"
+#include "solar/gui/Services.h"
 #include "solar/gui/Sandbox.h"
-#include "Renderer.h"
-#include "Window.h"
+#include "solar/gui/Renderer.h"
+#include "solar/gui/Window.h"
 #include "solar/paint/SkiaPainter.h"
 #include "solar/url/Normalizer.h"
 #include "solar/url/Parser.h"
@@ -96,6 +96,7 @@
 #include "solar/paint/Canvas.h"
 #include "solar/web-api/ImageLoad.h"
 #include "solar/web-api/Media.h"
+#include "solar/web-api/WebAudio.h"
 #include "solar/web-api/WebSocket.h"
 #include "solar/web-api/Worker.h"
 #include "solar/web/TimerHost.h"
@@ -260,6 +261,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
       solar::webapi::InstallCacheStoreNatives(realm);
       solar::webapi::InstallCompressionNatives(realm);
       solar::webapi::InstallMediaNatives(realm);
+      solar::webapi::InstallWebAudioNatives(realm);
       solar::webapi::InstallCanvasNatives(realm);
       solar::webapi::InstallWebGlNatives(realm);
       solar::webapi::InstallImageLoadNatives(realm);

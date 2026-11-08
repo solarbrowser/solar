@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-#include "GpuSurfaceInternal.h"
+#include "solar/gui/GpuSurfaceInternal.h"
 #include "include/core/SkBitmap.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkColorSpace.h"

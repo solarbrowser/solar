@@ -15,7 +15,7 @@
 #include <set>
 #include <sstream>
 
-#include "Internal.h"
+#include "solar/layout/Internal.h"
 #include "solar/dom/MediaHook.h"
 #include "solar/css/Logical.h"
 #include "solar/css/MediaQuery.h"

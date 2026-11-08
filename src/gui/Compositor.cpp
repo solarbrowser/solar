@@ -22,12 +22,12 @@
 #include "solar/gui/FrameBuffer.h"
 #include "solar/media/Player.h"
 #include "solar/paint/SkiaPainter.h"
-#include "Renderer.h"
-#include "GpuClient.h"
+#include "solar/gui/Renderer.h"
+#include "solar/gui/GpuClient.h"
 #include "solar/paint/GlRuntime.h"
-#include "RemoteAudio.h"
-#include "Scrollbar.h"
-#include "RemoteStorage.h"
+#include "solar/gui/RemoteAudio.h"
+#include "solar/gui/Scrollbar.h"
+#include "solar/gui/RemoteStorage.h"
 
 namespace solar::gui {
 

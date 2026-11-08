@@ -33,7 +33,7 @@
 #include <type_traits>
 #include <vector>
 
-#include "GlApi.h"
+#include "solar/paint/GlApi.h"
 #include "solar/paint/GlRuntime.h"
 
 // ANGLE's own tokens of eglext_angle.h (the header is not in the machine's).

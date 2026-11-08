@@ -11,7 +11,7 @@
 #include <optional>
 #include <thread>
 
-#include "PlayerImpl.h"
+#include "solar/media/PlayerImpl.h"
 
 namespace solar::media {
 

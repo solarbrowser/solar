@@ -10,7 +10,7 @@
 #include <cmath>
 #include <cstdlib>
 
-#include "Internal.h"
+#include "solar/layout/Internal.h"
 #include "solar/font/Face.h"
 
 namespace solar::layout {

@@ -11,7 +11,7 @@
 #include <memory>
 #include <unordered_map>
 
-#include "Internal.h"
+#include "solar/layout/Internal.h"
 #include "solar/css/Cssom.h"
 #include "solar/url/Parser.h"
 #include "solar/url/Serializer.h"

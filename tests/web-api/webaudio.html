@@ -1,0 +1,130 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Web Audio</title>
+<script>
+// Rendered offline, so every sample can be checked. Run: SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./solar file://$PWD/tests/web-api/webaudio.html  (the lines go to the console)
+const ok = (name, condition, detail) => console.log((condition ? "ok   " : "FAIL ") + name + (condition ? "" : "  " + detail));
+const near = (a, b, e = 1e-4) => Math.abs(a - b) <= e;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const render = async (frames, build, rate = 44100, channels = 2) => { const c = new OfflineAudioContext(channels, frames, rate); build(c); return c.startRendering(); };
+async function run() {
+  ok("classes exist", ["AudioContext", "OfflineAudioContext", "AudioBuffer", "AudioParam", "GainNode", "OscillatorNode", "AudioBufferSourceNode", "ScriptProcessorNode", "AnalyserNode"].every((n) => typeof globalThis[n] === "function"), "");
+  ok("webkitAudioContext", webkitAudioContext === AudioContext, "");
+  let e = null; try { new AudioNode(); } catch (x) { e = x; }
+  ok("AudioNode is an illegal constructor", e instanceof TypeError, String(e));
+
+  // a buffer through a gain
+  let b = await render(512, (c) => {
+    const buf = c.createBuffer(1, 256, 44100); const d = buf.getChannelData(0); for (let i = 0; i < 256; ++i) d[i] = i / 256;
+    const s = c.createBufferSource(); s.buffer = buf; const g = c.createGain(); g.gain.value = 0.5; s.connect(g); g.connect(c.destination); s.start();
+  });
+  const d0 = b.getChannelData(0), d1 = b.getChannelData(1);
+  ok("buffer source through gain (left)", near(d0[0], 0) && near(d0[128], 0.25) && near(d0[255], 255 / 512), d0[128]);
+  ok("mono to both sides", near(d1[128], d0[128]), d1[128]);
+  ok("silence after the buffer", d0[300] === 0 && d0[511] === 0, d0[300]);
+
+  // an oscillator
+  b = await render(1000, (c) => { const o = c.createOscillator(); o.frequency.value = 441; o.connect(c.destination); o.start(); });
+  let good = true; for (let i = 0; i < 1000; ++i) if (!near(b.getChannelData(0)[i], Math.sin(2 * Math.PI * 441 * i / 44100), 2e-3)) { good = false; break; }
+  ok("sine oscillator", good, b.getChannelData(0)[10]);
+  b = await render(300, (c) => { const o = c.createOscillator(); o.type = "square"; o.frequency.value = 100; o.connect(c.destination); o.start(); });
+  ok("square oscillator", b.getChannelData(0)[10] === 1 && b.getChannelData(0)[300 - 1] === -1, b.getChannelData(0)[10]);
+
+  // start and stop times
+  b = await render(44100, (c) => { const o = c.createConstantSource(); o.connect(c.destination); o.start(0.25); o.stop(0.5); });
+  const k = b.getChannelData(0);
+  ok("start/stop times", k[10000] === 0 && k[11025] === 1 && k[22000] === 1 && k[22100] === 0, [k[10000], k[11025], k[22000], k[22100]]);
+
+  // parameter automation
+  b = await render(44100, (c) => { const o = c.createConstantSource(); const g = c.createGain(); g.gain.setValueAtTime(0, 0); g.gain.linearRampToValueAtTime(1, 0.5); o.connect(g); g.connect(c.destination); o.start(); });
+  ok("linear ramp", near(b.getChannelData(0)[11025], 0.5, 2e-3) && near(b.getChannelData(0)[22050], 1, 2e-3) && near(b.getChannelData(0)[40000], 1), b.getChannelData(0)[11025]);
+  b = await render(44100, (c) => { const o = c.createConstantSource(); const g = c.createGain(); g.gain.setValueAtTime(1, 0); g.gain.exponentialRampToValueAtTime(0.01, 1); o.connect(g); g.connect(c.destination); o.start(); });
+  ok("exponential ramp", near(b.getChannelData(0)[22050], 0.1, 4e-3), b.getChannelData(0)[22050]);
+  b = await render(44100, (c) => { const o = c.createConstantSource(); const g = c.createGain(); g.gain.setValueAtTime(1, 0); g.gain.setTargetAtTime(0, 0, 0.1); o.connect(g); g.connect(c.destination); o.start(); });
+  ok("set target", near(b.getChannelData(0)[4410], Math.exp(-1), 5e-3), b.getChannelData(0)[4410]);
+
+  // a parameter driven by a node
+  b = await render(256, (c) => { const lfo = c.createConstantSource(); lfo.offset.value = 0.25; const o = c.createConstantSource(); const g = c.createGain(); g.gain.value = 0; lfo.connect(g.gain); o.connect(g); g.connect(c.destination); lfo.start(); o.start(); });
+  ok("a node into a parameter", near(b.getChannelData(0)[100], 0.25), b.getChannelData(0)[100]);
+
+  // mixing: two sources add
+  b = await render(256, (c) => { for (let i = 0; i < 2; ++i) { const o = c.createConstantSource(); o.offset.value = 0.25; o.connect(c.destination); o.start(); } });
+  ok("inputs add", near(b.getChannelData(0)[10], 0.5), b.getChannelData(0)[10]);
+
+  // pan
+  b = await render(256, (c) => { const o = c.createConstantSource(); const p = c.createStereoPanner(); p.pan.value = -1; o.connect(p); p.connect(c.destination); o.start(); });
+  ok("hard left pan", near(b.getChannelData(0)[10], 1) && near(b.getChannelData(1)[10], 0), [b.getChannelData(0)[10], b.getChannelData(1)[10]]);
+
+  // splitter and merger
+  b = await render(256, (c) => { const o = c.createConstantSource(); const m = c.createChannelMerger(2); o.connect(m, 0, 1); m.connect(c.destination); o.start(); });
+  ok("merger puts the sound on its second channel", near(b.getChannelData(0)[10], 0) && near(b.getChannelData(1)[10], 1), [b.getChannelData(0)[10], b.getChannelData(1)[10]]);
+
+  // delay
+  b = await render(1000, (c) => { const s = c.createConstantSource(); const d = c.createDelay(1); d.delayTime.value = 100 / 44100; s.connect(d); d.connect(c.destination); s.start(); });
+  ok("delay", near(b.getChannelData(0)[50], 0) && near(b.getChannelData(0)[150], 1), [b.getChannelData(0)[50], b.getChannelData(0)[150]]);
+
+  // a lowpass filter lets a low tone through and holds a high one back
+  const tone = async (f) => { const r = await render(8192, (c) => { const o = c.createOscillator(); o.frequency.value = f; const q = c.createBiquadFilter(); q.type = "lowpass"; q.frequency.value = 1000; o.connect(q); q.connect(c.destination); o.start(); }); let peak = 0; for (let i = 4096; i < 8192; ++i) peak = Math.max(peak, Math.abs(r.getChannelData(0)[i])); return peak; };
+  const low = await tone(100), high = await tone(10000);
+  ok("lowpass", low > 0.9 && high < 0.05, [low, high]);
+
+  // loop and playbackRate
+  b = await render(1024, (c) => { const buf = c.createBuffer(1, 100, 44100); buf.getChannelData(0).fill(0.5); const s = c.createBufferSource(); s.buffer = buf; s.loop = true; s.connect(c.destination); s.start(); });
+  ok("loop", near(b.getChannelData(0)[1000], 0.5), b.getChannelData(0)[1000]);
+  b = await render(600, (c) => { const buf = c.createBuffer(1, 100, 44100); const d = buf.getChannelData(0); for (let i = 0; i < 100; ++i) d[i] = i / 100; const s = c.createBufferSource(); s.buffer = buf; s.playbackRate.value = 2; s.connect(c.destination); s.start(); });
+  ok("playbackRate 2", near(b.getChannelData(0)[10], 0.2, 1e-3) && b.getChannelData(0)[60] === 0, b.getChannelData(0)[10]);
+
+  // ended
+  const ended = await new Promise((resolve) => { const c = new OfflineAudioContext(1, 4096, 44100); const s = c.createBufferSource(); const buf = c.createBuffer(1, 100, 44100); s.buffer = buf; s.connect(c.destination); s.onended = () => resolve(true); s.start(); c.startRendering(); setTimeout(() => resolve(false), 3000); });
+  ok("onended", ended, "");
+
+  // a script processor
+  const processed = await new Promise((resolve) => {
+    const c = new OfflineAudioContext(1, 8192, 44100);
+    const o = c.createConstantSource(); const p = c.createScriptProcessor(1024, 1, 1); let calls = 0, seen = 0;
+    p.onaudioprocess = (ev) => { ++calls; seen = ev.inputBuffer.getChannelData(0)[5]; const out = ev.outputBuffer.getChannelData(0); for (let i = 0; i < out.length; ++i) out[i] = 0.75; };
+    o.connect(p); p.connect(c.destination); o.start();
+    c.startRendering().then((r) => resolve({ calls, seen, last: r.getChannelData(0)[8000] }));
+  });
+  ok("script processor is called with the input", processed.calls >= 6 && near(processed.seen, 1), JSON.stringify(processed));
+  ok("script processor's output is heard", near(processed.last, 0.75), processed.last);
+
+  // an analyser
+  b = await render(4096, (c) => { const o = c.createConstantSource(); const a = c.createAnalyser(); o.connect(a); a.connect(c.destination); o.start(); window.__an = a; });
+  const td = new Float32Array(32); window.__an.getFloatTimeDomainData(td);
+  ok("analyser exists and reads", td.length === 32 && window.__an.frequencyBinCount === 1024, td.length);
+
+  // decodeAudioData of a WAV
+  const wav = new Uint8Array(44 + 8); const dv = new DataView(wav.buffer); const w4 = (o, s) => [...s].forEach((ch, i) => wav[o + i] = ch.charCodeAt(0));
+  w4(0, "RIFF"); dv.setUint32(4, 36 + 8, true); w4(8, "WAVE"); w4(12, "fmt "); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true); dv.setUint32(24, 22050, true); dv.setUint32(28, 44100, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true); w4(36, "data"); dv.setUint32(40, 8, true);
+  [16384, -16384, 0, 32767].forEach((v, i) => dv.setInt16(44 + 2 * i, v, true));
+  const ctx = new OfflineAudioContext(1, 100, 44100);
+  const decoded = await ctx.decodeAudioData(wav.buffer.slice(0));
+  ok("decodeAudioData of a wav", decoded.numberOfChannels === 1 && decoded.sampleRate === 44100 && decoded.length === 8 && near(decoded.getChannelData(0)[0], 0.5, 1e-3), [decoded.sampleRate, decoded.length]);
+  e = null; try { await ctx.decodeAudioData(new ArrayBuffer(10)); } catch (x) { e = x; }
+  ok("garbage is an EncodingError", e && e.name === "EncodingError", String(e));
+
+  // ogg (vorbis) and mp3 of 0.3 s of 440 Hz at 22050 Hz, mono: decoded and resampled to the context's rate
+  for (const [name, b64] of [["ogg", "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"], ["mp3", "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"]]) {
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    let buf = null, err = null; try { buf = await new OfflineAudioContext(1, 100, 44100).decodeAudioData(bytes.buffer.slice(0)); } catch (x) { err = x; }
+    const d = buf && buf.getChannelData(0); let peak = 0; if (d) for (let i = 2000; i < 10000; ++i) peak = Math.max(peak, Math.abs(d[i]));
+    let crossings = 0; if (d) for (let i = 2001; i < 10000; ++i) if ((d[i - 1] < 0) !== (d[i] < 0)) ++crossings;
+    ok("decodeAudioData of " + name, buf && buf.sampleRate === 44100 && buf.length > 12000 && buf.length < 14500 && peak > 0.1 && peak < 0.15 && Math.abs(crossings - 2 * 440 * 7999 / 44100) < 6, err ? String(err) : [buf && buf.length, peak, crossings]);
+  }
+
+  // the realtime context runs
+  const rc = new AudioContext();
+  ok("realtime context is running", rc.state === "running" && rc.sampleRate > 0 && rc.destination.maxChannelCount >= 2, rc.state);
+  const t0 = rc.currentTime; await sleep(300); const t1 = rc.currentTime;
+  ok("the clock moves", t1 > t0 + 0.1 && t1 < t0 + 0.6, [t0, t1]);
+  let realtimeCalls = 0;
+  const rp = rc.createScriptProcessor(1024, 1, 1); rp.onaudioprocess = () => { ++realtimeCalls; };
+  const ro = rc.createOscillator(); ro.connect(rp); rp.connect(rc.destination); ro.start();
+  await sleep(600);
+  ok("script processor runs in real time", realtimeCalls >= 5, realtimeCalls);
+  await rc.close();
+  ok("closed", rc.state === "closed", rc.state);
+}
+run().then(() => console.log("done"), (e) => { console.log("FAIL exception " + (e && e.stack || e)); console.log("done"); });
+</script>

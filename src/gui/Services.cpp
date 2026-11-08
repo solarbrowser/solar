@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-#include "Services.h"
+#include "solar/gui/Services.h"
 
 #include <atomic>
 #include <cctype>

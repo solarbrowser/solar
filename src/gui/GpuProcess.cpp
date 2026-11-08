@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-#include "GpuProcess.h"
+#include "solar/gui/GpuProcess.h"
 
 #include <fcntl.h>
 #include <signal.h>
@@ -25,7 +25,7 @@
 #include <thread>
 #include <vector>
 
-#include "GpuRaster.h"
+#include "solar/gui/GpuRaster.h"
 #include "solar/gui/FrameBuffer.h"
 #include "solar/gui/GlWire.h"
 #include "solar/gui/GpuWire.h"

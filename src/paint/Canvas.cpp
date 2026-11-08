@@ -10,7 +10,7 @@
 #include <map>
 #include <regex>
 
-#include "CanvasSurface.h"
+#include "solar/paint/CanvasSurface.h"
 #include "include/core/SkData.h"
 #include "include/core/SkStream.h"
 #include "include/core/SkSurface.h"

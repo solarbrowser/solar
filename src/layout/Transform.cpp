@@ -7,7 +7,7 @@
 // Transforms (https://www.w3.org/TR/css-transforms-2/): a box's transform as a matrix, and its rectangles through the transforms around it.
 #include <cmath>
 
-#include "Internal.h"
+#include "solar/layout/Internal.h"
 #include "solar/css/Calc.h"
 #include "solar/css/Syntax.h"
 

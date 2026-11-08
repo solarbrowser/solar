@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-#include "Navigation.h"
+#include "solar/gui/Navigation.h"
 
 #include "solar/net/Http1Parser.h"
 #include "solar/url/Parser.h"

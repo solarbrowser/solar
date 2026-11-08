@@ -28,7 +28,7 @@
 #include "include/effects/SkGradient.h"
 #include "solar/font/Database.h"
 #include "solar/media/Controls.h"
-#include "CanvasSurface.h"
+#include "solar/paint/CanvasSurface.h"
 #include "include/core/SkM44.h"
 #include "include/core/SkPaint.h"
 #include "include/core/SkPath.h"

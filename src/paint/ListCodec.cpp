@@ -12,7 +12,7 @@
 #include <cstring>
 #include <filesystem>
 
-#include "CanvasSurface.h"
+#include "solar/paint/CanvasSurface.h"
 #include "include/core/SkImage.h"
 #include "include/core/SkPixmap.h"
 #include "solar/font/Face.h"

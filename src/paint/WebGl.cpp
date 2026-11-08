@@ -17,7 +17,7 @@
 #include <string>
 #include <vector>
 
-#include "CanvasNatives.h"
+#include "solar/paint/CanvasNatives.h"
 #include "solar/paint/Canvas.h"
 #include "solar/paint/GlRuntime.h"
 

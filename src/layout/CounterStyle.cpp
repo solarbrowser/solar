@@ -12,7 +12,7 @@
 #include <map>
 #include <sstream>
 
-#include "Internal.h"
+#include "solar/layout/Internal.h"
 #include "solar/css/Cssom.h"
 #include "solar/css/Style.h"
 #include "solar/css/Syntax.h"

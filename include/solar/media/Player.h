@@ -112,6 +112,8 @@ class AudioOutput {
 };
 using AudioOutputFactory = std::function<std::unique_ptr<AudioOutput>()>;
 void SetAudioOutputFactory(AudioOutputFactory factory);
+// A new stream of the program's audio output (null where there is none: the sound is not played).
+std::unique_ptr<AudioOutput> MakeAudioOutput();
 
 // https://html.spec.whatwg.org/multipage/media.html#ready-states
 enum ReadyState { kHaveNothing = 0, kHaveMetadata = 1, kHaveCurrentData = 2, kHaveFutureData = 3, kHaveEnoughData = 4 };

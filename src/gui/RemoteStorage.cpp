@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-#include "RemoteStorage.h"
+#include "solar/gui/RemoteStorage.h"
 
 #include <atomic>
 #include <chrono>

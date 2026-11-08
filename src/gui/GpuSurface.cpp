@@ -6,7 +6,7 @@
 
 #include "solar/gui/GpuSurface.h"
 
-#include "GpuSurfaceInternal.h"
+#include "solar/gui/GpuSurfaceInternal.h"
 
 #include <SDL3/SDL.h>
 

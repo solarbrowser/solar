@@ -12,8 +12,8 @@
 #include <memory>
 #include <set>
 
-#include "CanvasNatives.h"
-#include "CanvasSurface.h"
+#include "solar/paint/CanvasNatives.h"
+#include "solar/paint/CanvasSurface.h"
 #include "include/codec/SkCodec.h"
 #include "include/core/SkData.h"
 #include "include/core/SkStream.h"

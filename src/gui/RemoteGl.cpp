@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-#include "RemoteGl.h"
+#include "solar/gui/RemoteGl.h"
 
 #include <chrono>
 #include <condition_variable>

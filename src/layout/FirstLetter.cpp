@@ -6,7 +6,7 @@
 
 // ::first-letter (https://www.w3.org/TR/css-pseudo-4/#first-letter-pseudo): the first typographic letter unit of the first formatted line of a block
 // container, with the punctuation around it, is a box of its own, styled by the pseudo-element's rules.
-#include "Internal.h"
+#include "solar/layout/Internal.h"
 #include "solar/css/Selectors.h"
 #include "solar/css/Style.h"
 #include "solar/css/Tokenizer.h"

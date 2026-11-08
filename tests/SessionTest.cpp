@@ -15,8 +15,8 @@
 #include <thread>
 #include <vector>
 
-#include "../src/gui/Services.h"
-#include "../src/gui/Session.h"
+#include "solar/gui/Services.h"
+#include "solar/gui/Session.h"
 #include "solar/gui/Wire.h"
 #include "solar/net/Ipc.h"
 #include "solar/net/PageFetch.h"

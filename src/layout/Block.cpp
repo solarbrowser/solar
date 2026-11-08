@@ -11,7 +11,7 @@
 #include <cstdlib>
 #include <cmath>
 
-#include "Internal.h"
+#include "solar/layout/Internal.h"
 
 namespace solar::layout {
 namespace {

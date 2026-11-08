@@ -11,7 +11,7 @@
 #include <map>
 #include <unordered_map>
 
-#include "Internal.h"
+#include "solar/layout/Internal.h"
 #include "solar/css/Fonts.h"
 #include "solar/css/Tokenizer.h"
 #include "solar/text/Unicode.h"

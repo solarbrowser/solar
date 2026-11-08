@@ -10,7 +10,7 @@
 #include <condition_variable>
 #include <cstring>
 
-#include "MseInternal.h"
+#include "solar/media/MseInternal.h"
 
 namespace solar::media {
 

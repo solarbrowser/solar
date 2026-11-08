@@ -12,7 +12,7 @@
 #include <set>
 #include <tuple>
 
-#include "Internal.h"
+#include "solar/layout/Internal.h"
 #include "solar/css/Syntax.h"
 
 namespace solar::layout {

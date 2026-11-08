@@ -7,7 +7,7 @@
 #include <random>
 #include <sstream>
 
-#include "../src/paint/CanvasSurface.h"
+#include "solar/paint/CanvasSurface.h"
 #include "include/core/SkBitmap.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkSurface.h"
@@ -15,7 +15,7 @@
 #include "include/core/SkStream.h"
 #include "solar/font/Face.h"
 #include "solar/paint/ListCodec.h"
-#include "../src/gui/GpuRaster.h"
+#include "solar/gui/GpuRaster.h"
 #include "solar/paint/SkiaPainter.h"
 
 using namespace solar::paint;

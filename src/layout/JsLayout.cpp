@@ -8,7 +8,7 @@
 #include <cmath>
 #include <iostream>
 
-#include "Internal.h"
+#include "solar/layout/Internal.h"
 #include "solar/css/Style.h"
 #include "solar/dom/NodeBindingsInternal.h"
 

@@ -10,7 +10,7 @@
 #include "solar/dom/MediaHook.h"
 #include "solar/media/Player.h"
 
-#include "FfmpegApi.h"
+#include "solar/media/FfmpegApi.h"
 
 namespace solar::media {
 
