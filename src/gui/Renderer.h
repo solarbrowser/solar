@@ -15,6 +15,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <deque>
+#include <functional>
 #include <iterator>
 #include <memory>
 #include <mutex>
@@ -160,6 +161,18 @@ class Shared {
     if (wait.count() > 0) compositorCv_.wait_for(lock, wait, [&] { return compositorWoken_; });
     compositorWoken_ = false;
   }
+  // The connections to the browser: its network (the descriptor), and the one the window's messages come on (navigations are asked on it and answered on it).
+  int networkFd = -1;
+  solar::net::ipc::Channel* browserLink = nullptr;
+  // Where the answers to navigations go (the page sets it when it is ready for them; what comes before is not kept: nothing was asked yet).
+  void SetNavigationSink(std::function<void(solar::gui::wire::ToRenderer, std::string)> sink) {
+    std::lock_guard<std::mutex> lock(navigationMutex_);
+    navigationSink_ = std::move(sink);
+  }
+  void DeliverNavigation(solar::gui::wire::ToRenderer type, std::string bytes) {
+    std::lock_guard<std::mutex> lock(navigationMutex_);
+    if (navigationSink_) navigationSink_(type, std::move(bytes));
+  }
   solar::gui::wire::Geometry initialGeometry;  // (what the window said first: the page starts knowing it)
   std::atomic<int> mods{0};  // the modifier keys (SDL's bits) as the last thing the user did had them
   void WakePage() { cv_.notify_all(); }
@@ -171,6 +184,8 @@ class Shared {
   std::deque<UiCommand> commands_;
   Frame frame_;
   bool hasFrame_ = false;
+  std::mutex navigationMutex_;
+  std::function<void(solar::gui::wire::ToRenderer, std::string)> navigationSink_;
   std::mutex compositorMutex_;
   std::condition_variable compositorCv_;
   std::deque<CompositorInput> compositorInput_;

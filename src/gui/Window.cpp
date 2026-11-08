@@ -49,7 +49,7 @@ void SendGeometry(net::ipc::Channel& link, SDL_Window* window) {
   Send(link, wire::ToRenderer::Resize, out.bytes());
 }
 
-void RunWindow(net::ipc::Channel& link, SDL_Window* window, SDL_Renderer* renderer) {
+void RunWindow(net::ipc::Channel& link, SDL_Window* window, SDL_Renderer* renderer, BrowserServices::Tab& tab) {
   // What the page says comes on a thread of its own and is handed to this one (the window's events and the page's messages are taken in one place).
   std::mutex mutex;
   std::deque<Message> inbox;
@@ -150,6 +150,16 @@ void RunWindow(net::ipc::Channel& link, SDL_Window* window, SDL_Renderer* render
           SDL_WarpMouseInWindow(window, lockedAtX, lockedAtY);
         }
         break;
+      case wire::ToBrowser::Navigate: {
+        wire::Navigate request;
+        if (wire::Read(in, request)) tab.Navigate(std::move(request));
+        break;
+      }
+      case wire::ToBrowser::NavCommitted: {
+        const std::string address = in.String(size_t{1} << 21);
+        if (in.ok()) tab.Committed(address);
+        break;
+      }
       case wire::ToBrowser::Quit: running = false; break;
       default: break;
     }

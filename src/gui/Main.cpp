@@ -55,10 +55,12 @@
 #include "solar/html/Parser.h"
 #include "solar/layout/Layout.h"
 #include "solar/net/HttpClient.h"
-#include "solar/net/NetworkThread.h"
+#include "solar/net/RemoteNetwork.h"
 #include "solar/net/PageFetch.h"
 #include "solar/paint/Paint.h"
 #include "solar/gui/Wire.h"
+#include "Navigation.h"
+#include "Services.h"
 #include "Renderer.h"
 #include "Window.h"
 #include "solar/paint/SkiaPainter.h"
@@ -129,23 +131,6 @@ class Collector : public solar::net::FetchHandler {
   std::string body, contentType, address, error;
 };
 
-// A file: address is a file of this machine; the rest are the network's.
-std::string FileOfAddress(const std::string& address) {
-  std::string path = address.substr(7);  // file://
-  const size_t cut = path.find_first_of("?#");
-  if (cut != std::string::npos) path.resize(cut);
-  std::string decoded;
-  for (size_t i = 0; i < path.size(); ++i) {
-    if (path[i] == '%' && i + 2 < path.size() && std::isxdigit(static_cast<unsigned char>(path[i + 1])) && std::isxdigit(static_cast<unsigned char>(path[i + 2]))) {
-      decoded += static_cast<char>(std::stoi(path.substr(i + 1, 2), nullptr, 16));
-      i += 2;
-    } else {
-      decoded += path[i];
-    }
-  }
-  return decoded;
-}
-
 struct RealmBundle {
   std::unique_ptr<qe::Realm> realm;
   std::unique_ptr<solar::web::FetchHost> host;
@@ -160,7 +145,7 @@ struct RealmBundle {
 // What the pages get from the program: realms of one isolate, and the resources of the network and of the disk.
 class Browser : public solar::html::FrameEnvironment, public solar::webapi::WorkerHost {
  public:
-  Browser(qe::Isolate& isolate, solar::net::Loop& loop, solar::net::BrowserNetwork& client, solar::web::JsEventLoop& events)
+  Browser(qe::Isolate& isolate, solar::net::Loop& loop, solar::net::NetworkService& client, solar::web::JsEventLoop& events)
       : isolate_(isolate), loop_(loop), client_(client), events_(events) {
     solar::webapi::SetWorkerHost(this);
   }
@@ -445,7 +430,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     pendingNavigations_.erase(found);
     Collector& collector = *pending.collector;
     if (mode == 1) {  // left to the network
-      client_.Fetch(pending.url, collector, pending.options);
+      navigator_->Fetch(pending.url, collector, pending.options);
       return;
     }
     if (mode == 2) {
@@ -551,7 +536,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
   std::optional<std::string> LoadAs(const std::string& url, Kind kind) {
     if (url.starts_with("file://")) {
       std::string contents;
-      if (!ReadFile(FileOfAddress(url), contents)) return std::nullopt;
+      if (!ReadFile(solar::gui::FileOfAddress(url), contents)) return std::nullopt;
       return contents;
     }
     Resource* resource = Start(url, kind);
@@ -748,6 +733,8 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
   void ScriptFailed(const std::string& message) override { std::fprintf(stderr, "  script error: %s\n", message.c_str()); }
 
   void SetPageUrl(const std::string& url) { pageUrl_ = url; }
+  // The way to the documents of navigations (the browser's).
+  solar::gui::RemoteNavigation* navigator_ = nullptr;
   void SetContentType(const std::string& url, const std::string& type) { types_[url] = type; }
 
  private:
@@ -756,7 +743,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
   bool scanImages_ = false;
   qe::Isolate& isolate_;
   solar::net::Loop& loop_;
-  solar::net::BrowserNetwork& client_;
+  solar::net::NetworkService& client_;
   solar::web::JsEventLoop& events_;
   std::string pageUrl_;
   std::map<std::string, std::string> types_;
@@ -948,9 +935,11 @@ size_t LineEndAt(const std::string& s, size_t at) {
 int PageMain(Shared& shared, int argc, char** argv);
 
 // The renderer: the page and the compositor, which speak to the window through `fd`. It is a thread of the program for now (a process of its own to come); it ends with the page.
-int RendererMain(int fd, int argc, char** argv) {
+int RendererMain(int fd, int networkFd, int argc, char** argv) {
   solar::net::ipc::Channel link(fd);
   Shared shared;
+  shared.networkFd = networkFd;
+  shared.browserLink = &link;
   // The window says how large it is first: the page starts knowing it.
   {
     uint8_t type = 0;
@@ -1039,17 +1028,25 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "vsync: asked %s, renderer says %d, driver %s\n", ok ? "ok" : "failed", on, SDL_GetRendererName(renderer));
   }
   SDL_StartTextInput(window);
-  // The page is on the other end of a connection: in a thread now.
+  // The page is on the other end of two connections: one for the window (what the user does, the pictures, the navigations), one for the network. It is a thread now.
   const auto [windowEnd, pageEnd] = solar::net::ipc::Channel::MakePair();
-  if (windowEnd < 0) {
+  const auto [networkEnd, pageNetworkEnd] = solar::net::ipc::Channel::MakePair();
+  if (windowEnd < 0 || networkEnd < 0) {
     std::fprintf(stderr, "cannot connect the window and the page\n");
     return 1;
   }
   int result = 0;
-  std::thread rendererThread([&, pageEnd = pageEnd] { result = RendererMain(pageEnd, argc, argv); });
+  std::thread rendererThread([&, pageEnd = pageEnd, pageNetworkEnd = pageNetworkEnd] { result = RendererMain(pageEnd, pageNetworkEnd, argc, argv); });
   {
+    solar::gui::BrowserServices services;
     solar::net::ipc::Channel link(windowEnd);
-    solar::gui::RunWindow(link, window, renderer);
+    // (A page that was asked for by a file may be taken to files; one that came from the network may not.)
+    const std::string given = argc > 1 ? argv[1] : "";
+    const bool startsWithFile = AddressOf(given.empty() ? "https://example.com/" : given).starts_with("file://");
+    {
+      auto tab = services.OpenTab(networkEnd, link, startsWithFile);
+      solar::gui::RunWindow(link, window, renderer, *tab);
+    }
   }
   rendererThread.join();
   SDL_DestroyRenderer(renderer);
@@ -1082,19 +1079,16 @@ int PageMain(Shared& shared, int argc, char** argv) {
     std::fprintf(stderr, "cannot start the event loop\n");
     return 1;
   }
-  // The network: a service on a thread of its own, which tells this loop (the loop of the page) what happens; SOLAR_NET_INLINE=1: the client on this loop, as it was.
-  std::unique_ptr<solar::net::HttpClient> inlineClient;
-  std::unique_ptr<solar::net::ThreadedNetworkService> threadedNetwork;
-  if (std::getenv("SOLAR_NET_INLINE")) {
-    inlineClient = std::make_unique<solar::net::HttpClient>(*loop);
-  } else {
-    threadedNetwork = std::make_unique<solar::net::ThreadedNetworkService>(*loop);
-  }
-  solar::net::BrowserNetwork& client = inlineClient ? static_cast<solar::net::BrowserNetwork&>(*inlineClient) : static_cast<solar::net::BrowserNetwork&>(*threadedNetwork);
+  // The network is the browser's: what the page asks goes through a connection to it (the service of the network, which holds the cookies, the cache and the connections), and the
+  // documents of navigations are asked of the browser, which fetches them. What they tell comes to this loop.
+  solar::net::RemoteNetworkService client(*loop, shared.networkFd);
+  solar::gui::RemoteNavigation navigator(*loop, *shared.browserLink);
+  shared.SetNavigationSink([&navigator](solar::gui::wire::ToRenderer type, std::string bytes) { navigator.Deliver(type, std::move(bytes)); });
   solar::web::TimerHost timers;
   isolate->SetTimerProvider(timers.Provider());
   solar::web::JsEventLoop events(*loop, {[&] { isolate->PerformMicrotaskCheckpoint(); }, [&] { timers.RunDue(); }, [&] { return timers.NextDelayMs(); }});
   Browser browser(*isolate, *loop, client, events);
+  browser.navigator_ = &navigator;
   browser.timing_ = std::getenv("SOLAR_GUI_TIMES") != nullptr;
   browser.dropTimers_ = [&](qe::Realm* realm) { timers.DropRealm(realm); };
   solar::layout::SetImageRequestHandler([&](const std::string& absolute) { return browser.RequestImage(absolute); });
@@ -1151,6 +1145,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
     // (The drop-down of the page that was left is gone with it.)
     solar::paint::SetPopup(solar::paint::Popup{});
     browser.SetPageUrl(address);
+    navigator.Committed(address);
     browser.SetContentType(address, type);
     {
       const auto parsedAddress = solar::url::Parse(address);
@@ -1248,15 +1243,6 @@ int PageMain(Shared& shared, int argc, char** argv) {
   Navigation* current = nullptr;
   const auto navigate = [&](const std::string& where, const std::string& method = "GET", const std::string& body = "", const std::string& bodyType = "") -> bool {
     std::fprintf(stderr, "loading %s\n", where.c_str());
-    if (where.starts_with("file://")) {
-      std::string markup;
-      if (!ReadFile(FileOfAddress(where), markup)) {
-        std::fprintf(stderr, "cannot read %s\n", where.c_str());
-        return false;
-      }
-      commit(where, std::move(markup), "text/html", Clock::now());
-      return true;
-    }
     std::optional<solar::url::Url> parsed = solar::url::Parse(where);
     if (!parsed) {
       std::fprintf(stderr, "invalid address: %s\n", where.c_str());
@@ -1270,7 +1256,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
       options.body = std::make_shared<const std::string>(body);
       if (!bodyType.empty()) options.headers.emplace_back("Content-Type", bodyType);
     }
-    if (!browser.TryWorkerNavigation(*parsed, where, options, navigation->collector)) client.Fetch(*parsed, navigation->collector, options);
+    if (!browser.TryWorkerNavigation(*parsed, where, options, navigation->collector)) navigator.Fetch(*parsed, navigation->collector, options);
     current = navigation.get();
     navigations.push_back(std::move(navigation));
     {

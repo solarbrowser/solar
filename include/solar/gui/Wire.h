@@ -16,8 +16,40 @@
 // clipboard, full screen, the pointer held). Every message is checked when it is read.
 namespace solar::gui::wire {
 
-enum class ToRenderer : uint8_t { Resize = 1, Input, BufferReleased, Shutdown };
-enum class ToBrowser : uint8_t { NewBuffer = 32, Frame, Title, Clipboard, Fullscreen, PointerLock, Quit };
+enum class ToRenderer : uint8_t {
+  Resize = 1, Input, BufferReleased, Shutdown,
+  // The answer to a navigation (every one has the id the page gave it): the head of the response, its body in pieces, the end, or an error in their place; and a restart, where the
+  // browser asks again from the start before any of the body went (what was heard is dropped, and the head comes again).
+  NavHead = 8, NavBody, NavEnd, NavError, NavRestart,
+};
+enum class ToBrowser : uint8_t {
+  NewBuffer = 32, Frame, Title, Clipboard, Fullscreen, PointerLock, Quit,
+  // The page asks the browser to take a frame's document from an address (the browser does the fetching, and lets the page ask for the origin of what comes); it says what it has
+  // committed to (the origins it asks for are then the one it is on).
+  Navigate = 40, NavCommitted,
+};
+
+// A document to take: the browser is trusted to fetch it, the page is not trusted to say what it is, so the address is checked there.
+struct Navigate {
+  uint32_t id = 0;
+  std::string url;
+  std::string method = "GET";  // GET or POST
+  std::string body, bodyType;
+};
+void Write(net::ipc::Writer& out, const Navigate& navigate);
+// False where it is not one (a method that is none, a body too large).
+bool Read(net::ipc::Reader& in, Navigate& navigate);
+
+struct NavHead {
+  uint32_t id = 0;
+  int32_t status = 0;
+  std::string contentType, finalUrl;
+};
+void Write(net::ipc::Writer& out, const NavHead& head);
+bool Read(net::ipc::Reader& in, NavHead& head);
+
+// The most a navigation's body may be, as the page sends it (a form).
+constexpr size_t kMaxNavigationBody = size_t{32} << 20;
 
 // How large the window is: in points, in pixels, and the pixels a point comes to.
 struct Geometry {

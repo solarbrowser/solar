@@ -469,6 +469,11 @@ std::thread StartWindowLink(Shared& shared, net::ipc::Channel& link) {
           if (in.ok()) shared.PushCompositor(std::move(input));
           break;
         }
+        case wire::ToRenderer::NavHead:
+        case wire::ToRenderer::NavBody:
+        case wire::ToRenderer::NavEnd:
+        case wire::ToRenderer::NavError:
+        case wire::ToRenderer::NavRestart: shared.DeliverNavigation(static_cast<wire::ToRenderer>(type), bytes); break;
         case wire::ToRenderer::Shutdown: shared.quit = true; break;
         default: break;  // (A message that is none is not taken.)
       }

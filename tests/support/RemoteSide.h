@@ -33,10 +33,13 @@ struct RemoteSide {
   ~RemoteSide() {
     host.reset();
     // (What the host ends is ended by a task of the loop: it has gone through all that was put before this when this has run.)
+    // (The network is let go of on the loop's thread: it is where what it tells is run.)
     std::promise<void> flushed;
-    loop->Post([&flushed] { flushed.set_value(); });
+    loop->Post([&] {
+      network.reset();
+      flushed.set_value();
+    });
     flushed.get_future().wait();
-    network.reset();
     loop->Post([this] {
       loop->EndExternalWork();
       loop->Stop();

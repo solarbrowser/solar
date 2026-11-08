@@ -53,7 +53,11 @@ class NetworkServiceHost {
   NetworkServiceHost(const NetworkServiceHost&) = delete;
   NetworkServiceHost& operator=(const NetworkServiceHost&) = delete;
 
+  // The origins the page may ask for: the one it was made for (empty: none yet) and the ones the browser lets it have as it navigates. SetOrigin is the only one now;
+  // AllowOrigin adds one (the page is on its way to it and may still be on the old one); KeepOnlyOrigin drops the others, where the one given is allowed (a page can only ask for less).
   void SetOrigin(std::string origin);
+  void AllowOrigin(std::string origin);
+  void KeepOnlyOrigin(std::string origin);
   // How many of the page's requests were refused for naming an origin that is not its (for looking at).
   size_t refused() const;
 

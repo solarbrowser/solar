@@ -87,4 +87,36 @@ bool Read(Reader& in, Frame& f) {
   return in.ok() && f.index < 64;
 }
 
+void Write(Writer& out, const Navigate& n) {
+  out.U32(n.id);
+  out.String(n.url);
+  out.String(n.method);
+  out.String(n.body);
+  out.String(n.bodyType);
+}
+
+bool Read(Reader& in, Navigate& n) {
+  n.id = in.U32();
+  n.url = in.String(size_t{1} << 21);
+  n.method = in.String(16);
+  n.body = in.String(kMaxNavigationBody);
+  n.bodyType = in.String(1024);
+  return in.ok() && (n.method == "GET" || n.method == "POST");
+}
+
+void Write(Writer& out, const NavHead& h) {
+  out.U32(h.id);
+  out.I32(h.status);
+  out.String(h.contentType);
+  out.String(h.finalUrl);
+}
+
+bool Read(Reader& in, NavHead& h) {
+  h.id = in.U32();
+  h.status = in.I32();
+  h.contentType = in.String(1 << 16);
+  h.finalUrl = in.String(size_t{1} << 21);
+  return in.ok();
+}
+
 }  // namespace solar::gui::wire

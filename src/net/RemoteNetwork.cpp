@@ -14,6 +14,8 @@
 #include <pthread.h>
 #endif
 
+#include <set>
+
 #include "solar/url/Origin.h"
 
 namespace solar::net {
@@ -249,14 +251,16 @@ struct NetworkServiceHost::Impl {
   ipc::Channel channel;
   std::thread reader;
   std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>>(true);  // (read on the host's thread, written by the destructor)
-  std::string origin;                          // the origin the page may ask for (read on the host's thread)
+  std::set<std::string> allowed;               // the origins the page may ask for (read on the host's thread)
   std::atomic<size_t> refusedCount{0};
   // Touched from the host's thread only.
   std::unordered_map<uint64_t, std::unique_ptr<HostFetch>> fetches;
   std::unordered_map<uint64_t, std::unique_ptr<HostSocket>> sockets;
   static constexpr size_t kMaxInFlight = 4096;
 
-  Impl(BrowserNetwork& n, Loop& loop, int fd, std::string o) : network(n), hostLoop(loop), channel(fd), origin(std::move(o)) {}
+  Impl(BrowserNetwork& n, Loop& loop, int fd, std::string o) : network(n), hostLoop(loop), channel(fd) {
+    if (!o.empty()) allowed.insert(std::move(o));
+  }
 
   void Handle(Message type, const std::string& bytes);
   // What the page had in flight ends (on the host's thread).
@@ -375,7 +379,7 @@ void NetworkServiceHost::Impl::Handle(Message type, const std::string& bytes) {
       if (!ipc::Read(in, request) || !in.AtEnd()) { RefuseFetch(id, "Failed to fetch (the request was not understood)"); return; }
       if (fetches.count(id) || fetches.size() >= kMaxInFlight) { RefuseFetch(id, "Failed to fetch (too many requests)"); return; }
       // A page asks for the account of its own origin and no other's: what it names as its address is checked against what it was made for.
-      if (url::SerializeOrigin(request.pageUrl) != origin) { RefuseFetch(id, "Failed to fetch (the page is not the one this was made for)"); return; }
+      if (!allowed.count(url::SerializeOrigin(request.pageUrl))) { RefuseFetch(id, "Failed to fetch (the page is not the one this was made for)"); return; }
       if (request.url.scheme != "http" && request.url.scheme != "https") { RefuseFetch(id, "Failed to fetch (not an address of the network)"); return; }
       auto fetch = std::make_unique<HostFetch>(*this, id);
       HostFetch* raw = fetch.get();
@@ -392,7 +396,7 @@ void NetworkServiceHost::Impl::Handle(Message type, const std::string& bytes) {
       auto address = in.ReadUrl();
       WebSocketOptions options;
       if (!address || !ipc::Read(in, options) || !in.AtEnd() || sockets.count(id) || sockets.size() >= kMaxInFlight ||
-          !options.initiator || url::SerializeOrigin(*options.initiator) != origin) {
+          !options.initiator || !allowed.count(url::SerializeOrigin(*options.initiator))) {
         ++refusedCount;
         Writer out;
         out.U64(id);
@@ -463,9 +467,24 @@ NetworkServiceHost::~NetworkServiceHost() {
 }
 
 void NetworkServiceHost::SetOrigin(std::string origin) {
-  Impl* impl = impl_.get();
-  impl->hostLoop.Post([keep = impl_, origin = std::move(origin)]() mutable {
-    if (keep->alive->load()) keep->origin = std::move(origin);
+  impl_->hostLoop.Post([keep = impl_, origin = std::move(origin)]() mutable {
+    if (!keep->alive->load()) return;
+    keep->allowed.clear();
+    if (!origin.empty()) keep->allowed.insert(std::move(origin));
+  });
+}
+
+void NetworkServiceHost::AllowOrigin(std::string origin) {
+  impl_->hostLoop.Post([keep = impl_, origin = std::move(origin)]() mutable {
+    if (keep->alive->load() && !origin.empty()) keep->allowed.insert(std::move(origin));
+  });
+}
+
+void NetworkServiceHost::KeepOnlyOrigin(std::string origin) {
+  impl_->hostLoop.Post([keep = impl_, origin = std::move(origin)]() mutable {
+    if (!keep->alive->load() || !keep->allowed.count(origin)) return;
+    keep->allowed.clear();
+    keep->allowed.insert(std::move(origin));
   });
 }
 
