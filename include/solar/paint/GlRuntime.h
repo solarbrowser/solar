@@ -91,6 +91,17 @@ class Context {
   std::unique_ptr<Impl> impl_;
 };
 
+// A context for the drawing of the page (Skia's), made on the EGL that WebGL's contexts are made on (ANGLE where there is one, else the machine's), and shared with them: the two draw
+// into one another's textures only on one EGL. `makeCurrent(display, context)` makes it current in the calling thread (a null context lets go).
+struct RasterEgl {
+  void* display = nullptr;
+  void* context = nullptr;
+  void* (*getProc)(const char*) = nullptr;
+  bool (*makeCurrent)(void* display, void* context) = nullptr;
+};
+bool CreateRasterContext(RasterEgl& out, std::string* why = nullptr);
+void DestroyRasterContext(RasterEgl& egl);
+
 // Contexts made after this share their textures with `context` of `display` (EGL's handles; the GPU's process gives the one Skia draws with), so that what a page's WebGL drew is
 // drawn into the page without being read: a context that cannot share is made without it.
 void SetShare(void* display, void* context);

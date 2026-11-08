@@ -362,8 +362,6 @@ SandboxPolicy GpuPolicy() {
 }
 
 int GpuMain(int controlFd) {
-  // WebGL here runs on the machine's own EGL, as the drawing of the pages does: their textures are shared, which two EGLs cannot.
-  if (!std::getenv("SOLAR_GL_ANGLE")) ::setenv("SOLAR_GL_NATIVE", "1", 1);
   ::prctl(PR_SET_PDEATHSIG, SIGKILL);
   ::signal(SIGPIPE, SIG_IGN);
   net::ipc::Channel control(controlFd);

@@ -1255,6 +1255,43 @@ std::map<std::pair<uint64_t, uint32_t>, Context*>& Registered() {
 }
 }  // namespace
 
+bool CreateRasterContext(RasterEgl& out, std::string* why) {
+  if (!paint::EnsureEgl()) {
+    if (why) *why = "no EGL";
+    return false;
+  }
+  paint::Egl& egl = paint::TheEgl();
+  const EGLint attributes[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 0, EGL_NONE};
+  EGLContext context = paint::Proc<EGLContext (*)(EGLDisplay, EGLConfig, EGLContext, const EGLint*)>(egl, "eglCreateContext")(egl.display, egl.config, EGL_NO_CONTEXT, attributes);
+  if (context == EGL_NO_CONTEXT) {
+    if (why) *why = "no OpenGL ES 3 context";
+    return false;
+  }
+  out.display = egl.display;
+  out.context = context;
+  out.getProc = [](const char* name) -> void* {
+    paint::Egl& e = paint::TheEgl();
+    if (e.eglLibrary) {
+      if (void* p = dlsym(e.eglLibrary, name)) return p;
+    }
+    return e.getProc ? reinterpret_cast<void*>(e.getProc(name)) : nullptr;
+  };
+  out.makeCurrent = [](void* display, void* context) -> bool {
+    paint::Egl& e = paint::TheEgl();
+    return paint::Proc<EGLBoolean (*)(EGLDisplay, EGLSurface, EGLSurface, EGLContext)>(e, "eglMakeCurrent")(display, EGL_NO_SURFACE, EGL_NO_SURFACE, context ? context : EGL_NO_CONTEXT);
+  };
+  // (WebGL's contexts are made to share their textures with it.)
+  SetShare(out.display, out.context);
+  return true;
+}
+
+void DestroyRasterContext(RasterEgl& egl) {
+  if (!egl.context) return;
+  paint::Egl& e = paint::TheEgl();
+  paint::Proc<EGLBoolean (*)(EGLDisplay, EGLContext)>(e, "eglDestroyContext")(egl.display, egl.context);
+  egl.context = nullptr;
+}
+
 void SetShare(void* display, void* context) {
   paint::g_shareDisplay.store(display);
   paint::g_shareContext.store(context);
