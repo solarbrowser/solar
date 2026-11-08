@@ -42,4 +42,12 @@ bool IsSameSite(const Url& a, const Url& b) {
   return siteA == siteB;
 }
 
+std::string SiteOf(const Url& url) {
+  if (url.scheme == "file") return "file:";
+  if (SerializeOrigin(url) == "null") return "";
+  const std::string& host = url.host.value_or("");
+  const std::string_view registrable = RegistrableDomain(host);
+  return url.scheme + "://" + std::string(registrable.empty() ? std::string_view(host) : registrable);
+}
+
 }  // namespace solar::url

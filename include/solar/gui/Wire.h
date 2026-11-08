@@ -21,6 +21,9 @@ enum class ToRenderer : uint8_t {
   // The answer to a navigation (every one has the id the page gave it): the head of the response, its body in pieces, the end, or an error in their place; and a restart, where the
   // browser asks again from the start before any of the body went (what was heard is dropped, and the head comes again).
   NavHead = 8, NavBody, NavEnd, NavError, NavRestart,
+  // The navigation (U32 id) went to another process (the page's site is not the address's): this page stays as it is. And: the browser asks the page to go to an address as a step along
+  // the history (String url, I32 entry), which is what back and forward come to when the entry is of the page's own site.
+  NavTransferred = 13, GoTo = 14,
   // How much sound the window has been given and not played, of a stream (U32 id, U64 frames): the page keeps time by it.
   AudioQueued = 16,
   // The answer to a storage request (U32 id, bool ok, then the bytes that were asked for).
@@ -31,6 +34,8 @@ enum class ToBrowser : uint8_t {
   // The page asks the browser to take a frame's document from an address (the browser does the fetching, and lets the page ask for the origin of what comes); it says what it has
   // committed to (the origins it asks for are then the one it is on).
   Navigate = 40, NavCommitted,
+  // A step back or forward along the history of the window, which the page has no entries of (I32 delta); the browser keeps them.
+  HistoryGo = 42,
   // The sound of the page's media, played by the window: a stream is opened (U32 id, I32 rate, I32 channels), given samples (U32 id, then 32-bit floats, a frame after a frame), paused (U32 id,
   // bool), cleared (U32 id) and closed (U32 id).
   AudioOpen = 48, AudioData, AudioPause, AudioClear, AudioClose,
@@ -41,6 +46,9 @@ enum class ToBrowser : uint8_t {
 // A document to take: the browser is trusted to fetch it, the page is not trusted to say what it is, so the address is checked there.
 struct Navigate {
   uint32_t id = 0;
+  // What the navigation is for the history: a new entry, the page again, or a step to an entry the browser named (GoTo).
+  enum class Kind : uint8_t { New, Reload, Traversal } kind = Kind::New;
+  int32_t entry = -1;
   std::string url;
   std::string method = "GET";  // GET or POST
   std::string body, bodyType;

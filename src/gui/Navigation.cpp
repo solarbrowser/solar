@@ -12,11 +12,13 @@
 
 namespace solar::gui {
 
-void RemoteNavigation::Fetch(const url::Url& address, net::FetchHandler& handler, const net::FetchOptions& options) {
+uint32_t RemoteNavigation::Fetch(const url::Url& address, net::FetchHandler& handler, const net::FetchOptions& options, wire::Navigate::Kind kind, int entry) {
   const uint32_t id = next_++;
   pending_[id] = &handler;
   wire::Navigate request;
   request.id = id;
+  request.kind = kind;
+  request.entry = entry;
   request.url = url::Serialize(address);
   request.method = options.method == "POST" ? "POST" : "GET";
   if (options.body) request.body = *options.body;
@@ -35,11 +37,19 @@ void RemoteNavigation::Fetch(const url::Url& address, net::FetchHandler& handler
       handler->OnError("the browser is gone");
     });
   }
+  return id;
 }
 
-void RemoteNavigation::Committed(const std::string& address) {
+void RemoteNavigation::HistoryGo(int delta) {
+  net::ipc::Writer out;
+  out.I32(delta);
+  link_.SendRaw(static_cast<uint8_t>(wire::ToBrowser::HistoryGo), out.bytes());
+}
+
+void RemoteNavigation::Committed(const std::string& address, uint32_t navigation) {
   net::ipc::Writer out;
   out.String(address);
+  out.U32(navigation);
   link_.SendRaw(static_cast<uint8_t>(wire::ToBrowser::NavCommitted), out.bytes());
 }
 
@@ -87,6 +97,21 @@ void RemoteNavigation::Handle(wire::ToRenderer type, const std::string& bytes) {
       net::FetchHandler* handler = found->second;
       pending_.erase(found);
       handler->OnError(message);
+      return;
+    }
+    case wire::ToRenderer::NavTransferred: {
+      const uint32_t id = in.U32();
+      const auto found = pending_.find(id);
+      if (!in.ok() || found == pending_.end()) return;
+      net::FetchHandler* handler = found->second;
+      pending_.erase(found);
+      handler->OnError(kTransferred);
+      return;
+    }
+    case wire::ToRenderer::GoTo: {
+      const std::string address = in.String(size_t{1} << 21);
+      const int entry = in.I32();
+      if (in.ok() && goTo_) goTo_(address, entry);
       return;
     }
     case wire::ToRenderer::NavRestart: {

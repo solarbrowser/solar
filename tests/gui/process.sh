@@ -72,5 +72,16 @@ check "closing the window ends the browser" "$(kill -0 $browser 2>/dev/null || e
 check "and the page" "$(kill -0 $renderer 2>/dev/null || echo ok)"
 wait $browser 2>/dev/null
 
+# A navigation to another site is another process, which takes the window; the history goes back and forth between them.
+printf '<p>one</p>' > "$dir/one.html"
+python3 -m http.server 8793 --bind 127.0.0.1 --directory "$dir" > /dev/null 2>&1 &
+server=$!
+sleep 1
+SOLAR_BROWSER_SCRIPT="wait:2500;go:http://localhost:8793/one.html;wait:3000;entries;back;wait:3000;entries;wait:300" timeout 60 ./solar "http://127.0.0.1:8793/one.html" > "$dir/out5.txt" 2>&1
+kill $server 2>/dev/null; wait $server 2>/dev/null
+check "a navigation to another site goes on with the history" "$(grep -c 'history (at 1): http://127.0.0.1:8793/one.html http://localhost:8793/one.html' "$dir/out5.txt" | grep -q 1 && echo ok)"
+check "and back is to the entry before" "$(grep -q 'history (at 0): http://127.0.0.1:8793/one.html http://localhost:8793/one.html' "$dir/out5.txt" && echo ok)"
+check "a renderer was started for each site" "$([ "$(grep -c '^loading http' "$dir/out5.txt")" -ge 3 ] && echo ok)"
+
 echo "gui process: $pass/$((pass+fail)) passed"
 [ $fail -eq 0 ]

@@ -1057,7 +1057,7 @@ solar::gui::SandboxPolicy RendererPolicy(const std::string& given) {
 
 // The renderer as a process of its own: the program started again with its two connections (the window's and the network's) as descriptors 3 and 4, and nothing else of the browser's
 // (every other descriptor is closed for it). It ends when the browser does.
-pid_t SpawnRenderer(int windowFd, int networkFd, int argc, char** argv) {
+pid_t SpawnRenderer(int windowFd, int networkFd, const std::string& url) {
   char self[4096];
   const ssize_t length = ::readlink("/proc/self/exe", self, sizeof(self) - 1);
   if (length <= 0) return -1;
@@ -1070,8 +1070,7 @@ pid_t SpawnRenderer(int windowFd, int networkFd, int argc, char** argv) {
   posix_spawn_file_actions_adddup2(&actions, high1, 3);
   posix_spawn_file_actions_adddup2(&actions, high2, 4);
   posix_spawn_file_actions_addclosefrom_np(&actions, 5);
-  std::vector<std::string> words = {"solar", "--renderer"};
-  if (argc > 1) words.push_back(argv[1]);
+  std::vector<std::string> words = {"solar", "--renderer", url};
   std::vector<char*> arguments;
   for (std::string& word : words) arguments.push_back(word.data());
   arguments.push_back(nullptr);
@@ -1127,53 +1126,35 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "vsync: asked %s, renderer says %d, driver %s\n", ok ? "ok" : "failed", on, SDL_GetRendererName(renderer));
   }
   SDL_StartTextInput(window);
-  // The page is on the other end of two connections: one for the window (what the user does, the pictures, the navigations), one for the network. It is a thread now.
-  const auto [windowEnd, pageEnd] = solar::net::ipc::Channel::MakePair();
-  const auto [networkEnd, pageNetworkEnd] = solar::net::ipc::Channel::MakePair();
-  if (windowEnd < 0 || networkEnd < 0) {
-    std::fprintf(stderr, "cannot connect the window and the page\n");
-    return 1;
-  }
-  int result = 0;
-  // The page is a process of its own (SOLAR_RENDERER_THREAD=1: a thread of this one, for looking into it with the tools that follow threads).
-  pid_t child = -1;
-  std::thread rendererThread;
-  if (std::getenv("SOLAR_RENDERER_THREAD")) {
-    rendererThread = std::thread([&, pageEnd = pageEnd, pageNetworkEnd = pageNetworkEnd] { result = RendererMain(pageEnd, pageNetworkEnd, argc, argv); });
-  } else {
-    child = SpawnRenderer(pageEnd, pageNetworkEnd, argc, argv);
-    ::close(pageEnd);
-    ::close(pageNetworkEnd);
-    if (child < 0) {
-      std::fprintf(stderr, "cannot start the page's process\n");
-      return 1;
-    }
-  }
-  {
-    solar::gui::BrowserServices services;
-    solar::net::ipc::Channel link(windowEnd);
-    // (A page that was asked for by a file may be taken to files; one that came from the network may not.)
-    const std::string given = argc > 1 ? argv[1] : "";
-    const bool startsWithFile = AddressOf(given.empty() ? "https://example.com/" : given).starts_with("file://");
-    {
-      auto tab = services.OpenTab(networkEnd, link, startsWithFile);
-      solar::gui::RunWindow(link, window, renderer, *tab);
-    }
-  }
-  if (rendererThread.joinable()) rendererThread.join();
-  if (child > 0) {
+  // The pages are processes of their own (the session starts them: the first for the address, another where a navigation goes to another site).
+  solar::gui::Launcher launcher;
+  launcher.start = [&](int windowFd, int networkFd, const std::string& url) -> long {
+    const pid_t child = SpawnRenderer(windowFd, networkFd, url);
+    ::close(windowFd);
+    ::close(networkFd);
+    return child;
+  };
+  launcher.finish = [](long child) -> int {
     // (The page was told the window is gone: it is waited for for a moment, then ended.)
     int status = 0;
     bool done = false;
     for (int i = 0; i < 200 && !done; ++i) {
-      done = ::waitpid(child, &status, WNOHANG) == child;
+      done = ::waitpid(static_cast<pid_t>(child), &status, WNOHANG) == static_cast<pid_t>(child);
       if (!done) std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     if (!done) {
-      ::kill(child, SIGKILL);
-      ::waitpid(child, &status, 0);
+      ::kill(static_cast<pid_t>(child), SIGKILL);
+      ::waitpid(static_cast<pid_t>(child), &status, 0);
     }
-    result = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+    return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+  };
+  int result = 0;
+  {
+    solar::gui::BrowserServices services;
+    // (A page that was asked for by a file may be taken to files; one that came from the network may not.)
+    const std::string given = argc > 1 ? argv[1] : "https://example.com/";
+    const std::string address = AddressOf(given);
+    result = solar::gui::RunWindow(window, renderer, services, std::move(launcher), address.starts_with("file://"), address);
   }
   SDL_DestroyRenderer(renderer);
   SDL_DestroyWindow(window);
@@ -1188,9 +1169,6 @@ int PageMain(Shared& shared, int argc, char** argv) {
   const std::string given = argc > 1 ? argv[1] : "https://example.com/";
   std::string address = AddressOf(given);
   // The pages this window went through, and where in them it is (back and forward move along them); a page left by going back or forward is not added again.
-  std::vector<std::string> session;
-  size_t sessionAt = 0;
-  bool historyMove = false;
 
   // The page: an isolate, the network, and a window's worth of APIs in a realm.
   auto isolate = qe::Isolate::Create();
@@ -1210,6 +1188,9 @@ int PageMain(Shared& shared, int argc, char** argv) {
   // documents of navigations are asked of the browser, which fetches them. What they tell comes to this loop.
   solar::net::RemoteNetworkService client(*loop, shared.networkFd);
   solar::gui::RemoteNavigation navigator(*loop, *shared.browserLink);
+  // (The browser asks this page to go to an address: it is done from the page's own loop, where the navigations are.)
+  std::optional<std::pair<std::string, int>> goToRequest;
+  navigator.SetGoTo([&goToRequest](std::string address, int entry) { goToRequest = std::make_pair(std::move(address), entry); });
   shared.SetNavigationSink([&navigator](solar::gui::wire::ToRenderer type, std::string bytes) { navigator.Deliver(type, std::move(bytes)); });
   solar::web::TimerHost timers;
   isolate->SetTimerProvider(timers.Provider());
@@ -1244,6 +1225,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
   int pressButton = 0;
   const bool timing_log = std::getenv("SOLAR_GUI_TIMES") != nullptr;
   // `stream`: the page is parsed as it comes from this fetch (`markup` is what came first), not once all of it is here.
+  uint32_t committingNavigation = 0;  // (the navigation the browser has for what is being committed)
   const auto commit = [&](const std::string& where, std::string markup, std::string type, const Clock::time_point& started, Collector* stream = nullptr) {
     // (SOLAR_INJECT_HEAD=file: the text of the file is put right after <head> of each page that comes, for looking into what a page's scripts do.)
     if (const char* inject = std::getenv("SOLAR_INJECT_HEAD")) {
@@ -1263,16 +1245,10 @@ int PageMain(Shared& shared, int argc, char** argv) {
     solar::dom::Document* leftDocument = document;
     pressTarget = nullptr;
     address = where;
-    if (!historyMove && (session.empty() || session[sessionAt] != where)) {
-      if (!session.empty()) session.resize(sessionAt + 1);
-      session.push_back(where);
-      sessionAt = session.size() - 1;
-    }
-    historyMove = false;
     // (The drop-down of the page that was left is gone with it.)
     solar::paint::SetPopup(solar::paint::Popup{});
     browser.SetPageUrl(address);
-    navigator.Committed(address);
+    navigator.Committed(address, committingNavigation);
     browser.SetContentType(address, type);
     {
       const auto parsedAddress = solar::url::Parse(address);
@@ -1363,12 +1339,13 @@ int PageMain(Shared& shared, int argc, char** argv) {
   // The document being fetched: the window goes on with the page it has until the new one is here.
   struct Navigation {
     std::string where;
+    uint32_t id = 0;  // (what the browser knows it by)
     Collector collector;
     Clock::time_point started = Clock::now();
   };
   std::vector<std::unique_ptr<Navigation>> navigations;  // (a fetch cannot be taken back: the ones that were left are kept until they end)
   Navigation* current = nullptr;
-  const auto navigate = [&](const std::string& where, const std::string& method = "GET", const std::string& body = "", const std::string& bodyType = "") -> bool {
+  const auto navigate = [&](const std::string& where, const std::string& method = "GET", const std::string& body = "", const std::string& bodyType = "", solar::gui::wire::Navigate::Kind kind = solar::gui::wire::Navigate::Kind::New, int entry = -1) -> bool {
     std::fprintf(stderr, "loading %s\n", where.c_str());
     std::optional<solar::url::Url> parsed = solar::url::Parse(where);
     if (!parsed) {
@@ -1383,7 +1360,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
       options.body = std::make_shared<const std::string>(body);
       if (!bodyType.empty()) options.headers.emplace_back("Content-Type", bodyType);
     }
-    if (!browser.TryWorkerNavigation(*parsed, where, options, navigation->collector)) navigator.Fetch(*parsed, navigation->collector, options);
+    if (!browser.TryWorkerNavigation(*parsed, where, options, navigation->collector)) navigation->id = navigator.Fetch(*parsed, navigation->collector, options, kind, entry);
     current = navigation.get();
     navigations.push_back(std::move(navigation));
     {
@@ -1428,7 +1405,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
     current = nullptr;
     Collector& collector = arrived->collector;
     if (collector.failed) {
-      std::fprintf(stderr, "fetch failed: %s\n", collector.error.c_str());
+      if (collector.error != solar::gui::RemoteNavigation::kTransferred) std::fprintf(stderr, "fetch failed: %s\n", collector.error.c_str());
       UiCommand title;
       title.kind = UiCommand::Kind::Title;
       title.text = "Solar - " + address;
@@ -1440,11 +1417,13 @@ int PageMain(Shared& shared, int argc, char** argv) {
       collector.streaming = true;
       if (std::getenv("SOLAR_GUI_TIMES")) std::fprintf(stderr, "  document begins at %.0f ms (%zu bytes so far)\n", std::chrono::duration<double, std::milli>(Clock::now() - arrived->started).count(), collector.body.size());
       const std::string first = collector.body;
+      committingNavigation = arrived->id;
       commit(collector.address.empty() ? arrived->where : collector.address, first, "text/html", arrived->started, &collector);
       return;
     }
     if (std::getenv("SOLAR_GUI_TIMES")) std::fprintf(stderr, "  document fetched at %.0f ms (%zu bytes)\n", std::chrono::duration<double, std::milli>(Clock::now() - arrived->started).count(), collector.body.size());
     const std::string type = collector.contentType.find("xml") != std::string::npos ? "application/xhtml+xml" : "text/html";
+    committingNavigation = arrived->id;
     commit(collector.address.empty() ? arrived->where : collector.address, std::move(collector.body), type, arrived->started);
   };
   // (What the form controls show is asked of the page's script before the frame, on the thread the script is on; the frame reads it as it was committed.)
@@ -1612,11 +1591,8 @@ int PageMain(Shared& shared, int argc, char** argv) {
       dirty = true;
       return;
     }
-    const long target = static_cast<long>(sessionAt) + delta;
-    if (target < 0 || target >= static_cast<long>(session.size())) return;
-    sessionAt = static_cast<size_t>(target);
-    historyMove = true;
-    if (!navigate(session[sessionAt])) historyMove = false;
+    // (The history of the window is the browser's: the pages come and go.)
+    navigator.HistoryGo(delta);
   };
   // The text control that has the focus, if one has.
   const auto focusedTextControl = [&]() -> solar::dom::Element* {
@@ -2938,6 +2914,11 @@ int PageMain(Shared& shared, int argc, char** argv) {
     events.Step(std::chrono::milliseconds(4));
     stepMs = std::chrono::duration<double, std::milli>(Clock::now() - s0).count();
     if (timing && solar::dom::DocumentVersion() != beforeStep) std::fprintf(stderr, "step changed the document by %llu\n", (unsigned long long)(solar::dom::DocumentVersion() - beforeStep));
+    if (goToRequest) {
+      const auto request = std::move(*goToRequest);
+      goToRequest.reset();
+      navigate(request.first, "GET", "", "", request.second >= 0 ? solar::gui::wire::Navigate::Kind::Traversal : solar::gui::wire::Navigate::Kind::New, request.second);
+    }
     if (browser.requested_) {
       const Browser::Requested request = std::move(*browser.requested_);
       browser.requested_.reset();

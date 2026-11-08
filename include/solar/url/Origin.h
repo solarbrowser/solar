@@ -21,4 +21,8 @@ std::string SerializeOrigin(const Url& url);
 // itself, which two URLs cannot tell.
 bool IsSameSite(const Url& a, const Url& b);
 
+// What a process is made for: the scheme and the registrable domain (the host where it has none), so that two URLs have the same one just when IsSameSite says they are the same site; every
+// file: address is one site. Empty for an opaque origin (which is a site of its own, and a process of its own).
+std::string SiteOf(const Url& url);
+
 }  // namespace solar::url

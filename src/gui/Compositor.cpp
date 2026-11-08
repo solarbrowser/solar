@@ -475,7 +475,9 @@ std::thread StartWindowLink(Shared& shared, net::ipc::Channel& link) {
         case wire::ToRenderer::NavBody:
         case wire::ToRenderer::NavEnd:
         case wire::ToRenderer::NavError:
-        case wire::ToRenderer::NavRestart: shared.DeliverNavigation(static_cast<wire::ToRenderer>(type), bytes); break;
+        case wire::ToRenderer::NavRestart:
+        case wire::ToRenderer::NavTransferred:
+        case wire::ToRenderer::GoTo: shared.DeliverNavigation(static_cast<wire::ToRenderer>(type), bytes); break;
         case wire::ToRenderer::AudioQueued: {
           const uint32_t id = in.U32();
           const uint64_t frames = in.U64();

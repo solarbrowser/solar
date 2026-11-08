@@ -89,6 +89,8 @@ bool Read(Reader& in, Frame& f) {
 
 void Write(Writer& out, const Navigate& n) {
   out.U32(n.id);
+  out.U8(static_cast<uint8_t>(n.kind));
+  out.I32(n.entry);
   out.String(n.url);
   out.String(n.method);
   out.String(n.body);
@@ -97,6 +99,8 @@ void Write(Writer& out, const Navigate& n) {
 
 bool Read(Reader& in, Navigate& n) {
   n.id = in.U32();
+  n.kind = in.EnumUpTo(Navigate::Kind::Traversal);
+  n.entry = in.I32();
   n.url = in.String(size_t{1} << 21);
   n.method = in.String(16);
   n.body = in.String(kMaxNavigationBody);
