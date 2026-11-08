@@ -116,6 +116,7 @@ bool EnterLandlock(const SandboxPolicy& policy, std::string& problems) {
     ::close(fd);
   };
   for (const std::string& path : policy.readable) add(path, readRights);
+  for (const std::string& path : policy.executable) add(path, readRights | LANDLOCK_ACCESS_FS_EXECUTE);
   for (const std::string& path : policy.writable) add(path, fsAll & ~LANDLOCK_ACCESS_FS_EXECUTE);
   const bool ok = LandlockRestrict(ruleset) == 0;
   if (!ok) problems += std::string("landlock: ") + std::strerror(errno) + "; ";
@@ -145,7 +146,7 @@ constexpr int kAllowedSystemCalls[] = {
     SYS_getegid, SYS_getrandom, SYS_uname, SYS_sysinfo, SYS_prlimit64, SYS_getrlimit, SYS_getrusage, SYS_times,
 };
 
-enum { kAllow = 0, kKill = 1, kClone, kClone3, kPrctl, kIoctl, kCount };
+enum { kAllow = 0, kKill = 1, kClone, kClone3, kPrctl, kIoctl, kSocket, kCount };
 
 class Program {
  public:
@@ -160,7 +161,7 @@ class Program {
 
 uint32_t ArgumentLow(int index) { return static_cast<uint32_t>(offsetof(seccomp_data, args) + index * 8); }
 
-std::vector<sock_filter> BuildFilter(uint32_t denied) {
+std::vector<sock_filter> BuildFilter(uint32_t denied, const SandboxPolicy& policy) {
   Program p;
   const uint32_t kNr = offsetof(seccomp_data, nr), kArch = offsetof(seccomp_data, arch);
   // The architecture is the one the numbers are of, and not the x32 range of them.
@@ -172,15 +173,27 @@ std::vector<sock_filter> BuildFilter(uint32_t denied) {
   p.Add(BPF_RET | BPF_K, 0, 0, SECCOMP_RET_KILL_PROCESS);
   // Each allowed call: a jump over the next instruction where it is not that call, else a long jump to the end (patched below).
   std::vector<size_t> toAllow, toBlock[kCount];
-  for (int number : kAllowedSystemCalls) {
+  std::vector<int> allowed(std::begin(kAllowedSystemCalls), std::end(kAllowedSystemCalls));
+  allowed.insert(allowed.end(), policy.extraSystemCalls.begin(), policy.extraSystemCalls.end());
+  if (policy.anyIoctl) allowed.push_back(SYS_ioctl);
+  if (!policy.executable.empty()) {
+    for (int number : {SYS_execve, SYS_wait4, SYS_waitid, SYS_pipe2, SYS_dup2, SYS_dup3, SYS_close_range}) allowed.push_back(number);
+  }
+  if (policy.unixSockets) {
+    // (A connection to the system's own: sockets of the network are not made, only these.)
+    for (int number : {SYS_connect, SYS_getsockname, SYS_getpeername}) allowed.push_back(number);
+  }
+  for (int number : allowed) {
     p.Add(BPF_JMP | BPF_JEQ | BPF_K, 0, 1, static_cast<uint32_t>(number));
     toAllow.push_back(p.size());
     p.Add(BPF_JMP | BPF_JA, 0, 0, 0);
   }
   const struct {
     int number, block;
-  } special[] = {{SYS_clone, kClone}, {SYS_clone3, kClone3}, {SYS_prctl, kPrctl}, {SYS_ioctl, kIoctl}};
+  } special[] = {{SYS_clone, kClone}, {SYS_clone3, kClone3}, {SYS_prctl, kPrctl}, {SYS_ioctl, kIoctl}, {SYS_socket, kSocket}};
   for (const auto& s : special) {
+    if (s.number == SYS_ioctl && policy.anyIoctl) continue;
+    if (s.number == SYS_socket && !policy.unixSockets) continue;
     p.Add(BPF_JMP | BPF_JEQ | BPF_K, 0, 1, static_cast<uint32_t>(s.number));
     toBlock[s.block].push_back(p.size());
     p.Add(BPF_JMP | BPF_JA, 0, 0, 0);
@@ -193,6 +206,13 @@ std::vector<sock_filter> BuildFilter(uint32_t denied) {
   // clone: only what makes a thread (the flags glibc's pthread_create gives, and CLONE_THREAD among them), never a process or a namespace.
   {
     patch(toBlock[kClone], here());
+    if (!policy.executable.empty()) {
+      // (The clone of a vfork: the child shares the memory until it executes one of the programs it may.)
+      p.Add(BPF_LD | BPF_W | BPF_ABS, 0, 0, ArgumentLow(0));
+      p.Add(BPF_JMP | BPF_JEQ | BPF_K, 0, 1, CLONE_VM | CLONE_VFORK | SIGCHLD);
+      toAllow.push_back(p.size());
+      p.Add(BPF_JMP | BPF_JA, 0, 0, 0);
+    }
     const uint32_t threadFlags = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD | CLONE_SYSVSEM | CLONE_SETTLS | CLONE_PARENT_SETTID | CLONE_CHILD_CLEARTID;
     p.Add(BPF_LD | BPF_W | BPF_ABS, 0, 0, ArgumentLow(0));
     p.Add(BPF_ALU | BPF_AND | BPF_K, 0, 0, ~threadFlags);
@@ -232,6 +252,15 @@ std::vector<sock_filter> BuildFilter(uint32_t denied) {
     }
     p.Add(BPF_RET | BPF_K, 0, 0, SECCOMP_RET_ERRNO | ENOTTY);
   }
+  // socket: only a unix one.
+  if (policy.unixSockets) {
+    patch(toBlock[kSocket], here());
+    p.Add(BPF_LD | BPF_W | BPF_ABS, 0, 0, ArgumentLow(0));
+    p.Add(BPF_JMP | BPF_JEQ | BPF_K, 1, 0, 1 /*AF_UNIX*/);
+    p.Add(BPF_RET | BPF_K, 0, 0, denied);
+    toAllow.push_back(p.size());
+    p.Add(BPF_JMP | BPF_JA, 0, 0, 0);
+  }
   patch(toAllow, here());
   p.Add(BPF_RET | BPF_K, 0, 0, SECCOMP_RET_ALLOW);
   return p.all();
@@ -254,7 +283,7 @@ void ReportDenied(int, siginfo_t* info, void* context) {
   static_cast<ucontext_t*>(context)->uc_mcontext.gregs[REG_RAX] = -ENOSYS;
 }
 
-bool EnterSeccomp(SandboxMode mode, std::string& problems) {
+bool EnterSeccomp(SandboxMode mode, const SandboxPolicy& policy, std::string& problems) {
   const uint32_t denied = mode == SandboxMode::Report ? SECCOMP_RET_TRAP : SECCOMP_RET_KILL_PROCESS;
   if (mode == SandboxMode::Report) {
     struct sigaction action{};
@@ -263,7 +292,7 @@ bool EnterSeccomp(SandboxMode mode, std::string& problems) {
     sigemptyset(&action.sa_mask);
     ::sigaction(SIGSYS, &action, nullptr);
   }
-  std::vector<sock_filter> filter = BuildFilter(denied);
+  std::vector<sock_filter> filter = BuildFilter(denied, policy);
   sock_fprog program{static_cast<unsigned short>(filter.size()), filter.data()};
   if (::syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER, SECCOMP_FILTER_FLAG_TSYNC, &program) != 0) {
     problems += std::string("seccomp: ") + std::strerror(errno) + "; ";
@@ -292,7 +321,7 @@ SandboxResult EnterSandbox(const SandboxPolicy& policy, SandboxMode mode) {
     return result;
   }
   result.landlock = EnterLandlock(policy, result.problems);
-  result.seccomp = EnterSeccomp(mode, result.problems);
+  result.seccomp = EnterSeccomp(mode, policy, result.problems);
   return result;
 }
 

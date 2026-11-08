@@ -52,6 +52,7 @@ SkPath PathFromCommands(const std::vector<double>& commands);
 class CanvasSurface {
  public:
   CanvasSurface(int width, int height);
+  virtual ~CanvasSurface() = default;
 
   int width() const { return width_; }
   int height() const { return height_; }
@@ -130,7 +131,7 @@ class CanvasSurface {
   // The page's thread: the surface as it is now becomes what the window shows.
   void Publish();
   // Any thread: what was last published (null before the first).
-  sk_sp<SkImage> Latest() const;
+  virtual sk_sp<SkImage> Latest() const;
   // The page's thread: the surface as it is now (for drawImage from a canvas, and for making a file of it).
   sk_sp<SkImage> Snapshot() { return surface_ ? surface_->makeImageSnapshot() : nullptr; }
   // Set when something was drawn since the last Publish.

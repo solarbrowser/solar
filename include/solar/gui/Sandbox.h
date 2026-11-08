@@ -22,6 +22,14 @@ struct SandboxPolicy {
   std::vector<std::string> readable;
   // Directories (with what is under them) that may be read and written, made in and removed from.
   std::vector<std::string> writable;
+  // What a process needs more than the page's has (the GPU's process, which talks to a driver): system calls (numbers of the platform) that are allowed besides, every ioctl (the drivers'
+  // are the ones of their devices, and are many), and unix sockets (a connection to what the driver may ask of the system: nothing of the network).
+  std::vector<int> extraSystemCalls;
+  bool anyIoctl = false;
+  bool unixSockets = false;
+  // Programs the process may start (and only these: a process is made the way a library does, with the child sharing the memory until it executes), for what a driver runs when its
+  // devices are not as it likes (they stay as shut in as the process is: nothing is gained by it).
+  std::vector<std::string> executable;
 };
 
 enum class SandboxMode {

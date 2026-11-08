@@ -187,7 +187,7 @@ struct DrawImage {
 
 // The picture of a video element (src/media): the player is asked for its current picture each time the list is drawn, so the list does not change as the video plays.
 struct DrawVideo {
-  std::shared_ptr<media::Player> player;
+  std::shared_ptr<media::VideoSource> player;
   RoundedRect clip;  // the content box
   ObjectFit fit = ObjectFit::Contain;
   Length x{0, 50, false}, y{0, 50, false};

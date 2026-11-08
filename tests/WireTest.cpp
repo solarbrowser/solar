@@ -12,6 +12,7 @@
 #include <thread>
 
 #include "solar/gui/FrameBuffer.h"
+#include "solar/gui/GpuWire.h"
 #include "solar/gui/Wire.h"
 #include "solar/net/Ipc.h"
 
@@ -161,6 +162,34 @@ int main() {
     Check("third made", third.Create(64));
     page.SendRaw(1, "x", third.fd());
     Check("descriptor not asked for is dropped", window.ReceiveRaw(type, bytes) && bytes == "x");
+  }
+  {
+    // What a page and the GPU's process say to each other.
+    solar::gui::gpu::Draw draw;
+    draw.index = 2; draw.serial = 77; draw.pixelWidth = 2560; draw.pixelHeight = 1600; draw.density = 2.f; draw.scrollX = 1.5; draw.scrollY = 1234.25;
+    draw.barVisible = true; draw.barEmphasized = true; draw.barAlpha = 0.5f; draw.barTop = 10; draw.barHeight = 40; draw.windowWidth = 1280; draw.windowHeight = 800;
+    Writer out;
+    solar::gui::gpu::Write(out, draw);
+    const std::string bytes = out.Take();
+    Reader in(bytes);
+    solar::gui::gpu::Draw back;
+    Check("a draw round trip", solar::gui::gpu::Read(in, back) && back.index == 2 && back.serial == 77 && back.pixelWidth == 2560 && back.scrollY == 1234.25 && back.barVisible && back.barEmphasized && !back.barDragging && back.barAlpha == 0.5f && back.windowHeight == 800);
+    for (const solar::gui::gpu::Draw& bad : {solar::gui::gpu::Draw{64, 1, 10, 10, 1.f}, solar::gui::gpu::Draw{0, 1, 0, 10, 1.f}, solar::gui::gpu::Draw{0, 1, 10, 100000, 1.f}, solar::gui::gpu::Draw{0, 1, 10, 10, 0.f}, solar::gui::gpu::Draw{0, 1, 10, 10, 99.f}}) {
+      Writer w;
+      solar::gui::gpu::Write(w, bad);
+      const std::string b = w.Take();
+      Reader r(b);
+      solar::gui::gpu::Draw out2;
+      Check("a draw out of range is refused", !solar::gui::gpu::Read(r, out2));
+    }
+    Writer wb;
+    solar::gui::gpu::Write(wb, solar::gui::gpu::Buffer{3, 100, 50, 400});
+    const std::string bb = wb.Take();
+    Reader rb(bb);
+    solar::gui::gpu::Buffer buffer;
+    Check("a buffer round trip", solar::gui::gpu::Read(rb, buffer) && buffer.index == 3 && buffer.stride == 400);
+    Reader cut(std::string_view(bytes).substr(0, bytes.size() - 5));
+    Check("a draw cut short is refused", !solar::gui::gpu::Read(cut, back));
   }
   std::printf("wire: %d/%d passed\n", total - failed, total);
   return failed == 0 ? 0 : 1;

@@ -2,6 +2,7 @@
 // thing that is to be refused ends the process (seccomp) or fails (files), a thing that is to work does.
 
 #include <fcntl.h>
+#include <spawn.h>
 #include <linux/io_uring.h>
 #include <netinet/in.h>
 #include <sched.h>
@@ -26,6 +27,8 @@
 
 #include "solar/gui/FrameBuffer.h"
 #include "solar/gui/Sandbox.h"
+
+extern char** environ;
 
 using namespace solar::gui;
 
@@ -157,6 +160,38 @@ int main() {
   killed("reading another process's memory", [] { return ::syscall(SYS_process_vm_readv, 1, nullptr, 0, nullptr, 0, 0) >= 0 ? 1 : 0; });
   killed("loading a BPF program", [] { return ::syscall(SYS_bpf, 0, nullptr, 0) >= 0 ? 1 : 0; });
   killed("a prctl that is not for threads", [] { return ::prctl(PR_SET_SECCOMP, 0, 0, 0, 0) == 0 ? 1 : 0; });
+
+  // A program that is allowed may be started, and no other.
+  {
+    SandboxPolicy withProgram = policy;
+    withProgram.executable = {"/usr/bin/true", "/usr/lib/ld-linux-x86-64.so.2", "/usr/lib64/ld-linux-x86-64.so.2"};
+    withProgram.readable.push_back("/usr/lib");
+    Check("a program that is allowed is started (and its end waited for)", Run(withProgram, SandboxMode::On, [&] {
+      pid_t child = -1;
+      char arg0[] = "true";
+      char* arguments[] = {arg0, nullptr};
+      if (::posix_spawn(&child, "/usr/bin/true", nullptr, nullptr, arguments, environ) != 0) return 1;
+      int status = 0;
+      return ::waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : 2;
+    }, &why) == Outcome::Worked, why);
+    Check("another is not (the file is not there to be executed)", Run(withProgram, SandboxMode::On, [&] {
+      pid_t child = -1;
+      char arg0[] = "false";
+      char* arguments[] = {arg0, nullptr};
+      const int result = ::posix_spawn(&child, "/usr/bin/false", nullptr, nullptr, arguments, environ);
+      if (result != 0) return 0;
+      int status = 0;
+      ::waitpid(child, &status, 0);
+      // (A spawn is a child that did not execute: it ends with 127.)
+      return WIFEXITED(status) && WEXITSTATUS(status) == 127 ? 0 : 1;
+    }, &why) == Outcome::Worked, why);
+    Check("and without any, a process is not made", Run(policy, SandboxMode::On, [&] {
+      pid_t child = -1;
+      char arg0[] = "true";
+      char* arguments[] = {arg0, nullptr};
+      return ::posix_spawn(&child, "/usr/bin/true", nullptr, nullptr, arguments, environ) == 0 ? 1 : 0;
+    }, &why) == Outcome::Killed, why);
+  }
 
   // The rest of what the process is: no capabilities, the user the same, no network namespace shared.
   {

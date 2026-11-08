@@ -23,7 +23,9 @@
 #include "solar/media/Player.h"
 #include "solar/paint/SkiaPainter.h"
 #include "Renderer.h"
+#include "GpuClient.h"
 #include "RemoteAudio.h"
+#include "Scrollbar.h"
 #include "RemoteStorage.h"
 
 namespace solar::gui {
@@ -32,7 +34,7 @@ using net::ipc::Writer;
 
 // The compositor: the scroll of the page (a wheel step is a glide), the scrollbar, and the drawing of the display list the page made, at the scroll it has now, into a picture the window
 // shows. It is on a thread of its own so that a script that runs long does not stop the page from scrolling. Returns when the program is to end.
-void RunCompositor(Shared& shared, net::ipc::Channel& link) {
+void RunCompositor(Shared& shared, net::ipc::Channel& link, int gpuFd) {
   solar::paint::SkiaPainter painter;
   // The pictures it draws into are memory the window can see (it only reads); one is the window's while it shows it. They are made again when the window changes its size.
   struct Slot {
@@ -40,7 +42,11 @@ void RunCompositor(Shared& shared, net::ipc::Channel& link) {
     int width = 0, height = 0, stride = 0;
     bool held = false;  // the window has it
     bool announced = false;
+    uint64_t generation = 0;  // (which memory it is: a new one is made when the size changes)
   };
+  uint64_t generations = 0;
+  // The GPU's process draws the pictures where there is one (the page's process has no GPU to do it with itself); where it does not, or stops, the page draws them with the CPU.
+  std::unique_ptr<GpuClient> gpu = gpuFd >= 0 ? std::make_unique<GpuClient>(gpuFd) : nullptr;
   std::vector<Slot> slots(3);
   uint64_t frameSerial = 0;
   bool stalledForBuffer = false;
@@ -308,6 +314,7 @@ void RunCompositor(Shared& shared, net::ipc::Channel& link) {
         s.width = pixelW;
         s.height = pixelH;
         s.stride = static_cast<int>(stride);
+        s.generation = ++generations;
         slot = &s;
         slotIndex = i;
       }
@@ -320,36 +327,47 @@ void RunCompositor(Shared& shared, net::ipc::Channel& link) {
     }
     stalledForBuffer = false;
     const auto d0 = Clock::now();
-    sk_sp<SkSurface> surface = SkSurfaces::WrapPixels(SkImageInfo::MakeN32Premul(pixelW, pixelH), slot->memory.data(), static_cast<size_t>(slot->stride));
-    if (!surface) continue;
-    SkCanvas* canvas = surface->getCanvas();
-    canvas->resetMatrix();
-    canvas->clear(SK_ColorWHITE);
     const float density = shared.density.load();
-    canvas->scale(density, density);
-    const auto rasterStart = Clock::now();
-    if (frame.list) painter.Draw(*frame.list, *canvas, x, y);
-    const auto rasterEnd = Clock::now();
+    ScrollbarShape shape;
     {
       Bar bar;
       const double idle = std::chrono::duration<double>(Clock::now() - scrollActive).count();
       const double alpha = barHover || barDrag ? 1.0 : std::clamp(1.0 - (idle - 1.0) / 0.4, 0.0, 1.0);
-      const int ww = shared.width.load(), wh = shared.height.load();
       if (alpha > 0 && barOf(bar)) {
-        const float width = barHover || barDrag ? 10.f : 6.f;
-        SkPaint paint;
-        paint.setAntiAlias(true);
-        if (barHover || barDrag) {
-          paint.setColor(SkColorSetARGB(40, 0, 0, 0));
-          canvas->drawRect(SkRect::MakeXYWH(ww - width - 4, 0, width + 4, wh), paint);
-        }
-        paint.setColor(SkColorSetARGB(static_cast<U8CPU>((barDrag ? 170 : 120) * alpha), 0, 0, 0));
-        canvas->drawRRect(SkRRect::MakeRectXY(SkRect::MakeXYWH(ww - width - 2, bar.top + 2, width, bar.height - 4), width / 2, width / 2), paint);
+        shape.visible = true;
+        shape.alpha = static_cast<float>(alpha);
+        shape.emphasized = barHover || barDrag;
+        shape.dragging = barDrag;
+        shape.top = static_cast<float>(bar.top);
+        shape.height = static_cast<float>(bar.height);
+        shape.windowWidth = shared.width.load();
+        shape.windowHeight = shared.height.load();
         if (alpha < 1.0 || idle < 1.4) dirty = true;
       }
     }
-    SkPixmap pixmap;
-    surface->peekPixels(&pixmap);
+    const auto rasterStart = Clock::now();
+    bool drawn = false;
+    if (gpu && frame.list) {
+      drawn = gpu->Draw(frame.list, slot->memory, static_cast<uint32_t>(slotIndex), slot->generation, pixelW, pixelH, slot->stride, density, x, y, shape);
+      if (!drawn && !gpu->ok()) {
+        std::fprintf(stderr, "the GPU's process is gone: the page draws by itself\n");
+        gpu.reset();
+      } else if (!drawn) {
+        std::fprintf(stderr, "the GPU's process did not draw: this picture is drawn by the page\n");
+      }
+    }
+    if (!drawn) {
+      sk_sp<SkSurface> surface = SkSurfaces::WrapPixels(SkImageInfo::MakeN32Premul(pixelW, pixelH), slot->memory.data(), static_cast<size_t>(slot->stride));
+      if (!surface) continue;
+      SkCanvas* canvas = surface->getCanvas();
+      canvas->resetMatrix();
+      canvas->clear(SK_ColorWHITE);
+      canvas->scale(density, density);
+      if (frame.list) painter.Draw(*frame.list, *canvas, x, y);
+      DrawScrollbar(*canvas, shape);
+    }
+    const auto rasterEnd = Clock::now();
+    const SkPixmap pixmap(SkImageInfo::MakeN32Premul(pixelW, pixelH), slot->memory.data(), static_cast<size_t>(slot->stride));
     const auto uploadStart = Clock::now();
     // The window is told of the picture (the first time of the memory with it), and shows it.
     if (!slot->announced) {

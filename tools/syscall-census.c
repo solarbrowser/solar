@@ -26,6 +26,7 @@
 struct proc {
   int used, tgid, matches, inSyscall;
   char lastPath[512], lastCall[16];
+  long lastNr; unsigned long lastArg0;
   unsigned long counts[512];
 };
 static struct proc* procs[MAXPID];
@@ -79,6 +80,8 @@ int main(int argc, char** argv) {
     if (pid < 0) break;
     if (!procs[SLOT(pid)]) { procs[SLOT(pid)] = calloc(1, sizeof(struct proc)); }
     struct proc* p = procs[SLOT(pid)];
+    if (WIFSIGNALED(status)) fprintf(out, "X %d killed by signal %d (its last system call was %ld, first argument 0x%lx)\n", pid, WTERMSIG(status), p->lastNr, p->lastArg0);
+    if (WIFEXITED(status) && WEXITSTATUS(status) != 0) fprintf(out, "X %d exit %d\n", pid, WEXITSTATUS(status));
     if (WIFEXITED(status) || WIFSIGNALED(status)) continue;
     int sig = WSTOPSIG(status);
     int deliver = 0;
@@ -94,6 +97,8 @@ int main(int argc, char** argv) {
         if (p->inSyscall) {
           if (!cmdlineKnown[SLOT(pid)]) readCmdline(pid);
           unsigned long number = r.orig_rax;
+          p->lastNr = (long)number;
+          p->lastArg0 = r.rdi;
           if (number < 512) p->counts[number]++;
           char path[512];
           unsigned long where = 0;
@@ -113,6 +118,8 @@ int main(int argc, char** argv) {
             case 83: where = r.rdi; name = "mkdir"; break;
             case 87: where = r.rdi; name = "unlink"; break;
             case 82: where = r.rdi; name = "rename"; break;
+            case 42: where = r.rsi + 2; name = "connect"; break;  /* (the path of a unix socket; an abstract one starts with a nul) */
+            case 88: where = r.rdi; name = "symlink"; break;
           }
           p->lastPath[0] = 0;
           if (name && readString(pid, where, path, sizeof path)) { fprintf(out, "P %d %s %s\n", pid, name, path); strncpy(p->lastPath, path, 511); strncpy(p->lastCall, name, 15); }

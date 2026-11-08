@@ -163,6 +163,7 @@ class Shared {
   }
   // The connections to the browser: its network (the descriptor), and the one the window's messages come on (navigations are asked on it and answered on it).
   int networkFd = -1;
+  int gpuFd = -1;  // the connection to the GPU's process, if the page has one
   bool sandboxed = false;  // the process is shut in (what it may not use, it does not)
   solar::net::ipc::Channel* browserLink = nullptr;
   // Where the answers to navigations go (the page sets it when it is ready for them; what comes before is not kept: nothing was asked yet).
@@ -195,7 +196,7 @@ class Shared {
 inline int64_t NowNs() { return std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count(); }
 
 // The compositor (on the thread that calls it) until the program ends; `link` is the connection to the window.
-void RunCompositor(Shared& shared, net::ipc::Channel& link);
+void RunCompositor(Shared& shared, net::ipc::Channel& link, int gpuFd = -1);
 // Takes what the window says (its size, what the user does, the pictures it has let go of) and gives it to the compositor; the thread ends when the connection does.
 std::thread StartWindowLink(Shared& shared, net::ipc::Channel& link);
 

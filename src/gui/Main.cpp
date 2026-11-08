@@ -69,6 +69,7 @@
 #include "Navigation.h"
 #include "RemoteAudio.h"
 #include "RemoteStorage.h"
+#include "GpuProcess.h"
 #include "Services.h"
 #include "solar/gui/Sandbox.h"
 #include "Renderer.h"
@@ -945,10 +946,11 @@ size_t LineEndAt(const std::string& s, size_t at) {
 int PageMain(Shared& shared, int argc, char** argv);
 
 // The renderer: the page and the compositor, which speak to the window through `fd`. It is a thread of the program for now (a process of its own to come); it ends with the page.
-int RendererMain(int fd, int networkFd, int argc, char** argv, bool sandboxed = false) {
+int RendererMain(int fd, int networkFd, int argc, char** argv, bool sandboxed = false, int gpuFd = -1) {
   solar::net::ipc::Channel link(fd);
   Shared shared;
   shared.sandboxed = sandboxed;
+  shared.gpuFd = gpuFd;
   solar::gui::InstallRemoteAudio(link);
   solar::gui::InstallRemoteStorage(link);
   shared.networkFd = networkFd;
@@ -1006,7 +1008,7 @@ int RendererMain(int fd, int networkFd, int argc, char** argv, bool sandboxed = 
     pthread_attr_destroy(&attributes);
   }
   std::thread fromWindow = solar::gui::StartWindowLink(shared, link);
-  solar::gui::RunCompositor(shared, link);
+  solar::gui::RunCompositor(shared, link, shared.gpuFd);
   // The page is asked to stop; one that is in the middle of a long script is not waited for for long.
   for (int i = 0; i < 100 && !shared.pageDone.load(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(10));
   if (!shared.pageDone.load()) std::_Exit(0);
@@ -1057,19 +1059,20 @@ solar::gui::SandboxPolicy RendererPolicy(const std::string& given) {
 
 // The renderer as a process of its own: the program started again with its two connections (the window's and the network's) as descriptors 3 and 4, and nothing else of the browser's
 // (every other descriptor is closed for it). It ends when the browser does.
-pid_t SpawnRenderer(int windowFd, int networkFd, const std::string& url) {
+pid_t SpawnRenderer(int windowFd, int networkFd, int gpuFd, const std::string& url) {
   char self[4096];
   const ssize_t length = ::readlink("/proc/self/exe", self, sizeof(self) - 1);
   if (length <= 0) return -1;
   self[length] = 0;
   // (The descriptors are moved out of the way of 3 and 4 first, so that putting them there does not close one of them.)
-  const int high1 = ::fcntl(windowFd, F_DUPFD_CLOEXEC, 10), high2 = ::fcntl(networkFd, F_DUPFD_CLOEXEC, 10);
+  const int high1 = ::fcntl(windowFd, F_DUPFD_CLOEXEC, 10), high2 = ::fcntl(networkFd, F_DUPFD_CLOEXEC, 10), high3 = gpuFd >= 0 ? ::fcntl(gpuFd, F_DUPFD_CLOEXEC, 10) : -1;
   if (high1 < 0 || high2 < 0) return -1;
   posix_spawn_file_actions_t actions;
   posix_spawn_file_actions_init(&actions);
   posix_spawn_file_actions_adddup2(&actions, high1, 3);
   posix_spawn_file_actions_adddup2(&actions, high2, 4);
-  posix_spawn_file_actions_addclosefrom_np(&actions, 5);
+  if (high3 >= 0) posix_spawn_file_actions_adddup2(&actions, high3, 5);
+  posix_spawn_file_actions_addclosefrom_np(&actions, high3 >= 0 ? 6 : 5);
   std::vector<std::string> words = {"solar", "--renderer", url};
   std::vector<char*> arguments;
   for (std::string& word : words) arguments.push_back(word.data());
@@ -1079,6 +1082,7 @@ pid_t SpawnRenderer(int windowFd, int networkFd, const std::string& url) {
   posix_spawn_file_actions_destroy(&actions);
   ::close(high1);
   ::close(high2);
+  if (high3 >= 0) ::close(high3);
   return status == 0 ? child : -1;
 }
 
@@ -1103,8 +1107,10 @@ int main(int argc, char** argv) {
         return 1;
       }
     }
-    return RendererMain(3, 4, argc > 2 ? 2 : 1, pageArguments, true);
+    const int gpuFd = ::fcntl(5, F_GETFD) >= 0 ? 5 : -1;
+    return RendererMain(3, 4, argc > 2 ? 2 : 1, pageArguments, true, gpuFd);
   }
+  if (argc >= 2 && std::strcmp(argv[1], "--gpu") == 0) return solar::gui::GpuMain(3);
   if (!SDL_Init(SDL_INIT_VIDEO)) {
     std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
     return 1;
@@ -1127,11 +1133,20 @@ int main(int argc, char** argv) {
   }
   SDL_StartTextInput(window);
   // The pages are processes of their own (the session starts them: the first for the address, another where a navigation goes to another site).
+  // The GPU's process, which the pages' pictures are drawn by where there is a GPU to draw with (else they draw them themselves, with the CPU).
+  std::string gpuWhy;
+  std::unique_ptr<solar::gui::GpuHost> gpuHost = solar::gui::GpuHost::Start(&gpuWhy);
+  if (std::getenv("SOLAR_GUI_TIMES")) {
+    if (gpuHost) std::fprintf(stderr, "gpu: %s (in a process of its own)\n", gpuHost->renderer().c_str());
+    else std::fprintf(stderr, "gpu: none (%s): the pages draw with the CPU\n", gpuWhy.c_str());
+  }
   solar::gui::Launcher launcher;
   launcher.start = [&](int windowFd, int networkFd, const std::string& url) -> long {
-    const pid_t child = SpawnRenderer(windowFd, networkFd, url);
+    const int gpuFd = gpuHost ? gpuHost->NewClient() : -1;
+    const pid_t child = SpawnRenderer(windowFd, networkFd, gpuFd, url);
     ::close(windowFd);
     ::close(networkFd);
+    if (gpuFd >= 0) ::close(gpuFd);
     return child;
   };
   launcher.finish = [](long child) -> int {

@@ -138,13 +138,21 @@ struct PlayerState {
   bool fullscreen = false;
 };
 
-class Player {
+// What a picture of a video is drawn from: the player of this process, or what stands for it where the picture is drawn in another (the GPU's process: it is given the frames and the state).
+class VideoSource {
+ public:
+  virtual ~VideoSource() = default;
+  virtual PlayerState State() = 0;
+  virtual std::shared_ptr<const VideoFrame> Frame() = 0;
+};
+
+class Player : public VideoSource {
  public:
   // Starts playing from the stream (paused). `changed` is called, from any thread, when the state or the events have something new.
   static std::shared_ptr<Player> Create(std::shared_ptr<ByteStream> stream, std::function<void()> changed);
   // The same over a MediaSource (media/Mse.h): what plays is what the page has appended.
   static std::shared_ptr<Player> CreateMse(std::shared_ptr<class MseSource> source, std::function<void()> changed);
-  ~Player();
+  ~Player() override;
   Player(const Player&) = delete;
   Player& operator=(const Player&) = delete;
 
@@ -160,11 +168,11 @@ class Player {
   void SetControlsVisible(bool visible);
   void SetFullscreen(bool fullscreen);
 
-  PlayerState State();
+  PlayerState State() override;
   // The events there have been since the last call, by the names of the media events ("loadedmetadata", "canplay", "seeked", "ended", ...), in order.
   std::vector<std::string> TakeEvents();
   // The picture to show now (the clock decides), or null if there is none yet. Cheap; call it when drawing.
-  std::shared_ptr<const VideoFrame> Frame();
+  std::shared_ptr<const VideoFrame> Frame() override;
   // Whether the player is playing (the program keeps drawing while one is).
   bool playing() const { return playing_.load(); }
 

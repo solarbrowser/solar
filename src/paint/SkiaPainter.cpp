@@ -355,7 +355,7 @@ struct SkiaPainter::Impl {
     uint64_t serial = 0;
     sk_sp<SkImage> image;
   };
-  std::unordered_map<const media::Player*, VideoPicture> videoPictures;
+  std::unordered_map<const media::VideoSource*, VideoPicture> videoPictures;
 
 
   // The controls of a video that has the attribute (https://html.spec.whatwg.org/multipage/media.html#user-interface): a bar over the bottom of the picture, with play or pause,

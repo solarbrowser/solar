@@ -31,7 +31,7 @@ P
 ./solar "file://$dir/page.html" > "$dir/out2.txt" 2>&1 &
 browser=$!
 sleep 2.5
-renderer=$(pgrep -P $browser | head -1)
+renderer=$(pgrep -P $browser -f -- --renderer | head -1)
 check "the page is another process" "$([ -n "$renderer" ] && [ "$renderer" != "$browser" ] && echo ok)"
 fds=$(ls /proc/$renderer/fd 2>/dev/null | wc -l)
 check "it has few descriptors ($fds)" "$([ "$fds" -le 12 ] && echo ok)"
@@ -45,6 +45,15 @@ check "it has no new privileges" "$(echo "$status" | grep -q '^NoNewPrivs:[[:spa
 check "it has no capabilities" "$(echo "$status" | grep -q '^CapEff:[[:space:]]*0000000000000000' && echo ok)"
 check "it is in a network namespace of its own" "$([ "$(readlink /proc/$renderer/ns/net)" != "$(readlink /proc/$browser/ns/net)" ] && echo ok)"
 
+# The GPU's process (the pages' pictures are drawn there where there is a GPU) is shut in too.
+gpu=$(pgrep -P $browser -f -- --gpu | head -1)
+if [ -n "$gpu" ]; then
+  gstatus=$(cat /proc/$gpu/status 2>/dev/null)
+  check "the GPU's process has a system call filter" "$(echo "$gstatus" | grep -q '^Seccomp:[[:space:]]*2' && echo ok)"
+  check "no new privileges and no capabilities" "$(echo "$gstatus" | grep -q '^NoNewPrivs:[[:space:]]*1' && echo "$gstatus" | grep -q '^CapEff:[[:space:]]*0000000000000000' && echo ok)"
+  check "a network namespace of its own" "$([ "$(readlink /proc/$gpu/ns/net)" != "$(readlink /proc/$browser/ns/net)" ] && echo ok)"
+fi
+
 # A page that goes ends the browser.
 kill -9 $renderer
 for i in $(seq 1 20); do kill -0 $browser 2>/dev/null || break; sleep 0.25; done
@@ -55,7 +64,7 @@ wait $browser 2>/dev/null
 ./solar "file://$dir/page.html" > "$dir/out3.txt" 2>&1 &
 browser=$!
 sleep 2.5
-renderer=$(pgrep -P $browser | head -1)
+renderer=$(pgrep -P $browser -f -- --renderer | head -1)
 kill -9 $browser
 sleep 1
 check "the page's process ends when the browser does" "$(kill -0 $renderer 2>/dev/null || echo ok)"
@@ -65,7 +74,7 @@ wait $browser 2>/dev/null
 ./solar "file://$dir/page.html" > "$dir/out4.txt" 2>&1 &
 browser=$!
 sleep 2.5
-renderer=$(pgrep -P $browser | head -1)
+renderer=$(pgrep -P $browser -f -- --renderer | head -1)
 kill -TERM $browser
 for i in $(seq 1 20); do kill -0 $browser 2>/dev/null || break; sleep 0.25; done
 check "closing the window ends the browser" "$(kill -0 $browser 2>/dev/null || echo ok)"

@@ -150,6 +150,7 @@ std::shared_ptr<Face> Face::OpenFile(const std::string& path, unsigned index) {
   result->impl_ = std::make_unique<Impl>();
   result->impl_->blob = blob;
   result->impl_->face = hb_face_create(blob, index);
+  result->path_ = path;
   return Finish(std::move(result));
 }
 

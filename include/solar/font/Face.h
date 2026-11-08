@@ -111,6 +111,8 @@ class Face : public std::enable_shared_from_this<Face> {
   const std::vector<Axis>& Variations() const { return variations_; }
   // A face of a file on disk (mapped, not copied).
   static std::shared_ptr<Face> OpenFile(const std::string& path, unsigned index = 0);
+  // The file it was opened from (a variation of one has its parent's), empty for a face made of bytes (a web font).
+  const std::string& SourcePath() const { return parent_ ? parent_->SourcePath() : path_; }
 
  private:
   Face() = default;
@@ -120,6 +122,7 @@ class Face : public std::enable_shared_from_this<Face> {
   std::shared_ptr<const Face> parent_;  // the face a variation is of
   std::vector<Axis> variations_;
   std::string data_;
+  std::string path_;
   Description description_;
   Metrics metrics_;
   std::unique_ptr<Impl> impl_;
