@@ -15,6 +15,8 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace solar::dom {
 
@@ -135,10 +137,115 @@ static uint64_t g_nameVersion = 1;
 static uint64_t g_baseVersion = 1;
 uint64_t NameVersion() { return g_nameVersion; }
 uint64_t BaseVersion() { return g_baseVersion; }
-static void NoteAttributeName(const Attr* attribute) {
+// What the elements of a document that are in its tree are found by, kept as they come and go, so that a name is not looked for by walking the whole tree: by id (in the order of
+// the tree), and the elements that may have a name that is not an id (a name attribute, an object with an id). The ids are looked at again when asked for, for the elements whose
+// attributes were touched or that came into the tree since.
+namespace {
+struct IdIndex {
+  std::unordered_map<std::string, std::vector<Element*>> byId;
+  std::unordered_map<Element*, std::string> idOf;  // the id an element is in byId by
+  std::unordered_set<Element*> dirty;              // those to look at again
+  std::unordered_set<Element*> nameCandidates;
+};
+std::unordered_map<const Document*, IdIndex>& IdIndexes() {
+  static std::unordered_map<const Document*, IdIndex> indexes;
+  return indexes;
+}
+bool IsNameCandidate(const Element* element) {
+  bool hasId = false;
+  for (const Attr* attribute : element->attributes) {
+    if (!attribute->namespaceUri.empty()) continue;
+    if (attribute->localName == "name") return true;
+    if (attribute->localName == "id") hasId = true;
+  }
+  return hasId && element->IsHtml("object");
+}
+Document* DocumentOfTree(const Node* node) {
+  while (node->parentNode) node = node->parentNode;
+  return node->IsDocument() ? const_cast<Document*>(static_cast<const Document*>(node)) : nullptr;
+}
+void DropFromId(IdIndex& index, Element* element) {
+  const auto at = index.idOf.find(element);
+  if (at == index.idOf.end()) return;
+  const auto bucket = index.byId.find(at->second);
+  if (bucket != index.byId.end()) {
+    bucket->second.erase(std::remove(bucket->second.begin(), bucket->second.end(), element), bucket->second.end());
+    if (bucket->second.empty()) index.byId.erase(bucket);
+  }
+  index.idOf.erase(at);
+}
+void SyncIds(IdIndex& index) {
+  if (index.dirty.empty()) return;
+  std::vector<std::vector<Element*>*> touched;
+  for (Element* element : index.dirty) {
+    const Attr* attribute = element->FindAttribute("", "id");
+    const std::string now = attribute ? attribute->value : std::string();
+    const auto at = index.idOf.find(element);
+    if (at != index.idOf.end()) {
+      if (at->second == now) continue;
+      DropFromId(index, element);
+    }
+    if (now.empty()) continue;
+    std::vector<Element*>& bucket = index.byId[now];
+    bucket.push_back(element);
+    index.idOf[element] = now;
+    if (bucket.size() > 1) touched.push_back(&bucket);
+  }
+  index.dirty.clear();
+  for (std::vector<Element*>* bucket : touched) {
+    std::sort(bucket->begin(), bucket->end(), [](Element* a, Element* b) { return (CompareDocumentPosition(a, b) & kFollowing) != 0; });
+  }
+}
+// `add`: the elements of the subtree are to be looked at; otherwise they go out of the index.
+void NoteNamedSubtree(Node* root, Document* document, bool add) {
+  if (!document) return;
+  IdIndex& index = IdIndexes()[document];
+  for (Node* n = root; n; n = n->NextInTree(root)) {
+    if (!n->IsElement()) continue;
+    Element* element = static_cast<Element*>(n);
+    if (add) {
+      index.dirty.insert(element);
+      if (IsNameCandidate(element)) index.nameCandidates.insert(element);
+    } else {
+      index.dirty.erase(element);
+      DropFromId(index, element);
+      index.nameCandidates.erase(element);
+    }
+  }
+}
+}  // namespace
+Element* ElementById(Document* document, const std::string& id) {
+  const auto found = IdIndexes().find(document);
+  if (found == IdIndexes().end()) return nullptr;
+  SyncIds(found->second);
+  const auto bucket = found->second.byId.find(id);
+  return bucket == found->second.byId.end() || bucket->second.empty() ? nullptr : bucket->second.front();
+}
+const std::vector<Element*>* ElementsById(Document* document, const std::string& id) {
+  const auto found = IdIndexes().find(document);
+  if (found == IdIndexes().end()) return nullptr;
+  SyncIds(found->second);
+  const auto bucket = found->second.byId.find(id);
+  return bucket == found->second.byId.end() ? nullptr : &bucket->second;
+}
+const std::unordered_set<Element*>* NameCandidates(Document* document) {
+  static const std::unordered_set<Element*> none;
+  const auto found = IdIndexes().find(document);
+  return found == IdIndexes().end() ? &none : &found->second.nameCandidates;
+}
+void ForgetNamedElements(Document* document) { IdIndexes().erase(document); }
+static void NoteAttributeName(const Attr* attribute, Element* element = nullptr) {
   if (!attribute->namespaceUri.empty()) return;
-  if (attribute->localName == "id" || attribute->localName == "name") ++g_nameVersion;
-  else if (attribute->localName == "href" && (!attribute->ownerElement || attribute->ownerElement->IsHtml("base"))) ++g_baseVersion;
+  if (attribute->localName == "id" || attribute->localName == "name") {
+    ++g_nameVersion;
+    if (element) {
+      if (Document* document = DocumentOfTree(element)) {
+        IdIndex& index = IdIndexes()[document];
+        index.dirty.insert(element);
+        index.nameCandidates.insert(element);
+      }
+    }
+  } else if (attribute->localName == "href" && (!attribute->ownerElement || attribute->ownerElement->IsHtml("base"))) ++g_baseVersion;
 }
 // Whether linking or unlinking the node can change what an id or a name finds, or the base.
 static void NoteSubtreeLinked(const Node* node) {
@@ -277,6 +384,7 @@ void DisposeDocument(Document* document) {
   if (!document) return;
   TellGone(document, 0);
   ForgetNameIndex(document);
+  ForgetNamedElements(document);
   // Every node that hangs from it, through the children, the shadow trees and the contents of templates.
   std::vector<Node*> all;
   std::vector<Node*> pending = {document};
@@ -691,6 +799,7 @@ std::optional<DomError> Validate(Node* node, Node* parent, Node* child, bool rep
 
 void Unlink(Node* node) {
   NoteSubtreeLinked(node);
+  if (node->parentNode) NoteNamedSubtree(node, DocumentOfTree(node->parentNode), false);
   NoteTreeChangeAt(node->parentNode);
   NoteDamage(node->parentNode, kDamageChildren);
   Node* parent = node->parentNode;
@@ -720,6 +829,7 @@ void Unlink(Node* node) {
 
 void Link(Node* node, Node* parent, Node* child) {
   NoteSubtreeLinked(node);
+  NoteNamedSubtree(node, DocumentOfTree(parent), true);
   NoteTreeChangeAt(parent);
   NoteDamage(parent, kDamageChildren);
   MarkLinks(node);
@@ -1066,7 +1176,7 @@ void AppendCharacterData(CharacterData* node, std::string_view data) {
 }
 
 void SetAttrValue(Attr* attribute, std::string value) {
-  NoteAttributeName(attribute);
+  NoteAttributeName(attribute, attribute->ownerElement);
   Element* owner = attribute->ownerElement;
   if (owner && HasMutationObservers()) QueueAttributeRecord(owner, attribute->localName, attribute->namespaceUri, attribute->value);
   const std::string old = attribute->value;
@@ -1085,7 +1195,7 @@ void SetAttrValue(Attr* attribute, std::string value) {
 }
 
 void AppendAttr(Element* element, Attr* attribute) {
-  NoteAttributeName(attribute);
+  NoteAttributeName(attribute, element);
   attribute->ownerElement = element;
   attribute->nodeDocument = element->nodeDocument;
   element->attributes.push_back(attribute);
@@ -1425,7 +1535,7 @@ std::optional<DomError> SetAttribute(Context& ctx, Element* element, std::string
 std::optional<DomError> SetAttributeNode(Element* element, Attr* attribute, Attr*& replaced) {
   replaced = nullptr;
   if (attribute->ownerElement && attribute->ownerElement != element) return DomError{"InUseAttributeError", "The attribute is in use by another element"};
-  NoteAttributeName(attribute);
+  NoteAttributeName(attribute, element);
   Attr* old = element->FindAttribute(attribute->namespaceUri, attribute->localName);
   if (old == attribute) {
     replaced = attribute;
@@ -1455,7 +1565,7 @@ std::optional<DomError> SetAttributeNode(Element* element, Attr* attribute, Attr
 }
 
 void RemoveAttributeNode(Element* element, Attr* attribute) {
-  NoteAttributeName(attribute);
+  NoteAttributeName(attribute, element);
   if (HasMutationObservers()) QueueAttributeRecord(element, attribute->localName, attribute->namespaceUri, attribute->value);
   element->attributes.erase(std::find(element->attributes.begin(), element->attributes.end(), attribute));
   attribute->ownerElement = nullptr;

@@ -14,6 +14,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 #include "quanta/Embed.h"
@@ -522,6 +523,12 @@ Attr* NewAttr(Quanta::Context& ctx, Document* document, std::string_view namespa
 uint64_t TreeVersion();
 // Moves when a name or an id can be found by something else (see WindowNamedElements).
 uint64_t NameVersion();
+// The elements of a document that are in its tree, found by their ids, kept as they come and go (not by walking the tree): the first in the order of the tree, or all of them.
+Element* ElementById(Document* document, const std::string& id);
+const std::vector<Element*>* ElementsById(Document* document, const std::string& id);
+// The elements that may have a name that is not an id (a name attribute, an object that has an id): more than those that do, unordered.
+const std::unordered_set<Element*>* NameCandidates(Document* document);
+void ForgetNamedElements(Document* document);
 // Moves when the base of a document (its first base element, or that one's href) can have changed.
 uint64_t BaseVersion();
 // How many nodes are alive (made and not yet collected), for looking for what keeps a page after it was left.

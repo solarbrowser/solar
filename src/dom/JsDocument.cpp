@@ -319,7 +319,10 @@ Value GetElementById(Context& ctx, Value t, qe::Args args, Value) {
   if (!self || Missing(ctx, args, 1, "Document", "getElementById")) return qe::Undefined();
   const std::string id = qe::ToWtf8(ctx, args[0]);
   if (qe::HasException(ctx)) return qe::Undefined();
-  return id.empty() ? qe::Null() : NodeValue(FindById(self, id));
+  if (id.empty()) return qe::Null();
+  // (A document finds an id by its index, not by walking its tree.)
+  if (self->IsDocument()) return NodeValue(ElementById(static_cast<Document*>(self), id));
+  return NodeValue(FindById(self, id));
 }
 
 // ---- DOMImplementation ----
@@ -445,7 +448,8 @@ namespace {
 struct NameIndex {
   uint64_t tree = 0, document = 0;
   bool built = false;
-  std::unordered_map<std::string, std::vector<Element*>> window, named;
+  std::unordered_map<std::string, std::vector<Element*>> byName, named;  // the elements by a name that is not their id (window), and those document.x finds
+  std::unordered_map<std::string, std::vector<Element*>> windowMerged;   // what window[name] is, worked out when asked for
 };
 std::unordered_map<const Document*, NameIndex>& NameIndexes() {
   static std::unordered_map<const Document*, NameIndex> indexes;
@@ -454,16 +458,15 @@ std::unordered_map<const Document*, NameIndex>& NameIndexes() {
 const NameIndex& NameIndexOf(Document* document) {
   NameIndex& index = NameIndexes()[document];
   if (index.built && index.tree == NameVersion()) return index;
-  index.window.clear();
+  index.byName.clear();
   index.named.clear();
+  index.windowMerged.clear();
   static uint64_t builds = 0;
   static double buildMs = 0;
   const auto began = std::chrono::steady_clock::now();
-  for (Node* node = document->NextInTree(document); node; node = node->NextInTree(document)) {
-    if (!node->IsElement()) continue;
-    Element* element = static_cast<Element*>(node);
+  // (The elements that can have a name are kept by the tree as they come and go: the walk of all of it this was is not made.)
+  for (Element* element : *NameCandidates(document)) {
     if (element->attributes.empty()) continue;
-    // (One look at the attributes: most elements have neither an id nor a name.)
     const Attr* id = nullptr;
     const Attr* name = nullptr;
     for (const Attr* attribute : element->attributes) {
@@ -472,18 +475,24 @@ const NameIndex& NameIndexOf(Document* document) {
       else if (attribute->localName == "name") name = attribute;
     }
     if (!id && !name) continue;
-    if (id && !id->value.empty()) index.window[id->value].push_back(element);
     if (element->IsHtml()) {
       const std::string& tag = element->localName;
       const bool named = tag == "embed" || tag == "form" || tag == "img" || tag == "object";
       // (An element that has the same name as its id is one, not two.)
-      if (named && name && !name->value.empty() && !(id && id->value == name->value)) index.window[name->value].push_back(element);
+      if (named && name && !name->value.empty() && !(id && id->value == name->value)) index.byName[name->value].push_back(element);
       std::vector<std::string> names;
       DocumentNamesOf(element, names);
       for (const std::string& each : names) {
         std::vector<Element*>& list = index.named[each];
         if (list.empty() || list.back() != element) list.push_back(element);
       }
+    }
+  }
+  // (Those that came in any order are put in the order of the tree where more than one has a name: that is what a collection of them is in.)
+  const auto inTreeOrder = [](Element* a, Element* b) { return (CompareDocumentPosition(a, b) & kFollowing) != 0; };
+  for (auto* map : {&index.byName, &index.named}) {
+    for (auto& entry : *map) {
+      if (entry.second.size() > 1) std::sort(entry.second.begin(), entry.second.end(), inTreeOrder);
     }
   }
   ++builds;
@@ -498,9 +507,20 @@ const NameIndex& NameIndexOf(Document* document) {
 void ForgetNameIndex(Document* document) { NameIndexes().erase(document); }
 
 const std::vector<Element*>* WindowNamedElements(Document* document, const std::string& name) {
-  const NameIndex& index = NameIndexOf(document);
-  const auto found = index.window.find(name);
-  return found == index.window.end() ? nullptr : &found->second;
+  NameIndex& index = const_cast<NameIndex&>(NameIndexOf(document));
+  const auto cached = index.windowMerged.find(name);
+  if (cached != index.windowMerged.end()) return cached->second.empty() ? nullptr : &cached->second;
+  // (The elements that have it as an id, and those that have it as a name: in the order of the tree.)
+  std::vector<Element*> merged;
+  if (const std::vector<Element*>* byId = ElementsById(document, name)) merged = *byId;
+  const auto byName = index.byName.find(name);
+  if (byName != index.byName.end()) {
+    merged.insert(merged.end(), byName->second.begin(), byName->second.end());
+    std::sort(merged.begin(), merged.end(), [](Element* a, Element* b) { return (CompareDocumentPosition(a, b) & kFollowing) != 0; });
+  }
+  std::vector<Element*>& stored = index.windowMerged[name];
+  stored = std::move(merged);
+  return stored.empty() ? nullptr : &stored;
 }
 
 bool Document::NamedGetter(Context& ctx, Document& self, const std::string& name, Value& out) {
