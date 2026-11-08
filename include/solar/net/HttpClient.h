@@ -65,6 +65,11 @@ class FetchHandler {
   // The client wants to ask for the response again, from the start, because it stopped coming (no byte for a while). A handler that keeps what it was given in one place and
   // can take it away says true after it has (OnResponseHead and OnBody come again); the default keeps what the handler has seen as it is: the fetch goes on to its end or its timeout.
   virtual bool OnRestart() { return false; }
+  // A handler that cannot answer at once whether the response may be asked for again (it is in another thread, or process) says so, and is told by OnRestartRequested when the
+  // response stalls; the fetch waits (nothing else does) for NetworkService::AnswerRestart, and asks again if it is allowed (the handler has then dropped what it had, as OnRestart
+  // has it do), or goes on as it was if not.
+  virtual bool DefersRestarts() const { return false; }
+  virtual void OnRestartRequested() {}
 };
 
 // What a redirect response does to a fetch (Fetch Standard, request's redirect mode).
@@ -142,6 +147,8 @@ class FetchHandle {
  public:
   FetchHandle() = default;
   void Cancel();
+  // The number the service knows the fetch by.
+  uint64_t id() const { return id_; }
 
  private:
   friend class NetworkService;
@@ -163,8 +170,15 @@ class NetworkService {
   virtual void Cancel(uint64_t id) = 0;
   // The answer to OnReceiveRedirect of the fetch with that number: go on to the redirect's address with `headers`, or (`follow` false) end the fetch.
   virtual void FollowRedirect(uint64_t id, bool follow, std::vector<std::pair<std::string, std::string>> headers = {}) = 0;
+  // The answer to OnRestartRequested of the fetch with that number.
+  virtual void AnswerRestart(uint64_t id, bool allow) = 0;
   // Closes the connections waiting in the pool.
   virtual void CloseIdleConnections() = 0;
+  // What a service that makes the handles of its own needs: the handle is made by the service, which is the only one to know what a number means.
+ protected:
+  static FetchHandle MakeHandle(NetworkService* service, uint64_t id) { return FetchHandle(service, id); }
+
+ public:
   // (Until WebSocket goes through the service as well: the client whose loop, lookups and cookies it makes its connections with. Null for a service that has none.)
   virtual HttpClient* Http() { return nullptr; }
 };
@@ -185,6 +199,7 @@ class HttpClient : public NetworkService {
   FetchHandle Fetch(const url::Url& url, FetchHandler& handler, FetchOptions options = {}) override;
   void Cancel(uint64_t id) override;
   void FollowRedirect(uint64_t id, bool follow, std::vector<std::pair<std::string, std::string>> headers = {}) override;
+  void AnswerRestart(uint64_t id, bool allow) override;
   HttpClient* Http() override { return this; }
 
   // Closes the connections waiting in the pool.

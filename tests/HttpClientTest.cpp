@@ -236,7 +236,57 @@ class Deferring : public solar::net::FetchHandler {
   std::function<void()> onRedirect;
 };
 
+// A handler that is asked, when the response stalls, and answers later.
+class DeferringRestart : public solar::net::FetchHandler {
+ public:
+  bool DefersRestarts() const override { return true; }
+  void OnRestartRequested() override {
+    ++requests;
+    if (onRequest) onRequest();
+  }
+  bool OnRestart() override {
+    ++syncCalls;
+    return false;
+  }
+  void OnResponseHead(const HttpResponseHead& head, const solar::url::Url&) override { status = head.status; }
+  void OnBody(std::span<const uint8_t> data) override { body.append(reinterpret_cast<const char*>(data.data()), data.size()); }
+  void OnEnd() override { ended = true; }
+  void OnError(std::string_view message) override { error = std::string(message); }
+  int requests = 0, syncCalls = 0, status = 0;
+  std::string body;
+  bool ended = false;
+  std::optional<std::string> error;
+  std::function<void()> onRequest;
+};
+
 int main() {
+  // ---- A restart answered later ----
+  for (const bool allow : {true, false}) {
+    std::atomic<int> connections{0};
+    TestServer server([&](int client) {
+      const int n = ++connections;
+      const std::string head = TestServer::ReadHead(client);
+      if (head.empty()) return;
+      if (n == 1) {
+        TestServer::WaitForClose(client);  // (the first connection never answers)
+        return;
+      }
+      TestServer::SendAll(client, Response("200 OK", "second"));
+    });
+    Session s;
+    DeferringRestart handler;
+    solar::net::FetchHandle handle;
+    FetchOptions options;
+    options.stall = std::chrono::milliseconds(150);
+    options.timeout = std::chrono::milliseconds(1500);
+    handler.onRequest = [&] { s.loop->Post([&, allow] { s.client->AnswerRestart(handle.id(), allow); }); };
+    handle = s.client->Fetch(*solar::url::Parse(Origin(server) + "/slow"), handler, options);
+    s.loop->Run();
+    const std::string which = allow ? "allowed" : "refused";
+    Check("a stall is asked of a handler that defers, not told to it (" + which + ")", handler.requests >= 1 && handler.syncCalls == 0, std::to_string(handler.requests));
+    if (allow) Check("the response is asked for again when it is allowed", handler.ended && handler.body == "second" && connections.load() == 2, handler.error.value_or(handler.body));
+    else Check("the fetch goes on as it was when it is refused (and ends by its time)", !handler.ended && handler.error.has_value() && connections.load() == 1, handler.error.value_or("ended"));
+  }
   // ---- A redirect answered later ----
   {
     Log log;

@@ -203,6 +203,8 @@ struct Exchange : Http1ResponseParser::Sink, Http2Stream {
   FetchOptions options;
   url::Url current;
   int redirects = 0;
+  bool awaitingRestart = false;            // the handler is to say whether the response is asked for again (see FetchHandler::DefersRestarts)
+  std::optional<std::string> closedWhileAwaiting;  // the stalled connection ended meanwhile, and what is to be said if the answer is no
   bool awaitingRedirect = false;           // the handler is to say whether the redirect is followed (see FetchHandler::DefersRedirects)
   std::optional<url::Url> pendingNext;     // where it goes
   std::string method;                      // as sent: normalized, and changed by a redirect that turns a POST into a GET
@@ -243,6 +245,7 @@ struct Exchange : Http1ResponseParser::Sink, Http2Stream {
   int restarts = 0;
   void ArmStall();
   bool TryRestart();
+  void Restart();
 
   Exchange(HttpClient::Impl& i, uint64_t identifier, FetchHandler& h, FetchOptions o, const url::Url& u)
       : impl(i), id(identifier), handler(h), options(std::move(o)), current(u) {}
@@ -769,7 +772,10 @@ void Exchange::OnConnectionClosed(int error, const std::string& failure) {
   conn = nullptr;
   streamId = 0;
   if (finished) return;
-  if (wasStalled && TryRestart()) return;
+  if (wasStalled && TryRestart()) {
+    if (awaitingRestart) closedWhileAwaiting = failure.empty() ? "connection closed" : failure;
+    return;
+  }
   if (reusedConnection && !anyResponseByte && !staleRetried) {
     // An idle connection the server had already closed. Nothing of a response came, so it is very
     // likely the request was never looked at, and browsers ask again whatever the method.
@@ -918,7 +924,19 @@ void Exchange::ArmStall() {
 
 bool Exchange::TryRestart() {
   if (finished || restarts >= 2 || (method != "GET" && method != "HEAD") || body || inHandler > 0) return false;
+  if (handler.DefersRestarts()) {
+    if (awaitingRestart) return true;  // (asked already)
+    awaitingRestart = true;
+    HandlerCall held(*this);
+    handler.OnRestartRequested();
+    return true;
+  }
   if (!handler.OnRestart()) return false;
+  Restart();
+  return true;
+}
+
+void Exchange::Restart() {
   ++restarts;
   if (std::getenv("SOLAR_NET_DEBUG")) std::fprintf(stderr, "  net: no byte for %lld ms from %s, asked for again (%d)\n", static_cast<long long>(options.stall.count()), (current.host ? current.host->c_str() : "?"), restarts);
   HttpConnection* old = conn;
@@ -933,7 +951,6 @@ bool Exchange::TryRestart() {
   staleRetried = false;
   StartHop(false);
   if (old && old->users.empty() && !old->dead) old->Close();
-  return true;
 }
 
 void Exchange::Fail(const std::string& message) {
@@ -1137,6 +1154,20 @@ void HttpClient::FollowRedirect(uint64_t id, bool follow, std::vector<std::pair<
   exchange.current = std::move(*exchange.pendingNext);
   exchange.pendingNext.reset();
   exchange.StartHop(false);
+}
+
+void HttpClient::AnswerRestart(uint64_t id, bool allow) {
+  auto it = impl_->exchanges.find(id);
+  if (it == impl_->exchanges.end()) return;
+  internal::Exchange& exchange = *it->second;
+  if (exchange.finished || !exchange.awaitingRestart) return;
+  exchange.awaitingRestart = false;
+  if (allow) {
+    exchange.closedWhileAwaiting.reset();
+    exchange.Restart();
+  } else if (exchange.closedWhileAwaiting) {
+    exchange.Fail(*exchange.closedWhileAwaiting);
+  }
 }
 
 void FetchHandle::Cancel() {
