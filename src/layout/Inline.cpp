@@ -168,18 +168,26 @@ struct TextData {
   std::vector<Run> runs;
   double size = 16;
   double letterSpacing = 0, wordSpacing = 0;
+  // The width of the glyphs before each byte, made when the first width is asked (the runs do not change after they are shaped): any [b, e) is then a difference.
+  mutable std::vector<long double> widthBefore;
 };
 
 // How wide [b, e) of the box's text is.
 double WidthOf(const TextData& data, size_t b, size_t e) {
-  double width = 0;
-  for (const Run& run : data.runs) {
-    if (run.end <= b || run.begin >= e) continue;
-    for (const font::Glyph& g : run.glyphs) {
-      if (g.cluster >= b && g.cluster < e) width += g.advance * data.size + data.letterSpacing;
+  if (data.widthBefore.empty()) {
+    const size_t size = data.box ? data.box->processed.size() : 0;
+    std::vector<long double> before(size + 2, 0);
+    for (const Run& run : data.runs) {
+      for (const font::Glyph& g : run.glyphs) {
+        if (g.cluster <= size) before[g.cluster + 1] += g.advance * data.size + data.letterSpacing;
+      }
     }
+    for (size_t i = 1; i < before.size(); ++i) before[i] += before[i - 1];
+    data.widthBefore = std::move(before);
   }
-  return width;
+  const size_t last = data.widthBefore.size() - 1;
+  const size_t from = std::min(b, last), to = std::min(e, last);
+  return to > from ? static_cast<double>(data.widthBefore[to] - data.widthBefore[from]) : 0;
 }
 
 struct Atom {

@@ -238,7 +238,7 @@ BidiResult ResolveBidi(const std::u32string& text, int baseLevel) {
   auto& table = kept.byText[baseLevel < 0 ? 0 : baseLevel > 2 ? 2 : baseLevel];
   const auto found = table.find(text);
   if (found != table.end()) return found->second;
-  if (kept.bytes > (static_cast<size_t>(24) << 20)) {
+  if (kept.bytes > (static_cast<size_t>(8) << 20)) {
     for (auto& t : kept.byText) t.clear();
     kept.bytes = 0;
   }

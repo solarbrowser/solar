@@ -45,7 +45,7 @@ std::vector<char> FindLineBreaks(std::string_view text, const LineBreakOptions& 
   auto& table = kept.byText[static_cast<int>(options.strictness)][static_cast<int>(options.words)][options.japaneseOrChinese ? 1 : 0];
   const auto found = table.find(std::string(text));
   if (found != table.end()) return found->second;
-  if (kept.bytes > (static_cast<size_t>(24) << 20)) {
+  if (kept.bytes > (static_cast<size_t>(8) << 20)) {
     for (auto& a : kept.byText) for (auto& b : a) for (auto& c : b) c.clear();
     kept.bytes = 0;
   }

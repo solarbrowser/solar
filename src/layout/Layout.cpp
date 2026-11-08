@@ -177,6 +177,9 @@ void VerifyAgainstFresh(Quanta::Context& ctx, dom::Document* document, const css
 const char* g_layoutCause = "?";
 void SetLayoutCause(const char* cause) { g_layoutCause = cause; }
 double g_layoutMs = 0;
+namespace {
+struct LayoutTotals { uint64_t calls = 0; ~LayoutTotals() { if (std::getenv("SOLAR_LAYOUT_DEBUG")) std::fprintf(stderr, "layout total: %.0f ms in %llu real layouts\n", g_layoutMs, (unsigned long long)calls); } } g_totals;
+}
 double LayoutMillis() { return g_layoutMs; }
 
 namespace {
@@ -336,9 +339,25 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
           LayoutRoot(strict);
           break;
         }
+        // (The boxes under it that were kept for two ways too are as likely to be left so: they are marked now, not one level at each round.)
+        std::vector<Box*> stack;
         for (Box* b : unsettled) {
           b->memoStrict = true;
           if (b->node && b->node->IsElement()) static_cast<dom::Element*>(b->node)->layoutMemoStrict = true;
+          stack.push_back(b);
+        }
+        while (!stack.empty()) {
+          Box* b = stack.back();
+          stack.pop_back();
+          for (auto& child : b->children) {
+            Box* c = child.get();
+            if (c->kind != Box::Kind::Block) continue;
+            if (!c->memoStrict && c->memos[0].valid && c->memos[1].valid) {
+              c->memoStrict = true;
+              if (c->node && c->node->IsElement()) static_cast<dom::Element*>(c->node)->layoutMemoStrict = true;
+            }
+            stack.push_back(c);
+          }
         }
         tree->memoInconsistent.clear();
         LayoutRoot(lc);
@@ -392,6 +411,7 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
   ApplySticky(*tree);
   document->layoutTree = tree;
   g_layoutCause = "?";
+  ++g_totals.calls;
   if (getenv("SOLAR_VERIFY") && previous && (previous->damaged || getenv("SOLAR_NOREUSE"))) VerifyAgainstFresh(ctx, document, environment, *tree);
   return tree.get();
 }
