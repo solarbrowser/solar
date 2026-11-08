@@ -11,6 +11,7 @@
 #include <memory>
 
 #include "solar/net/HttpClient.h"
+#include "solar/net/PageFetch.h"
 #include "solar/url/Parser.h"
 #include "solar/web/FetchHost.h"
 
@@ -26,15 +27,24 @@ char g_key;
 
 struct State;
 
-struct Transfer final : net::FetchHandler {
+struct Transfer final : net::PageFetchHandler {
   State* owner = nullptr;
   uint32_t id = 0;
   int status = 0;
   std::string contentType, body;
   bool cancelled = false;
-  void OnResponseHead(const net::HttpResponseHead& head, const url::Url&) override {
-    status = head.status;
-    if (auto type = head.Header("content-type")) contentType = std::string(*type);
+  void OnResponse(const net::PageResponse& response) override {
+    status = response.status;
+    for (const auto& [name, value] : response.headers) {
+      if (name.size() == 12 && (name == "Content-Type" || name == "content-type")) contentType = value;
+    }
+    if (contentType.empty()) {
+      for (const auto& [name, value] : response.headers) {
+        std::string lower = name;
+        for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (lower == "content-type") contentType = value;
+      }
+    }
   }
   void OnBody(std::span<const uint8_t> data) override { body.append(reinterpret_cast<const char*>(data.data()), data.size()); }
   void OnEnd() override;
@@ -114,13 +124,19 @@ Value Fetch(Context& ctx, Value, qe::Args args, Value) {
   item.callback = qe::Persistent(ctx, args[1]);
   const uint32_t id = state->next++;
   item.transfer->id = id;
-  net::FetchOptions options;
-  options.timeout = std::chrono::minutes(2);
-  options.initiator = state->host->config().pageUrl;
-  options.headers.emplace_back("Accept", "image/avif,image/webp,image/png,image/svg+xml,image/*,*/*;q=0.8");
+  // A picture the page loads for itself: a no-cors request for an image, with the cookies of the page's, and Opaque Response Blocking keeps out what is not one.
+  net::PageRequest request;
+  request.url = *parsed;
+  request.destination = net::RequestDestination::Image;
+  request.mode = net::RequestMode::NoCors;
+  request.credentials = net::RequestCredentials::Include;
+  request.timeout = std::chrono::minutes(2);
+  request.pageUrl = state->host->config().pageUrl;
+  request.tls = state->host->config().tls;
+  request.headers.emplace_back("Accept", "image/avif,image/webp,image/png,image/svg+xml,image/*,*/*;q=0.8");
   Transfer* transfer = item.transfer.get();
   state->items[id] = std::move(item);
-  state->items[id].handle = state->host->config().client->Fetch(*parsed, *transfer, std::move(options));
+  state->items[id].handle = state->host->config().client->StartFetch(std::move(request), *transfer);
   return qe::FromNumber(id);
 }
 

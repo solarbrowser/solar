@@ -56,6 +56,7 @@
 #include "solar/layout/Layout.h"
 #include "solar/net/HttpClient.h"
 #include "solar/net/NetworkThread.h"
+#include "solar/net/PageFetch.h"
 #include "solar/paint/Paint.h"
 #include "solar/gui/GpuSurface.h"
 #include "solar/paint/SkiaPainter.h"
@@ -157,7 +158,7 @@ struct RealmBundle {
 // What the pages get from the program: realms of one isolate, and the resources of the network and of the disk.
 class Browser : public solar::html::FrameEnvironment, public solar::webapi::WorkerHost {
  public:
-  Browser(qe::Isolate& isolate, solar::net::Loop& loop, solar::net::NetworkService& client, solar::web::JsEventLoop& events)
+  Browser(qe::Isolate& isolate, solar::net::Loop& loop, solar::net::BrowserNetwork& client, solar::web::JsEventLoop& events)
       : isolate_(isolate), loop_(loop), client_(client), events_(events) {
     solar::webapi::SetWorkerHost(this);
   }
@@ -298,25 +299,35 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
   }
 
   // A resource in flight or here: what the network brought for an address, kept for as long as the program runs (pages share their scripts, styles and pictures).
-  struct Resource : solar::net::FetchHandler {
+  // What a load is for: it decides how the network service asks for it (see net::RequestDestination). Fonts and module scripts are asked for with CORS, the rest without.
+  enum class Kind { Generic, Script, Style, Image, Font, Module };
+  static bool WithCors(Kind kind) { return kind == Kind::Font || kind == Kind::Module; }
+  static std::string KeyOf(const std::string& url, Kind kind) { return WithCors(kind) ? url + "\x01" "cors" : url; }
+
+  struct Resource : solar::net::PageFetchHandler {
     Browser* owner = nullptr;
     std::string url;
+    Kind kind = Kind::Generic;
     int status = 0;
     bool done = false, failed = false;
     bool viaWorker = false;  // asked of the page's service worker (what it made is that page's, not to be kept for the next)
     std::string body, contentType;
+    solar::net::FetchHandle handle;
     Clock::time_point started = Clock::now();
-    void OnResponseHead(const solar::net::HttpResponseHead& head, const solar::url::Url&) override {
-      status = head.status;
-      if (auto type = head.Header("content-type")) contentType = std::string(*type);
+    void OnResponse(const solar::net::PageResponse& response) override {
+      status = response.status;
+      for (const auto& [name, value] : response.headers) {
+        std::string lower = name;
+        for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (lower == "content-type") contentType = value;
+      }
     }
     void OnBody(std::span<const uint8_t> data) override { body.append(reinterpret_cast<const char*>(data.data()), data.size()); }
     void OnEnd() override { Finish(); }
-    bool OnRestart() override {
+    void OnRestart() override {
       body.clear();
       status = 0;
       contentType.clear();
-      return true;
     }
     std::string error;
     void OnError(std::string_view message) override {
@@ -336,19 +347,44 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     }
   };
 
+  // What the page asks the network for a resource of its own (a script, a style sheet, a picture, a font): a Fetch Standard request of the kind it is, from the page, which the
+  // network service applies the rules of fetching to (CORS where the kind has it, Opaque Response Blocking where it has none).
+  void FetchResource(Resource& resource) {
+    std::optional<solar::url::Url> parsed = solar::url::Parse(resource.url);
+    if (!parsed) return;
+    solar::net::PageRequest request;
+    request.url = *parsed;
+    request.pageUrl = solar::url::Parse(pageUrl_).value_or(*parsed);
+    request.restartable = true;
+    // (A module and a font are asked for with the cookies of the page's own origin only, so that a server that allows everyone does: credentials "same-origin".)
+    request.credentials = WithCors(resource.kind) ? solar::net::RequestCredentials::SameOrigin : solar::net::RequestCredentials::Include;
+    request.mode = WithCors(resource.kind) ? solar::net::RequestMode::Cors : solar::net::RequestMode::NoCors;
+    switch (resource.kind) {
+      case Kind::Script: request.destination = solar::net::RequestDestination::Script; break;
+      case Kind::Style: request.destination = solar::net::RequestDestination::Style; break;
+      case Kind::Image: request.destination = solar::net::RequestDestination::Image; break;
+      case Kind::Font: request.destination = solar::net::RequestDestination::Font; break;
+      case Kind::Module: request.destination = solar::net::RequestDestination::Module; break;
+      default: request.destination = solar::net::RequestDestination::Other; break;
+    }
+    resource.handle = client_.StartFetch(std::move(request), resource);
+  }
+
   // Starts getting the resource at the address, if it is not being got already. Null for what is not for the network.
-  Resource* Start(const std::string& url) {
-    const auto found = resources_.find(url);
+  Resource* Start(const std::string& url, Kind kind = Kind::Generic) {
+    const std::string key = KeyOf(url, kind);
+    const auto found = resources_.find(key);
     if (found != resources_.end()) return found->second.get();
     std::optional<solar::url::Url> parsed = solar::url::Parse(url);
     if (!parsed || (parsed->scheme != "http" && parsed->scheme != "https")) return nullptr;
     auto resource = std::make_unique<Resource>();
     resource->owner = this;
     resource->url = url;
+    resource->kind = kind;
     Resource* raw = resource.get();
-    resources_[url] = std::move(resource);
+    resources_[key] = std::move(resource);
     if (swControlled_ && !bypassWorker_ && pageRealm_ && AskWorker(raw)) return raw;
-    client_.Fetch(*parsed, *raw, solar::net::FetchOptions());
+    FetchResource(*raw);
     return raw;
   }
 
@@ -446,12 +482,14 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     if (pending == swPending_.end()) return;
     const std::string url = pending->second;
     swPending_.erase(pending);
-    const auto found = resources_.find(url);
-    if (found == resources_.end()) return;
-    Resource* resource = found->second.get();
+    Resource* resource = nullptr;
+    for (auto& entry : resources_) {
+      if (entry.second->url == url && entry.second->viaWorker) resource = entry.second.get();
+    }
+    if (!resource) return;
     if (mode == 1) {  // left to the network
       resource->viaWorker = false;
-      if (auto parsed = solar::url::Parse(url)) client_.Fetch(*parsed, *resource, solar::net::FetchOptions());
+      FetchResource(*resource);
       return;
     }
     if (mode == 2) {
@@ -496,15 +534,21 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     waiting_ = nullptr;
   }
 
-  void Prefetch(const std::string& url) override { Start(url); }
+  void Prefetch(const std::string& url) override { Start(url, Kind::Module); }  // (the modules a module imports)
 
-  std::optional<std::string> Load(const std::string& url) override {
+  std::optional<std::string> Load(const std::string& url) override { return LoadAs(url, Kind::Generic); }
+  // A script or a style sheet, with no CORS (a response from another origin that Opaque Response Blocking blocks comes back with no text); a module and a font, with it.
+  std::optional<std::string> LoadNoCors(const std::string& url, bool styleSheet) override { return LoadAs(url, styleSheet ? Kind::Style : Kind::Script); }
+  std::optional<std::string> LoadModule(const std::string& url) override { return LoadAs(url, Kind::Module); }
+  std::optional<std::string> LoadFont(const std::string& url) override { return LoadAs(url, Kind::Font); }
+
+  std::optional<std::string> LoadAs(const std::string& url, Kind kind) {
     if (url.starts_with("file://")) {
       std::string contents;
       if (!ReadFile(FileOfAddress(url), contents)) return std::nullopt;
       return contents;
     }
-    Resource* resource = Start(url);
+    Resource* resource = Start(url, kind);
     if (!resource) return std::nullopt;
     WaitFor(resource);
     if (resource->failed || resource->status < 200 || resource->status >= 300) {
@@ -517,9 +561,9 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
   // The pictures that layout and painting asked for and that are on their way: they are fetched together, and the page is laid out again when they are here.
   bool RequestImage(const std::string& absolute) {
     if (absolute.starts_with("file://")) return false;
-    const auto found = resources_.find(absolute);
+    const auto found = resources_.find(KeyOf(absolute, Kind::Image));
     if (found != resources_.end() && found->second->done) return false;  // here (or failed): the loader has it
-    if (!Start(absolute)) return false;
+    if (!Start(absolute, Kind::Image)) return false;
     if (!painting_) layoutImages_.insert(absolute);
     return true;
   }
@@ -635,17 +679,23 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
         const std::string tag = markup.substr(at, end - at + 1), tagLower = lower.substr(at, end - at + 1);
         at = end;
         std::string target;
+        Kind kind = Kind::Script;
         if (needle == "<link") {
           const std::string rel = attribute(tag, tagLower, "rel");
           if (rel.find("stylesheet") == std::string::npos && rel.find("preload") == std::string::npos) continue;
           if (rel.find("preload") != std::string::npos) {
             const std::string as = attribute(tag, tagLower, "as");
             if (as != "style" && as != "script" && as != "image") continue;
+            kind = as == "style" ? Kind::Style : as == "image" ? Kind::Image : Kind::Script;
+          } else {
+            kind = Kind::Style;
           }
           target = attribute(tag, tagLower, "href");
         } else if (needle == "<script") {
           target = attribute(tag, tagLower, "src");
+          if (attribute(tag, tagLower, "type") == "module") kind = Kind::Module;
         } else {
+          kind = Kind::Image;
           target = attribute(tag, tagLower, "src");
           if (target.empty()) {
             std::string set = attribute(tag, tagLower, "srcset");
@@ -661,10 +711,10 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
           int inFlight = 0;
           for (const auto& entry : resources_) inFlight += entry.second->done ? 0 : 1;
           if (inFlight >= 8) continue;
-          if (Start(absolute)) ++scanImagesStarted_;
+          if (Start(absolute, Kind::Image)) ++scanImagesStarted_;
           continue;
         }
-        if (Start(absolute)) ++started;
+        if (Start(absolute, kind)) ++started;
       }
     }
   }
@@ -672,8 +722,10 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
   std::string ContentType(const std::string& url) override {
     const auto found = types_.find(url);
     if (found != types_.end()) return found->second;
-    const auto resource = resources_.find(url);
-    if (resource != resources_.end() && resource->second && !resource->second->contentType.empty()) return resource->second->contentType;
+    for (const Kind kind : {Kind::Generic, Kind::Module}) {
+      const auto resource = resources_.find(KeyOf(url, kind));
+      if (resource != resources_.end() && resource->second && !resource->second->contentType.empty()) return resource->second->contentType;
+    }
     return solar::html::FrameEnvironment::ContentType(url);
   }
 
@@ -698,7 +750,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
   bool scanImages_ = false;
   qe::Isolate& isolate_;
   solar::net::Loop& loop_;
-  solar::net::NetworkService& client_;
+  solar::net::BrowserNetwork& client_;
   solar::web::JsEventLoop& events_;
   std::string pageUrl_;
   std::map<std::string, std::string> types_;
@@ -1478,7 +1530,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
   } else {
     threadedNetwork = std::make_unique<solar::net::ThreadedNetworkService>(*loop);
   }
-  solar::net::NetworkService& client = inlineClient ? static_cast<solar::net::NetworkService&>(*inlineClient) : static_cast<solar::net::NetworkService&>(*threadedNetwork);
+  solar::net::BrowserNetwork& client = inlineClient ? static_cast<solar::net::BrowserNetwork&>(*inlineClient) : static_cast<solar::net::BrowserNetwork&>(*threadedNetwork);
   solar::web::TimerHost timers;
   isolate->SetTimerProvider(timers.Provider());
   solar::web::JsEventLoop events(*loop, {[&] { isolate->PerformMicrotaskCheckpoint(); }, [&] { timers.RunDue(); }, [&] { return timers.NextDelayMs(); }});

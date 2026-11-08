@@ -195,6 +195,9 @@ struct NetPageFetch final : PageFetchHandler {
   void OnBody(std::span<const uint8_t> data) override {
     impl.TellPageFetch(id, [bytes = std::vector<uint8_t>(data.begin(), data.end())](ThreadedNetworkService::Impl::PagePageFetch& page) { page.handler->OnBody(bytes); });
   }
+  void OnRestart() override {
+    impl.TellPageFetch(id, [](ThreadedNetworkService::Impl::PagePageFetch& page) { page.handler->OnRestart(); });
+  }
   void OnEnd() override {
     ThreadedNetworkService::Impl* owner = &impl;
     const uint64_t number = id;

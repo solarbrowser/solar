@@ -90,6 +90,13 @@ struct Heard : solar::net::PageFetchHandler {
   void OnBody(std::span<const uint8_t> data) override { Note(); body.append(reinterpret_cast<const char*>(data.data()), data.size()); }
   void OnEnd() override { Note(); ended = true; ++terminal; }
   void OnError(std::string_view message) override { Note(); error = std::string(message); ++terminal; }
+  int restarts = 0;
+  void OnRestart() override {
+    Note();
+    ++restarts;
+    response.reset();
+    body.clear();
+  }
   bool HeaderIs(const std::string& name, const std::string& value) const {
     if (!response) return false;
     for (const auto& [n, v] : response->headers) {
@@ -224,6 +231,82 @@ void RunAll(bool thread) {
     env.Run();
     Check("a no-cors response from another origin is opaque, with no status, no headers and no body" + via, opaque.response && opaque.response->type == ResponseType::Opaque && opaque.response->status == 0 && opaque.response->headers.empty() && opaque.body.empty() && opaque.ended, opaque.error.value_or(""));
     Check("one that Opaque Response Blocking blocks is an error" + via, !blocked.response && blocked.error && blocked.error->find("ORB") != std::string::npos, blocked.error.value_or("answered"));
+  }
+  {
+    // What the page loads for itself is given whole, and what Opaque Response Blocking blocks is not.
+    Recording log;
+    log.respond = [](const std::string& head) {
+      if (Path(head) == "/image") return Response("200 OK", "PNGDATA", "Content-Type: image/png\r\nX-Other: 1\r\n");
+      if (Path(head) == "/html") return Response("404 Not Found", "<html>nope</html>", "Content-Type: text/html\r\nX-Content-Type-Options: nosniff\r\n");
+      return Response("200 OK", "whatever", "Content-Type: text/html\r\n");
+    };
+    TestServer server(Serves(log));
+    TestServer page(Serves(log));
+    Env env(thread);
+    auto load = [&](const char* path, solar::net::RequestDestination destination, Heard& heard) {
+      PageRequest request = Ask(Origin(page) + "/", Origin(server) + path, RequestMode::NoCors);
+      request.destination = destination;
+      request.credentials = RequestCredentials::Include;
+      env.service->StartFetch(request, heard);
+    };
+    Heard image, blocked, other;
+    load("/image", solar::net::RequestDestination::Image, image);
+    load("/html", solar::net::RequestDestination::Image, blocked);
+    load("/html", solar::net::RequestDestination::Other, other);
+    env.Run();
+    Check("a picture the page loads for itself is given whole: its status, its headers, its body" + via, image.response && image.response->type != ResponseType::Opaque && image.response->status == 200 && image.HeaderIs("x-other", "1") && image.body == "PNGDATA", image.error.value_or(image.body));
+    Check("and the Sec-Fetch-Dest says what it is for" + via, [&] { for (size_t i = 0; i < log.Count(); ++i) if (Path(log.Head(i)) == "/image") return Has(log.Head(i), "Sec-Fetch-Dest: image"); return false; }());
+    Check("HTML for a picture is blocked, though the page is given the errors it makes" + via, !blocked.response && blocked.error && blocked.error->find("ORB") != std::string::npos, blocked.error.value_or("answered"));
+    Check("a load that is not yet named is not blocked" + via, other.response && other.body == "<html>nope</html>", other.error.value_or(other.body));
+  }
+  {
+    // A font or a module is asked for with CORS: the server has to allow the page.
+    Recording log;
+    log.respond = [](const std::string& head) {
+      if (Path(head) == "/allowed") return Response("200 OK", "FONT", "Access-Control-Allow-Origin: *\r\n");
+      return Response("200 OK", "FONT");
+    };
+    TestServer server(Serves(log));
+    TestServer page(Serves(log));
+    Env env(thread);
+    auto load = [&](const char* path, RequestCredentials credentials, Heard& heard) {
+      PageRequest request = Ask(Origin(page) + "/", Origin(server) + path, RequestMode::Cors);
+      request.destination = solar::net::RequestDestination::Font;
+      request.credentials = credentials;
+      env.service->StartFetch(request, heard);
+    };
+    Heard allowed, closed, withCookies;
+    load("/allowed", RequestCredentials::SameOrigin, allowed);
+    load("/closed", RequestCredentials::SameOrigin, closed);
+    load("/allowed", RequestCredentials::Include, withCookies);
+    env.Run();
+    Check("a font from a server that allows everyone is the page's" + via, allowed.response && allowed.body == "FONT", allowed.error.value_or(allowed.body));
+    Check("one from a server that does not say is refused" + via, !closed.response && closed.error && closed.error->find("CORS") != std::string::npos, closed.error.value_or("answered"));
+    Check("and \"everyone\" is not enough for a request that carries credentials" + via, !withCookies.response && withCookies.error, withCookies.error.value_or("answered"));
+  }
+  {
+    // A response that stalls is asked for again, for a page that can start over.
+    std::atomic<int> connections{0};
+    TestServer server([&](int client) {
+      const int n = ++connections;
+      if (TestServer::ReadHead(client).empty()) return;
+      if (n == 1) {
+        TestServer::SendAll(client, "HTTP/1.1 200 OK\r\nContent-Type: text/css\r\nContent-Length: 20\r\n\r\npartial");
+        TestServer::WaitForClose(client);
+        return;
+      }
+      TestServer::SendAll(client, Response("200 OK", "the whole style", "Content-Type: text/css\r\n"));
+    });
+    Env env(thread);
+    PageRequest request = Ask(Origin(server) + "/", Origin(server) + "/slow", RequestMode::NoCors);
+    request.destination = solar::net::RequestDestination::Style;
+    request.restartable = true;
+    request.stall = std::chrono::milliseconds(200);
+    request.timeout = std::chrono::milliseconds(3000);
+    Heard heard;
+    env.service->StartFetch(request, heard);
+    env.Run();
+    Check("a stalled response is asked for again and the page hears it from its start" + via, heard.restarts == 1 && heard.body == "the whole style" && heard.ended && connections.load() == 2, heard.error.value_or(heard.body) + " restarts " + std::to_string(heard.restarts));
   }
   {
     // A redirect in cors mode: each server along the way has to allow it.

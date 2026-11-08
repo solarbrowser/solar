@@ -42,7 +42,7 @@ Value FontOpen(Context& ctx, Value, qe::Args args, Value) {
 
 // __solarFontFetch(url): the handle of the font the address has, loaded as style sheets are, or -1.
 Value FontFetch(Context& ctx, Value, qe::Args args, Value) {
-  const SheetLoader& load = GetSheetLoader();
+  const SheetLoader& load = GetFontLoader();
   if (!load) return qe::FromInt32(-1);
   std::optional<std::string> data = load(StringArg(ctx, args, 0));
   if (!data) return qe::FromInt32(-1);

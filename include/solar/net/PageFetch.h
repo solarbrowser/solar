@@ -27,6 +27,10 @@ namespace solar::net {
 enum class RequestMode { SameOrigin, NoCors, Cors, Navigate };
 enum class RequestCredentials { Omit, SameOrigin, Include };
 enum class ResponseType { Basic, Cors, Default, Error, Opaque, OpaqueRedirect };
+// What a request is for. Of a fetch() (Fetch) the page's script is told only what a response of its type allows; of a load the page makes for itself (a picture, a style sheet, a
+// script, a font, a media file) the page, which is where it is used, is given the head and the body whole, and Opaque Response Blocking and the CORS check of a cors request are what
+// keep the sensitive ones out. Other is the loads of the page that are not yet named: they are asked as no-cors ones and are not blocked (to be made none).
+enum class RequestDestination { Fetch, Image, Media, Script, Style, Font, Module, Other };
 
 
 // What the page asks. Everything in it is data (no pointer to what only the page has).
@@ -35,6 +39,7 @@ struct PageRequest {
   std::string method = "GET";
   std::vector<std::pair<std::string, std::string>> headers;  // the ones the page's script gave
   std::shared_ptr<const std::string> body;
+  RequestDestination destination = RequestDestination::Fetch;
   RequestMode mode = RequestMode::Cors;
   RequestCredentials credentials = RequestCredentials::SameOrigin;
   int redirect = 0;  // RedirectMode as a number: Follow 0, Error 1, Manual 2
@@ -44,6 +49,9 @@ struct PageRequest {
   url::Url pageUrl;  // the page the request is for: its origin is the request's origin, its address the Referer, its site the one Sec-Fetch-Site compares
   std::chrono::milliseconds timeout{std::chrono::hours(24)};
   std::shared_ptr<TlsContext> tls;
+  // A response that stalls (no byte for `stall`) is asked for again, up to twice, if the handler says it can have it from the start (OnRestart drops what it heard of it).
+  bool restartable = false;
+  std::chrono::milliseconds stall{8000};
 };
 
 // What the page is told of the response: the head of it as the Fetch Standard's response filtering leaves it (an opaque response has no status and no headers).
@@ -68,6 +76,8 @@ class PageFetchHandler {
   virtual void OnBody(std::span<const uint8_t> data) = 0;
   virtual void OnEnd() = 0;
   virtual void OnError(std::string_view message) = 0;
+  // The response is asked for again from the start (only when the request said it was restartable): what was heard of it is dropped, and the response, the body and the end come again.
+  virtual void OnRestart() {}
 };
 
 }  // namespace solar::net

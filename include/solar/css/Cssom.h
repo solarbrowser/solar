@@ -267,6 +267,9 @@ using SheetLoader = std::function<std::optional<std::string>(const std::string& 
 void ProcessImports(Quanta::Context& ctx, CssStyleSheet* sheet, const SheetLoader& load, int depth = 0);
 // The loader that an @import inserted with insertRule is fetched with.
 void SetSheetLoader(SheetLoader loader);
+// What loads a font (a font is asked for with CORS, a style sheet without): when none is set, the sheet loader does.
+void SetFontLoader(SheetLoader loader);
+const SheetLoader& GetFontLoader();
 // Whatever was set, for what else needs to fetch (font files).
 const SheetLoader& GetSheetLoader();
 // A sheet for a link element, made of the text at `address`.

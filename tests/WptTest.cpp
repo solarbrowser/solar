@@ -292,7 +292,7 @@ PyAnswer RunPythonHandler(const std::string& file, const std::string& method, co
 
 class TestEnvironment : public solar::html::FrameEnvironment, public solar::webapi::WorkerHost {
  public:
-  TestEnvironment(qe::Isolate& isolate, solar::net::Loop& loop, solar::net::NetworkService& client, solar::web::JsEventLoop& events)
+  TestEnvironment(qe::Isolate& isolate, solar::net::Loop& loop, solar::net::BrowserNetwork& client, solar::web::JsEventLoop& events)
       : isolate_(isolate), loop_(loop), client_(client), events_(events) {
     solar::webapi::SetWorkerHost(this);
   }
@@ -783,7 +783,7 @@ class TestEnvironment : public solar::html::FrameEnvironment, public solar::weba
   qe::Isolate& isolate_;
   std::map<std::string, std::pair<std::string, std::shared_ptr<qe::Script>>> scripts_;
   solar::net::Loop& loop_;
-  solar::net::NetworkService& client_;
+  solar::net::BrowserNetwork& client_;
   solar::web::JsEventLoop& events_;
   std::vector<std::unique_ptr<RealmBundle>> bundles_;
 };
@@ -1090,7 +1090,7 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
     clientOptions.resolver = solar::net::MakeSystemResolver(*loop, WptResolverOptions(server.port(), tlsServer.port()));
     inlineClient = std::make_unique<solar::net::HttpClient>(*loop, std::move(clientOptions));
   }
-  solar::net::NetworkService& client = inlineClient ? static_cast<solar::net::NetworkService&>(*inlineClient) : static_cast<solar::net::NetworkService&>(*threadedNetwork);
+  solar::net::BrowserNetwork& client = inlineClient ? static_cast<solar::net::BrowserNetwork&>(*inlineClient) : static_cast<solar::net::BrowserNetwork&>(*threadedNetwork);
   // The tasks of the page are the program's: timers go into its queue, which its event loop runs.
   solar::web::TimerHost timers;
   isolate->SetTimerProvider(timers.Provider());

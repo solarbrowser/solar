@@ -58,12 +58,23 @@ bool PotentiallyTrustworthy(const url::Url& address) {
   return host == "localhost" || host.ends_with(".localhost") || host == "[::1]" || host.starts_with("127.");
 }
 
-void SetSecFetchHeaders(std::vector<std::pair<std::string, std::string>>& headers, const url::Url& target, int site, const std::string& mode) {
+void SetSecFetchHeaders(std::vector<std::pair<std::string, std::string>>& headers, const url::Url& target, int site, const std::string& mode, const char* destination) {
   std::erase_if(headers, [](const auto& header) { return header.first.size() > 10 && EqualsIgnoreCase(header.first.substr(0, 10), "sec-fetch-"); });
   if (!PotentiallyTrustworthy(target)) return;
-  headers.emplace_back("Sec-Fetch-Dest", "empty");
+  headers.emplace_back("Sec-Fetch-Dest", destination);
   headers.emplace_back("Sec-Fetch-Mode", mode);
   headers.emplace_back("Sec-Fetch-Site", site == 0 ? "same-origin" : site == 1 ? "same-site" : "cross-site");
+}
+
+const char* DestinationName(RequestDestination destination) {
+  switch (destination) {
+    case RequestDestination::Image: return "image";
+    case RequestDestination::Media: return "video";
+    case RequestDestination::Script: case RequestDestination::Module: return "script";
+    case RequestDestination::Style: return "style";
+    case RequestDestination::Font: return "font";
+    default: return "empty";
+  }
 }
 
 int SecFetchSiteOf(const url::Url& page, const url::Url& target) {
@@ -103,6 +114,7 @@ void PageFetchLoader::Start() {
   options.cache = request_.cache;
   options.redirect = redirectMode_;
   options.timeout = request_.timeout;
+  options.stall = request_.restartable ? request_.stall : std::chrono::milliseconds(0);
   options.useCookies = credentials_ == RequestCredentials::Include || (credentials_ == RequestCredentials::SameOrigin && !crossOrigin_);
   options.initiator = page;
   options.tls = request_.tls;
@@ -110,7 +122,7 @@ void PageFetchLoader::Start() {
   secFetchPage_ = page;
   secFetchSite_ = SecFetchSiteOf(page, request_.url);
   secFetchMode_ = mode_ == RequestMode::Cors ? "cors" : mode_ == RequestMode::NoCors ? "no-cors" : "same-origin";
-  SetSecFetchHeaders(options.headers, request_.url, secFetchSite_, secFetchMode_);
+  SetSecFetchHeaders(options.headers, request_.url, secFetchSite_, secFetchMode_, DestinationName(request_.destination));
   referrerPolicy_ = request_.referrerPolicy;
   sendsReferrer_ = request_.sendsReferrer;
   referrerSource_ = page;
@@ -243,7 +255,7 @@ bool PageFetchLoader::OnRedirect(const HttpResponseHead& redirect, const url::Ur
   std::string next_method = method_;
   if (((redirect.status == 301 || redirect.status == 302) && method_ == "POST") || (redirect.status == 303 && method_ != "GET" && method_ != "HEAD")) next_method = "GET";
   secFetchSite_ = std::max(secFetchSite_, SecFetchSiteOf(secFetchPage_, next));
-  SetSecFetchHeaders(headers, next, secFetchSite_, secFetchMode_);
+  SetSecFetchHeaders(headers, next, secFetchSite_, secFetchMode_, DestinationName(request_.destination));
   // The Referrer-Policy of the redirect response is the policy from here on (the last of its tokens that is one), and the Referer is made again.
   if (const auto policyHeader = redirect.Header("referrer-policy")) {
     std::string value(*policyHeader), token;
@@ -306,7 +318,7 @@ void PageFetchLoader::OnResponseHead(const HttpResponseHead& head, const url::Ur
   }
 
   // A response to a no-cors request that is from another origin is checked by Opaque Response Blocking before the page has it.
-  if (mode_ == RequestMode::NoCors && crossOrigin_ && !orbReleased_) {
+  if (mode_ == RequestMode::NoCors && crossOrigin_ && !orbReleased_ && request_.destination != RequestDestination::Other) {
     const auto header = [&](const char* name) { return head.Header(name).value_or(std::string_view()); };
     std::string nosniffValue(header("x-content-type-options"));
     for (char& c : nosniffValue) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -331,13 +343,14 @@ void PageFetchLoader::Respond(const HttpResponseHead& head, const url::Url& fina
   withoutFragment.fragment.reset();
   PageResponse response;
   response.url = withoutFragment;
-  if (redirectMode_ == RedirectMode::Manual && IsRedirectStatus(head.status)) {
+  const bool forScript = request_.destination == RequestDestination::Fetch;  // (what is told to script is filtered; a load the page makes for itself is given whole)
+  if (forScript && redirectMode_ == RedirectMode::Manual && IsRedirectStatus(head.status)) {
     response.type = ResponseType::OpaqueRedirect;
     response.status = 0;
     response.hiddenStatus = head.status;
     if (const auto location = head.Header("location")) response.hiddenLocation = std::string(*location);
     response.hasBody = false;
-  } else if (mode_ == RequestMode::NoCors && crossOrigin_) {
+  } else if (forScript && mode_ == RequestMode::NoCors && crossOrigin_) {
     response.type = ResponseType::Opaque;
     response.status = 0;
     response.hasBody = false;  // (what an opaque response holds does not go to the page)
@@ -347,7 +360,7 @@ void PageFetchLoader::Respond(const HttpResponseHead& head, const url::Url& fina
     response.statusText = head.reason;
     response.redirected = redirects_ > 0;
     for (const auto& header : head.headers) {
-      if (response.type == ResponseType::Cors && !IsCorsExposedHeader(header.first, head, includeCredentials)) continue;
+      if (forScript && response.type == ResponseType::Cors && !IsCorsExposedHeader(header.first, head, includeCredentials)) continue;
       response.headers.push_back(header);
     }
     response.hasBody = !(head.status == 101 || head.status == 204 || head.status == 205 || head.status == 304);
@@ -386,6 +399,17 @@ void PageFetchLoader::OnEnd() {
   }
   handler_.OnEnd();
   Done();
+}
+
+bool PageFetchLoader::OnRestart() {
+  // (A response is asked for again only when the page can take it from the start: nothing of a preflight, and nothing of a response the page was given in pieces it cannot drop.)
+  if (!request_.restartable || finished || preflighting_) return false;
+  handler_.OnRestart();
+  responded_ = false;
+  hasBody_ = false;
+  orbBuffering_ = false;
+  heldBytes_.clear();
+  return true;
 }
 
 void PageFetchLoader::OnError(std::string_view message) {

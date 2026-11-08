@@ -21,7 +21,7 @@ namespace solar::net {
 // A fetch keeps `pageLoop` from running out of work until it has ended (Loop::BeginExternalWork), so that a loop that is run to wait for one waits for the thread.
 // Its handler may leave the redirects and the stalls to the page (DefersRedirects and DefersRestarts), and the ones that do not are asked on the page's thread, in the middle of the
 // answers, as before; for a stall that is allowed what had come before it is dropped, so that the handler sees the response again from its start (as FetchHandler::OnRestart has it).
-class ThreadedNetworkService final : public NetworkService {
+class ThreadedNetworkService final : public BrowserNetwork {
  public:
   ThreadedNetworkService(Loop& pageLoop, HttpClientOptions options = {});
   // For options that are made with the loop of the thread (a resolver is made on one): `makeOptions` is called on the service's thread with its loop.

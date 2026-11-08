@@ -233,7 +233,7 @@ std::function<std::shared_ptr<font::Face>()> LoaderOf(const FaceRule& rule) {
         if (std::shared_ptr<font::Face> face = font::Database::System().FindLocal(source.name)) return face;
         continue;
       }
-      const SheetLoader& load = GetSheetLoader();
+      const SheetLoader& load = GetFontLoader();
       if (!load) continue;
       if (std::optional<std::string> data = load(source.name)) {
         if (std::shared_ptr<font::Face> face = font::Face::Open(std::move(*data))) return face;

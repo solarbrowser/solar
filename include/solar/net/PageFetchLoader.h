@@ -35,6 +35,7 @@ class PageFetchLoader final : public FetchHandler {
   void OnBody(std::span<const uint8_t> data) override;
   void OnEnd() override;
   void OnError(std::string_view message) override;
+  bool OnRestart() override;
 
  private:
   void StartMain();

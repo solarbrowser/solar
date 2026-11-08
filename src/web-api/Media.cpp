@@ -18,6 +18,7 @@
 #include "solar/media/Mse.h"
 #include "solar/media/Player.h"
 #include "solar/net/HttpClient.h"
+#include "solar/net/PageFetch.h"
 #include "solar/url/Parser.h"
 #include "solar/web/BlobUrls.h"
 #include "solar/web/FetchHost.h"
@@ -52,16 +53,24 @@ struct Fetcher : std::enable_shared_from_this<Fetcher> {
   url::Url url;
   bool dead = false;
 
-  struct Transfer final : net::FetchHandler {
+  struct Transfer final : net::PageFetchHandler {
     Fetcher* owner = nullptr;
     uint64_t generation = 0, from = 0, pos = 0;
     bool failed = false, settled = false, ended = false;
-    void OnResponseHead(const net::HttpResponseHead& head, const url::Url&) override {
+    static std::optional<std::string> HeaderOf(const net::PageResponse& response, const char* name) {
+      for (const auto& [key, value] : response.headers) {
+        std::string lower = key;
+        for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (lower == name) return value;
+      }
+      return std::nullopt;
+    }
+    void OnResponse(const net::PageResponse& head) override {
       if (head.status == 206) {
         // Content-Range: bytes first-last/total
         uint64_t first = 0, last = 0, total = 0;
-        const auto range = head.Header("content-range");
-        if (!range || std::sscanf(std::string(*range).c_str(), "bytes %" SCNu64 "-%" SCNu64 "/%" SCNu64, &first, &last, &total) < 2 || first != from) {
+        const auto range = HeaderOf(head, "content-range");
+        if (!range || std::sscanf(range->c_str(), "bytes %" SCNu64 "-%" SCNu64 "/%" SCNu64, &first, &last, &total) < 2 || first != from) {
           failed = true;
           return;
         }
@@ -70,7 +79,7 @@ struct Fetcher : std::enable_shared_from_this<Fetcher> {
       } else if (head.status == 200 && from == 0) {
         // The server does not do ranges: the whole of it comes now.
         owner->stream->SetSequential();
-        if (auto length = head.Header("content-length")) owner->stream->SetTotal(static_cast<uint64_t>(std::strtoull(std::string(*length).c_str(), nullptr, 10)));
+        if (auto length = HeaderOf(head, "content-length")) owner->stream->SetTotal(static_cast<uint64_t>(std::strtoull(length->c_str(), nullptr, 10)));
         pos = 0;
       } else if (head.status == 416) {
         settled = true;
@@ -106,12 +115,18 @@ struct Fetcher : std::enable_shared_from_this<Fetcher> {
     transfer->generation = generation;
     transfer->from = from;
     transfer->pos = from;
-    net::FetchOptions options;
-    options.timeout = std::chrono::minutes(2);
-    options.initiator = host->config().pageUrl;
-    options.headers.emplace_back("Accept", "*/*");
-    options.headers.emplace_back("Range", "bytes=" + std::to_string(from) + "-" + std::to_string(to - 1));
-    handle = host->config().client->Fetch(url, *transfer, std::move(options));
+    // A media file the page plays: a no-cors request with the cookies of the page's, for the range the player wants.
+    net::PageRequest request;
+    request.url = url;
+    request.destination = net::RequestDestination::Media;
+    request.mode = net::RequestMode::NoCors;
+    request.credentials = net::RequestCredentials::Include;
+    request.timeout = std::chrono::minutes(2);
+    request.pageUrl = host->config().pageUrl;
+    request.tls = host->config().tls;
+    request.headers.emplace_back("Accept", "*/*");
+    request.headers.emplace_back("Range", "bytes=" + std::to_string(from) + "-" + std::to_string(to - 1));
+    handle = host->config().client->StartFetch(std::move(request), *transfer);
     transfers.push_back(std::move(transfer));
   }
   void Stop() {

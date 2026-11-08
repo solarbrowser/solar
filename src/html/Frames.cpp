@@ -113,6 +113,18 @@ std::optional<std::string> LoadNoCorsResource(const std::string& url, bool style
   return g_environment->LoadNoCors(url, styleSheet);
 }
 
+// A module script: asked for with CORS.
+std::optional<std::string> LoadModuleResource(const std::string& url) {
+  if (url.starts_with("blob:") || url.starts_with("data:") || !g_environment) return LoadResource(url);
+  return g_environment->LoadModule(url);
+}
+
+// A font: asked for with CORS.
+std::optional<std::string> LoadFontResource(const std::string& url) {
+  if (url.starts_with("blob:") || url.starts_with("data:") || !g_environment) return LoadResource(url);
+  return g_environment->LoadFont(url);
+}
+
 void PrefetchResource(const std::string& url) {
   if (g_environment && (url.starts_with("http://") || url.starts_with("https://"))) g_environment->Prefetch(url);
 }
@@ -821,6 +833,7 @@ void SetFrameEnvironment(FrameEnvironment* environment) {
   g_environment = environment;
   dom::SetDocumentBaseUriProvider(&DocumentBaseUrl);
   css::SetSheetLoader([](const std::string& url) { return LoadSheetResource(url); });
+  css::SetFontLoader([](const std::string& url) { return LoadFontResource(url); });
 }
 
 void RunInRealm(Quanta::Embed::Realm& realm, const std::function<void()>& work) { RunAs(realm, work); }

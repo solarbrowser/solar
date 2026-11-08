@@ -10,6 +10,7 @@
 
 #include "solar/net/FetchHeaders.h"
 #include "solar/net/HttpClient.h"
+#include "solar/net/PageFetch.h"
 #include "solar/net/Loop.h"
 #include "solar/url/Parser.h"
 #include "solar/url/Serializer.h"
@@ -26,11 +27,11 @@ using Quanta::Value;
 namespace {
 
 // What a request that is waited for hears: the response in one piece.
-struct Collector : net::FetchHandler {
+struct Collector : net::PageFetchHandler {
   bool done = false, failed = false;
-  net::HttpResponseHead head;
+  net::PageResponse head;
   std::string body;
-  void OnResponseHead(const net::HttpResponseHead& response, const url::Url&) override { head = response; }
+  void OnResponse(const net::PageResponse& response) override { head = response; }
   void OnBody(std::span<const uint8_t> data) override { body.append(reinterpret_cast<const char*>(data.data()), data.size()); }
   void OnEnd() override { done = true; }
   void OnError(std::string_view) override { done = failed = true; }
@@ -85,24 +86,29 @@ Value SyncFetch(Context& ctx, Value, qe::Args args, Value) {
     qe::ArrayPush(ctx, out, qe::NewUint8Array(ctx, {reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size()}));
     return out;
   }
-  net::FetchOptions options;
-  options.method = method;
-  options.initiator = host->config().pageUrl;
-  options.tls = host->config().tls;
+  // A request of a script that is waited for: a cors request (the rules of CORS apply to it as to any other of the page's), without credentials of another origin's.
+  net::PageRequest request;
+  request.url = *parsed;
+  request.method = method;
+  request.mode = net::RequestMode::Cors;
+  request.credentials = net::RequestCredentials::SameOrigin;
+  request.pageUrl = host->config().pageUrl;
+  request.tls = host->config().tls;
+  request.timeout = std::chrono::minutes(2);
   const uint32_t count = qe::ToUint32(ctx, qe::Get(ctx, args[2], "length"));
   for (uint32_t i = 0; i + 1 < count; i += 2) {
-    options.headers.emplace_back(FromIsomorphic(qe::ToWtf8(ctx, qe::Get(ctx, args[2], std::to_string(i).c_str()))),
+    request.headers.emplace_back(FromIsomorphic(qe::ToWtf8(ctx, qe::Get(ctx, args[2], std::to_string(i).c_str()))),
                                  FromIsomorphic(qe::ToWtf8(ctx, qe::Get(ctx, args[2], std::to_string(i + 1).c_str()))));
   }
-  if (!qe::IsNull(args[3]) && !qe::IsUndefined(args[3])) options.body = std::make_shared<const std::string>(FromIsomorphic(qe::ToWtf8(ctx, args[3])));
+  if (!qe::IsNull(args[3]) && !qe::IsUndefined(args[3])) request.body = std::make_shared<const std::string>(FromIsomorphic(qe::ToWtf8(ctx, args[3])));
   Collector collector;
-  net::FetchHandle handle = host->config().client->Fetch(*parsed, collector, std::move(options));
+  net::FetchHandle handle = host->config().client->StartFetch(std::move(request), collector);
   host->config().loop->RunUntil([&] { return collector.done; });
   if (!collector.done) { handle.Cancel(); return qe::Null(); }
   if (collector.failed) return qe::Null();
   Value out = qe::NewArray(ctx);
   qe::ArrayPush(ctx, out, qe::FromUint32(static_cast<uint32_t>(collector.head.status)));
-  qe::ArrayPush(ctx, out, qe::FromUtf8(ctx, net::IsomorphicDecode(collector.head.reason)));
+  qe::ArrayPush(ctx, out, qe::FromUtf8(ctx, net::IsomorphicDecode(collector.head.statusText)));
   Value headers = qe::NewArray(ctx);
   for (const auto& [name, value] : collector.head.headers) {
     qe::ArrayPush(ctx, headers, qe::FromUtf8(ctx, net::IsomorphicDecode(name)));

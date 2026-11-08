@@ -164,23 +164,15 @@ class FetchHandle {
 };
 
 // What the pages ask the network for: the one thing that stands between them and the connections, the cookies, the cache and the rules of fetching. Everything a page needs of the
-// network goes through it, as messages in one direction (the request: a url, a handler to hear of the answer, and the options, which are data) and in the other (the answer, which
-// the handler is told of from the loop the call was made from, never from inside the call). It is what the network will be behind when it is a thread of its own, and then a process.
+// network goes through it, as messages in one direction (the request, a handler to hear of the answer from the loop the call was made on, never from inside the call) and in the other
+// (the answer). It is what the network is behind when it is a thread of its own, and then a process: a page (a renderer) is given this and nothing of what is below.
 class NetworkService {
  public:
   virtual ~NetworkService() = default;
-  // A fetch. `handler` must outlive it.
-  virtual FetchHandle Fetch(const url::Url& url, FetchHandler& handler, FetchOptions options = {}) = 0;
   // A fetch as a page asks for one (a Fetch Standard request): the service applies the rules of fetching to it and tells the handler what the page may be told. `handler` must outlive it.
   virtual FetchHandle StartFetch(PageRequest request, PageFetchHandler& handler) = 0;
   // Ends the fetch with that number (what FetchHandle::Cancel does).
   virtual void Cancel(uint64_t id) = 0;
-  // The answer to OnReceiveRedirect of the fetch with that number: go on to the redirect's address with `headers`, or (`follow` false) end the fetch.
-  virtual void FollowRedirect(uint64_t id, bool follow, std::vector<std::pair<std::string, std::string>> headers = {}) = 0;
-  // The answer to OnRestartRequested of the fetch with that number.
-  virtual void AnswerRestart(uint64_t id, bool allow) = 0;
-  // Closes the connections waiting in the pool.
-  virtual void CloseIdleConnections() = 0;
   // A WebSocket connection. `handler` must outlive it, which ends with its OnClosed.
   virtual WebSocketHandle ConnectWebSocket(const url::Url& url, WebSocketHandler& handler, WebSocketOptions options = {}) = 0;
   // What the handle of a connection asks of it.
@@ -194,10 +186,24 @@ class NetworkService {
   static WebSocketHandle MakeWebSocketHandle(NetworkService* service, uint64_t id) { return WebSocketHandle(service, id); }
 };
 
+// What the program around the pages asks (the browser, not a page): a fetch with no rules of a page's (a navigation, which the browser makes for the address the user gave or a page was
+// sent to), the answers to a redirect and a stall that a handler left to later, the pool of connections. A page is never given this.
+class BrowserNetwork : public NetworkService {
+ public:
+  // A fetch of an address, as the options say and nothing more. `handler` must outlive it.
+  virtual FetchHandle Fetch(const url::Url& url, FetchHandler& handler, FetchOptions options = {}) = 0;
+  // The answer to OnReceiveRedirect of the fetch with that number: go on to the redirect's address with `headers`, or (`follow` false) end the fetch.
+  virtual void FollowRedirect(uint64_t id, bool follow, std::vector<std::pair<std::string, std::string>> headers = {}) = 0;
+  // The answer to OnRestartRequested of the fetch with that number.
+  virtual void AnswerRestart(uint64_t id, bool allow) = 0;
+  // Closes the connections waiting in the pool.
+  virtual void CloseIdleConnections() = 0;
+};
+
 // Fetches over HTTP/1.1 (through TLS for https), following redirects as the Fetch Standard says,
 // and keeps connections between requests. It must outlive the Loop::Run calls that serve its
 // fetches, and be destroyed before the Loop.
-class HttpClient : public NetworkService {
+class HttpClient : public BrowserNetwork {
  public:
   explicit HttpClient(Loop& loop, HttpClientOptions options = {});
   ~HttpClient() override;

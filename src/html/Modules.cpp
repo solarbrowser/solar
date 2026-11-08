@@ -243,7 +243,7 @@ void Fetch(qe::Realm* realm, const std::string& address, const std::string& type
   if (address.starts_with("data:")) {
     if (auto data = DecodeDataUrl(address)) text = std::move(data->first);
   } else {
-    text = LoadResource(address);
+    text = LoadModuleResource(address);
   }
   // The modules this one imports are on their way before anything waits for them, one after another otherwise.
   if (text && !address.starts_with("data:")) {

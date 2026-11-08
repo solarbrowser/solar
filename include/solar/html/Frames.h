@@ -46,6 +46,9 @@ class FrameEnvironment {
   virtual void SetRealmUrl(Quanta::Embed::Realm*, const std::string& /*url*/) {}
   virtual std::optional<std::string> LoadNavigation(const std::string& url) { return Load(url); }
   virtual std::optional<std::string> LoadNoCors(const std::string& url, bool /*styleSheet*/) { return Load(url); }
+  // The same for a module script and for a font, which are asked for with CORS (the server has to allow the page's origin).
+  virtual std::optional<std::string> LoadModule(const std::string& url) { return Load(url); }
+  virtual std::optional<std::string> LoadFont(const std::string& url) { return Load(url); }
 
   // What the resource at the URL is, as the Content-Type header would say: text/html, or an XML type.
   virtual std::string ContentType(const std::string& url) {
@@ -162,6 +165,8 @@ bool LoadPageStreaming(Quanta::Embed::Realm& realm, dom::Document* document, std
 // URL's bytes included).
 std::string DocumentBaseUrl(const dom::Document* document);
 std::optional<std::string> LoadResource(const std::string& url);
+// The same for a module script (asked for with CORS).
+std::optional<std::string> LoadModuleResource(const std::string& url);
 // Starts getting a resource that is wanted later, without waiting for it.
 void PrefetchResource(const std::string& url);
 // Whether what is being loaded is a style sheet (the page is not to be drawn while it is waited for).
