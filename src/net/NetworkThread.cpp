@@ -8,6 +8,7 @@
 
 #include "solar/net/PageFetch.h"
 
+#include <atomic>
 #include <condition_variable>
 #include <future>
 #include <thread>
@@ -37,7 +38,7 @@ struct ThreadedNetworkService::Impl {
   };
   uint64_t nextId = 1;
   std::unordered_map<uint64_t, PageFetch> fetches;
-  std::shared_ptr<bool> alive = std::make_shared<bool>(true);  // read on the page's thread only
+  std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>>(true);  // (read on the page's thread; the destructor may run on another)
 
   // A fetch as a page asks for it (see PageFetch.h): the rules of fetching are the service's.
   struct PagePageFetch {
@@ -65,7 +66,7 @@ struct ThreadedNetworkService::Impl {
   // response asked for again since.
   void Tell(uint64_t id, uint32_t epoch, std::function<void(PageFetch&)> tell) {
     pageLoop.Post([this, alive = alive, id, epoch, tell = std::move(tell)] {
-      if (!*alive) return;
+      if (!alive->load()) return;
       auto it = fetches.find(id);
       if (it == fetches.end() || epoch < it->second.epoch) return;
       tell(it->second);
@@ -75,7 +76,7 @@ struct ThreadedNetworkService::Impl {
   // The same for a page's fetch.
   void TellPageFetch(uint64_t id, std::function<void(PagePageFetch&)> tell) {
     pageLoop.Post([this, alive = alive, id, tell = std::move(tell)] {
-      if (!*alive) return;
+      if (!alive->load()) return;
       auto it = pageFetches.find(id);
       if (it == pageFetches.end()) return;
       tell(it->second);
@@ -88,7 +89,7 @@ struct ThreadedNetworkService::Impl {
   // The same for a connection.
   void TellSocket(uint64_t id, std::function<void(PageSocket&)> tell) {
     pageLoop.Post([this, alive = alive, id, tell = std::move(tell)] {
-      if (!*alive) return;
+      if (!alive->load()) return;
       auto it = sockets.find(id);
       if (it == sockets.end()) return;
       tell(it->second);
@@ -276,7 +277,7 @@ ThreadedNetworkService::ThreadedNetworkService(Loop& pageLoop, std::function<Htt
 
 ThreadedNetworkService::~ThreadedNetworkService() {
   Impl* impl = impl_.get();
-  *impl->alive = false;
+  impl->alive->store(false);
   impl->netLoop->Post([impl] {
     impl->netLoop->EndExternalWork();
     impl->netLoop->Stop();

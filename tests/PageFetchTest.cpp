@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdio>
 #include <functional>
+#include <future>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -14,8 +15,10 @@
 #include "solar/net/HttpClient.h"
 #include "solar/net/NetworkThread.h"
 #include "solar/net/PageFetch.h"
+#include "solar/net/RemoteNetwork.h"
 #include "solar/url/Parser.h"
 #include "solar/url/Serializer.h"
+#include "support/RemoteSide.h"
 #include "support/TestLoop.h"
 #include "support/TestServer.h"
 
@@ -117,20 +120,34 @@ struct Heard : solar::net::PageFetchHandler {
   }
 };
 
-// The network, either way, and the loop the page is run by.
+// The network, as the page has it: the client on the page's loop, the service on a thread, or a connection to a service that is in another thread as it would be in another process.
 struct Env {
   std::unique_ptr<solar::net::Loop> loop = solar::test::MakeLoop();
   std::unique_ptr<solar::net::HttpClient> inlineClient;
   std::unique_ptr<solar::net::ThreadedNetworkService> threaded;
+  std::unique_ptr<solar::test::RemoteSide> remote;
+  std::unique_ptr<solar::net::RemoteNetworkService> remoteService;
   solar::net::NetworkService* service = nullptr;
-  explicit Env(bool thread) {
-    if (thread) {
+  explicit Env(int mode) {
+    if (mode == 2) {
+      const auto [pageEnd, hostEnd] = solar::net::ipc::Channel::MakePair();
+      remote = std::make_unique<solar::test::RemoteSide>(hostEnd);
+      remoteService = std::make_unique<solar::net::RemoteNetworkService>(*loop, pageEnd);
+      service = remoteService.get();
+    } else if (mode == 1) {
       threaded = std::make_unique<solar::net::ThreadedNetworkService>(*loop);
       service = threaded.get();
     } else {
       inlineClient = std::make_unique<solar::net::HttpClient>(*loop);
       service = inlineClient.get();
     }
+  }
+  // (The origin a page that is in another process is tied to.)
+  void Lock(const std::string& origin) {
+    if (remote) remote->host->SetOrigin(origin);
+  }
+  ~Env() {
+    remoteService.reset();  // (before the service end: it hears the connection end)
   }
   void Run() { loop->Run(); }
 };
@@ -143,14 +160,15 @@ PageRequest Ask(const std::string& page, const std::string& url, RequestMode mod
   return request;
 }
 
-void RunAll(bool thread) {
-  const std::string via = thread ? " (service thread)" : " (client)";
+void RunAll(int mode) {
+  const std::string via = mode == 2 ? " (remote)" : mode == 1 ? " (service thread)" : " (client)";
   {
     // The same origin: all of the response is the page's.
     Recording log;
     log.respond = [](const std::string&) { return Response("200 OK", "hello", "X-Secret: yes\r\nContent-Type: text/plain\r\n"); };
     TestServer server(Serves(log));
-    Env env(thread);
+    Env env(mode);
+    env.Lock(Origin(server));
     Heard heard;
     env.service->StartFetch(Ask(Origin(server) + "/page", Origin(server) + "/data", RequestMode::Cors), heard);
     env.Run();
@@ -167,7 +185,8 @@ void RunAll(bool thread) {
     };
     TestServer server(Serves(log));
     TestServer page(Serves(log));
-    Env env(thread);
+    Env env(mode);
+    env.Lock(Origin(page));
     Heard closed, open;
     env.service->StartFetch(Ask(Origin(page) + "/", Origin(server) + "/closed"), closed);
     env.service->StartFetch(Ask(Origin(page) + "/", Origin(server) + "/open"), open);
@@ -194,7 +213,8 @@ void RunAll(bool thread) {
     };
     TestServer server(Serves(log));
     TestServer page(Serves(log));
-    Env env(thread);
+    Env env(mode);
+    env.Lock(Origin(page));
     PageRequest request = Ask(Origin(page) + "/", Origin(server) + "/put");
     request.method = "PUT";
     request.headers = {{"X-Custom", "1"}};
@@ -224,7 +244,8 @@ void RunAll(bool thread) {
     };
     TestServer server(Serves(log));
     TestServer page(Serves(log));
-    Env env(thread);
+    Env env(mode);
+    env.Lock(Origin(page));
     Heard opaque, blocked;
     env.service->StartFetch(Ask(Origin(page) + "/", Origin(server) + "/image", RequestMode::NoCors), opaque);
     env.service->StartFetch(Ask(Origin(page) + "/", Origin(server) + "/page", RequestMode::NoCors), blocked);
@@ -242,7 +263,8 @@ void RunAll(bool thread) {
     };
     TestServer server(Serves(log));
     TestServer page(Serves(log));
-    Env env(thread);
+    Env env(mode);
+    env.Lock(Origin(page));
     auto load = [&](const char* path, solar::net::RequestDestination destination, Heard& heard) {
       PageRequest request = Ask(Origin(page) + "/", Origin(server) + path, RequestMode::NoCors);
       request.destination = destination;
@@ -265,7 +287,8 @@ void RunAll(bool thread) {
     log.respond = [](const std::string&) { return Response("200 OK", "<html>a frame</html>", "Content-Type: text/html\r\nX-Content-Type-Options: nosniff\r\n"); };
     TestServer server(Serves(log));
     TestServer page(Serves(log));
-    Env env(thread);
+    Env env(mode);
+    env.Lock(Origin(page));
     PageRequest request = Ask(Origin(page) + "/", Origin(server) + "/frame", RequestMode::Navigate);
     request.destination = solar::net::RequestDestination::Document;
     request.credentials = RequestCredentials::Include;
@@ -280,7 +303,8 @@ void RunAll(bool thread) {
     Recording log;
     log.respond = [](const std::string&) { return Response("400 Bad Request", "no"); };
     TestServer server(Serves(log));
-    Env env(thread);
+    Env env(mode);
+    env.Lock("http://page.example");
     struct Socket : solar::net::WebSocketHandler {
       bool closed = false;
       void OnOpen(const std::string&, const std::string&) override {}
@@ -303,7 +327,8 @@ void RunAll(bool thread) {
     };
     TestServer server(Serves(log));
     TestServer page(Serves(log));
-    Env env(thread);
+    Env env(mode);
+    env.Lock(Origin(page));
     auto load = [&](const char* path, RequestCredentials credentials, Heard& heard) {
       PageRequest request = Ask(Origin(page) + "/", Origin(server) + path, RequestMode::Cors);
       request.destination = solar::net::RequestDestination::Font;
@@ -332,7 +357,8 @@ void RunAll(bool thread) {
       }
       TestServer::SendAll(client, Response("200 OK", "the whole style", "Content-Type: text/css\r\n"));
     });
-    Env env(thread);
+    Env env(mode);
+    env.Lock(Origin(server));
     PageRequest request = Ask(Origin(server) + "/", Origin(server) + "/slow", RequestMode::NoCors);
     request.destination = solar::net::RequestDestination::Style;
     request.restartable = true;
@@ -353,7 +379,8 @@ void RunAll(bool thread) {
     };
     TestServer server(Serves(log));
     TestServer page(Serves(log));
-    Env env(thread);
+    Env env(mode);
+    env.Lock(Origin(page));
     Heard good, bad;
     env.service->StartFetch(Ask(Origin(page) + "/", Origin(server) + "/start"), good);
     env.service->StartFetch(Ask(Origin(page) + "/", Origin(server) + "/start-quiet"), bad);
@@ -366,7 +393,8 @@ void RunAll(bool thread) {
     Recording log;
     log.respond = [](const std::string&) { return Response("200 OK", "x", "Access-Control-Allow-Origin: *\r\n"); };
     TestServer server(Serves(log));
-    Env env(thread);
+    Env env(mode);
+    env.Lock(Origin(server));
     PageRequest request = Ask(Origin(server) + "/dir/page?q=1#frag", Origin(server) + "/r");
     request.sendsReferrer = true;
     request.referrerPolicy = "origin";
@@ -395,7 +423,8 @@ void RunAll(bool thread) {
       TestServer::ReadHead(client);
       while (!release.load()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
     });
-    Env env(thread);
+    Env env(mode);
+    env.Lock(Origin(server));
     Heard heard;
     solar::net::FetchHandle handle = env.service->StartFetch(Ask(Origin(server) + "/", Origin(server) + "/hang"), heard);
     std::this_thread::sleep_for(std::chrono::milliseconds(150));
@@ -410,8 +439,9 @@ void RunAll(bool thread) {
 }  // namespace
 
 int main() {
-  RunAll(false);
-  RunAll(true);
+  RunAll(0);
+  RunAll(1);
+  RunAll(2);
   std::printf("page fetch: %d/%d passed\n", total - failed, total);
   return failed == 0 ? 0 : 1;
 }
