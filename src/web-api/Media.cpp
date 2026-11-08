@@ -122,6 +122,7 @@ struct Fetcher : std::enable_shared_from_this<Fetcher> {
     request.mode = net::RequestMode::NoCors;
     request.credentials = net::RequestCredentials::Include;
     request.timeout = std::chrono::minutes(2);
+    request.sendsReferrer = true;
     request.pageUrl = host->config().pageUrl;
     request.tls = host->config().tls;
     request.headers.emplace_back("Accept", "*/*");

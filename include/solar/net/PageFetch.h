@@ -30,7 +30,7 @@ enum class ResponseType { Basic, Cors, Default, Error, Opaque, OpaqueRedirect };
 // What a request is for. Of a fetch() (Fetch) the page's script is told only what a response of its type allows; of a load the page makes for itself (a picture, a style sheet, a
 // script, a font, a media file) the page, which is where it is used, is given the head and the body whole, and Opaque Response Blocking and the CORS check of a cors request are what
 // keep the sensitive ones out. Other is the loads of the page that are not yet named: they are asked as no-cors ones and are not blocked (to be made none).
-enum class RequestDestination { Fetch, Image, Media, Script, Style, Font, Module, Other };
+enum class RequestDestination { Fetch, Image, Media, Script, Style, Font, Module, Document, Other };
 
 
 // What the page asks. Everything in it is data (no pointer to what only the page has).

@@ -118,7 +118,7 @@ Value Open(Context& ctx, Value, qe::Args args, Value) {
     if (end > at) options.protocols.push_back(protocols.substr(at, end - at));
     at = end + 1;
   }
-  options.origin = qe::ToWtf8(ctx, args[2]);
+  // (The origin the page names is not used: the service takes the page's own.)
   options.initiator = state->host->config().pageUrl;
   const uint32_t id = state->next++;
   auto socket = std::make_unique<State::Socket>(*state, id, qe::Persistent(ctx, args[3]));

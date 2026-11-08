@@ -219,7 +219,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     // (importScripts and the like are not the worker's to answer: it is the one asking.)
     const bool was = bypassWorker_;
     bypassWorker_ = true;
-    auto text = Load(url);
+    auto text = LoadAs(url, Kind::Script);  // (a script of the worker: no CORS, and what is not one is blocked)
     bypassWorker_ = was;
     return text;
   }
@@ -300,7 +300,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
 
   // A resource in flight or here: what the network brought for an address, kept for as long as the program runs (pages share their scripts, styles and pictures).
   // What a load is for: it decides how the network service asks for it (see net::RequestDestination). Fonts and module scripts are asked for with CORS, the rest without.
-  enum class Kind { Generic, Script, Style, Image, Font, Module };
+  enum class Kind { Generic, Script, Style, Image, Font, Module, Document };
   static bool WithCors(Kind kind) { return kind == Kind::Font || kind == Kind::Module; }
   static std::string KeyOf(const std::string& url, Kind kind) { return WithCors(kind) ? url + "\x01" "cors" : url; }
 
@@ -356,6 +356,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     request.url = *parsed;
     request.pageUrl = solar::url::Parse(pageUrl_).value_or(*parsed);
     request.restartable = true;
+    request.sendsReferrer = true;  // (under the default policy: the page's origin where it is another one, its address where it is the same)
     // (A module and a font are asked for with the cookies of the page's own origin only, so that a server that allows everyone does: credentials "same-origin".)
     request.credentials = WithCors(resource.kind) ? solar::net::RequestCredentials::SameOrigin : solar::net::RequestCredentials::Include;
     request.mode = WithCors(resource.kind) ? solar::net::RequestMode::Cors : solar::net::RequestMode::NoCors;
@@ -365,6 +366,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
       case Kind::Image: request.destination = solar::net::RequestDestination::Image; break;
       case Kind::Font: request.destination = solar::net::RequestDestination::Font; break;
       case Kind::Module: request.destination = solar::net::RequestDestination::Module; break;
+      case Kind::Document: request.destination = solar::net::RequestDestination::Document; request.mode = solar::net::RequestMode::Navigate; break;
       default: request.destination = solar::net::RequestDestination::Other; break;
     }
     resource.handle = client_.StartFetch(std::move(request), resource);
@@ -540,6 +542,8 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
   // A script or a style sheet, with no CORS (a response from another origin that Opaque Response Blocking blocks comes back with no text); a module and a font, with it.
   std::optional<std::string> LoadNoCors(const std::string& url, bool styleSheet) override { return LoadAs(url, styleSheet ? Kind::Style : Kind::Script); }
   std::optional<std::string> LoadModule(const std::string& url) override { return LoadAs(url, Kind::Module); }
+  // The document of a frame that is navigated.
+  std::optional<std::string> LoadNavigation(const std::string& url) override { return LoadAs(url, Kind::Document); }
   std::optional<std::string> LoadFont(const std::string& url) override { return LoadAs(url, Kind::Font); }
 
   std::optional<std::string> LoadAs(const std::string& url, Kind kind) {

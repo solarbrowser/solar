@@ -131,6 +131,7 @@ Value Fetch(Context& ctx, Value, qe::Args args, Value) {
   request.mode = net::RequestMode::NoCors;
   request.credentials = net::RequestCredentials::Include;
   request.timeout = std::chrono::minutes(2);
+  request.sendsReferrer = true;
   request.pageUrl = state->host->config().pageUrl;
   request.tls = state->host->config().tls;
   request.headers.emplace_back("Accept", "image/avif,image/webp,image/png,image/svg+xml,image/*,*/*;q=0.8");

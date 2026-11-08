@@ -1198,6 +1198,8 @@ WebSocketClient& HttpClient::WebSockets() {
 }
 
 WebSocketHandle HttpClient::ConnectWebSocket(const url::Url& url, WebSocketHandler& handler, WebSocketOptions options) {
+  // The Origin of the handshake is the page's, as the service knows it (the page's address it is for), not what the page says it is.
+  options.origin = options.initiator ? url::SerializeOrigin(*options.initiator) : std::string();
   return MakeWebSocketHandle(this, WebSockets().Connect(url, handler, std::move(options)));
 }
 void HttpClient::SendWebSocket(uint64_t id, std::string data, bool binary) { WebSockets().Send(id, std::move(data), binary); }

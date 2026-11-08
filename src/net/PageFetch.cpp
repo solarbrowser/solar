@@ -73,6 +73,7 @@ const char* DestinationName(RequestDestination destination) {
     case RequestDestination::Script: case RequestDestination::Module: return "script";
     case RequestDestination::Style: return "style";
     case RequestDestination::Font: return "font";
+    case RequestDestination::Document: return "iframe";
     default: return "empty";
   }
 }
@@ -121,7 +122,7 @@ void PageFetchLoader::Start() {
   options.body = request_.body;
   secFetchPage_ = page;
   secFetchSite_ = SecFetchSiteOf(page, request_.url);
-  secFetchMode_ = mode_ == RequestMode::Cors ? "cors" : mode_ == RequestMode::NoCors ? "no-cors" : "same-origin";
+  secFetchMode_ = mode_ == RequestMode::Cors ? "cors" : mode_ == RequestMode::NoCors ? "no-cors" : mode_ == RequestMode::Navigate ? "navigate" : "same-origin";
   SetSecFetchHeaders(options.headers, request_.url, secFetchSite_, secFetchMode_, DestinationName(request_.destination));
   referrerPolicy_ = request_.referrerPolicy;
   sendsReferrer_ = request_.sendsReferrer;

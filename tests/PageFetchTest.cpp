@@ -260,6 +260,41 @@ void RunAll(bool thread) {
     Check("a load that is not yet named is not blocked" + via, other.response && other.body == "<html>nope</html>", other.error.value_or(other.body));
   }
   {
+    // The document of a frame is a navigation: nothing of CORS or of ORB, and the metadata says so.
+    Recording log;
+    log.respond = [](const std::string&) { return Response("200 OK", "<html>a frame</html>", "Content-Type: text/html\r\nX-Content-Type-Options: nosniff\r\n"); };
+    TestServer server(Serves(log));
+    TestServer page(Serves(log));
+    Env env(thread);
+    PageRequest request = Ask(Origin(page) + "/", Origin(server) + "/frame", RequestMode::Navigate);
+    request.destination = solar::net::RequestDestination::Document;
+    request.credentials = RequestCredentials::Include;
+    Heard heard;
+    env.service->StartFetch(request, heard);
+    env.Run();
+    Check("the document of a frame is given whole, whatever it is" + via, heard.response && heard.body == "<html>a frame</html>" && heard.response->type != ResponseType::Opaque, heard.error.value_or(heard.body));
+    Check("with Sec-Fetch-Mode navigate and Sec-Fetch-Dest iframe" + via, Has(log.Head(0), "Sec-Fetch-Mode: navigate") && Has(log.Head(0), "Sec-Fetch-Dest: iframe"), log.Head(0));
+  }
+  {
+    // The Origin of a WebSocket handshake is the page's own address' origin, not what the page says.
+    Recording log;
+    log.respond = [](const std::string&) { return Response("400 Bad Request", "no"); };
+    TestServer server(Serves(log));
+    Env env(thread);
+    struct Socket : solar::net::WebSocketHandler {
+      bool closed = false;
+      void OnOpen(const std::string&, const std::string&) override {}
+      void OnMessage(std::string, bool) override {}
+      void OnClosed(bool, uint16_t, const std::string&, const std::string&) override { closed = true; }
+    } socket;
+    solar::net::WebSocketOptions options;
+    options.origin = "http://evil.example";
+    options.initiator = *solar::url::Parse("http://page.example/some/page");
+    env.service->ConnectWebSocket(*solar::url::Parse("ws://127.0.0.1:" + std::to_string(server.port()) + "/"), socket, options);
+    env.Run();
+    Check("a WebSocket handshake carries the origin of the page the service knows" + via, Has(log.Head(0), "Origin: http://page.example") && !Has(log.Head(0), "evil.example") && socket.closed, log.Head(0));
+  }
+  {
     // A font or a module is asked for with CORS: the server has to allow the page.
     Recording log;
     log.respond = [](const std::string& head) {
