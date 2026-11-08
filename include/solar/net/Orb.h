@@ -8,7 +8,7 @@
 
 #include <string_view>
 
-namespace solar::web {
+namespace solar::net {
 
 // Opaque Response Blocking (https://fetch.spec.whatwg.org/#orb-algorithm): what a cross-origin response to a no-cors request may
 // be given to the page as. Block makes it a network error.
@@ -20,4 +20,4 @@ OrbVerdict OrbCheckHead(int status, std::string_view contentType, bool nosniff, 
 // By the body, for a response the head could not decide: true where it is HTML, XML or JSON, which are blocked.
 bool OrbBodyIsBlocked(std::string_view body);
 
-}  // namespace solar::web
+}  // namespace solar::net

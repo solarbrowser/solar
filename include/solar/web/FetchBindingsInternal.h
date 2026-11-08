@@ -16,6 +16,7 @@
 #include "solar/net/FetchHeaders.h"
 #include "solar/net/HttpCache.h"
 #include "solar/net/HttpClient.h"
+#include "solar/net/PageFetch.h"
 #include "solar/url/Url.h"
 #include "solar/web/DomBindingsInternal.h"
 
@@ -122,7 +123,7 @@ void EncodeMultipart(const JsFormData& form, std::string& body, std::string& con
 // A body as a FormData, by its Content-Type: urlencoded or multipart. False if it is neither or is malformed.
 bool ParseFormData(Quanta::Context& ctx, std::string_view body, std::string_view contentType, JsFormData* into);
 
-enum class ResponseType { Basic, Cors, Default, Error, Opaque, OpaqueRedirect };
+using ResponseType = net::ResponseType;
 
 struct JsResponse : JsBodyOwner {
   using Parent = JsBodyOwner;
@@ -141,8 +142,8 @@ struct JsResponse : JsBodyOwner {
   }
 };
 
-enum class RequestMode { SameOrigin, NoCors, Cors, Navigate };
-enum class RequestCredentials { Omit, SameOrigin, Include };
+using RequestMode = net::RequestMode;
+using RequestCredentials = net::RequestCredentials;
 
 struct JsRequest : JsBodyOwner {
   using Parent = JsBodyOwner;

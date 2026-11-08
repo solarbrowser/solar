@@ -6,6 +6,8 @@
 
 #include "solar/net/NetworkThread.h"
 
+#include "solar/net/PageFetch.h"
+
 #include <condition_variable>
 #include <future>
 #include <thread>
@@ -21,6 +23,7 @@ namespace {
 
 // What the service makes of what it was asked for, on its own thread.
 struct NetFetch;
+struct NetPageFetch;
 struct NetSocket;
 
 }  // namespace
@@ -36,6 +39,11 @@ struct ThreadedNetworkService::Impl {
   std::unordered_map<uint64_t, PageFetch> fetches;
   std::shared_ptr<bool> alive = std::make_shared<bool>(true);  // read on the page's thread only
 
+  // A fetch as a page asks for it (see PageFetch.h): the rules of fetching are the service's.
+  struct PagePageFetch {
+    PageFetchHandler* handler = nullptr;
+  };
+  std::unordered_map<uint64_t, PagePageFetch> pageFetches;
   struct PageSocket {
     WebSocketHandler* handler = nullptr;
   };
@@ -47,6 +55,7 @@ struct ThreadedNetworkService::Impl {
   std::unique_ptr<Loop> netLoop;
   std::unique_ptr<HttpClient> client;
   std::unordered_map<uint64_t, std::unique_ptr<NetFetch>> netFetches;
+  std::unordered_map<uint64_t, std::unique_ptr<NetPageFetch>> netPageFetches;
   std::unordered_map<uint64_t, std::unique_ptr<NetSocket>> netSockets;
   std::unordered_map<uint64_t, uint64_t> socketClientIds;  // the number the client knows a connection by
 
@@ -61,6 +70,19 @@ struct ThreadedNetworkService::Impl {
       if (it == fetches.end() || epoch < it->second.epoch) return;
       tell(it->second);
     });
+  }
+
+  // The same for a page's fetch.
+  void TellPageFetch(uint64_t id, std::function<void(PagePageFetch&)> tell) {
+    pageLoop.Post([this, alive = alive, id, tell = std::move(tell)] {
+      if (!*alive) return;
+      auto it = pageFetches.find(id);
+      if (it == pageFetches.end()) return;
+      tell(it->second);
+    });
+  }
+  void EndedPageFetch(uint64_t id) {
+    if (pageFetches.erase(id)) pageLoop.EndExternalWork();
   }
 
   // The same for a connection.
@@ -161,6 +183,45 @@ struct NetFetch final : FetchHandler {
   }
 };
 
+struct NetPageFetch final : PageFetchHandler {
+  ThreadedNetworkService::Impl& impl;
+  const uint64_t id;
+  FetchHandle handle;
+  NetPageFetch(ThreadedNetworkService::Impl& i, uint64_t number) : impl(i), id(number) {}
+
+  void OnResponse(const PageResponse& response) override {
+    impl.TellPageFetch(id, [response](ThreadedNetworkService::Impl::PagePageFetch& page) { page.handler->OnResponse(response); });
+  }
+  void OnBody(std::span<const uint8_t> data) override {
+    impl.TellPageFetch(id, [bytes = std::vector<uint8_t>(data.begin(), data.end())](ThreadedNetworkService::Impl::PagePageFetch& page) { page.handler->OnBody(bytes); });
+  }
+  void OnEnd() override {
+    ThreadedNetworkService::Impl* owner = &impl;
+    const uint64_t number = id;
+    impl.TellPageFetch(id, [owner, number](ThreadedNetworkService::Impl::PagePageFetch& page) {
+      PageFetchHandler* handler = page.handler;
+      owner->EndedPageFetch(number);
+      handler->OnEnd();
+    });
+    Finished();
+  }
+  void OnError(std::string_view message) override {
+    ThreadedNetworkService::Impl* owner = &impl;
+    const uint64_t number = id;
+    impl.TellPageFetch(id, [owner, number, message = std::string(message)](ThreadedNetworkService::Impl::PagePageFetch& page) {
+      PageFetchHandler* handler = page.handler;
+      owner->EndedPageFetch(number);
+      handler->OnError(message);
+    });
+    Finished();
+  }
+  void Finished() {
+    ThreadedNetworkService::Impl* owner = &impl;
+    const uint64_t number = id;
+    impl.netLoop->Post([owner, number] { owner->netPageFetches.erase(number); });
+  }
+};
+
 struct NetSocket final : WebSocketHandler {
   ThreadedNetworkService::Impl& impl;
   const uint64_t id;
@@ -219,12 +280,14 @@ ThreadedNetworkService::~ThreadedNetworkService() {
   });
   impl->thread.join();
   impl->netFetches.clear();
+  impl->netPageFetches.clear();
   impl->netSockets.clear();
   impl->client.reset();
   impl->netLoop.reset();
   // (What was in flight is let go: the loop of the page is no longer kept waiting for it.)
-  for (size_t i = 0; i < impl->fetches.size() + impl->sockets.size(); ++i) impl->pageLoop.EndExternalWork();
+  for (size_t i = 0; i < impl->fetches.size() + impl->pageFetches.size() + impl->sockets.size(); ++i) impl->pageLoop.EndExternalWork();
   impl->fetches.clear();
+  impl->pageFetches.clear();
   impl->sockets.clear();
 }
 
@@ -242,7 +305,32 @@ FetchHandle ThreadedNetworkService::Fetch(const url::Url& url, FetchHandler& han
   return MakeHandle(this, id);
 }
 
+FetchHandle ThreadedNetworkService::StartFetch(PageRequest request, PageFetchHandler& handler) {
+  const uint64_t id = impl_->nextId++;
+  impl_->pageFetches[id].handler = &handler;
+  impl_->pageLoop.BeginExternalWork();
+  Impl* impl = impl_.get();
+  impl->netLoop->Post([impl, id, request = std::move(request)]() mutable {
+    auto fetch = std::make_unique<NetPageFetch>(*impl, id);
+    NetPageFetch* raw = fetch.get();
+    impl->netPageFetches[id] = std::move(fetch);
+    raw->handle = impl->client->StartFetch(std::move(request), *raw);
+  });
+  return MakeHandle(this, id);
+}
+
 void ThreadedNetworkService::Cancel(uint64_t id) {
+  if (const auto page = impl_->pageFetches.find(id); page != impl_->pageFetches.end()) {
+    PageFetchHandler* handler = page->second.handler;
+    impl_->EndedPageFetch(id);
+    Impl* impl = impl_.get();
+    impl->netLoop->Post([impl, id] {
+      auto found = impl->netPageFetches.find(id);
+      if (found != impl->netPageFetches.end()) found->second->handle.Cancel();
+    });
+    handler->OnError("aborted");
+    return;
+  }
   const auto it = impl_->fetches.find(id);
   if (it == impl_->fetches.end()) return;
   FetchHandler* handler = it->second.handler;

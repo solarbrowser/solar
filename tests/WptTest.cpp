@@ -58,8 +58,8 @@
 #include "solar/web-api/WebSocket.h"
 #include "solar/web-api/Worker.h"
 #include "solar/web/FetchHost.h"
-#include "solar/web/MimeType.h"
-#include "solar/web/Orb.h"
+#include "solar/net/MimeType.h"
+#include "solar/net/Orb.h"
 #include "solar/web/JsEventLoop.h"
 #include "solar/web/TimerHost.h"
 #include "solar/web/UrlBindings.h"
@@ -677,12 +677,12 @@ class TestEnvironment : public solar::html::FrameEnvironment, public solar::weba
     if (found == serverTypes_.end()) return text;
     // (A style sheet of another origin is one only if it says it is.)
     if (styleSheet) {
-      const auto mime = solar::web::ParseMimeType(found->second);
+      const auto mime = solar::net::ParseMimeType(found->second);
       if (!mime || mime->type != "text" || mime->subtype != "css") return blockedLoad_ = true, std::nullopt;
     }
     const auto nosniff = serverNoSniff_.find(url);
-    const solar::web::OrbVerdict verdict = solar::web::OrbCheckHead(200, found->second, nosniff != serverNoSniff_.end() && nosniff->second, "");
-    if (verdict == solar::web::OrbVerdict::Block || (verdict == solar::web::OrbVerdict::NeedBody && solar::web::OrbBodyIsBlocked(*text))) return blockedLoad_ = true, std::nullopt;
+    const solar::net::OrbVerdict verdict = solar::net::OrbCheckHead(200, found->second, nosniff != serverNoSniff_.end() && nosniff->second, "");
+    if (verdict == solar::net::OrbVerdict::Block || (verdict == solar::net::OrbVerdict::NeedBody && solar::net::OrbBodyIsBlocked(*text))) return blockedLoad_ = true, std::nullopt;
     return text;
   }
 

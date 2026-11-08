@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-namespace solar::web {
+namespace solar::net {
 
 // A MIME type as the MIME Sniffing Standard has it (https://mimesniff.spec.whatwg.org/#mime-type-representation).
 struct MimeType {
@@ -25,4 +25,4 @@ std::optional<MimeType> ParseMimeType(std::string_view text);
 // "Serialize a MIME type".
 std::string SerializeMimeType(const MimeType& mime);
 
-}  // namespace solar::web
+}  // namespace solar::net

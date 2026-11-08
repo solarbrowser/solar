@@ -57,9 +57,6 @@ class FetchHost {
   Quanta::Value JsonParse() const { return jsonParse_.Get(); }
   Quanta::Value JsonStringify() const { return jsonStringify_.Get(); }
 
-  // What CORS preflights have allowed, for every fetch of this realm.
-  net::PreflightCache& preflights() { return preflights_; }
-
   // For fetch(): takes the operation, which then lives until it ends.
   void Adopt(std::unique_ptr<FetchOperation> operation);
   // Called when an operation has ended; it is destroyed once the stack it ended on has unwound.
@@ -75,7 +72,6 @@ class FetchHost {
   Config config_;
   Quanta::Context* ctx_;
   Quanta::Embed::Persistent jsonParse_;
-  net::PreflightCache preflights_;
   Quanta::Embed::Persistent jsonStringify_;
   std::vector<std::unique_ptr<FetchOperation>> operations_;
   std::vector<std::pair<const void*, std::shared_ptr<void>>> extensions_;

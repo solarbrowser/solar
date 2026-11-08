@@ -4,11 +4,11 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-#include "solar/web/MimeType.h"
+#include "solar/net/MimeType.h"
 
 #include <algorithm>
 
-namespace solar::web {
+namespace solar::net {
 
 namespace {
 
@@ -110,4 +110,4 @@ std::string SerializeMimeType(const MimeType& mime) {
   return out;
 }
 
-}  // namespace solar::web
+}  // namespace solar::net

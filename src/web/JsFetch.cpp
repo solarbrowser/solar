@@ -15,10 +15,10 @@
 #include "solar/web/BlobUrls.h"
 #include "solar/web/FetchBindingsInternal.h"
 #include "solar/web/FetchHost.h"
-#include "solar/web/MimeType.h"
+#include "solar/net/MimeType.h"
 #include "solar/web/FetchOperation.h"
 #include "solar/web/Integrity.h"
-#include "solar/web/Orb.h"
+#include "solar/net/Orb.h"
 
 namespace solar::web {
 
@@ -39,55 +39,6 @@ std::string_view Trimmed(std::string_view text) {
   while (!text.empty() && (text.front() == ' ' || text.front() == '\t')) text.remove_prefix(1);
   while (!text.empty() && (text.back() == ' ' || text.back() == '\t')) text.remove_suffix(1);
   return text;
-}
-
-bool IsRedirectStatus(int status) { return status == 301 || status == 302 || status == 303 || status == 307 || status == 308; }
-
-// What a Referer header carries under the request's referrer policy (Referrer Policy, "determine the
-// request's referrer"), or nothing.
-std::optional<std::string> RefererFor(const std::string& policy, const url::Url& page, const url::Url& target) {
-  if (page.scheme != "http" && page.scheme != "https") return std::nullopt;
-  url::Url full = page;
-  full.fragment.reset();
-  full.username.clear();
-  full.password.clear();
-  const std::string fullText = url::Serialize(full);
-  const std::string originText = url::SerializeOrigin(page) + "/";
-  const bool sameOrigin = url::SerializeOrigin(page) == url::SerializeOrigin(target);
-  const bool downgrade = page.scheme == "https" && target.scheme != "https";
-
-  const std::string effective = policy.empty() ? "strict-origin-when-cross-origin" : policy;
-  if (effective == "no-referrer") return std::nullopt;
-  if (effective == "origin") return originText;
-  if (effective == "unsafe-url") return fullText;
-  if (effective == "same-origin") return sameOrigin ? std::optional<std::string>(fullText) : std::nullopt;
-  if (effective == "origin-when-cross-origin") return sameOrigin ? fullText : originText;
-  if (effective == "no-referrer-when-downgrade") return downgrade ? std::nullopt : std::optional<std::string>(fullText);
-  if (effective == "strict-origin") return downgrade ? std::nullopt : std::optional<std::string>(originText);
-  // strict-origin-when-cross-origin
-  if (sameOrigin) return fullText;
-  return downgrade ? std::nullopt : std::optional<std::string>(originText);
-}
-
-// Sec-Fetch-Site / -Mode / -Dest (Fetch Metadata): sent to the addresses a browser trusts (https, and the loopback), and to no others.
-bool PotentiallyTrustworthy(const url::Url& address) {
-  if (address.scheme == "https" || address.scheme == "wss") return true;
-  if (address.scheme != "http" || !address.host) return false;
-  const std::string& host = *address.host;
-  return host == "localhost" || host.ends_with(".localhost") || host == "[::1]" || host.starts_with("127.");
-}
-
-void SetSecFetchHeaders(std::vector<std::pair<std::string, std::string>>& headers, const url::Url& target, int site, const std::string& mode) {
-  std::erase_if(headers, [](const auto& header) { return header.first.size() > 10 && EqualsIgnoreCase(header.first.substr(0, 10), "sec-fetch-"); });
-  if (!PotentiallyTrustworthy(target)) return;
-  headers.emplace_back("Sec-Fetch-Dest", "empty");
-  headers.emplace_back("Sec-Fetch-Mode", mode);
-  headers.emplace_back("Sec-Fetch-Site", site == 0 ? "same-origin" : site == 1 ? "same-site" : "cross-site");
-}
-
-int SecFetchSiteOf(const url::Url& page, const url::Url& target) {
-  if (url::SerializeOrigin(page) == url::SerializeOrigin(target)) return 0;
-  return url::IsSameSite(page, target) ? 1 : 2;
 }
 
 }  // namespace
@@ -112,153 +63,40 @@ void FetchOperation::Done() {
   host.Finish(this);
 }
 
-bool FetchOperation::OnRedirectIn(const net::HttpResponseHead& redirect, const url::Url& next, std::vector<std::pair<std::string, std::string>>& headers) {
-  if (settled && !body) return false;
-  ++redirects;
-  const bool nextCrossOrigin = url::SerializeOrigin(next) != pageOrigin;
-  // A cors request that has gone cross-origin must have its redirects allowed by each server.
-  if (mode == RequestMode::Cors && url::SerializeOrigin(currentUrl) != pageOrigin &&
-      !net::CorsAllowsResponse(redirect, taintedOrigin ? "null" : pageOrigin, credentials == RequestCredentials::Include)) {
-    FailWith(MakeTypeError(host.context(), "Failed to fetch: a redirect was not allowed by CORS"), "a redirect was not allowed by CORS");
-    return false;
-  }
-  if (next.scheme != "http" && next.scheme != "https") return false;
-  if (mode == RequestMode::Cors && (corsTainted || nextCrossOrigin) && next.IncludesCredentials()) {
-    FailWith(MakeTypeError(host.context(), "Failed to fetch: a redirect to an address with credentials"), "a redirect to an address with credentials");
-    return false;
-  }
-  // Having gone from one origin to another, and then on to a third, the request's origin is unknown.
-  if (url::SerializeOrigin(next) != url::SerializeOrigin(currentUrl) && url::SerializeOrigin(currentUrl) != pageOrigin) taintedOrigin = true;
-  if (mode == RequestMode::Cors && nextCrossOrigin) corsTainted = true;
-  currentUrl = next;
-
-  // The Origin header follows: null once tainted, and dropped again on a same-origin GET.
-  std::erase_if(headers, [](const auto& header) { return EqualsIgnoreCase(header.first, "origin"); });
-  // (301 and 302 turn a POST into a GET, 303 turns anything but a HEAD into one; 307 and 308 keep the method.)
-  std::string next_method = method;
-  if (((redirect.status == 301 || redirect.status == 302) && method == "POST") || (redirect.status == 303 && method != "GET" && method != "HEAD")) next_method = "GET";
-  secFetchSite = std::max(secFetchSite, SecFetchSiteOf(secFetchPage, next));
-  SetSecFetchHeaders(headers, next, secFetchSite, secFetchMode);
-  // The Referrer-Policy of the redirect response is the policy from here on (the last of its tokens that is one), and the Referer is made again.
-  if (const auto policyHeader = redirect.Header("referrer-policy")) {
-    std::string value(*policyHeader), token;
-    value.push_back(',');
-    for (char c : value) {
-      if (c != ',') { if (c != ' ' && c != '\t') token.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c)))); continue; }
-      for (const char* known : {"no-referrer", "no-referrer-when-downgrade", "same-origin", "origin", "strict-origin", "origin-when-cross-origin", "strict-origin-when-cross-origin", "unsafe-url"}) {
-        if (token == known) referrerPolicy = token;
-      }
-      token.clear();
-    }
-  }
-  std::erase_if(headers, [](const auto& header) { return EqualsIgnoreCase(header.first, "referer"); });
-  if (sendsReferrer) {
-    // (What is sent is what the request's referrer is from then on: a policy cannot give back what an earlier one took away.)
-    if (const auto referer = RefererFor(referrerPolicy, referrerSource, next)) {
-      headers.emplace_back("Referer", *referer);
-      if (const auto parsed = url::Parse(*referer)) referrerSource = *parsed;
-    } else {
-      sendsReferrer = false;
-    }
-  }
-  if (corsTainted || taintedOrigin || (next_method != "GET" && next_method != "HEAD")) headers.emplace_back("Origin", taintedOrigin ? "null" : pageOrigin);
-  method = next_method;
-  if (nonSimple && corsTainted && mode == RequestMode::Cors) {
-    // The target is asked first, as the request is: this hop ends here, and the next begins with the preflight.
-    redirectForPreflight = true;
-    redirectTarget = next;
-    redirectOptions = mainOptions;
-    redirectOptions.method = next_method;
-    redirectOptions.headers = headers;
-    if (next_method == "GET" || next_method == "HEAD") redirectOptions.body.reset();
-    unsafeHeaders = net::CorsUnsafeRequestHeaderNames(requestHeaders);
-    return false;
-  }
-  return true;
-}
-
-void FetchOperation::OnResponseHeadIn(const net::HttpResponseHead& head, const url::Url& finalUrl) {
+void FetchOperation::OnResponseIn(const net::PageResponse& info) {
   if (settled) return;  // aborted, or failed already
-  if (preflighting) {
-    const bool includeCredentials = credentials == RequestCredentials::Include;
-    net::PreflightVerdict verdict = net::CheckPreflightResponse(head, pageOrigin, includeCredentials, method, unsafeHeaders);
-    if (!verdict.ok) {
-      const std::string text = "Failed to fetch (CORS preflight failed: " + verdict.reason + ")";
-      FailWith(MakeTypeError(host.context(), text), text);
-      handle.Cancel();
-      return;
-    }
-    host.preflights().Store(pageOrigin, preflightUrl, includeCredentials, std::move(verdict.permission));
-    return;  // the request itself goes when the preflight has ended
-  }
   Context& ctx = host.context();
-  currentUrl = finalUrl;
-  const bool includeCredentials = credentials == RequestCredentials::Include;
-
-  if (mode == RequestMode::Cors && (corsTainted || crossOrigin) && !net::CorsAllowsResponse(head, taintedOrigin ? "null" : pageOrigin, includeCredentials)) {
-    FailWith(MakeTypeError(ctx, "Failed to fetch: the response was not allowed by CORS"), "the response was not allowed by CORS");
-    handle.Cancel();
-    return;
-  }
-
-  // A response to a no-cors request that is from another origin is checked by Opaque Response Blocking before the page has it.
-  if (mode == RequestMode::NoCors && crossOrigin && !integrityReleased && integrity.empty()) {
-    const auto header = [&](const char* name) { return head.Header(name).value_or(std::string_view()); };
-    std::string nosniffValue(header("x-content-type-options"));
-    for (char& c : nosniffValue) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    const OrbVerdict verdict = OrbCheckHead(head.status, header("content-type"), nosniffValue.starts_with("nosniff"), header("content-range"));
-    if (verdict == OrbVerdict::Block) {
-      FailWith(MakeTypeError(ctx, "Failed to fetch: the response was blocked (ORB)"), "the response was blocked (ORB)");
-      handle.Cancel();
-      return;
-    }
-    if (verdict == OrbVerdict::NeedBody) {
-      integrityBuffering = orbBuffering = true;
-      integrityHead = head;
-      integrityFinalUrl = finalUrl;
-      return;
-    }
-  }
   if (!integrity.empty() && !integrityReleased) {
     // An opaque response cannot be checked; any other waits for its whole body.
-    if (mode == RequestMode::NoCors && crossOrigin) {
+    if (info.type == ResponseType::Opaque) {
       FailWith(MakeTypeError(ctx, "Failed to fetch: the integrity of an opaque response cannot be checked"), "integrity of an opaque response");
       handle.Cancel();
       return;
     }
     integrityBuffering = true;
-    integrityHead = head;
-    integrityFinalUrl = finalUrl;
+    integrityHead = info;
     return;
   }
   JsResponse* r = NewResponse(ctx);
-  url::Url withoutFragment = finalUrl;
-  withoutFragment.fragment.reset();
-  if (redirectMode == net::RedirectMode::Manual && IsRedirectStatus(head.status)) {
+  if (info.type == ResponseType::OpaqueRedirect) {
     r->type = ResponseType::OpaqueRedirect;
     r->status = 0;
-    r->hiddenStatus = head.status;
-    if (const auto location = head.Header("location")) r->hiddenLocation = std::string(*location);
-    r->url = url::Serialize(withoutFragment);
+    r->hiddenStatus = info.hiddenStatus;
+    r->hiddenLocation = info.hiddenLocation;
+    r->url = url::Serialize(info.url);
     r->headers = NewResponseHeaders(ctx, {});
-  } else if (mode == RequestMode::NoCors && crossOrigin) {
+  } else if (info.type == ResponseType::Opaque) {
     r->type = ResponseType::Opaque;
     r->status = 0;
     r->headers = NewResponseHeaders(ctx, {});
   } else {
-    r->type = corsTainted ? ResponseType::Cors : ResponseType::Basic;
-    r->status = head.status;
-    r->statusText = head.reason;
-    r->url = url::Serialize(withoutFragment);
-    r->redirected = redirects > 0;
-    std::vector<std::pair<std::string, std::string>> list;
-    for (const auto& header : head.headers) {
-      if (r->type == ResponseType::Cors && !net::IsCorsExposedHeader(header.first, head, includeCredentials)) continue;
-      list.push_back(header);
-    }
-    r->headers = NewResponseHeaders(ctx, list);
-    const bool noBody = head.status == 101 || head.status == 204 || head.status == 205 || head.status == 304;
-    if (!noBody) {
+    r->type = info.type;
+    r->status = info.status;
+    r->statusText = info.statusText;
+    r->url = url::Serialize(info.url);
+    r->redirected = info.redirected;
+    r->headers = NewResponseHeaders(ctx, info.headers);
+    if (info.hasBody) {
       body = std::make_shared<BodyBuffer>();
       body->complete = false;
       r->body = body;
@@ -275,7 +113,6 @@ void FetchOperation::OnResponseHeadIn(const net::HttpResponseHead& head, const u
 }
 
 void FetchOperation::OnBodyIn(std::span<const uint8_t> data) {
-  if (preflighting) return;
   if (integrityBuffering) {
     integrityBytes.append(reinterpret_cast<const char*>(data.data()), data.size());
     return;
@@ -289,32 +126,16 @@ void FetchOperation::OnBodyIn(std::span<const uint8_t> data) {
   }
 }
 
-void FetchOperation::StartMain() {
-  handle = host.config().client->Fetch(requestUrl, *this, std::move(mainOptions));
-}
-
 void FetchOperation::OnEndIn() {
-  if (preflighting) {
-    preflighting = false;
-    if (!settled) StartMain();
-    return;
-  }
   if (integrityBuffering) {
     integrityBuffering = false;
-    if (orbBuffering) {
-      orbBuffering = false;
-      if (OrbBodyIsBlocked(integrityBytes)) {
-        FailWith(MakeTypeError(host.context(), "Failed to fetch: the response was blocked (ORB)"), "the response was blocked (ORB)");
-        Done();
-        return;
-      }
-    } else if (!IntegrityMatches(integrity, integrityBytes)) {
+    if (!IntegrityMatches(integrity, integrityBytes)) {
       FailWith(MakeTypeError(host.context(), "Failed to fetch: the body does not match the integrity metadata"), "the body does not match the integrity metadata");
       Done();
       return;
     }
     integrityReleased = true;
-    OnResponseHeadIn(integrityHead, integrityFinalUrl);
+    OnResponseIn(integrityHead);
     if (body && !body->failure) body->bytes = std::move(integrityBytes);
   }
   if (body && !body->failure) {
@@ -326,59 +147,17 @@ void FetchOperation::OnEndIn() {
   Done();
 }
 
-void FetchOperation::StartPreflightedHop(const url::Url& target, net::FetchOptions options) {
-  requestUrl = target;
-  url::Url withoutFragment = target;
-  withoutFragment.fragment.reset();
-  preflightUrl = url::Serialize(withoutFragment);
-  const bool includeCredentials = credentials == RequestCredentials::Include;
-  if (host.preflights().Allows(pageOrigin, preflightUrl, includeCredentials, method, unsafeHeaders)) {
-    handle = host.config().client->Fetch(target, *this, std::move(options));
-    return;
-  }
-  net::FetchOptions preflight;
-  preflight.method = "OPTIONS";
-  preflight.headers.emplace_back("Origin", taintedOrigin ? "null" : pageOrigin);
-  preflight.headers.emplace_back("Access-Control-Request-Method", method);
-  if (!unsafeHeaders.empty()) {
-    std::string names;
-    for (const std::string& name : unsafeHeaders) names += (names.empty() ? "" : ",") + name;
-    preflight.headers.emplace_back("Access-Control-Request-Headers", names);
-  }
-  for (const auto& [name, value] : options.headers) {
-    if (EqualsIgnoreCase(name, "referer")) preflight.headers.emplace_back(name, value);
-  }
-  preflight.redirect = net::RedirectMode::Error;
-  preflight.cache = net::CacheMode::NoStore;
-  preflight.useCookies = false;
-  preflight.timeout = options.timeout;
-  preflight.initiator = options.initiator;
-  preflight.tls = options.tls;
-  mainOptions = std::move(options);
-  preflighting = true;
-  handle = host.config().client->Fetch(target, *this, std::move(preflight));
-}
-
 void FetchOperation::OnErrorIn(std::string_view message) {
-  if (redirectForPreflight && !settled) {
-    redirectForPreflight = false;
-    StartPreflightedHop(redirectTarget, std::move(redirectOptions));
-    return;
-  }
   if (!abortedByScript && !finished) {
-    const std::string text = std::string("Failed to fetch (") + (preflighting ? "CORS preflight: " : "") + std::string(message) + ")";
+    // (The network service words what is wrong with the request; an abort is the page's own.)
+    const std::string text = message == "aborted" ? std::string("Failed to fetch (aborted)") : std::string(message);
     FailWith(MakeTypeError(host.context(), text), text);
   }
   Done();
 }
 
-bool FetchOperation::OnRedirect(const net::HttpResponseHead& redirect, const url::Url& next, std::vector<std::pair<std::string, std::string>>& headers) {
-  bool follow = false;
-  host.InRealm([&] { follow = OnRedirectIn(redirect, next, headers); });
-  return follow;
-}
-void FetchOperation::OnResponseHead(const net::HttpResponseHead& head, const url::Url& finalUrl) {
-  host.InRealm([&] { OnResponseHeadIn(head, finalUrl); });
+void FetchOperation::OnResponse(const net::PageResponse& info) {
+  host.InRealm([&] { OnResponseIn(info); });
 }
 void FetchOperation::OnBody(std::span<const uint8_t> data) {
   host.InRealm([&] { OnBodyIn(data); });
@@ -535,7 +314,7 @@ bool DecodeDataUrl(const std::string& address, std::string& bytes, std::string& 
     }
   }
   if (mime.starts_with(";")) mime = "text/plain" + mime;
-  if (const auto record = ParseMimeType(mime)) type = SerializeMimeType(*record);
+  if (const auto record = net::ParseMimeType(mime)) type = net::SerializeMimeType(*record);
   else type = "text/plain;charset=US-ASCII";
   bytes.clear();
   if (base64) return DecodeBase64(payload, bytes);
@@ -617,46 +396,7 @@ Value Fetch(Context& ctx, Value, qe::Args args, Value newTarget) {
   const url::Url& page = host->config().pageUrl;
   auto operation = std::make_unique<FetchOperation>(*host);
   FetchOperation* op = operation.get();
-  op->requestUrl = request->url;
-  op->currentUrl = request->url;
-  op->pageOrigin = url::SerializeOrigin(page);
   op->mode = request->mode;
-  op->credentials = request->credentials;
-  op->redirectMode = request->redirect;
-  op->crossOrigin = url::SerializeOrigin(request->url) != op->pageOrigin;
-
-  if (op->crossOrigin && request->mode == RequestMode::SameOrigin) return reject(MakeTypeError(ctx, "Failed to fetch: a same-origin request to another origin"));
-  if (op->crossOrigin && request->mode == RequestMode::Cors) op->corsTainted = true;
-  // A no-cors request to another origin has its redirects followed or it is an error.
-  if (op->crossOrigin && request->mode == RequestMode::NoCors && request->redirect != net::RedirectMode::Follow) return reject(MakeTypeError(ctx, "Failed to fetch: a no-cors request to another origin must follow redirects"));
-
-  net::FetchOptions options;
-  options.method = request->method;
-  options.headers = request->headers->headers.list();
-  options.cache = request->cache;
-  options.redirect = request->redirect;
-  options.timeout = std::chrono::hours(24);
-  options.useCookies = request->credentials == RequestCredentials::Include || (request->credentials == RequestCredentials::SameOrigin && !op->crossOrigin);
-  options.initiator = page;
-  options.tls = host->config().tls;
-  op->secFetchPage = page;
-  op->secFetchSite = SecFetchSiteOf(page, request->url);
-  op->secFetchMode = request->mode == RequestMode::Cors ? "cors" : request->mode == RequestMode::NoCors ? "no-cors" : "same-origin";
-  SetSecFetchHeaders(options.headers, request->url, op->secFetchSite, op->secFetchMode);
-  op->referrerPolicy = request->referrerPolicy;
-  op->sendsReferrer = !request->referrer.empty();
-  op->referrerSource = page;
-  if (const auto referer = RefererFor(request->referrer.empty() ? "no-referrer" : request->referrerPolicy, page, request->url);
-      referer && !request->referrer.empty()) {
-    options.headers.emplace_back("Referer", *referer);
-    if (const auto parsed = url::Parse(*referer)) op->referrerSource = *parsed;
-  } else {
-    op->sendsReferrer = false;
-  }
-  // Origin goes with a cross-origin request, and with any request that is not a GET or a HEAD.
-  if (op->corsTainted || (request->method != "GET" && request->method != "HEAD")) {
-    options.headers.emplace_back("Origin", op->pageOrigin);
-  }
 
   op->resolve = qe::Persistent(ctx, capability.resolve);
   op->reject = qe::Persistent(ctx, capability.reject);
@@ -674,51 +414,26 @@ Value Fetch(Context& ctx, Value, qe::Args args, Value newTarget) {
     op->signal->abortAlgorithms.push_back(op->abortListener);
   }
 
-  op->method = request->method;
   op->integrity = request->integrity;
   host->Adopt(std::move(operation));
 
-  // From here on the request needs its bytes, which a stream gives only once it has ended.
-  auto launch = [host, op, request, page = page, options = std::move(options)](std::shared_ptr<const std::string> bodyBytes) mutable {
-    options.body = std::move(bodyBytes);
-
-    // A cors request that is not simple asks the server first, unless it has been told lately that it may.
-    op->mainOptions = options;
-    op->requestHeaders = request->headers->headers;
-    op->nonSimple = request->mode == RequestMode::Cors && net::NeedsPreflight(request->method, request->headers->headers);
-    if (op->corsTainted && net::NeedsPreflight(request->method, request->headers->headers)) {
-      op->preflightNeeded = true;
-      op->unsafeHeaders = net::CorsUnsafeRequestHeaderNames(request->headers->headers);
-      url::Url withoutFragment = request->url;
-      withoutFragment.fragment.reset();
-      op->preflightUrl = url::Serialize(withoutFragment);
-      const bool includeCredentials = request->credentials == RequestCredentials::Include;
-      if (!host->preflights().Allows(op->pageOrigin, op->preflightUrl, includeCredentials, op->method, op->unsafeHeaders)) {
-        net::FetchOptions preflight;
-        preflight.method = "OPTIONS";
-        preflight.headers.emplace_back("Origin", op->pageOrigin);
-        preflight.headers.emplace_back("Access-Control-Request-Method", op->method);
-        if (!op->unsafeHeaders.empty()) {
-          std::string names;
-          for (const std::string& name : op->unsafeHeaders) names += (names.empty() ? "" : ",") + name;
-          preflight.headers.emplace_back("Access-Control-Request-Headers", names);
-        }
-        for (const auto& [name, value] : options.headers) {
-          if (EqualsIgnoreCase(name, "referer")) preflight.headers.emplace_back(name, value);
-        }
-        preflight.redirect = net::RedirectMode::Error;  // a preflight that is redirected has failed
-        preflight.cache = net::CacheMode::NoStore;
-        preflight.useCookies = false;                   // it never carries credentials
-        preflight.timeout = options.timeout;
-        preflight.initiator = page;
-        preflight.tls = host->config().tls;
-        op->mainOptions = std::move(options);
-        op->preflighting = true;
-        op->handle = host->config().client->Fetch(request->url, *op, std::move(preflight));
-        return;
-      }
-    }
-    op->handle = host->config().client->Fetch(request->url, *op, std::move(options));
+  // From here on the request needs its bytes, which a stream gives only once it has ended. What the network is asked is the request as the Fetch Standard has it, with what
+  // the page knows of it: the rules of fetching are the network service's.
+  auto launch = [host, op, request, page = page](std::shared_ptr<const std::string> bodyBytes) mutable {
+    net::PageRequest asked;
+    asked.url = request->url;
+    asked.method = request->method;
+    asked.headers = request->headers->headers.list();
+    asked.body = std::move(bodyBytes);
+    asked.mode = request->mode;
+    asked.credentials = request->credentials;
+    asked.redirect = static_cast<int>(request->redirect);
+    asked.cache = request->cache;
+    asked.sendsReferrer = !request->referrer.empty();
+    asked.referrerPolicy = request->referrerPolicy;
+    asked.pageUrl = page;
+    asked.tls = host->config().tls;
+    op->handle = host->config().client->StartFetch(std::move(asked), *op);
   };
 
   if (request->body && request->body->fromStream) {

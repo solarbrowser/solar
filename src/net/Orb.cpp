@@ -4,14 +4,14 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-#include "solar/web/Orb.h"
+#include "solar/net/Orb.h"
 
 #include <cctype>
 #include <string>
 
-#include "solar/web/MimeType.h"
+#include "solar/net/MimeType.h"
 
-namespace solar::web {
+namespace solar::net {
 
 namespace {
 
@@ -181,4 +181,4 @@ bool OrbBodyIsBlocked(std::string_view body) {
   return Json(body).Valid();
 }
 
-}  // namespace solar::web
+}  // namespace solar::net

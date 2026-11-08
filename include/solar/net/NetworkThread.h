@@ -33,6 +33,7 @@ class ThreadedNetworkService final : public NetworkService {
   ThreadedNetworkService& operator=(const ThreadedNetworkService&) = delete;
 
   FetchHandle Fetch(const url::Url& url, FetchHandler& handler, FetchOptions options = {}) override;
+  FetchHandle StartFetch(PageRequest request, PageFetchHandler& handler) override;
   void Cancel(uint64_t id) override;
   void FollowRedirect(uint64_t id, bool follow, std::vector<std::pair<std::string, std::string>> headers = {}) override;
   void AnswerRestart(uint64_t id, bool allow) override;

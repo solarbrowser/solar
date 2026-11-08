@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include "solar/net/HttpClient.h"
+#include "solar/net/PageFetchLoader.h"
 #include "solar/net/WebSocket.h"
 
 #include <algorithm>
@@ -43,6 +44,8 @@ struct HttpClient::Impl {
   std::shared_ptr<CookieJar> cookies;
   std::shared_ptr<HttpCache> cache;
   uint64_t nextId = 1;
+  PreflightCache preflights;  // what CORS preflights have allowed, for every page this client fetches for
+  std::unordered_map<uint64_t, std::unique_ptr<PageFetchLoader>> pageFetches;
   std::unordered_map<uint64_t, std::unique_ptr<internal::Exchange>> exchanges;
   std::list<std::unique_ptr<internal::HttpConnection>> connections;
   std::unordered_map<std::string, std::vector<internal::HttpConnection*>> idle;
@@ -1136,7 +1139,25 @@ void HttpClient::CloseIdleConnections() {
   }
 }
 
+FetchHandle HttpClient::StartFetch(PageRequest request, PageFetchHandler& handler) {
+  const uint64_t id = impl_->nextId++;
+  Impl* impl = impl_.get();
+  auto loader = std::make_unique<PageFetchLoader>(*this, impl->preflights, std::move(request), handler, [impl, id] { impl->pageFetches.erase(id); });
+  PageFetchLoader* raw = loader.get();
+  impl->pageFetches[id] = std::move(loader);
+  // Begun from the loop: nothing is reported from inside this call.
+  impl->loop.Post([impl, id, raw] {
+    const auto found = impl->pageFetches.find(id);
+    if (found != impl->pageFetches.end() && found->second.get() == raw) raw->Start();
+  });
+  return FetchHandle(this, id);
+}
+
 void HttpClient::Cancel(uint64_t id) {
+  if (const auto page = impl_->pageFetches.find(id); page != impl_->pageFetches.end()) {
+    page->second->Cancel();
+    return;
+  }
   auto it = impl_->exchanges.find(id);
   if (it != impl_->exchanges.end()) it->second->Fail("aborted");
 }

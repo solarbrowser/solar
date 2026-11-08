@@ -142,6 +142,9 @@ struct HttpClientOptions {
 class NetworkService;
 class HttpClient;
 class WebSocketClient;
+struct PageRequest;
+class PageFetchHandler;
+class PreflightCache;
 
 // What a fetch in flight is held by: Cancel() ends it with OnError("aborted") and closes its connection, unless it has already finished. Safe to call again, and safe once the
 // fetch is over.
@@ -168,6 +171,8 @@ class NetworkService {
   virtual ~NetworkService() = default;
   // A fetch. `handler` must outlive it.
   virtual FetchHandle Fetch(const url::Url& url, FetchHandler& handler, FetchOptions options = {}) = 0;
+  // A fetch as a page asks for one (a Fetch Standard request): the service applies the rules of fetching to it and tells the handler what the page may be told. `handler` must outlive it.
+  virtual FetchHandle StartFetch(PageRequest request, PageFetchHandler& handler) = 0;
   // Ends the fetch with that number (what FetchHandle::Cancel does).
   virtual void Cancel(uint64_t id) = 0;
   // The answer to OnReceiveRedirect of the fetch with that number: go on to the redirect's address with `headers`, or (`follow` false) end the fetch.
@@ -203,6 +208,7 @@ class HttpClient : public NetworkService {
   // A GET. Everything is reported from Loop::Run, never from inside this call. `handler` must
   // outlive the fetch.
   FetchHandle Fetch(const url::Url& url, FetchHandler& handler, FetchOptions options = {}) override;
+  FetchHandle StartFetch(PageRequest request, PageFetchHandler& handler) override;
   void Cancel(uint64_t id) override;
   void FollowRedirect(uint64_t id, bool follow, std::vector<std::pair<std::string, std::string>> headers = {}) override;
   void AnswerRestart(uint64_t id, bool allow) override;
