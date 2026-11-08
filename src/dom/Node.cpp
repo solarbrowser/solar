@@ -146,6 +146,7 @@ struct IdIndex {
   std::unordered_map<Element*, std::string> idOf;  // the id an element is in byId by
   std::unordered_set<Element*> dirty;              // those to look at again
   std::unordered_set<Element*> nameCandidates;
+  std::unordered_set<Element*> iframes;           // the iframe elements in the tree of the document (not those in shadow trees)
 };
 std::unordered_map<const Document*, IdIndex>& IdIndexes() {
   static std::unordered_map<const Document*, IdIndex> indexes;
@@ -206,10 +207,12 @@ void NoteNamedSubtree(Node* root, Document* document, bool add) {
     if (add) {
       index.dirty.insert(element);
       if (IsNameCandidate(element)) index.nameCandidates.insert(element);
+      if (element->IsHtml("iframe")) index.iframes.insert(element);
     } else {
       index.dirty.erase(element);
       DropFromId(index, element);
       index.nameCandidates.erase(element);
+      index.iframes.erase(element);
     }
   }
 }
@@ -232,6 +235,11 @@ const std::unordered_set<Element*>* NameCandidates(Document* document) {
   static const std::unordered_set<Element*> none;
   const auto found = IdIndexes().find(document);
   return found == IdIndexes().end() ? &none : &found->second.nameCandidates;
+}
+const std::unordered_set<Element*>* IframeElementsOf(Document* document) {
+  static const std::unordered_set<Element*> none;
+  const auto found = IdIndexes().find(document);
+  return found == IdIndexes().end() ? &none : &found->second.iframes;
 }
 void ForgetNamedElements(Document* document) { IdIndexes().erase(document); }
 static void NoteAttributeName(const Attr* attribute, Element* element = nullptr) {

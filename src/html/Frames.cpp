@@ -1507,14 +1507,18 @@ std::string OriginOfDocument(const dom::Document* document) { return OriginOf(do
 std::vector<Quanta::Object*> ChildWindowsOf(dom::Document* document) { return ChildWindows(document); }
 Quanta::Object* ChildWindowNamed(dom::Document* document, const std::string& name) {
   if (!document) return nullptr;
-  for (dom::Element* iframe : IframesIn(document)) {
-    // (Only those of the document's own tree: a frame in a shadow tree is not named in the window.)
-    dom::Node* root = iframe;
-    while (root->parentNode) root = root->parentNode;
-    if (root != document) continue;
-    if (iframe->contentWindow && dom::GetAttribute(iframe, "name") == name) return iframe->contentWindow;
+  // (Only the frames of the document's own tree are named in the window, not those in a shadow tree: the document keeps them as they come and go, and most have none.)
+  Quanta::Object* found = nullptr;
+  dom::Element* first = nullptr;
+  for (dom::Element* iframe : *dom::IframeElementsOf(document)) {
+    if (!iframe->contentWindow || dom::GetAttribute(iframe, "name") != name) continue;
+    // (The first in the order of the tree, as the walk of the tree found it.)
+    if (!first || (dom::CompareDocumentPosition(first, iframe) & dom::kPreceding) != 0) {
+      first = iframe;
+      found = iframe->contentWindow;
+    }
   }
-  return nullptr;
+  return found;
 }
 
 }  // namespace solar::html

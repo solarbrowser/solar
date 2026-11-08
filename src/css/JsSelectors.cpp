@@ -4,7 +4,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+#include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "solar/css/CssBindings.h"
@@ -24,17 +26,49 @@ using Quanta::Value;
 
 namespace {
 
-// The selector in `args[0]`, or nullopt with the exception pending.
-std::optional<SelectorList> ParseArgument(Context& ctx, qe::Args args, const char* member) {
+// The selector in `args[0]` (a selector asked for again is not parsed again: scripts ask the same few over and over), or null with the exception pending.
+std::shared_ptr<const SelectorList> ParseArgument(Context& ctx, qe::Args args, const char* member) {
   if (args.empty()) {
     qe::ThrowTypeError(ctx, std::string("Failed to execute '") + member + "': 1 argument required, but only 0 present.");
-    return std::nullopt;
+    return nullptr;
   }
   const std::string text = qe::ToWtf8(ctx, args[0]);
-  if (qe::HasException(ctx)) return std::nullopt;
+  if (qe::HasException(ctx)) return nullptr;
+  static thread_local std::unordered_map<std::string, std::shared_ptr<const SelectorList>> parsed;
+  const auto found = parsed.find(text);
+  if (found != parsed.end()) return found->second;
   std::optional<SelectorList> list = ParseSelectorList(text);
-  if (!list) dom::Throw(ctx, {"SyntaxError", "Failed to execute '" + std::string(member) + "': '" + text + "' is not a valid selector."});
-  return list;
+  if (!list) {
+    dom::Throw(ctx, {"SyntaxError", "Failed to execute '" + std::string(member) + "': '" + text + "' is not a valid selector."});
+    return nullptr;
+  }
+  if (parsed.size() >= 2000) parsed.clear();
+  return parsed[text] = std::make_shared<const SelectorList>(std::move(*list));
+}
+
+// The id of a selector that is nothing but `#id`, or null.
+const std::string* OnlyId(const SelectorList& list) {
+  if (list.size() != 1) return nullptr;
+  const ComplexSelector& selector = list.front();
+  if (selector.compounds.size() != 1 || !selector.combinators.empty() || selector.relative || selector.implicitNesting || selector.hideNesting) return nullptr;
+  const CompoundSelector& compound = selector.compounds.front();
+  if (compound.simples.size() != 1 || compound.simples.front().kind != SimpleSelector::Kind::Id) return nullptr;
+  return &compound.simples.front().name;
+}
+
+// The elements of the tree of `self` that have the id, below it, in the order of the tree, found by the index of the ids of the document: for a node whose tree is the document's, and
+// no quirks (an id is matched without case there). False where the tree has to be walked.
+bool ElementsWithId(dom::Node* self, const std::string& id, bool quirks, std::vector<dom::Element*>& out) {
+  if (quirks) return false;
+  dom::Node* top = self;
+  while (top->parentNode) top = top->parentNode;
+  if (!top->IsDocument()) return false;
+  if (const std::vector<dom::Element*>* found = dom::ElementsById(static_cast<dom::Document*>(top), id)) {
+    for (dom::Element* element : *found) {
+      if (element != self && (self == top || self->Contains(element))) out.push_back(element);
+    }
+  }
+  return true;
 }
 
 MatchContext ContextFor(const dom::Node* node, const dom::Element* scope) {
@@ -51,6 +85,10 @@ Value QuerySelector(Context& ctx, Value t, qe::Args args, Value) {
   const auto list = ParseArgument(ctx, args, "querySelector");
   if (!list) return qe::Undefined();
   const MatchContext context = ContextFor(self, dom::AsElement(self));
+  if (const std::string* id = OnlyId(*list)) {
+    std::vector<dom::Element*> found;
+    if (ElementsWithId(self, *id, context.quirks, found)) return found.empty() ? qe::Null() : qe::FromObject(found.front());
+  }
   for (dom::Node* node = self->NextInTree(self); node; node = node->NextInTree(self)) {
     dom::Element* element = dom::AsElement(node);
     if (element && MatchesAny(*list, element, context)) return qe::FromObject(element);
@@ -65,6 +103,13 @@ Value QuerySelectorAll(Context& ctx, Value t, qe::Args args, Value) {
   if (!list) return qe::Undefined();
   const MatchContext context = ContextFor(self, dom::AsElement(self));
   std::vector<dom::Node*> found;
+  if (const std::string* id = OnlyId(*list)) {
+    std::vector<dom::Element*> elements;
+    if (ElementsWithId(self, *id, context.quirks, elements)) {
+      found.assign(elements.begin(), elements.end());
+      return qe::FromObject(dom::NewStaticNodeList(ctx, std::move(found)));
+    }
+  }
   for (dom::Node* node = self->NextInTree(self); node; node = node->NextInTree(self)) {
     dom::Element* element = dom::AsElement(node);
     if (element && MatchesAny(*list, element, context)) found.push_back(element);

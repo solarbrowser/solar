@@ -528,6 +528,8 @@ Element* ElementById(Document* document, const std::string& id);
 const std::vector<Element*>* ElementsById(Document* document, const std::string& id);
 // The elements that may have a name that is not an id (a name attribute, an object that has an id): more than those that do, unordered.
 const std::unordered_set<Element*>* NameCandidates(Document* document);
+// The iframe elements in the tree of the document, kept as they come and go (unordered).
+const std::unordered_set<Element*>* IframeElementsOf(Document* document);
 void ForgetNamedElements(Document* document);
 // Moves when the base of a document (its first base element, or that one's href) can have changed.
 uint64_t BaseVersion();
