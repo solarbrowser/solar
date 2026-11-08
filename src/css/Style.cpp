@@ -1767,6 +1767,21 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
 }
 
 
+// Whether the element is in a document (shadow-including): asked for each property of an element in turn, so the answer for the last element is kept while the trees are the same.
+bool InDocumentTree(dom::Element* element) {
+  static dom::Element* lastElement = nullptr;
+  static uint64_t lastSerial = 0, lastVersion = 0;
+  static bool lastAnswer = false;
+  const uint64_t version = dom::DocumentVersion();
+  if (lastElement == element && lastSerial == element->serial && lastVersion == version) return lastAnswer;
+  dom::Node* top = dom::ShadowIncludingRoot(element);
+  lastAnswer = top && top->IsDocument();
+  lastElement = element;
+  lastSerial = element->serial;
+  lastVersion = version;
+  return lastAnswer;
+}
+
 ElementStyle& StyleOf(dom::Element* element, const std::string& pseudo = "") {
   static uint64_t cachedStyleVersion = 0;
   const uint64_t version = dom::DocumentVersion() * 1000003 + g_styleVersion;
@@ -3215,8 +3230,7 @@ std::string Resolver::ComputeInner(dom::Element* element, const std::string& pro
   }
   const std::string name = initialOnly ? property.substr(9) : property;
   if (!initialOnly && pseudo.empty() && !AnimatedValuesSuppressed() && !StartingStyleFor(element, pseudo)) {
-    dom::Node* tree = dom::ShadowIncludingRoot(element);
-    if (tree && tree->IsDocument()) Prepare(element);
+    if (InDocumentTree(element)) Prepare(element);
   }
   ElementStyle& style = StyleOf(element, pseudo);
   if (!initialOnly) {
@@ -3240,8 +3254,7 @@ std::string Resolver::ComputeInner(dom::Element* element, const std::string& pro
     if (!physical.empty() && FindProperty(physical)) return Compute(element, initialOnly ? "\x01initial:" + physical : physical, pseudo);
   }
   // Not in a document: no computed style.
-  dom::Node* root = dom::ShadowIncludingRoot(element);
-  if (!root || !root->IsDocument()) return "";
+  if (!InDocumentTree(element)) return "";
 
   if (style.resolving.count("\x02" + name)) {
     // Only the sizes that lengths are relative to make a cycle of it.
