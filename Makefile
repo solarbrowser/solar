@@ -207,7 +207,7 @@ $(QUANTA_LIBS): | quanta
 # The browser: a page in a window (src/gui), and solar-cli, the command line for what is under it (addresses, fetches), which the tests and tools use.
 $(OBJ_DIR)/src/paint/SkiaPainter.o $(OBJ_DIR)/src/paint/ListCodec.o $(OBJ_DIR)/src/paint/Canvas.o $(OBJ_DIR)/src/paint/CanvasNatives.o $(OBJ_DIR)/src/paint/WebGl.o $(OBJ_DIR)/src/paint/GlRuntime.o $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/gui/Compositor.o $(OBJ_DIR)/src/gui/Window.o $(OBJ_DIR)/src/gui/GpuRaster.o $(OBJ_DIR)/src/gui/GpuProcess.o $(OBJ_DIR)/src/gui/GpuClient.o $(OBJ_DIR)/src/gui/GpuSurface.o $(OBJ_DIR)/src/gui/VulkanSurface.o $(OBJ_DIR)/src/gui/SdlAudio.o: CXXFLAGS += $(SKIA_CFLAGS) $(SDL_CFLAGS)
 
-solar: $(OBJ_DIR)/src/paint/Canvas.o $(OBJ_DIR)/src/paint/CanvasNatives.o $(OBJ_DIR)/src/paint/WebGl.o $(OBJ_DIR)/src/paint/GlRuntime.o $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/gui/Compositor.o $(OBJ_DIR)/src/gui/Window.o $(OBJ_DIR)/src/gui/SdlAudio.o $(OBJ_DIR)/src/gui/GpuSurface.o $(OBJ_DIR)/src/gui/VulkanSurface.o $(OBJ_DIR)/src/gui/Wire.o $(OBJ_DIR)/src/gui/FrameBuffer.o $(OBJ_DIR)/src/gui/Navigation.o $(OBJ_DIR)/src/gui/RemoteAudio.o $(OBJ_DIR)/src/gui/RemoteStorage.o $(OBJ_DIR)/src/gui/Services.o $(OBJ_DIR)/src/gui/Session.o $(OBJ_DIR)/src/gui/Sandbox.o $(OBJ_DIR)/src/gui/GpuRaster.o $(OBJ_DIR)/src/gui/GpuProcess.o $(OBJ_DIR)/src/gui/GpuClient.o $(OBJ_DIR)/src/gui/GpuWire.o $(OBJ_DIR)/src/paint/SkiaPainter.o $(OBJ_DIR)/src/paint/ListCodec.o $(PAINT_OBJECTS) $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
+solar: $(OBJ_DIR)/src/paint/Canvas.o $(OBJ_DIR)/src/paint/CanvasNatives.o $(OBJ_DIR)/src/paint/WebGl.o $(OBJ_DIR)/src/paint/GlRuntime.o $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/gui/Compositor.o $(OBJ_DIR)/src/gui/Window.o $(OBJ_DIR)/src/gui/SdlAudio.o $(OBJ_DIR)/src/gui/GpuSurface.o $(OBJ_DIR)/src/gui/VulkanSurface.o $(OBJ_DIR)/src/gui/Wire.o $(OBJ_DIR)/src/gui/FrameBuffer.o $(OBJ_DIR)/src/gui/Navigation.o $(OBJ_DIR)/src/gui/RemoteAudio.o $(OBJ_DIR)/src/gui/RemoteStorage.o $(OBJ_DIR)/src/gui/Services.o $(OBJ_DIR)/src/gui/Session.o $(OBJ_DIR)/src/gui/Sandbox.o $(OBJ_DIR)/src/gui/GpuRaster.o $(OBJ_DIR)/src/gui/GpuProcess.o $(OBJ_DIR)/src/gui/GpuClient.o $(OBJ_DIR)/src/gui/GpuWire.o $(OBJ_DIR)/src/gui/GlWire.o $(OBJ_DIR)/src/gui/RemoteGl.o $(OBJ_DIR)/src/paint/SkiaPainter.o $(OBJ_DIR)/src/paint/ListCodec.o $(PAINT_OBJECTS) $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS) $(SKIA_LIBS) $(SDL_LIBS)
 
@@ -257,7 +257,7 @@ $(BUILD_DIR)/HttpClientTest: $(OBJ_DIR)/tests/HttpClientTest.o $(OBJ_DIR)/tests/
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS)
 
-$(BUILD_DIR)/WireTest: $(OBJ_DIR)/tests/WireTest.o $(OBJ_DIR)/src/gui/GpuWire.o $(OBJ_DIR)/src/gui/Wire.o $(OBJ_DIR)/src/gui/FrameBuffer.o $(URL_OBJECTS) $(NET_OBJECTS)
+$(BUILD_DIR)/WireTest: $(OBJ_DIR)/tests/WireTest.o $(OBJ_DIR)/src/gui/GlWire.o $(OBJ_DIR)/src/gui/GpuWire.o $(OBJ_DIR)/src/gui/Wire.o $(OBJ_DIR)/src/gui/FrameBuffer.o $(URL_OBJECTS) $(NET_OBJECTS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS)
 

@@ -70,6 +70,8 @@
 #include "RemoteAudio.h"
 #include "RemoteStorage.h"
 #include "GpuProcess.h"
+#include "RemoteGl.h"
+#include "solar/paint/GlRuntime.h"
 #include "Services.h"
 #include "solar/gui/Sandbox.h"
 #include "Renderer.h"
@@ -1059,20 +1061,21 @@ solar::gui::SandboxPolicy RendererPolicy(const std::string& given) {
 
 // The renderer as a process of its own: the program started again with its two connections (the window's and the network's) as descriptors 3 and 4, and nothing else of the browser's
 // (every other descriptor is closed for it). It ends when the browser does.
-pid_t SpawnRenderer(int windowFd, int networkFd, int gpuFd, const std::string& url) {
+pid_t SpawnRenderer(int windowFd, int networkFd, int gpuFd, int glFd, const std::string& url) {
   char self[4096];
   const ssize_t length = ::readlink("/proc/self/exe", self, sizeof(self) - 1);
   if (length <= 0) return -1;
   self[length] = 0;
   // (The descriptors are moved out of the way of 3 and 4 first, so that putting them there does not close one of them.)
-  const int high1 = ::fcntl(windowFd, F_DUPFD_CLOEXEC, 10), high2 = ::fcntl(networkFd, F_DUPFD_CLOEXEC, 10), high3 = gpuFd >= 0 ? ::fcntl(gpuFd, F_DUPFD_CLOEXEC, 10) : -1;
+  const int high1 = ::fcntl(windowFd, F_DUPFD_CLOEXEC, 10), high2 = ::fcntl(networkFd, F_DUPFD_CLOEXEC, 10), high3 = gpuFd >= 0 ? ::fcntl(gpuFd, F_DUPFD_CLOEXEC, 10) : -1, high4 = glFd >= 0 ? ::fcntl(glFd, F_DUPFD_CLOEXEC, 10) : -1;
   if (high1 < 0 || high2 < 0) return -1;
   posix_spawn_file_actions_t actions;
   posix_spawn_file_actions_init(&actions);
   posix_spawn_file_actions_adddup2(&actions, high1, 3);
   posix_spawn_file_actions_adddup2(&actions, high2, 4);
   if (high3 >= 0) posix_spawn_file_actions_adddup2(&actions, high3, 5);
-  posix_spawn_file_actions_addclosefrom_np(&actions, high3 >= 0 ? 6 : 5);
+  if (high4 >= 0) posix_spawn_file_actions_adddup2(&actions, high4, 6);
+  posix_spawn_file_actions_addclosefrom_np(&actions, high4 >= 0 ? 7 : high3 >= 0 ? 6 : 5);
   std::vector<std::string> words = {"solar", "--renderer", url};
   std::vector<char*> arguments;
   for (std::string& word : words) arguments.push_back(word.data());
@@ -1083,6 +1086,7 @@ pid_t SpawnRenderer(int windowFd, int networkFd, int gpuFd, const std::string& u
   ::close(high1);
   ::close(high2);
   if (high3 >= 0) ::close(high3);
+  if (high4 >= 0) ::close(high4);
   return status == 0 ? child : -1;
 }
 
@@ -1108,6 +1112,9 @@ int main(int argc, char** argv) {
       }
     }
     const int gpuFd = ::fcntl(5, F_GETFD) >= 0 ? 5 : -1;
+    const int glFd = ::fcntl(6, F_GETFD) >= 0 ? 6 : -1;
+    // (WebGL is run by the GPU's process where there is one: this process has no GPU.)
+    if (glFd >= 0) solar::paint::gl::SetBackend(solar::gui::MakeRemoteGlBackend(glFd).release());
     return RendererMain(3, 4, argc > 2 ? 2 : 1, pageArguments, true, gpuFd);
   }
   if (argc >= 2 && std::strcmp(argv[1], "--gpu") == 0) return solar::gui::GpuMain(3);
@@ -1142,11 +1149,13 @@ int main(int argc, char** argv) {
   }
   solar::gui::Launcher launcher;
   launcher.start = [&](int windowFd, int networkFd, const std::string& url) -> long {
-    const int gpuFd = gpuHost ? gpuHost->NewClient() : -1;
-    const pid_t child = SpawnRenderer(windowFd, networkFd, gpuFd, url);
+    int glFd = -1;
+    const int gpuFd = gpuHost ? gpuHost->NewClient(&glFd) : -1;
+    const pid_t child = SpawnRenderer(windowFd, networkFd, gpuFd, glFd, url);
     ::close(windowFd);
     ::close(networkFd);
     if (gpuFd >= 0) ::close(gpuFd);
+    if (glFd >= 0) ::close(glFd);
     return child;
   };
   launcher.finish = [](long child) -> int {

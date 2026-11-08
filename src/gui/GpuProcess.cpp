@@ -26,9 +26,11 @@
 
 #include "GpuRaster.h"
 #include "solar/gui/FrameBuffer.h"
+#include "solar/gui/GlWire.h"
 #include "solar/gui/GpuWire.h"
 #include "solar/gui/Sandbox.h"
 #include "solar/net/Ipc.h"
+#include "solar/paint/GlRuntime.h"
 #include "solar/paint/ListCodec.h"
 #include "solar/paint/SkiaPainter.h"
 
@@ -120,6 +122,167 @@ void Serve(GpuRaster& raster, int fd, const std::vector<std::string>& fontDirect
   buffers.clear();
 }
 
+// What the GPU's process does for one page's WebGL: the contexts the page asks for, the calls its script makes (in batches), and the pictures of what it drew, made in memory the page gave.
+void ServeGl(int fd) {
+  net::ipc::Channel channel(fd);
+  struct Held {
+    std::unique_ptr<paint::gl::Context> context;
+    SharedMemory memory;
+    int width = 0, height = 0;
+  };
+  std::map<uint32_t, Held> contexts;
+  uint32_t next = 1;
+  constexpr size_t kMostContexts = 16;
+  const std::vector<std::string>& names = paint::gl::OperationNames();
+  uint8_t type = 0;
+  std::string bytes;
+  int received = -1;
+  bool good = true;
+  const auto answer = [&](uint64_t request, bool ok, const net::ipc::Writer& payload) {
+    net::ipc::Writer out;
+    out.U64(request);
+    out.Bool(ok);
+    std::string message = out.Take();
+    message += payload.bytes();
+    channel.SendRaw(static_cast<uint8_t>(glwire::FromGl::Answer), message);
+  };
+  while (good && channel.ReceiveRaw(type, bytes, &received)) {
+    const int descriptor = received;
+    received = -1;
+    net::ipc::Reader in(bytes);
+    const auto kind = static_cast<glwire::ToGl>(type);
+    if (kind != glwire::ToGl::Buffer && descriptor >= 0) ::close(descriptor);
+    switch (kind) {
+      case glwire::ToGl::Create: {
+        const uint64_t request = in.U64();
+        const int version = in.I32();
+        const std::string attributes = in.String(1 << 12);
+        const int width = in.I32(), height = in.I32();
+        if (!in.ok() || width < 1 || height < 1 || width > glwire::kMostSide || height > glwire::kMostSide) {
+          good = false;
+          break;
+        }
+        net::ipc::Writer out;
+        std::unique_ptr<paint::gl::Context> context;
+        if (contexts.size() < kMostContexts) context = paint::gl::Context::Create(version, attributes, width, height);
+        if (!context) {
+          answer(request, false, out);
+          break;
+        }
+        const uint32_t id = next++;
+        contexts[id].context = std::move(context);
+        contexts[id].width = width;
+        contexts[id].height = height;
+        out.U32(id);
+        answer(request, true, out);
+        break;
+      }
+      case glwire::ToGl::Info: {
+        const uint64_t request = in.U64();
+        const uint32_t id = in.U32();
+        const auto found = contexts.find(id);
+        net::ipc::Writer out;
+        if (!in.ok() || found == contexts.end()) {
+          answer(request, false, out);
+          break;
+        }
+        out.String(found->second.context->Info());
+        answer(request, true, out);
+        break;
+      }
+      case glwire::ToGl::Resize: {
+        const uint32_t id = in.U32();
+        const int width = in.I32(), height = in.I32();
+        const auto found = contexts.find(id);
+        if (!in.ok() || width < 1 || height < 1 || width > glwire::kMostSide || height > glwire::kMostSide) {
+          good = false;
+          break;
+        }
+        if (found != contexts.end()) {
+          found->second.context->Resize(width, height);
+          found->second.width = width;
+          found->second.height = height;
+          found->second.memory.Reset();  // (the page sends the memory for the new size)
+        }
+        break;
+      }
+      case glwire::ToGl::Buffer: {
+        const uint32_t id = in.U32();
+        const int width = in.I32(), height = in.I32();
+        const auto found = contexts.find(id);
+        if (!in.ok() || width < 1 || height < 1 || width > glwire::kMostSide || height > glwire::kMostSide) {
+          if (descriptor >= 0) ::close(descriptor);
+          good = false;
+          break;
+        }
+        SharedMemory memory;
+        if (found == contexts.end()) {
+          if (descriptor >= 0) ::close(descriptor);
+          break;
+        }
+        if (memory.Adopt(descriptor, static_cast<size_t>(width) * height * 4, true)) found->second.memory = std::move(memory);
+        break;
+      }
+      case glwire::ToGl::Calls: {
+        const uint32_t count = in.U32();
+        if (!in.ok() || count > (1u << 20)) {
+          good = false;
+          break;
+        }
+        for (uint32_t i = 0; i < count && good; ++i) {
+          glwire::Call call;
+          if (!glwire::ReadCall(in, call, names.size(), names)) {
+            good = false;
+            break;
+          }
+          const auto found = contexts.find(call.context);
+          paint::gl::Result result;
+          std::string outBytes;
+          if (found != contexts.end()) {
+            result = found->second.context->Call(call.operation, call.args);
+            const int output = glwire::OutputArgument(names[call.operation]);
+            if (output >= 0 && static_cast<size_t>(output) < call.args.size() && call.args[output].writable) {
+              outBytes.assign(reinterpret_cast<const char*>(call.args[output].data), call.args[output].size);
+            }
+          }
+          if (call.request != 0) {
+            net::ipc::Writer out;
+            glwire::WriteResult(out, result, outBytes);
+            answer(call.request, found != contexts.end(), out);
+          }
+        }
+        break;
+      }
+      case glwire::ToGl::Present: {
+        const uint64_t request = in.U64();
+        const uint32_t id = in.U32();
+        const auto found = contexts.find(id);
+        net::ipc::Writer out;
+        if (!in.ok() || found == contexts.end()) {
+          answer(request, false, out);
+          break;
+        }
+        const std::vector<uint8_t> pixels = found->second.context->Present();
+        if (!found->second.memory.data() || pixels.size() > found->second.memory.size() || pixels.size() != static_cast<size_t>(found->second.width) * found->second.height * 4) {
+          answer(request, false, out);
+          break;
+        }
+        std::memcpy(found->second.memory.data(), pixels.data(), pixels.size());
+        out.I32(found->second.width);
+        out.I32(found->second.height);
+        answer(request, true, out);
+        break;
+      }
+      case glwire::ToGl::Destroy: {
+        const uint32_t id = in.U32();
+        if (in.ok()) contexts.erase(id);
+        break;
+      }
+      default: break;
+    }
+  }
+}
+
 }  // namespace
 
 // What the GPU's process may read and write once it is shut in: the drivers, their libraries and configuration, the devices, the places a driver keeps its compiled shaders, the fonts.
@@ -175,11 +338,18 @@ int GpuMain(int controlFd) {
       std::vector<uint8_t> pixels(64 * 64 * 4);
       raster->Draw(warm, empty, 64, 64, 1.f, 0, 0, ScrollbarShape{}, pixels.data(), 64 * 4);
     }
+    // (WebGL's libraries and driver are loaded before the process is shut in, with a context made and drawn from.)
+    if (paint::gl::Available()) {
+      if (auto context = paint::gl::Context::Create(2, "{}", 16, 16)) context->Present();
+    }
     const SandboxResult result = EnterSandbox(GpuPolicy(), mode);
     if (!result.problems.empty()) std::fprintf(stderr, "gpu sandbox: %s\n", result.problems.c_str());
     if (!result.seccomp) {
       control.SendRaw(static_cast<uint8_t>(gpu::Control::Unavailable), "the GPU's process could not be shut in");
       return 1;
+    }
+    if (paint::gl::Available()) {
+      if (auto context = paint::gl::Context::Create(2, "{}", 16, 16)) context->Present();
     }
     paint::SkiaPainter check;
     paint::DisplayList list;
@@ -203,6 +373,8 @@ int GpuMain(int controlFd) {
   while (control.ReceiveRaw(type, bytes, &fd)) {
     if (static_cast<gpu::Control>(type) == gpu::Control::NewClient && fd >= 0) {
       clients.emplace_back([&raster, fd, &fonts] { Serve(*raster, fd, fonts); });
+    } else if (static_cast<gpu::Control>(type) == gpu::Control::NewGlClient && fd >= 0) {
+      clients.emplace_back([fd] { ServeGl(fd); });
     } else if (fd >= 0) {
       ::close(fd);
     }
@@ -216,6 +388,7 @@ int GpuMain(int controlFd) {
 // ---- The browser's side ----
 
 struct GpuHost::Impl {
+  std::mutex clientMutex;
   pid_t child = -1;
   std::unique_ptr<net::ipc::Channel> control;
   std::string renderer;
@@ -291,7 +464,17 @@ std::unique_ptr<GpuHost> GpuHost::Start(std::string* why) {
   return host;
 }
 
-int GpuHost::NewClient() {
+int GpuHost::NewClient(int* glFd) {
+  std::lock_guard<std::mutex> lock(impl_->clientMutex);
+  if (glFd) {
+    *glFd = -1;
+    const auto gl = net::ipc::Channel::MakePair();
+    if (gl.first >= 0) {
+      if (impl_->control->SendRaw(static_cast<uint8_t>(gpu::Control::NewGlClient), "", gl.first)) *glFd = gl.second;
+      else ::close(gl.second);
+      ::close(gl.first);
+    }
+  }
   const auto pair = net::ipc::Channel::MakePair();
   if (pair.first < 0) return -1;
   // (The GPU's end goes to the GPU's process; the page gets the other.)

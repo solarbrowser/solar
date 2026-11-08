@@ -26,7 +26,8 @@ enum class FromGpu : uint8_t { Drawn = 32, Failed = 33 };
 
 // Browser to GPU, and back.
 enum class Control : uint8_t {
-  NewClient = 1,  // a page's connection (sent with its descriptor)
+  NewClient = 1,    // a page's connection (sent with its descriptor)
+  NewGlClient = 4,  // a page's connection for WebGL (sent with its descriptor)
   Ready = 2,      // (from the GPU) it can draw: the name of the GPU
   Unavailable = 3,  // (from the GPU) it cannot: why
 };

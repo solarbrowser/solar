@@ -25,7 +25,8 @@ class GpuHost {
   GpuHost& operator=(const GpuHost&) = delete;
 
   // A new page's connection: the page's end of it (the other is the GPU's), or -1.
-  int NewClient();
+  // `glFd`, if given, is the page's connection for WebGL (-1 where there is none).
+  int NewClient(int* glFd = nullptr);
   // The name of the GPU.
   const std::string& renderer() const;
 

@@ -12,6 +12,7 @@
 #include <thread>
 
 #include "solar/gui/FrameBuffer.h"
+#include "solar/gui/GlWire.h"
 #include "solar/gui/GpuWire.h"
 #include "solar/gui/Wire.h"
 #include "solar/net/Ipc.h"
@@ -190,6 +191,69 @@ int main() {
     Check("a buffer round trip", solar::gui::gpu::Read(rb, buffer) && buffer.index == 3 && buffer.stride == 400);
     Reader cut(std::string_view(bytes).substr(0, bytes.size() - 5));
     Check("a draw cut short is refused", !solar::gui::gpu::Read(cut, back));
+  }
+  {
+    // The calls of a WebGL script, as bytes.
+    using namespace solar;
+    const std::vector<std::string> names = {"clear", "texImage2D", "readPixels", "shaderSource"};
+    gui::glwire::Call call;
+    call.context = 3; call.operation = 1; call.request = 0;
+    std::string pixels(64, 'p');
+    paint::gl::Arg number; number.kind = paint::gl::Arg::Kind::Number; number.number = 3553;
+    paint::gl::Arg bytes; bytes.kind = paint::gl::Arg::Kind::Bytes; bytes.data = reinterpret_cast<uint8_t*>(pixels.data()); bytes.size = pixels.size();
+    paint::gl::Arg text; text.kind = paint::gl::Arg::Kind::Text; text.text = "void main() {}";
+    call.args = {number, bytes, text};
+    net::ipc::Writer out;
+    gui::glwire::WriteCall(out, call, names[1]);
+    const std::string encoded = out.Take();
+    net::ipc::Reader in(encoded);
+    gui::glwire::Call back;
+    Check("a call round trip", gui::glwire::ReadCall(in, back, names.size(), names) && back.context == 3 && back.operation == 1 && back.args.size() == 3 && back.args[0].number == 3553 && back.args[1].size == 64 &&
+          std::string(reinterpret_cast<const char*>(back.args[1].data), 64) == pixels && back.args[2].text == "void main() {}" && !back.args[1].writable);
+    // A read of pixels says only how large the place for them is.
+    gui::glwire::Call read;
+    read.operation = 2;
+    std::string place(4096, 'x');
+    paint::gl::Arg out6; out6.kind = paint::gl::Arg::Kind::Bytes; out6.data = reinterpret_cast<uint8_t*>(place.data()); out6.size = place.size(); out6.writable = true;
+    read.args = {number, number, number, number, number, number, out6};
+    net::ipc::Writer readOut;
+    gui::glwire::WriteCall(readOut, read, names[2]);
+    const std::string readBytes = readOut.Take();
+    net::ipc::Reader readIn(readBytes);
+    gui::glwire::Call readBack;
+    Check("a read's place goes as its size only", readBytes.size() < 200 && gui::glwire::ReadCall(readIn, readBack, names.size(), names) && readBack.args[6].writable && readBack.args[6].size == 4096);
+    net::ipc::Reader badOperation(encoded);
+    Check("an operation that is none is refused", !gui::glwire::ReadCall(badOperation, back, 1, names));
+    // A write-into claimed for an argument that is not the one that is written into.
+    gui::glwire::Call lie = read;
+    net::ipc::Writer lieOut;
+    gui::glwire::WriteCall(lieOut, lie, names[2]);
+    std::string lieBytes = lieOut.Take();
+    net::ipc::Reader lieIn(lieBytes);
+    gui::glwire::Call lied;
+    Check("an output claimed for an operation that has none is refused", !gui::glwire::ReadCall(lieIn, lied, names.size(), std::vector<std::string>{"clear", "texImage2D", "clear", "x"}));
+    net::ipc::Reader cutIn(std::string_view(encoded).substr(0, encoded.size() - 6));
+    Check("a call cut short is refused", !gui::glwire::ReadCall(cutIn, back, names.size(), names));
+    // Garbage.
+    std::mt19937 random(11);
+    int taken = 0;
+    for (int i = 0; i < 4000; ++i) {
+      std::string junk(random() % 200, '\0');
+      for (char& c : junk) c = static_cast<char>(random());
+      net::ipc::Reader r(junk);
+      gui::glwire::Call c;
+      taken += gui::glwire::ReadCall(r, c, names.size(), names);
+    }
+    Check("garbage is read without a crash", taken >= 0);
+    // What a call gives back.
+    paint::gl::Result result = paint::gl::Result::Numbers({1, 2.5, -3});
+    net::ipc::Writer resultOut;
+    gui::glwire::WriteResult(resultOut, result, "out");
+    const std::string resultBytes = resultOut.Take();
+    net::ipc::Reader resultIn(resultBytes);
+    paint::gl::Result resultBack;
+    std::string outBack;
+    Check("a result round trip", gui::glwire::ReadResult(resultIn, resultBack, outBack) && resultBack.kind == paint::gl::Result::Kind::Numbers && resultBack.numbers.size() == 3 && resultBack.numbers[1] == 2.5 && outBack == "out");
   }
   std::printf("wire: %d/%d passed\n", total - failed, total);
   return failed == 0 ? 0 : 1;
