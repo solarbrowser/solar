@@ -1507,7 +1507,17 @@ void MarkSubjectsDirty(dom::Element* element, const std::unordered_set<uint64_t>
         }
       }
     }
-    if (touched) { at->second.dirty = true; ++g_marked; }
+    if (touched) {
+      at->second.dirty = true;
+      ++g_marked;
+      // (The boxes of what is above it, up to the element, are no good as they were: the style of this one is made again.)
+      for (dom::Node* up = below; up && up != element; up = up->parentNode) {
+        if (!up->IsElement()) continue;
+        ++static_cast<dom::Element*>(up)->subtreeVersion;
+        ++static_cast<dom::Element*>(up)->committedVersions.subtree;
+        dom::MarkPending(up, dom::kPendingVersions);
+      }
+    }
   }
   if (KeyDebug()) std::fprintf(stderr, "  marked dirty %zu\n", g_marked), g_marked = 0;
 }
@@ -1748,7 +1758,7 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
       entry.inheritEpoch = oldInheritEpoch;
       entry.customEpoch = ++g_styleEpoch;
       entry.cascadeEpoch = oldCascadeEpoch;
-    } else if (!computedStale && !customStale && entry.others.empty() && oldOthers.empty() && !InheritRelevantChange(old, entry.plain, coupled)) {
+    } else if (!computedStale && !customStale && !InheritRelevantChange(old, entry.plain, coupled)) {
       // What changed is none of what the elements under it have from it (a property that is not inherited): its own style is a new one, theirs are as they were.
       entry.inheritEpoch = oldInheritEpoch;
       entry.customEpoch = oldCustomEpoch;

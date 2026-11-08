@@ -483,6 +483,8 @@ class Builder {
   LayoutContext& lc_;
   solar::css::StyleReuse reuse_;
   uint64_t environmentKey_ = 0;
+  std::shared_ptr<void> lastToken_;  // the token of the style SharedBoxStyle read last (null when it has none), and the language it was read for
+  std::string lastLang_;
   bool dirtyBelow_ = false;  // the style of an element above was made again (the boxes under it are made again)
   bool langBelow_ = false;   // an element above has other attributes (or another parent) than it had: what is read of the styles under it (the language) may be another
   Tree* previous_ = nullptr;
@@ -810,9 +812,11 @@ class Builder {
     static const bool debug = std::getenv("SOLAR_STYLE_DEBUG") != nullptr;
     static long unshared = 0, sharedHits = 0, read = 0;
     if (debug && (++unshared + sharedHits + read) % 5000 == 0) std::fprintf(stderr, "box styles: no token %ld, token and found %ld, token and read %ld\n", unshared, sharedHits, read);
+    lastToken_ = token;
     if (!token) return Logicalize(ReadStyle(lc_.ctx, element, pseudo));
     --unshared;
-    const auto key = std::make_pair(static_cast<const void*>(token.get()), LangOf(element));
+    lastLang_ = LangOf(element);
+    const auto key = std::make_pair(static_cast<const void*>(token.get()), lastLang_);
     const auto found = kept.find(key);
     if (found != kept.end()) {
       ++sharedHits;
@@ -880,6 +884,11 @@ class Builder {
       if (shown++ < 60) std::fprintf(stderr, "restyle root-cause <%s%s%s> reason %s\n", element->localName.c_str(), element->FindAttribute("id") ? "#" : "", element->FindAttribute("id") ? element->FindAttribute("id")->Value().c_str() : "", names[r]);
     }
     std::shared_ptr<const BoxStyle> style = SharedBoxStyle(element);
+    // (Made from what it was made from before: it is that style, and what is under the element has nothing new from it.)
+    static const bool noSameToken = std::getenv("SOLAR_NO_SAME_TOKEN") != nullptr;
+    if (!noSameToken && element->layoutStyle && lastToken_ && element->layoutToken.get() == lastToken_.get() && element->layoutLang == lastLang_) style = std::static_pointer_cast<const BoxStyle>(element->layoutStyle);
+    element->layoutToken = lastToken_;
+    element->layoutLang = lastLang_;
     // (What is under the element is made again for a style that is another one than it was; for its own children changing, the boxes of what is under them are as they were.)
     if (styleChanged) *styleChanged = element->layoutStyle != style;
     element->layoutStyle = style;
@@ -950,7 +959,8 @@ class Builder {
         flat = !top->IsDocument();
       }
     }
-    if (!recomputed && !flat && style->display != Display::Contents) {
+    // (A box taken out of the flow is placed by what is around it, by an anchor among it: it is made again each time, as what it is placed by may have changed.)
+    if (!recomputed && !flat && style->display != Display::Contents && !style->IsOutOfFlow()) {
       if (std::unique_ptr<Box> old = TakeOld(parent, element)) {
         ++g_reused;
         parent.AddChild(std::move(old));

@@ -357,6 +357,9 @@ struct Element : Node {
   const std::map<std::string, std::map<std::string, std::string>>& AnimatedValuesInView() const { return g_committedViewDepth ? committedAnimatedValues : animatedValues; }
   // Layout's style of the element (a BoxStyle) and what it was made from.
   std::shared_ptr<const void> layoutStyle;
+  // What the style it is made from was (the token of the styles that share what was worked out, and the language): a style made from the same is the same one, not another that is equal.
+  std::shared_ptr<void> layoutToken;
+  std::string layoutLang;
   struct LayoutStamp {
     uint64_t author = 0, environment = 0;
     const Node* parent = nullptr;
