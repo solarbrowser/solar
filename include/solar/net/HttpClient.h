@@ -24,6 +24,7 @@
 #include "solar/net/Loop.h"
 #include "solar/net/Resolver.h"
 #include "solar/net/Tls.h"
+#include "solar/net/WebSocketTypes.h"
 #include "solar/net/UserAgent.h"
 #include "solar/url/Url.h"
 
@@ -140,6 +141,7 @@ struct HttpClientOptions {
 
 class NetworkService;
 class HttpClient;
+class WebSocketClient;
 
 // What a fetch in flight is held by: Cancel() ends it with OnError("aborted") and closes its connection, unless it has already finished. Safe to call again, and safe once the
 // fetch is over.
@@ -174,13 +176,17 @@ class NetworkService {
   virtual void AnswerRestart(uint64_t id, bool allow) = 0;
   // Closes the connections waiting in the pool.
   virtual void CloseIdleConnections() = 0;
+  // A WebSocket connection. `handler` must outlive it, which ends with its OnClosed.
+  virtual WebSocketHandle ConnectWebSocket(const url::Url& url, WebSocketHandler& handler, WebSocketOptions options = {}) = 0;
+  // What the handle of a connection asks of it.
+  virtual void SendWebSocket(uint64_t id, std::string data, bool binary) = 0;
+  virtual void CloseWebSocket(uint64_t id, uint16_t code, std::string reason) = 0;
+  virtual void AbortWebSocket(uint64_t id) = 0;
+
   // What a service that makes the handles of its own needs: the handle is made by the service, which is the only one to know what a number means.
  protected:
   static FetchHandle MakeHandle(NetworkService* service, uint64_t id) { return FetchHandle(service, id); }
-
- public:
-  // (Until WebSocket goes through the service as well: the client whose loop, lookups and cookies it makes its connections with. Null for a service that has none.)
-  virtual HttpClient* Http() { return nullptr; }
+  static WebSocketHandle MakeWebSocketHandle(NetworkService* service, uint64_t id) { return WebSocketHandle(service, id); }
 };
 
 // Fetches over HTTP/1.1 (through TLS for https), following redirects as the Fetch Standard says,
@@ -200,7 +206,10 @@ class HttpClient : public NetworkService {
   void Cancel(uint64_t id) override;
   void FollowRedirect(uint64_t id, bool follow, std::vector<std::pair<std::string, std::string>> headers = {}) override;
   void AnswerRestart(uint64_t id, bool allow) override;
-  HttpClient* Http() override { return this; }
+  WebSocketHandle ConnectWebSocket(const url::Url& url, WebSocketHandler& handler, WebSocketOptions options = {}) override;
+  void SendWebSocket(uint64_t id, std::string data, bool binary) override;
+  void CloseWebSocket(uint64_t id, uint16_t code, std::string reason) override;
+  void AbortWebSocket(uint64_t id) override;
 
   // Closes the connections waiting in the pool.
   void CloseIdleConnections() override;
@@ -217,7 +226,9 @@ class HttpClient : public NetworkService {
 
  private:
   friend class FetchHandle;
+  WebSocketClient& WebSockets();
   std::unique_ptr<Impl> impl_;
+  std::unique_ptr<WebSocketClient> websockets_;  // (made when the first connection is asked for)
 };
 
 }  // namespace solar::net

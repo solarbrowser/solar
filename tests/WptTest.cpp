@@ -46,6 +46,7 @@
 #include "solar/web/Messaging.h"
 #include "solar/web/DomBindings.h"
 #include "solar/net/HttpClient.h"
+#include "solar/net/NetworkThread.h"
 #include "solar/url/Origin.h"
 #include "solar/url/Parser.h"
 #include "solar/url/Serializer.h"
@@ -1075,9 +1076,21 @@ bool RunFile(const std::string& path, const std::string& harness, const std::str
   tlsOptions.extraRootsPem = pki.rootPem();
   g_tls = solar::net::TlsContext::Create(tlsOptions);
   auto loop = solar::net::Loop::Create();
-  solar::net::HttpClientOptions clientOptions;
-  clientOptions.resolver = solar::net::MakeSystemResolver(*loop, WptResolverOptions(server.port(), tlsServer.port()));
-  solar::net::HttpClient client(*loop, std::move(clientOptions));
+  // (SOLAR_NET_THREAD=1: the network is a service on a thread of its own, as in the window.)
+  std::unique_ptr<solar::net::HttpClient> inlineClient;
+  std::unique_ptr<solar::net::ThreadedNetworkService> threadedNetwork;
+  if (std::getenv("SOLAR_NET_THREAD")) {
+    threadedNetwork = std::make_unique<solar::net::ThreadedNetworkService>(*loop, [&](solar::net::Loop& networkLoop) {
+      solar::net::HttpClientOptions options;
+      options.resolver = solar::net::MakeSystemResolver(networkLoop, WptResolverOptions(server.port(), tlsServer.port()));
+      return options;
+    });
+  } else {
+    solar::net::HttpClientOptions clientOptions;
+    clientOptions.resolver = solar::net::MakeSystemResolver(*loop, WptResolverOptions(server.port(), tlsServer.port()));
+    inlineClient = std::make_unique<solar::net::HttpClient>(*loop, std::move(clientOptions));
+  }
+  solar::net::NetworkService& client = inlineClient ? static_cast<solar::net::NetworkService&>(*inlineClient) : static_cast<solar::net::NetworkService&>(*threadedNetwork);
   // The tasks of the page are the program's: timers go into its queue, which its event loop runs.
   solar::web::TimerHost timers;
   isolate->SetTimerProvider(timers.Provider());

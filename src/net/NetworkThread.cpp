@@ -21,6 +21,7 @@ namespace {
 
 // What the service makes of what it was asked for, on its own thread.
 struct NetFetch;
+struct NetSocket;
 
 }  // namespace
 
@@ -35,11 +36,19 @@ struct ThreadedNetworkService::Impl {
   std::unordered_map<uint64_t, PageFetch> fetches;
   std::shared_ptr<bool> alive = std::make_shared<bool>(true);  // read on the page's thread only
 
+  struct PageSocket {
+    WebSocketHandler* handler = nullptr;
+  };
+  uint64_t nextSocketId = 1;
+  std::unordered_map<uint64_t, PageSocket> sockets;
+
   // The service's side: made on its thread and touched from it only.
   std::thread thread;
   std::unique_ptr<Loop> netLoop;
   std::unique_ptr<HttpClient> client;
   std::unordered_map<uint64_t, std::unique_ptr<NetFetch>> netFetches;
+  std::unordered_map<uint64_t, std::unique_ptr<NetSocket>> netSockets;
+  std::unordered_map<uint64_t, uint64_t> socketClientIds;  // the number the client knows a connection by
 
   explicit Impl(Loop& loop) : pageLoop(loop) {}
 
@@ -50,6 +59,16 @@ struct ThreadedNetworkService::Impl {
       if (!*alive) return;
       auto it = fetches.find(id);
       if (it == fetches.end() || epoch < it->second.epoch) return;
+      tell(it->second);
+    });
+  }
+
+  // The same for a connection.
+  void TellSocket(uint64_t id, std::function<void(PageSocket&)> tell) {
+    pageLoop.Post([this, alive = alive, id, tell = std::move(tell)] {
+      if (!*alive) return;
+      auto it = sockets.find(id);
+      if (it == sockets.end()) return;
       tell(it->second);
     });
   }
@@ -142,17 +161,47 @@ struct NetFetch final : FetchHandler {
   }
 };
 
+struct NetSocket final : WebSocketHandler {
+  ThreadedNetworkService::Impl& impl;
+  const uint64_t id;
+  NetSocket(ThreadedNetworkService::Impl& i, uint64_t number) : impl(i), id(number) {}
+
+  void OnOpen(const std::string& protocol, const std::string& extensions) override {
+    impl.TellSocket(id, [protocol, extensions](ThreadedNetworkService::Impl::PageSocket& page) { page.handler->OnOpen(protocol, extensions); });
+  }
+  void OnMessage(std::string data, bool binary) override {
+    impl.TellSocket(id, [data = std::move(data), binary](ThreadedNetworkService::Impl::PageSocket& page) mutable { page.handler->OnMessage(std::move(data), binary); });
+  }
+  void OnClosed(bool clean, uint16_t code, const std::string& reason, const std::string& error) override {
+    const uint64_t number = id;
+    ThreadedNetworkService::Impl* owner = &impl;
+    impl.TellSocket(id, [owner, number, clean, code, reason, error](ThreadedNetworkService::Impl::PageSocket& page) {
+      WebSocketHandler* handler = page.handler;
+      if (owner->sockets.erase(number)) owner->pageLoop.EndExternalWork();
+      handler->OnClosed(clean, code, reason, error);
+    });
+    // (This goes from the loop, not from inside its own call.)
+    impl.netLoop->Post([owner, number] {
+      owner->netSockets.erase(number);
+      owner->socketClientIds.erase(number);
+    });
+  }
+};
+
 }  // namespace
 
-ThreadedNetworkService::ThreadedNetworkService(Loop& pageLoop, HttpClientOptions options) : impl_(std::make_unique<Impl>(pageLoop)) {
+ThreadedNetworkService::ThreadedNetworkService(Loop& pageLoop, HttpClientOptions options)
+    : ThreadedNetworkService(pageLoop, [options = std::move(options)](Loop&) mutable { return std::move(options); }) {}
+
+ThreadedNetworkService::ThreadedNetworkService(Loop& pageLoop, std::function<HttpClientOptions(Loop&)> makeOptions) : impl_(std::make_unique<Impl>(pageLoop)) {
   std::promise<void> ready;
   Impl* impl = impl_.get();
-  impl->thread = std::thread([impl, options = std::move(options), &ready]() mutable {
+  impl->thread = std::thread([impl, makeOptions = std::move(makeOptions), &ready]() mutable {
 #if defined(__linux__)
     pthread_setname_np(pthread_self(), "solar-net");
 #endif
     impl->netLoop = Loop::Create();
-    impl->client = std::make_unique<HttpClient>(*impl->netLoop, std::move(options));
+    impl->client = std::make_unique<HttpClient>(*impl->netLoop, makeOptions(*impl->netLoop));
     impl->netLoop->BeginExternalWork();  // (the loop runs until it is told to stop)
     ready.set_value();
     impl->netLoop->Run();
@@ -170,11 +219,13 @@ ThreadedNetworkService::~ThreadedNetworkService() {
   });
   impl->thread.join();
   impl->netFetches.clear();
+  impl->netSockets.clear();
   impl->client.reset();
   impl->netLoop.reset();
   // (What was in flight is let go: the loop of the page is no longer kept waiting for it.)
-  for (size_t i = 0; i < impl->fetches.size(); ++i) impl->pageLoop.EndExternalWork();
+  for (size_t i = 0; i < impl->fetches.size() + impl->sockets.size(); ++i) impl->pageLoop.EndExternalWork();
   impl->fetches.clear();
+  impl->sockets.clear();
 }
 
 FetchHandle ThreadedNetworkService::Fetch(const url::Url& url, FetchHandler& handler, FetchOptions options) {
@@ -224,6 +275,47 @@ void ThreadedNetworkService::AnswerRestart(uint64_t id, bool allow) {
     if (found == impl->netFetches.end()) return;
     if (allow) ++found->second->epoch;
     impl->client->AnswerRestart(found->second->handle.id(), allow);
+  });
+}
+
+WebSocketHandle ThreadedNetworkService::ConnectWebSocket(const url::Url& url, WebSocketHandler& handler, WebSocketOptions options) {
+  const uint64_t id = impl_->nextSocketId++;
+  impl_->sockets[id].handler = &handler;
+  impl_->pageLoop.BeginExternalWork();
+  Impl* impl = impl_.get();
+  impl->netLoop->Post([impl, id, url, options = std::move(options)]() mutable {
+    auto socket = std::make_unique<NetSocket>(*impl, id);
+    NetSocket* raw = socket.get();
+    impl->netSockets[id] = std::move(socket);
+    impl->socketClientIds[id] = impl->client->ConnectWebSocket(url, *raw, std::move(options)).id();
+  });
+  return MakeWebSocketHandle(this, id);
+}
+
+void ThreadedNetworkService::SendWebSocket(uint64_t id, std::string data, bool binary) {
+  if (!impl_->sockets.count(id)) return;
+  Impl* impl = impl_.get();
+  impl->netLoop->Post([impl, id, data = std::move(data), binary]() mutable {
+    const auto found = impl->socketClientIds.find(id);
+    if (found != impl->socketClientIds.end()) impl->client->SendWebSocket(found->second, std::move(data), binary);
+  });
+}
+
+void ThreadedNetworkService::CloseWebSocket(uint64_t id, uint16_t code, std::string reason) {
+  if (!impl_->sockets.count(id)) return;
+  Impl* impl = impl_.get();
+  impl->netLoop->Post([impl, id, code, reason = std::move(reason)]() mutable {
+    const auto found = impl->socketClientIds.find(id);
+    if (found != impl->socketClientIds.end()) impl->client->CloseWebSocket(found->second, code, std::move(reason));
+  });
+}
+
+void ThreadedNetworkService::AbortWebSocket(uint64_t id) {
+  if (!impl_->sockets.count(id)) return;
+  Impl* impl = impl_.get();
+  impl->netLoop->Post([impl, id] {
+    const auto found = impl->socketClientIds.find(id);
+    if (found != impl->socketClientIds.end()) impl->client->AbortWebSocket(found->second);
   });
 }
 

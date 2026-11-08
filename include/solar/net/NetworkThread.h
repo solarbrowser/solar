@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <functional>
 #include <memory>
 
 #include "solar/net/HttpClient.h"
@@ -23,6 +24,8 @@ namespace solar::net {
 class ThreadedNetworkService final : public NetworkService {
  public:
   ThreadedNetworkService(Loop& pageLoop, HttpClientOptions options = {});
+  // For options that are made with the loop of the thread (a resolver is made on one): `makeOptions` is called on the service's thread with its loop.
+  ThreadedNetworkService(Loop& pageLoop, std::function<HttpClientOptions(Loop&)> makeOptions);
   // Stops the thread. What is in flight is let go without being told of.
   ~ThreadedNetworkService() override;
 
@@ -34,6 +37,10 @@ class ThreadedNetworkService final : public NetworkService {
   void FollowRedirect(uint64_t id, bool follow, std::vector<std::pair<std::string, std::string>> headers = {}) override;
   void AnswerRestart(uint64_t id, bool allow) override;
   void CloseIdleConnections() override;
+  WebSocketHandle ConnectWebSocket(const url::Url& url, WebSocketHandler& handler, WebSocketOptions options = {}) override;
+  void SendWebSocket(uint64_t id, std::string data, bool binary) override;
+  void CloseWebSocket(uint64_t id, uint16_t code, std::string reason) override;
+  void AbortWebSocket(uint64_t id) override;
 
   struct Impl;
 

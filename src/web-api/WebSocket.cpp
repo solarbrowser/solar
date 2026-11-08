@@ -27,7 +27,7 @@ char g_key;
 // What the realm keeps: the client, and a socket for each connection that has not ended. When the realm goes, what is open is dropped and nothing more is told
 // to script; the state lives on until the last connection has ended, because the network's calls for it are still to come.
 struct State : std::enable_shared_from_this<State> {
-  State(Context& c, web::FetchHost& h) : ctx(&h.context()), host(&h), loop_(h.config().loop), client(*h.config().client->Http()) {}
+  State(Context& c, web::FetchHost& h) : ctx(&h.context()), host(&h), loop_(h.config().loop), service(h.config().client) {}
 
   struct Socket final : net::WebSocketHandler {
     Socket(State& s, uint32_t i, qe::Persistent cb) : state(s), id(i), callback(std::move(cb)) {}
@@ -74,7 +74,7 @@ struct State : std::enable_shared_from_this<State> {
   Context* ctx;
   web::FetchHost* host;
   net::Loop* loop_;
-  net::WebSocketClient client;
+  net::NetworkService* service;
   std::map<uint32_t, std::unique_ptr<Socket>> sockets;
   uint32_t next = 1;
   bool dead = false;
@@ -88,7 +88,7 @@ struct Guard {
     state->dead = true;
     if (!state->sockets.empty()) {
       state->self = state;
-      state->client.CloseAll();
+      for (auto& [number, socket] : state->sockets) socket->handle.Abort();
     }
   }
   std::shared_ptr<State> state;
@@ -124,7 +124,7 @@ Value Open(Context& ctx, Value, qe::Args args, Value) {
   auto socket = std::make_unique<State::Socket>(*state, id, qe::Persistent(ctx, args[3]));
   State::Socket* raw = socket.get();
   state->sockets[id] = std::move(socket);
-  raw->handle = state->client.Connect(*parsed, *raw, std::move(options));
+  raw->handle = state->service->ConnectWebSocket(*parsed, *raw, std::move(options));
   return qe::FromNumber(id);
 }
 

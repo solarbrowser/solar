@@ -596,7 +596,7 @@ WebSocketClient::WebSocketClient(HttpClient& http) : impl_(std::make_unique<Impl
 
 WebSocketClient::~WebSocketClient() = default;
 
-WebSocketHandle WebSocketClient::Connect(const url::Url& address, WebSocketHandler& handler, WebSocketOptions options) {
+uint64_t WebSocketClient::Connect(const url::Url& address, WebSocketHandler& handler, WebSocketOptions options) {
   url::Url url = address;
   if (url.scheme == "http") url.scheme = "ws";
   if (url.scheme == "https") url.scheme = "wss";
@@ -608,14 +608,14 @@ WebSocketHandle WebSocketClient::Connect(const url::Url& address, WebSocketHandl
     raw->failure = "the address is not a WebSocket one";
     raw->state = State::Closed;
     raw->Tell();
-    return WebSocketHandle(this, id);
+    return id;
   }
   // Begun from the loop: nothing is reported from inside this call.
   impl_->loop.Post([this, id] {
     const auto found = impl_->connections.find(id);
     if (found != impl_->connections.end() && found->second->state == State::Connecting) found->second->Begin();
   });
-  return WebSocketHandle(this, id);
+  return id;
 }
 
 void WebSocketClient::CloseAll() {
@@ -626,18 +626,21 @@ void WebSocketClient::CloseAll() {
   }
 }
 
-void WebSocketHandle::Send(std::string data, bool binary) {
-  if (!client_) return;
-  const auto found = client_->impl_->connections.find(id_);
-  if (found != client_->impl_->connections.end()) found->second->Send(std::move(data), binary);
+void WebSocketClient::Send(uint64_t id, std::string data, bool binary) {
+  const auto found = impl_->connections.find(id);
+  if (found != impl_->connections.end()) found->second->Send(std::move(data), binary);
 }
 
-void WebSocketHandle::Close(uint16_t code, std::string reason) {
-  if (!client_) return;
-  const auto found = client_->impl_->connections.find(id_);
-  if (found != client_->impl_->connections.end()) found->second->Close(code, std::move(reason));
+void WebSocketClient::Close(uint64_t id, uint16_t code, std::string reason) {
+  const auto found = impl_->connections.find(id);
+  if (found != impl_->connections.end()) found->second->Close(code, std::move(reason));
 }
 
-size_t WebSocketHandle::BufferedAmount() const { return 0; }
+void WebSocketClient::Abort(uint64_t id) {
+  const auto found = impl_->connections.find(id);
+  if (found == impl_->connections.end() || found->second->state == State::Closed) return;
+  found->second->failure = found->second->failure.empty() ? "the page went away" : found->second->failure;
+  found->second->Drop();
+}
 
 }  // namespace solar::net

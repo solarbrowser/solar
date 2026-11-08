@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include "solar/net/HttpClient.h"
+#include "solar/net/WebSocket.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -1169,6 +1170,29 @@ void HttpClient::AnswerRestart(uint64_t id, bool allow) {
     exchange.Fail(*exchange.closedWhileAwaiting);
   }
 }
+
+WebSocketClient& HttpClient::WebSockets() {
+  if (!websockets_) websockets_ = std::make_unique<WebSocketClient>(*this);
+  return *websockets_;
+}
+
+WebSocketHandle HttpClient::ConnectWebSocket(const url::Url& url, WebSocketHandler& handler, WebSocketOptions options) {
+  return MakeWebSocketHandle(this, WebSockets().Connect(url, handler, std::move(options)));
+}
+void HttpClient::SendWebSocket(uint64_t id, std::string data, bool binary) { WebSockets().Send(id, std::move(data), binary); }
+void HttpClient::CloseWebSocket(uint64_t id, uint16_t code, std::string reason) { WebSockets().Close(id, code, std::move(reason)); }
+void HttpClient::AbortWebSocket(uint64_t id) { WebSockets().Abort(id); }
+
+void WebSocketHandle::Send(std::string data, bool binary) {
+  if (service_) service_->SendWebSocket(id_, std::move(data), binary);
+}
+void WebSocketHandle::Close(uint16_t code, std::string reason) {
+  if (service_) service_->CloseWebSocket(id_, code, std::move(reason));
+}
+void WebSocketHandle::Abort() {
+  if (service_) service_->AbortWebSocket(id_);
+}
+size_t WebSocketHandle::BufferedAmount() const { return 0; }
 
 void FetchHandle::Cancel() {
   if (service_) service_->Cancel(id_);

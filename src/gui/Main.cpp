@@ -55,6 +55,7 @@
 #include "solar/html/Parser.h"
 #include "solar/layout/Layout.h"
 #include "solar/net/HttpClient.h"
+#include "solar/net/NetworkThread.h"
 #include "solar/paint/Paint.h"
 #include "solar/gui/GpuSurface.h"
 #include "solar/paint/SkiaPainter.h"
@@ -1469,7 +1470,15 @@ int PageMain(Shared& shared, int argc, char** argv) {
     std::fprintf(stderr, "cannot start the event loop\n");
     return 1;
   }
-  solar::net::HttpClient client(*loop);
+  // The network: a service on a thread of its own, which tells this loop (the loop of the page) what happens; SOLAR_NET_INLINE=1: the client on this loop, as it was.
+  std::unique_ptr<solar::net::HttpClient> inlineClient;
+  std::unique_ptr<solar::net::ThreadedNetworkService> threadedNetwork;
+  if (std::getenv("SOLAR_NET_INLINE")) {
+    inlineClient = std::make_unique<solar::net::HttpClient>(*loop);
+  } else {
+    threadedNetwork = std::make_unique<solar::net::ThreadedNetworkService>(*loop);
+  }
+  solar::net::NetworkService& client = inlineClient ? static_cast<solar::net::NetworkService&>(*inlineClient) : static_cast<solar::net::NetworkService&>(*threadedNetwork);
   solar::web::TimerHost timers;
   isolate->SetTimerProvider(timers.Provider());
   solar::web::JsEventLoop events(*loop, {[&] { isolate->PerformMicrotaskCheckpoint(); }, [&] { timers.RunDue(); }, [&] { return timers.NextDelayMs(); }});
@@ -1567,7 +1576,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
       solar::html::LoadPage(*realm, document, markup, type);
     }
     if (std::getenv("SOLAR_DOC_SIZE")) {
-      solar::html::RunInRealm(*realm, [&] { realm->Evaluate("console.log('doc elements ' + document.querySelectorAll('*').length + ' html ' + document.documentElement.outerHTML.length + ' links ' + document.querySelectorAll('link[rel=stylesheet]').length + ' hash ' + Array.from(document.documentElement.outerHTML).reduce((h, c) => (h * 31 + c.codePointAt(0)) | 0, 7) + ' title ' + document.title + ' bodychildren ' + document.body.children.length + ' head ' + document.head.children.length + ' htmlkids ' + Array.from(document.documentElement.children).map(e => e.localName).join(',') + ' firstbody ' + Array.from(document.body.children).slice(0, 12).map(e => e.localName + (e.id ? '#' + e.id : '')).join(','))", "size"); });
+      solar::html::RunInRealm(*realm, [&] { realm->Evaluate("console.log('doc elements ' + document.querySelectorAll('*').length + ' html ' + document.documentElement.outerHTML.length + ' links ' + document.querySelectorAll('link[rel=stylesheet]').length + ' hash ' + (document.documentElement.outerHTML.length < 200000 ? Array.from(document.documentElement.outerHTML).reduce((h, c) => (h * 31 + c.codePointAt(0)) | 0, 7) : 0) + ' title ' + document.title + ' bodychildren ' + document.body.children.length + ' head ' + document.head.children.length + ' htmlkids ' + Array.from(document.documentElement.children).map(e => e.localName).join(',') + ' firstbody ' + Array.from(document.body.children).slice(0, 12).map(e => e.localName + (e.id ? '#' + e.id : '')).join(','))", "size"); });
     }
     if (timing_log) std::fprintf(stderr, "[%.0f ms] LoadPage ends\n", std::chrono::duration<double, std::milli>(Clock::now().time_since_epoch()).count());
     if (timing_log) std::fprintf(stderr, "  LoadPage took %.0f ms (%.0f ms of it waiting; scripts %.0f ms, style sheets parsed %.0f ms, layout %.0f ms)\n", std::chrono::duration<double, std::milli>(Clock::now() - loadStart).count(), browser.waited_, solar::html::ScriptMillis(), solar::css::SheetParseMillis(), solar::layout::LayoutMillis());
