@@ -21,6 +21,8 @@
   // The pictures the browser fetched for the tabs: kept for the site the tab is on, dropped when the tab goes to another.
   const icons = {}, iconSite = {};
   const siteOf = (url) => { const m = /^[a-z]+:\/\/([^\/?#]*)/.exec(url || ""); return m ? m[1] : ""; };
+  // A tab that has no picture of its own (or not yet) has the globe.
+  const tabGlobe = '{{icon:public}}';
   let lastTabs = "";
   const renderTabs = () => {
     for (const t of state.tabs) { if (icons[t.id] && iconSite[t.id] !== siteOf(t.url)) { delete icons[t.id]; delete iconSite[t.id]; } }
@@ -32,7 +34,7 @@
     for (const t of state.tabs) {
       const blank = /^solar:\/\/newtab/.test(t.url) || !t.url;
       const name = nameOf(t);
-      html += '<div class="tab' + (t.id === state.active ? " active" : "") + (t.loading ? " loading" : "") + (blank ? " blank" : "") + (t.pinned ? " pinned" : "") + '" data-id="' + t.id + '" title="' + esc(name).replace(/"/g, "&quot;") + '">' + (icons[t.id] && !blank ? '<img class="icon" src="' + icons[t.id] + '">' : '<span class="icon"></span>') + '<span class="label">' + esc(name) + '</span><button class="close" data-id="' + t.id + '">' + cross + "</button></div>";
+      html += '<div class="tab' + (t.id === state.active ? " active" : "") + (t.loading ? " loading" : "") + (blank ? " blank" : "") + (t.pinned ? " pinned" : "") + '" data-id="' + t.id + '" title="' + esc(name).replace(/"/g, "&quot;") + '">' + (icons[t.id] && !blank ? '<img class="icon" src="' + icons[t.id] + '">' : '<span class="icon">' + tabGlobe + "</span>") + '<span class="label">' + esc(name) + '</span><button class="close" data-id="' + t.id + '">' + cross + "</button></div>";
     }
     tabsBox.innerHTML = html;
   };
