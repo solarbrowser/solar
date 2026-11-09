@@ -125,6 +125,7 @@ void RunCompositor(Shared& shared, net::ipc::Channel& link, int gpuFd) {
     shared.pixelWidth = g.pixelWidth;
     shared.pixelHeight = g.pixelHeight;
     shared.density = g.density;
+    shared.dark = g.dark;
     // (SOLAR_GUI_DENSITY=2: as on a high-density screen, for timing what that costs without one.)
     if (const char* forced = std::getenv("SOLAR_GUI_DENSITY")) {
       const float d = static_cast<float>(std::atof(forced));

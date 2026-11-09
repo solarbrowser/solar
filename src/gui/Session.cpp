@@ -996,6 +996,19 @@ uint32_t Session::activeTab() const {
   return impl_->active;
 }
 
+void Session::MoveTab(uint32_t tab, size_t index) {
+  impl_->services.Post([impl = impl_, tab, index] {
+    {
+      std::lock_guard<std::mutex> lock(impl->mutex);
+      const auto where = std::find(impl->order.begin(), impl->order.end(), tab);
+      if (where == impl->order.end()) return;
+      impl->order.erase(where);
+      impl->order.insert(impl->order.begin() + static_cast<std::ptrdiff_t>(std::min(index, impl->order.size())), tab);
+    }
+    impl->PushState();
+  });
+}
+
 void Session::CycleTab(int delta) {
   impl_->services.Post([impl = impl_, delta] {
     uint32_t next = 0;

@@ -61,6 +61,8 @@ class Session {
   uint32_t activeTab() const;
   void Activate(uint32_t tab);
   void CycleTab(int delta);
+  // The tab is put at this place among the tabs (0 is the first).
+  void MoveTab(uint32_t tab, size_t index);
   // Whether the interface draws the window's own buttons (the system's bar is not there), and whether the window is maximized: the interface is told.
   void SetWindowFlags(bool controls, bool maximized);
   // The browser's interface: its renderer is started (`geometry` is the size it is told first, a Resize message's bytes) and told the state of the browser as it changes. It is not a page of

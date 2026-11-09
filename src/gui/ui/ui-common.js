@@ -107,11 +107,60 @@
     const tab = e.target && e.target.closest ? e.target.closest(".tab") : null;
     if (tab) { delete icons[tab.dataset.id]; lastTabs = ""; renderTabs(); }
   }, true);
+  // A tab is dragged along the row (or the column): it follows the pointer, the ones it passes move aside, and where it is let go is where it stays.
+  const vertical = document.body.dataset.axis === "y";
+  const GAP = 2;
+  let drag = null;
+  const pointer = (e) => (vertical ? e.clientY : e.clientX);
+  const startOf = (r) => (vertical ? r.top : r.left);
+  const sizeOf = (r) => (vertical ? r.height : r.width);
   tabsBox.addEventListener("mousedown", (e) => {
     const close = e.target.closest ? e.target.closest(".close") : null;
     const tab = e.target.closest ? e.target.closest(".tab") : null;
-    if (close) send("close\t" + close.dataset.id);
-    else if (tab) send("activate\t" + tab.dataset.id);
+    if (close) { send("close\t" + close.dataset.id); return; }
+    if (!tab) return;
+    send("activate\t" + tab.dataset.id);
+    if (e.button !== 0) return;
+    const els = Array.from(tabsBox.children);
+    drag = { id: Number(tab.dataset.id), els, rects: els.map((el) => el.getBoundingClientRect()), from: els.indexOf(tab), to: els.indexOf(tab), at: pointer(e), moved: false };
+  });
+  document.addEventListener("mousemove", (e) => {
+    if (!drag) return;
+    const delta = pointer(e) - drag.at;
+    if (!drag.moved && Math.abs(delta) < 6) return;
+    drag.moved = true;
+    const mine = drag.rects[drag.from], size = sizeOf(mine) + GAP;
+    // (It stays inside the row.)
+    const lowest = startOf(drag.rects[0]) - startOf(mine);
+    const last = drag.rects[drag.rects.length - 1];
+    const highest = startOf(last) + sizeOf(last) - startOf(mine) - sizeOf(mine);
+    const d = Math.max(lowest, Math.min(highest, delta));
+    const centre = startOf(mine) + sizeOf(mine) / 2 + d;
+    let to = 0;
+    drag.rects.forEach((r, j) => { if (j !== drag.from && startOf(r) + sizeOf(r) / 2 < centre) to++; });
+    drag.to = to;
+    drag.els.forEach((el, j) => {
+      let shift = 0;
+      if (j === drag.from) shift = d;
+      else if (drag.from < j && j <= to) shift = -size;
+      else if (to <= j && j < drag.from) shift = size;
+      el.style.transform = (vertical ? "translateY(" : "translateX(") + shift + "px)";
+    });
+    drag.els[drag.from].style.zIndex = "5";
+  });
+  document.addEventListener("mouseup", () => {
+    if (!drag) return;
+    const done = drag;
+    drag = null;
+    for (const el of done.els) { el.style.transform = ""; el.style.zIndex = ""; }
+    if (done.moved && done.to !== done.from) {
+      // (The order is changed here at once, and the browser keeps it.)
+      const moved = state.tabs.splice(done.from, 1)[0];
+      state.tabs.splice(done.to, 0, moved);
+      lastTabs = "";
+      renderTabs();
+      send("move\t" + done.id + "\t" + done.to);
+    }
   });
   $("newtab").addEventListener("click", () => send("newtab"));
   // The menu comes down over the page: the browser makes this page taller for as long as it is open.

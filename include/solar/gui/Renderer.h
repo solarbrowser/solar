@@ -68,6 +68,7 @@ class Shared {
   // The window, as the thread of the page needs to know it (in points, and the pixels they come to).
   std::atomic<int> width{1280}, height{800}, pixelWidth{1280}, pixelHeight{800};
   std::atomic<float> density{1.f};
+  std::atomic<bool> dark{false};  // the user wants dark colours: the pages are told by prefers-color-scheme
   std::atomic<bool> quit{false}, pageDone{false};
   // The scroll of the page as the window has it; the serial moves with each change.
   std::atomic<double> scrollX{0}, scrollY{0};

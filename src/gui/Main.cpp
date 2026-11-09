@@ -1048,6 +1048,7 @@ int RendererMain(int fd, int networkFd, int argc, char** argv, bool sandboxed = 
     shared.pixelWidth = geometry.pixelWidth;
     shared.pixelHeight = geometry.pixelHeight;
     shared.density = geometry.density;
+    shared.dark = geometry.dark;
     if (const char* forced = std::getenv("SOLAR_GUI_DENSITY")) {
       const float d = static_cast<float>(std::atof(forced));
       if (d >= 1) {
@@ -1318,6 +1319,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
     environment.width = environment.deviceWidth = w;
     environment.height = environment.deviceHeight = h;
     environment.resolution = shared.density.load();
+    environment.colorScheme = shared.dark.load() ? "dark" : "light";
     solar::css::SetCurrentMediaEnvironment(environment);
   };
   setViewport();

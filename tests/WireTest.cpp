@@ -47,7 +47,12 @@ int main() {
     const std::string bytes = Encode(g);
     Reader in(bytes);
     wire::Geometry back;
-    Check("geometry round trip", wire::Read(in, back) && back.width == 1280 && back.pixelHeight == 1600 && back.density == 2.f && in.AtEnd());
+    Check("geometry round trip", wire::Read(in, back) && back.width == 1280 && back.pixelHeight == 1600 && back.density == 2.f && !back.dark && in.AtEnd());
+    wire::Geometry darkOne{1280, 800, 1280, 800, 1.f, true};
+    const std::string darkBytes = Encode(darkOne);
+    Reader darkIn(darkBytes);
+    wire::Geometry darkBack;
+    Check("and the colours the user wants go with it", wire::Read(darkIn, darkBack) && darkBack.dark && darkIn.AtEnd());
     for (const wire::Geometry& bad : {wire::Geometry{0, 800, 1, 1, 1}, wire::Geometry{1, 1, 1, 1000000, 1}, wire::Geometry{1, 1, 1, 1, 0.f}, wire::Geometry{-5, 1, 1, 1, 1}}) {
       const std::string b = Encode(bad);
       Reader r(b);

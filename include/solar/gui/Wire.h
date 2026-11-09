@@ -93,6 +93,7 @@ constexpr size_t kMaxStorageFile = size_t{60} << 20;
 struct Geometry {
   int32_t width = 0, height = 0, pixelWidth = 0, pixelHeight = 0;
   float density = 1;
+  bool dark = false;  // the colours the user wants (prefers-color-scheme of the pages)
 };
 void Write(net::ipc::Writer& out, const Geometry& geometry);
 // False where it is not a window (sizes below 1 or above what a screen has).

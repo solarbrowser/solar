@@ -17,6 +17,7 @@ void Write(Writer& out, const Geometry& g) {
   out.I32(g.pixelWidth);
   out.I32(g.pixelHeight);
   out.F32(g.density);
+  out.U8(g.dark ? 1 : 0);
 }
 
 bool Read(Reader& in, Geometry& g) {
@@ -25,6 +26,7 @@ bool Read(Reader& in, Geometry& g) {
   g.pixelWidth = in.I32();
   g.pixelHeight = in.I32();
   g.density = in.F32();
+  g.dark = in.U8() != 0;
   if (!in.ok()) return false;
   const auto sane = [](int32_t v) { return v >= 1 && v <= kMaxPixels; };
   return sane(g.width) && sane(g.height) && sane(g.pixelWidth) && sane(g.pixelHeight) && g.density >= 0.25f && g.density <= 16.f;

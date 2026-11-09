@@ -6,13 +6,13 @@
 <style>
   :root {
     --bg: #f4f5f8; --side: #eceef3; --card: #ffffff; --edge: #dfe2ea; --text: #1b1f27; --dim: #697181;
-    --accent: #3b6cf6; --pick: rgba(30, 40, 70, 0.08); --field: #eff1f6; --on: #3b6cf6; --off: #b4bac8; --knob: #ffffff;
+    --accent: #3b6cf6; --pick: rgba(30, 40, 70, 0.08); --field: #eff1f6; --on: #3b6cf6; --off: #b4bac8; --knob: #ffffff; --seg: #ffffff;
     --shadow: 0 1px 2px rgba(25, 35, 70, 0.06);
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #15171c; --side: #1b1e25; --card: #1e2129; --edge: #2c303a; --text: #e8eaf0; --dim: #949bab;
-      --accent: #7a9bff; --pick: rgba(255, 255, 255, 0.08); --field: #292d37; --on: #7a9bff; --off: #4d5362; --knob: #14161b;
+      --accent: #7a9bff; --pick: rgba(255, 255, 255, 0.08); --field: #292d37; --on: #7a9bff; --off: #4d5362; --knob: #14161b; --seg: #3a3f4c;
       --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
     }
   }
@@ -45,7 +45,7 @@
   .segmented { display: flex; padding: 3px; gap: 2px; border-radius: 10px; background: var(--field); }
   .segmented button { all: unset; box-sizing: border-box; padding: 7px 18px; border-radius: 9px; color: var(--dim); font-size: 14px; cursor: default; }
   .segmented button:hover { color: var(--text); }
-  .segmented button.on { background: var(--card); color: var(--text); font-weight: 500; box-shadow: 0 1px 2px rgba(25, 35, 70, 0.2); }
+  .segmented button.on { background: var(--seg); color: var(--text); font-weight: 500; box-shadow: 0 1px 2px rgba(25, 35, 70, 0.2); }
   select, input[type=text] { height: 38px; padding: 0 14px; border: 1px solid var(--edge); border-radius: 11px; background: var(--field); color: var(--text); font: inherit; font-size: 14px; outline: 1px solid transparent; }
   select { min-width: 200px; }
   input[type=text] { width: 280px; }

@@ -141,6 +141,7 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
   const auto leftPoints = [&] { return fullscreen || noBar || !sideTabs ? 0 : kSideWidth; };
   const auto barPixels = [&] { return static_cast<int>(std::lround(barPoints() * SDL_GetWindowPixelDensity(window))); };
   const auto leftPixels = [&] { return static_cast<int>(std::lround(leftPoints() * SDL_GetWindowPixelDensity(window))); };
+  const auto dark = [] { return Settings::Instance().Get("theme") == "dark"; };  // ("system" is light until the system's colours are read)
   // What the interface is told its size is: the bar (and what comes down from it), or the whole window with the tabs at the side.
   const auto chromeGeometry = [&] {
     int w = 0, h = 0, pw = 0, ph = 0;
@@ -149,16 +150,17 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
     const float density = SDL_GetWindowPixelDensity(window);
     Writer out;
     if (sideTabs) {
-      wire::Write(out, wire::Geometry{w, std::max(1, h), pw, std::max(1, ph), density});
+      wire::Write(out, wire::Geometry{w, std::max(1, h), pw, std::max(1, ph), density, dark()});
     } else {
       const int extra = barPoints() > 0 ? overlay : 0;
-      wire::Write(out, wire::Geometry{w, kChromeHeight + extra, pw, static_cast<int>(std::lround((kChromeHeight + extra) * density)), density});
+      wire::Write(out, wire::Geometry{w, kChromeHeight + extra, pw, static_cast<int>(std::lround((kChromeHeight + extra) * density)), density, dark()});
     }
     return out.bytes();
   };
   const auto chromeAddress = [&] { return std::string(sideTabs ? kSideTabsAddress : kChromeAddress); };
   const auto compose = [&] {
-    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    if (dark()) SDL_SetRenderDrawColor(renderer, 21, 23, 28, 255);
+    else SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
     SDL_RenderClear(renderer);
     int outW = 0, outH = 0;
     SDL_GetRenderOutputSize(renderer, &outW, &outH);
@@ -185,7 +187,7 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
     const float density = SDL_GetWindowPixelDensity(window);
     const int bar = barPixels(), barPts = barPoints(), left = leftPixels(), leftPts = leftPoints();
     Writer out;
-    wire::Write(out, wire::Geometry{std::max(1, w - leftPts), std::max(1, h - barPts), std::max(1, pw - left), std::max(1, ph - bar), density});
+    wire::Write(out, wire::Geometry{std::max(1, w - leftPts), std::max(1, h - barPts), std::max(1, pw - left), std::max(1, ph - bar), density, dark()});
     session.Broadcast(wire::ToRenderer::Resize, out.bytes());
     session.SendChrome(wire::ToRenderer::Resize, chromeGeometry());
   };
@@ -410,6 +412,11 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
             if (second != std::string::npos && Settings::Instance().Set(rest.substr(0, second), rest.substr(second + 1))) {
               session.Send(message.host, wire::ToRenderer::UiState, Settings::Instance().Json());
               // The tabs are moved to the other layout at once: another interface is started for it, and the pages are told how large they are now.
+              // The colours too: the pages and the interface are told (they are given the size again, with the colours the user wants).
+              if (rest.rfind("theme\t", 0) == 0) {
+                sendGeometry();
+                present();
+              }
               const bool wantSide = Settings::Instance().Get("tabs") == "side";
               if (wantSide != sideTabs) {
                 sideTabs = wantSide;
@@ -462,6 +469,11 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
             else session.CloseTab(static_cast<uint32_t>(number));
             barFocused = false;
           }
+        } else if (verb == "move") {
+          // A tab is put at another place (by the interface, which has it dragged).
+          const size_t second = rest.find('\t');
+          const int number = std::atoi(rest.c_str()), place = second == std::string::npos ? -1 : std::atoi(rest.c_str() + second + 1);
+          if (number > 0 && place >= 0) session.MoveTab(static_cast<uint32_t>(number), static_cast<size_t>(place));
         } else if (verb == "min") SDL_MinimizeWindow(window);
         else if (verb == "max") {
           if (SDL_GetWindowFlags(window) & SDL_WINDOW_MAXIMIZED) SDL_RestoreWindow(window);
@@ -550,6 +562,35 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
             SDL_PushEvent(&wheel);
             std::this_thread::sleep_for(std::chrono::milliseconds(every));
           }
+        } else if (step.rfind("drag:", 0) == 0) {
+          // drag:x1,y1,x2,y2: the button goes down at the first place, the pointer goes to the second in steps, and the button is let go.
+          float x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+          std::sscanf(step.c_str() + 5, "%f,%f,%f,%f", &x1, &y1, &x2, &y2);
+          const auto motion = [](float x, float y) {
+            SDL_Event move{};
+            move.type = SDL_EVENT_MOUSE_MOTION;
+            move.motion.x = x;
+            move.motion.y = y;
+            SDL_PushEvent(&move);
+          };
+          const auto button = [](bool down, float x, float y) {
+            SDL_Event press{};
+            press.type = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+            press.button.button = SDL_BUTTON_LEFT;
+            press.button.down = down;
+            press.button.x = x;
+            press.button.y = y;
+            SDL_PushEvent(&press);
+          };
+          motion(x1, y1);
+          std::this_thread::sleep_for(std::chrono::milliseconds(60));
+          button(true, x1, y1);
+          for (int i = 1; i <= 12; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(40));
+            motion(x1 + (x2 - x1) * i / 12, y1 + (y2 - y1) * i / 12);
+          }
+          std::this_thread::sleep_for(std::chrono::milliseconds(60));
+          button(false, x2, y2);
         } else if (step.rfind("text:", 0) == 0) {
           SDL_Event typed{};
           typed.type = SDL_EVENT_TEXT_INPUT;
