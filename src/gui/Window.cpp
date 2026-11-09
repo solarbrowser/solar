@@ -144,7 +144,11 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
   const auto leftPoints = [&] { return !chromeVisible() ? 0 : layout == 1 ? kSideWidth : layout == 2 ? kSidebarWidth : 0; };
   const auto barPixels = [&] { return static_cast<int>(std::lround(barPoints() * SDL_GetWindowPixelDensity(window))); };
   const auto leftPixels = [&] { return static_cast<int>(std::lround(leftPoints() * SDL_GetWindowPixelDensity(window))); };
-  const auto dark = [] { return Settings::Instance().Get("theme") == "dark"; };  // ("system" is light until the system's colours are read)
+  // The colours: the user's choice, and for "system" the system's own (SDL asks the desktop: the portal on Linux, the settings of Windows and of macOS).
+  const auto dark = [] {
+    const std::string theme = Settings::Instance().Get("theme");
+    return theme == "dark" || (theme == "system" && SDL_GetSystemTheme() == SDL_SYSTEM_THEME_DARK);
+  };
   // What the interface is told its size is: the bar (and what comes down from it), or the whole window with the tabs at the side.
   const auto chromeGeometry = [&] {
     int w = 0, h = 0, pw = 0, ph = 0;
@@ -671,6 +675,14 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
         case SDL_EVENT_WINDOW_RESIZED:
         case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED: sendGeometry(); forward = false; break;
         case SDL_EVENT_WINDOW_EXPOSED: present(); forward = false; break;
+        case SDL_EVENT_SYSTEM_THEME_CHANGED:
+          // (The user changed the colours of the system: with "system" chosen, the pages and the interface follow.)
+          if (Settings::Instance().Get("theme") == "system") {
+            sendGeometry();
+            present();
+          }
+          forward = false;
+          break;
         case SDL_EVENT_WINDOW_MAXIMIZED:
         case SDL_EVENT_WINDOW_RESTORED: {
           const bool maximized = (SDL_GetWindowFlags(window) & SDL_WINDOW_MAXIMIZED) != 0;

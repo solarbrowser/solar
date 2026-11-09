@@ -56,9 +56,18 @@ const std::vector<SearchEngine>& Settings::Engines() {
 
 std::string Settings::Path() {
   if (const char* forced = std::getenv("SOLAR_SETTINGS_FILE")) return forced;
+#if defined(_WIN32)
+  // %LOCALAPPDATA%\\solar (where the other files of the browser are).
+  if (const char* local = std::getenv("LOCALAPPDATA")) return std::string(local) + "\\solar\\settings.conf";
+  return "settings.conf";
+#elif defined(__APPLE__)
+  if (const char* home = std::getenv("HOME")) return std::string(home) + "/Library/Application Support/solar/settings.conf";
+  return "settings.conf";
+#else
   if (const char* config = std::getenv("XDG_CONFIG_HOME")) return std::string(config) + "/solar/settings.conf";
   const char* home = std::getenv("HOME");
   return std::string(home ? home : ".") + "/.config/solar/settings.conf";
+#endif
 }
 
 Settings& Settings::Instance() {
