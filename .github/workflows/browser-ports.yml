@@ -22,9 +22,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          # (The labels of GitHub's runners change: macos-latest is Apple silicon, and the Intel one has a label of its own. macos-14 and macos-13 are not offered any more.)
+          - os: macos-latest
             arch: arm64
-          - os: macos-13
+          - os: macos-15-intel
             arch: x86_64
     steps:
       - uses: actions/checkout@v4
