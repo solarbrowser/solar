@@ -11,7 +11,9 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <spawn.h>
+#if defined(__linux__)
 #include <sys/prctl.h>
+#endif
 #include <sys/wait.h>
 #include <unistd.h>
 

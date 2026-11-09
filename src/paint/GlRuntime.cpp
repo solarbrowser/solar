@@ -9,7 +9,16 @@
 // canvas's surface, which the window shows as it shows a 2D canvas. The API the script sees is src/web-api/js/webgl.js; this is the natives under it: __solarGlCreate, __solarGlOps,
 // __solarGl and the rest. Most of the functions of the standard are the OpenGL ES function of the same name, called with the numbers the script gives (`Scalar`); the ones that
 // take memory, strings or arrays have a handler each.
+#if defined(_WIN32)
+#include <windows.h>
+// (Windows opens a library by LoadLibrary and finds a function by GetProcAddress: the calls below are the same ones.)
+#define RTLD_NOW 0
+#define RTLD_LOCAL 0
+static void* dlopen(const char* name, int) { return reinterpret_cast<void*>(::LoadLibraryA(name)); }
+static void* dlsym(void* handle, const char* name) { return reinterpret_cast<void*>(::GetProcAddress(static_cast<HMODULE>(handle), name)); }
+#else
 #include <dlfcn.h>
+#endif
 #include <unistd.h>
 
 #include <chrono>
@@ -163,8 +172,8 @@ bool EnsureEgl() {
     EGLint attributes[] = {EGL_PLATFORM_ANGLE_TYPE_ANGLE, type, EGL_NONE};
     if (std::getenv("SOLAR_ANGLE_SWIFTSHADER")) {
       EGLint swift[] = {EGL_PLATFORM_ANGLE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE, EGL_PLATFORM_ANGLE_DEVICE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_DEVICE_TYPE_SWIFTSHADER_ANGLE, EGL_NONE};
-      if (InitDisplay(egl, getPlatformDisplay(EGL_PLATFORM_ANGLE_ANGLE, EGL_DEFAULT_DISPLAY, swift))) egl.ok = true;
-    } else if (InitDisplay(egl, getPlatformDisplay(EGL_PLATFORM_ANGLE_ANGLE, EGL_DEFAULT_DISPLAY, attributes))) {
+      if (InitDisplay(egl, getPlatformDisplay(EGL_PLATFORM_ANGLE_ANGLE, nullptr, swift))) egl.ok = true;
+    } else if (InitDisplay(egl, getPlatformDisplay(EGL_PLATFORM_ANGLE_ANGLE, nullptr, attributes))) {
       egl.ok = true;
     }
   }

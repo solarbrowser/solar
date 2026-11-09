@@ -427,7 +427,8 @@ PORTABLE_NET_TESTS = LoopTest ResolverTest NetTest HttpClientTest TlsTest Http2T
 POSIX_TESTS = IpcTest WireTest SessionTest StorageTest SettingsTest
 LINUX_TESTS = SandboxTest
 NET_TESTS = $(PORTABLE_NET_TESTS) $(if $(filter-out windows,$(PLATFORM)),$(POSIX_TESTS)) $(if $(filter linux,$(PLATFORM)),$(LINUX_TESTS))
-QUANTA_TESTS = UrlBindingsTest UrlRealmsTest FetchBindingsTest DomTest HtmlTreeTest ListCodecTest
+# (ListCodecTest has Skia in it: where Skia is not built, as in CI, it is not run.)
+QUANTA_TESTS = UrlBindingsTest UrlRealmsTest FetchBindingsTest DomTest HtmlTreeTest $(if $(wildcard $(SKIA_OUT)/libskia.a),ListCodecTest)
 ifeq ($(PLATFORM),linux)
 TESTS = $(PORTABLE_TESTS) $(NET_TESTS) $(QUANTA_TESTS)
 else

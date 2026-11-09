@@ -227,7 +227,19 @@ struct World {
   std::vector<long> finished;
   long next = 100;
   bool refuseStart = false;
+  // What a renderer says is handed to the session while there is one: its reader threads go on while it is being ended, and on some systems the pointer is null by then (a
+  // unique_ptr is emptied before its object is destroyed on macOS's library, after on Linux's). The lock and the flag are declared before the session: they are destroyed after it.
+  std::mutex deliverMutex;
+  bool delivering = true;
   std::unique_ptr<gui::Session> session;
+  void Deliver(uint32_t host, uint8_t type, const std::string& bytes) {
+    std::lock_guard<std::mutex> lock(deliverMutex);
+    if (delivering && session) session->Handle(host, type, bytes);
+  }
+  ~World() {
+    std::lock_guard<std::mutex> lock(deliverMutex);
+    delivering = false;
+  }
   std::map<long, uint32_t> hostOf;  // (a renderer's number in the session: the order they were started in)
 
   gui::Launcher Launcher() {
@@ -345,7 +357,7 @@ int main() {
     gui::Session::Events events;
     events.message = [&](uint32_t host, uint8_t type, std::string bytes, int fd) {
       if (fd >= 0) ::close(fd);
-      world.session->Handle(host, type, bytes);
+      world.Deliver(host, type, bytes);
     };
     events.gone = [](uint32_t, bool) {};
     events.shown = [](uint32_t) {};
@@ -422,7 +434,7 @@ int main() {
     gui::Session::Events events;
     events.message = [&](uint32_t host, uint8_t type, std::string bytes, int fd) {
       if (fd >= 0) ::close(fd);
-      world.session->Handle(host, type, bytes);
+      world.Deliver(host, type, bytes);
     };
     events.gone = [](uint32_t, bool) {};
     events.shown = [](uint32_t) {};
@@ -459,7 +471,7 @@ int main() {
     gui::Session::Events events;
     events.message = [&](uint32_t host, uint8_t type, std::string bytes, int fd) {
       if (fd >= 0) ::close(fd);
-      world.session->Handle(host, type, bytes);
+      world.Deliver(host, type, bytes);
     };
     events.gone = [](uint32_t, bool) {};
     events.shown = [](uint32_t) {};
@@ -506,7 +518,7 @@ int main() {
     gui::Session::Events events;
     events.message = [&](uint32_t host, uint8_t type, std::string bytes, int fd) {
       if (fd >= 0) ::close(fd);
-      world.session->Handle(host, type, bytes);
+      world.Deliver(host, type, bytes);
     };
     events.gone = [](uint32_t, bool) {};
     events.shown = [](uint32_t) {};
@@ -531,7 +543,7 @@ int main() {
     gui::Session::Events events;
     events.message = [&](uint32_t host, uint8_t type, std::string bytes, int fd) {
       if (fd >= 0) ::close(fd);
-      world.session->Handle(host, type, bytes);
+      world.Deliver(host, type, bytes);
     };
     events.gone = [](uint32_t, bool) {};
     events.shown = [](uint32_t) {};
@@ -566,7 +578,7 @@ int main() {
     gui::Session::Events events;
     events.message = [&](uint32_t host, uint8_t type, std::string bytes, int fd) {
       if (fd >= 0) ::close(fd);
-      world.session->Handle(host, type, bytes);
+      world.Deliver(host, type, bytes);
     };
     events.gone = [](uint32_t, bool) {};
     events.shown = [](uint32_t) {};
@@ -613,7 +625,7 @@ int main() {
     gui::Session::Events events;
     events.message = [&](uint32_t host, uint8_t type, std::string bytes, int fd) {
       if (fd >= 0) ::close(fd);
-      world.session->Handle(host, type, bytes);
+      world.Deliver(host, type, bytes);
     };
     events.gone = [&](uint32_t, bool isFatal) { if (isFatal) ++fatal; else ++notFatal; };
     events.shown = [](uint32_t) {};
@@ -648,7 +660,7 @@ int main() {
     gui::Session::Events events;
     events.message = [&](uint32_t host, uint8_t type, std::string bytes, int fd) {
       if (fd >= 0) ::close(fd);
-      world.session->Handle(host, type, bytes);
+      world.Deliver(host, type, bytes);
     };
     events.gone = [&](uint32_t, bool isFatal) { if (isFatal) ++fatal; };
     events.shown = [](uint32_t) {};

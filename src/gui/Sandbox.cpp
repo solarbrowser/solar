@@ -351,8 +351,12 @@ namespace solar::gui {
 bool EnterNamespaces(std::string&) { return false; }
 
 SandboxMode SandboxModeFromEnvironment() {
+  // (There is no sandbox on this system yet, docs/porting.md: it is off unless it is asked for, and then the process does not run, as it would not run without it.)
   const char* value = std::getenv("SOLAR_SANDBOX");
-  return value && (std::strcmp(value, "off") == 0 || std::strcmp(value, "0") == 0) ? SandboxMode::Off : SandboxMode::On;
+  if (!value) return SandboxMode::Off;
+  if (std::strcmp(value, "on") == 0) return SandboxMode::On;
+  if (std::strcmp(value, "report") == 0) return SandboxMode::Report;
+  return SandboxMode::Off;
 }
 
 SandboxResult EnterSandbox(const SandboxPolicy&, SandboxMode mode) {
