@@ -35,17 +35,25 @@ PAINT_OBJECTS = $(PAINT_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
 SKIA_DIR = third_party/skia
 # (Skia is built with OpenGL and Vulkan: gn gen out/StaticVk with the args of out/Static and skia_use_vulkan = true. GPU_TEST_UTILS is defined by that build and changes
 # the layout of what the headers declare, so it is defined here too.)
-SKIA_OUT = $(SKIA_DIR)/out/StaticVk
 ifeq ($(shell uname -s),Linux)
+SKIA_OUT = $(SKIA_DIR)/out/StaticVk
 SKIA_CFLAGS = -I$(SKIA_DIR) -DSK_RELEASE -DSK_VULKAN -DGPU_TEST_UTILS=1 -I$(SKIA_DIR)/third_party/externals/vulkan-headers/include
 else
 # (Skia is built with Metal or Direct3D and OpenGL elsewhere, not Vulkan: docs/porting.md.)
+SKIA_OUT = $(SKIA_DIR)/out/Static
 SKIA_CFLAGS = -I$(SKIA_DIR) -DSK_RELEASE -DGPU_TEST_UTILS=1
 endif
 # (Skia's own static libraries, in one group: they refer to each other)
+ifeq ($(shell uname -s),Linux)
 SKIA_LIBS = -Wl,--start-group $(SKIA_OUT)/libskia.a $(SKIA_OUT)/libsvg.a $(SKIA_OUT)/libskresources.a $(SKIA_OUT)/libskshaper.a $(SKIA_OUT)/libraw_ptr.a $(SKIA_OUT)/liballocator_core.a $(SKIA_OUT)/liballocator_base.a \
             $(SKIA_OUT)/libfreetype2.a $(SKIA_OUT)/libpng.a $(SKIA_OUT)/libjpeg.a $(SKIA_OUT)/libwebp.a $(SKIA_OUT)/libwebp_sse41.a \
             $(SKIA_OUT)/libzlib.a $(SKIA_OUT)/libexpat.a $(SKIA_OUT)/libskcms.a $(SKIA_OUT)/libwuffs.a -Wl,--end-group
+else ifeq ($(shell uname -s),Darwin)
+# (macOS's linker finds what the archives need of each other without a group: all that was built is given, and the frameworks Skia reaches the system by.)
+SKIA_LIBS = $(wildcard $(SKIA_OUT)/*.a) -framework CoreFoundation -framework CoreGraphics -framework CoreText -framework CoreServices -framework ApplicationServices -framework Foundation -framework AppKit -framework Metal -framework QuartzCore -framework IOKit -framework IOSurface
+else
+SKIA_LIBS = -Wl,--start-group $(wildcard $(SKIA_OUT)/*.lib) -Wl,--end-group -luser32 -lgdi32 -lole32 -ldwrite -lwinmm
+endif
 SDL_CFLAGS = $(shell pkg-config --cflags sdl3 2>/dev/null)
 SDL_LIBS = $(shell pkg-config --libs sdl3 2>/dev/null)
 # (Skia's OpenGL support reaches the platform's: GLX on Linux.)
