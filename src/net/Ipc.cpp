@@ -6,22 +6,35 @@
 
 #include "solar/net/Ipc.h"
 
-#include <fcntl.h>
-
 #include <cerrno>
 #include <cmath>
-#include <sys/uio.h>
 #include <cstring>
 
+#if !defined(_WIN32)
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/uio.h>
 #include <unistd.h>
+#endif
 
 #include "solar/net/HttpClient.h"
 #include "solar/url/Parser.h"
 #include "solar/url/Serializer.h"
 
 namespace solar::net::ipc {
+
+#if !defined(_WIN32)
+// (macOS has neither: the writes do not raise SIGPIPE because the socket says so (SO_NOSIGPIPE), and what is received is marked to close on exec after it is received.)
+#if !defined(MSG_NOSIGNAL)
+#define SOLAR_NO_MSG_NOSIGNAL 1
+#define MSG_NOSIGNAL 0
+#endif
+#if !defined(MSG_CMSG_CLOEXEC)
+#define SOLAR_NO_MSG_CMSG_CLOEXEC 1
+#define MSG_CMSG_CLOEXEC 0
+#endif
+#endif
 
 void Writer::U32(uint32_t v) {
   for (int i = 0; i < 4; ++i) bytes_.push_back(static_cast<char>((v >> (8 * i)) & 0xFF));
@@ -196,6 +209,15 @@ bool Read(Reader& in, WebSocketOptions& options) {
   return in.ok();
 }
 
+#if defined(_WIN32)
+// Windows has no descriptors to pass between processes: its channel is named pipes and handles, which are not written yet (docs/porting.md). Until then nothing connects.
+Channel::Channel(int fd) : fd_(fd) {}
+Channel::~Channel() {}
+std::pair<int, int> Channel::MakePair() { return {-1, -1}; }
+void Channel::Shutdown() {}
+bool Channel::SendRaw(uint8_t, std::string_view, int) { return false; }
+bool Channel::ReceiveRaw(uint8_t&, std::string&, int*) { return false; }
+#else
 Channel::Channel(int fd) : fd_(fd) {}
 
 Channel::~Channel() {
@@ -211,6 +233,11 @@ std::pair<int, int> Channel::MakePair() {
   if (::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0) return {-1, -1};
   ::fcntl(fds[0], F_SETFD, FD_CLOEXEC);
   ::fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+#endif
+#if defined(SO_NOSIGPIPE)
+  const int on = 1;
+  ::setsockopt(fds[0], SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof on);
+  ::setsockopt(fds[1], SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof on);
 #endif
   return {fds[0], fds[1]};
 }
@@ -289,6 +316,9 @@ bool Channel::ReceiveRaw(uint8_t& type, std::string& bytes, int* fd) {
           int one;
           std::memcpy(&one, CMSG_DATA(header) + i * sizeof(int), sizeof(int));
           // (Only the first is kept: the others are not asked for, and are closed.)
+#if defined(SOLAR_NO_MSG_CMSG_CLOEXEC)
+          ::fcntl(one, F_SETFD, FD_CLOEXEC);
+#endif
           if (received < 0) received = one; else ::close(one);
         }
       }
@@ -307,5 +337,7 @@ bool Channel::ReceiveRaw(uint8_t& type, std::string& bytes, int* fd) {
   if (fd) *fd = received; else closeReceived();
   return true;
 }
+
+#endif  // !_WIN32
 
 }  // namespace solar::net::ipc

@@ -1,0 +1,43 @@
+name: WPT
+
+# The Web Platform Tests that are kept to pass (tests/wpt-solar): apart from CI, whose answer is whether the program builds and its own tests pass. A page of the WPT that fails is something to
+# fix in the engine, not a build that is broken, and was hiding the answer of the other.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wpt:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch the submodules the tests use
+        run: git submodule update --init --depth 1 third_party/quanta third_party/skia tests/wpt
+      - name: Fetch what Quanta's makefile does not
+        run: git -C third_party/quanta submodule update --init --recursive --depth 1 third_party/utf8proc third_party/pcre2 third_party/mimalloc
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang lld llvm make pkg-config liburing-dev libssl-dev zlib1g-dev libbrotli-dev libzstd-dev libnghttp2-dev libharfbuzz-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev
+
+      - name: Find the Quanta revision
+        id: quanta
+        run: echo "revision=$(git rev-parse HEAD:third_party/quanta)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the Quanta build
+        uses: actions/cache@v4
+        with:
+          path: third_party/quanta/build
+          key: quanta-${{ runner.os }}-noicu-${{ steps.quanta.outputs.revision }}
+
+      - run: make -j"$(nproc)" ICU4X=0 test-wpt-all
+
+      - name: What Quanta's compiler said
+        if: failure()
+        run: cat third_party/quanta/build/errors.log || true

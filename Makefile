@@ -413,7 +413,11 @@ $(BUILD_DIR)/GenIdnaTables: tools/GenIdnaTables.cpp
 WPT_ANY = $(shell cat tests/wpt-solar/anyjs-passing.txt)
 
 PORTABLE_TESTS = FontTest BidiTest CssValuesTest HtmlTokenizerTest UrlTest SearchParamsTest ValidationErrorTest NormalizerTest PublicSuffixTest CookiesTest HttpCacheTest FetchHeadersTest CorsTest Http1ParserTest ContentDecoderTest AddressRaceTest HstsTest
-NET_TESTS = LoopTest ResolverTest NetTest HttpClientTest TlsTest Http2Test NetworkThreadTest PageFetchTest IpcTest WireTest SessionTest SandboxTest StorageTest SettingsTest
+PORTABLE_NET_TESTS = LoopTest ResolverTest NetTest HttpClientTest TlsTest Http2Test NetworkThreadTest PageFetchTest
+# What reaches into POSIX (descriptors passed between processes, setenv, the browser's processes): not on Windows yet. And what is Linux's own: the sandbox.
+POSIX_TESTS = IpcTest WireTest SessionTest StorageTest SettingsTest
+LINUX_TESTS = SandboxTest
+NET_TESTS = $(PORTABLE_NET_TESTS) $(if $(filter-out windows,$(PLATFORM)),$(POSIX_TESTS)) $(if $(filter linux,$(PLATFORM)),$(LINUX_TESTS))
 QUANTA_TESTS = UrlBindingsTest UrlRealmsTest FetchBindingsTest DomTest HtmlTreeTest ListCodecTest
 ifeq ($(PLATFORM),linux)
 TESTS = $(PORTABLE_TESTS) $(NET_TESTS) $(QUANTA_TESTS)
@@ -421,15 +425,20 @@ else
 TESTS = $(PORTABLE_TESTS) $(NET_TESTS)
 endif
 
+# What `test` says is whether the program's parts build and their own tests pass: the WPT is not in it (a page of the WPT that fails is not a build that fails, and it hid the one in the
+# other); `test-wpt-all` runs it (the workflow wpt.yml does).
 # SOLAR_LOOP_BACKEND picks the event loop the network tests run on. Linux has two, and both are
 # run: io_uring where the kernel has it, and epoll everywhere.
-test: $(addprefix $(BUILD_DIR)/,$(TESTS)) $(if $(filter linux,$(PLATFORM)),$(BUILD_DIR)/WptTest)
+test: $(addprefix $(BUILD_DIR)/,$(TESTS))
 	@for t in $(TESTS); do $(BUILD_DIR)/$$t || exit 1; done
 ifeq ($(PLATFORM),linux)
 	@for t in $(NET_TESTS) FetchBindingsTest; do SOLAR_LOOP_BACKEND=readiness $(BUILD_DIR)/$$t || exit 1; done
+endif
+
+# All of the WPT that is kept to pass: the .any.js files, and the DOM and CSS pages.
+test-wpt-all: $(BUILD_DIR)/WptTest
 	@$(BUILD_DIR)/WptTest $(WPT_ANY)
 	@python3 tools/wptrun.py --check tests/wpt-solar/dom-passing.txt tests/wpt-solar/css-passing.txt
-endif
 
 # Only the WPT pages of the passing lists (DOM and CSS), the part that changes with the engine: no unit tests.
 test-wpt: $(BUILD_DIR)/WptTest

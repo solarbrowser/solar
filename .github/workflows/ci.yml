@@ -10,8 +10,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Everything: the URL library, the network layer on io_uring and on epoll, and the Quanta
-  # bindings with WPT's url tests.
+  # Whether the program's parts build and their own tests pass: the URL library, the network layer on io_uring and on epoll, and the Quanta bindings. (The WPT is wpt.yml: a page
+  # of it that fails is not a build that fails.)
   linux:
     runs-on: ubuntu-24.04
     steps:
