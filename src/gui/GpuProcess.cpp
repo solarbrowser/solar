@@ -5,6 +5,27 @@
  */
 
 #include "solar/gui/GpuProcess.h"
+
+// The GPU's process is shut in with what Linux has (namespaces, Landlock, seccomp) and draws on the machine's driver or ANGLE: elsewhere there is none yet (docs/porting.md), and the pages draw by
+// themselves, on the CPU, as they do when it is gone.
+#if !defined(__linux__)
+namespace solar::gui {
+struct GpuHost::Impl {};
+int GpuMain(int) { return 1; }
+std::unique_ptr<GpuHost> GpuHost::Start(std::string* why) {
+  if (why) *why = "the GPU's process is only on Linux for now";
+  return nullptr;
+}
+GpuHost::GpuHost() {}
+GpuHost::~GpuHost() {}
+int GpuHost::NewClient(int*) { return -1; }
+const std::string& GpuHost::renderer() const {
+  static const std::string none;
+  return none;
+}
+}  // namespace solar::gui
+#else
+
 #include "solar/gui/Platform.h"
 
 #include <fcntl.h>
@@ -563,3 +584,5 @@ int GpuHost::NewClient(int* glFd) {
 }
 
 }  // namespace solar::gui
+
+#endif  // __linux__
