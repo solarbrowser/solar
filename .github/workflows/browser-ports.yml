@@ -50,8 +50,10 @@ jobs:
           echo "skia=$(git rev-parse HEAD:third_party/skia)" >> "$GITHUB_OUTPUT"
 
       # Quanta, the engine (without Intl: ICU4X is a Rust library of its own, built later).
-      - name: Cache Quanta
-        uses: actions/cache@v4
+      # (Saved only when the build worked: a cache that is saved cannot be replaced, and one of a build that failed would be restored for ever.)
+      - name: Restore Quanta
+        id: quantacache
+        uses: actions/cache/restore@v4
         with:
           path: third_party/quanta/build
           key: quanta-${{ matrix.os }}-noicu-${{ steps.revisions.outputs.quanta }}
@@ -59,17 +61,27 @@ jobs:
         id: quanta
         continue-on-error: true
         run: make -C third_party/quanta lib ICU4X=0 -j"$(sysctl -n hw.ncpu)"
+      - name: Save Quanta
+        if: steps.quanta.outcome == 'success' && steps.quantacache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: third_party/quanta/build
+          key: quanta-${{ matrix.os }}-noicu-${{ steps.revisions.outputs.quanta }}
 
       # Skia, with Metal and OpenGL (the Linux build has Vulkan and OpenGL: Makefile's SKIA_* are Linux's).
-      - name: Cache Skia
-        uses: actions/cache@v4
+      # (What is kept is the libraries Skia makes, not its object files: a program is linked with those, and the cache has 10 GB for the whole repository. Skia is built again only
+      # when its revision is another.)
+      - name: Restore Skia
+        id: skiacache
+        uses: actions/cache/restore@v4
         with:
           path: |
-            third_party/skia/out
-            third_party/skia/third_party/externals
+            third_party/skia/out/Static/*.a
+            third_party/skia/out/Static/args.gn
           key: skia-${{ matrix.os }}-${{ steps.revisions.outputs.skia }}
       - name: Skia
         id: skia
+        if: steps.skiacache.outputs.cache-hit != 'true'
         continue-on-error: true
         working-directory: third_party/skia
         run: |
@@ -77,6 +89,14 @@ jobs:
           python3 bin/fetch-gn
           bin/gn gen out/Static --args='cc="clang" cxx="clang++" is_debug=false is_official_build=false skia_use_system_freetype2=false skia_use_system_harfbuzz=false skia_use_harfbuzz=false skia_enable_skshaper=true skia_enable_skunicode=false skia_use_icu=false skia_use_icu4x=false skia_use_fontconfig=false skia_enable_fontmgr_custom_empty=true skia_use_gl=true skia_use_metal=true skia_use_vulkan=false skia_enable_tools=false skia_enable_pdf=false skia_use_expat=true skia_use_xps=false skia_enable_svg=true skia_enable_skottie=false'
           ninja -C out/Static
+      - name: Save Skia
+        if: steps.skia.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            third_party/skia/out/Static/*.a
+            third_party/skia/out/Static/args.gn
+          key: skia-${{ matrix.os }}-${{ steps.revisions.outputs.skia }}
 
       - name: The network layer and the URL library (tests)
         id: network
@@ -138,15 +158,17 @@ jobs:
 
       # Skia with clang-cl and the Microsoft library: the ABI that the program has to be built with as well (the MSYS2 toolchain the network layer is built with here is the other one,
       # MinGW's: what is built for one cannot be linked with the other). Whether the program is moved to clang-cl is decided by what this step and the next say.
-      - name: Cache Skia
-        uses: actions/cache@v4
+      - name: Restore Skia
+        id: skiacache
+        uses: actions/cache/restore@v4
         with:
           path: |
-            third_party/skia/out
-            third_party/skia/third_party/externals
+            third_party/skia/out/Static/*.lib
+            third_party/skia/out/Static/args.gn
           key: skia-windows-${{ steps.revisions.outputs.skia }}
       - name: Skia (clang-cl)
         id: skia
+        if: steps.skiacache.outputs.cache-hit != 'true'
         continue-on-error: true
         working-directory: third_party/skia
         shell: pwsh
@@ -157,6 +179,14 @@ jobs:
           bin/gn gen out/Static --args="clang_win=`"C:\Program Files\LLVM`" clang_win_version=$version is_debug=false is_official_build=false skia_use_system_freetype2=false skia_use_harfbuzz=false skia_enable_skshaper=true skia_enable_skunicode=false skia_use_icu=false skia_use_icu4x=false skia_use_fontconfig=false skia_enable_fontmgr_custom_empty=true skia_use_gl=true skia_use_angle=false skia_use_vulkan=false skia_enable_tools=false skia_enable_pdf=false skia_use_expat=true skia_use_xps=false skia_enable_svg=true skia_enable_skottie=false"
           choco install ninja -y
           ninja -C out/Static
+      - name: Save Skia
+        if: steps.skia.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            third_party/skia/out/Static/*.lib
+            third_party/skia/out/Static/args.gn
+          key: skia-windows-${{ steps.revisions.outputs.skia }}
 
       - uses: msys2/setup-msys2@v2
         with:
