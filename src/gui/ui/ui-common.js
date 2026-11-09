@@ -286,7 +286,8 @@
     if (open) { renderDownloads(); placeDownloads(); }
     syncOverlay();
   };
-  dlButton.addEventListener("click", () => setDownloads(!dlOpen));
+  // The button goes to the page of the downloads; the list that comes down is what shows when a download begins.
+  dlButton.addEventListener("click", () => { setDownloads(false); send("downloads-page"); });
   dlPanel.addEventListener("mousedown", (e) => {
     const act = e.target.closest ? e.target.closest("button") : null;
     const file = e.target.closest ? e.target.closest(".file") : null;
@@ -321,7 +322,7 @@
     const item = e.target.closest ? e.target.closest(".item") : null;
     if (!item || !item.dataset.do) return;
     setMenu(false);
-    if (item.dataset.do === "downloads") setTimeout(() => setDownloads(true), 0);
+    if (item.dataset.do === "downloads") send("downloads-page");
     else if (item.dataset.do === "find") globalThis.__solarFindUi.open();
     else send(item.dataset.do);
   });

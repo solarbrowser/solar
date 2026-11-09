@@ -1408,6 +1408,21 @@ void Session::NewTab(const std::string& address) {
   impl_->services.Post([impl = impl_, address] { impl->NewTab(address, true); });
 }
 
+void Session::ShowPage(const std::string& address) {
+  impl_->services.Post([impl = impl_, address] {
+    uint32_t found = 0;
+    {
+      std::lock_guard<std::mutex> lock(impl->mutex);
+      for (uint32_t id : impl->order) {
+        const Impl::TabState& t = impl->tabs.at(id);
+        if (t.index >= 0 && t.index < static_cast<int>(t.entries.size()) && t.entries[static_cast<size_t>(t.index)] == address) found = id;
+      }
+    }
+    if (found) impl->Activate(found);
+    else impl->NewTab(address, true);
+  });
+}
+
 void Session::CloseTab(uint32_t tab) {
   impl_->services.Post([impl = impl_, tab] {
     {

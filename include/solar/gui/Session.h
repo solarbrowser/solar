@@ -58,6 +58,8 @@ class Session {
   // The tabs: a new one (for an address, or the browser's page for a new tab when it is empty) which is shown at once, the one with this number ended (the last one ends the window: `gone` is told
   // with `fatal`), the one with this number shown, and the next or the one before it shown (`delta` 1 or -1).
   void NewTab(const std::string& address);
+  // The page of the browser at this address is shown: in the tab that already has it, or in a new one.
+  void ShowPage(const std::string& address);
   void CloseTab(uint32_t tab);
   // The number of the tab that is shown (0: none).
   uint32_t activeTab() const;

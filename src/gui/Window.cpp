@@ -485,7 +485,7 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
         else if (verb == "reload") session.Reload();
         else if (verb == "focus") barFocused = rest == "1";
         else if (verb == "zoom") session.Zoom(std::atoi(rest.c_str()));
-        else if (verb == "downloads-page") session.NewTab(kDownloadsAddress);
+        else if (verb == "downloads-page") session.ShowPage(kDownloadsAddress);
         else if (verb == "dl-open" || verb == "dl-folder") {
           // A file that was downloaded is opened by the system's program for it, or the folder it is in is shown.
           const int number = std::atoi(rest.c_str());
@@ -518,7 +518,7 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
         else if (verb == "ready") {
           session.PushState();
           session.SendChrome(wire::ToRenderer::UiState, Settings::Instance().Json());
-        } else if (verb == "settings") session.NewTab(kSettingsAddress);
+        } else if (verb == "settings") session.ShowPage(kSettingsAddress);
         else if (verb == "overlay") {
           // The interface asks to be taller (a menu) or to be as it was: it takes the keys while it is, and the window tells the pages and it how large they are.
           const int wanted = std::clamp(std::atoi(rest.c_str()), 0, 600);
@@ -916,7 +916,7 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
             }
             forward = false;
           } else if (ctrl && input.key == SDLK_J) {
-            session.NewTab(kDownloadsAddress);
+            session.ShowPage(kDownloadsAddress);
             forward = false;
           } else if (ctrl && input.key == SDLK_F) {
             if (!noBar && !fullscreen) {
