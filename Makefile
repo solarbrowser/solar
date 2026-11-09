@@ -86,6 +86,15 @@ ifeq ($(PLATFORM),linux)
 NET_LIBS += -ldl
 endif
 CXXFLAGS += $(OPENSSL_CFLAGS) $(COMPRESSION_CFLAGS) $(HTTP2_CFLAGS) $(FFMPEG_CFLAGS)
+# The headers of EGL and OpenGL ES are ANGLE's, on every system (the machine's own may not have them, as macOS and a runner do not): the program opens libEGL and libGLESv2 when WebGL is
+# first used (src/paint/GlRuntime.cpp), and what it is built against is the headers.
+ifneq ($(wildcard third_party/angle/include/EGL/egl.h),)
+CXXFLAGS += -isystem third_party/angle/include
+endif
+# SOLAR_DEBUG_INFO=1: the program and its tests with their symbols, for a debugger to say where one stopped.
+ifdef SOLAR_DEBUG_INFO
+CXXFLAGS += -g
+endif
 
 MEDIA_SOURCES = $(wildcard src/media/*.cpp)
 MEDIA_OBJECTS = $(MEDIA_SOURCES:%.cpp=$(OBJ_DIR)/%.o)
@@ -430,7 +439,7 @@ endif
 # SOLAR_LOOP_BACKEND picks the event loop the network tests run on. Linux has two, and both are
 # run: io_uring where the kernel has it, and epoll everywhere.
 test: $(addprefix $(BUILD_DIR)/,$(TESTS))
-	@for t in $(TESTS); do $(BUILD_DIR)/$$t || exit 1; done
+	@for t in $(TESTS); do echo "[RUN] $$t"; $(BUILD_DIR)/$$t || { echo "[FAILED] $$t"; exit 1; }; done
 ifeq ($(PLATFORM),linux)
 	@for t in $(NET_TESTS) FetchBindingsTest; do SOLAR_LOOP_BACKEND=readiness $(BUILD_DIR)/$$t || exit 1; done
 endif

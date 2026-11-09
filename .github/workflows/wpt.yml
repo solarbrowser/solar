@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Fetch the submodules the tests use
-        run: git submodule update --init --depth 1 third_party/quanta third_party/skia tests/wpt
+        run: git submodule update --init --depth 1 third_party/quanta third_party/skia third_party/angle tests/wpt
       - name: Fetch what Quanta's makefile does not
         run: git -C third_party/quanta submodule update --init --recursive --depth 1 third_party/utf8proc third_party/pcre2 third_party/mimalloc
 

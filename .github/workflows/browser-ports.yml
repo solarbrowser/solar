@@ -34,7 +34,7 @@ jobs:
         id: submodules
         continue-on-error: true
         run: |
-          git submodule update --init --depth 1 third_party/quanta third_party/skia
+          git submodule update --init --depth 1 third_party/quanta third_party/skia third_party/angle
           git -C third_party/quanta submodule update --init --recursive --depth 1 third_party/utf8proc third_party/pcre2 third_party/mimalloc
 
       - name: Dependencies
@@ -103,7 +103,14 @@ jobs:
       - name: The network layer and the URL library (tests)
         id: network
         continue-on-error: true
-        run: make -j"$(sysctl -n hw.ncpu)" ICU4X=0 test
+        run: make -j"$(sysctl -n hw.ncpu)" ICU4X=0 SOLAR_DEBUG_INFO=1 test
+      - name: Where a test stopped
+        if: steps.network.outcome == 'failure'
+        run: |
+          for t in SessionTest StorageTest SettingsTest; do
+            echo "== $t"
+            lldb --batch -o run -o "thread backtrace all" -- build/$t 2>&1 | tail -70 || true
+          done
 
       - name: The program
         id: program
@@ -148,7 +155,7 @@ jobs:
         continue-on-error: true
         shell: bash
         run: |
-          git submodule update --init --depth 1 third_party/quanta third_party/skia
+          git submodule update --init --depth 1 third_party/quanta third_party/skia third_party/angle
           git -C third_party/quanta submodule update --init --recursive --depth 1 third_party/utf8proc third_party/pcre2 third_party/mimalloc
 
       - name: Revisions
@@ -195,7 +202,7 @@ jobs:
         with:
           msystem: CLANG64
           update: true
-          install: make mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-openssl mingw-w64-clang-x86_64-pkgconf mingw-w64-clang-x86_64-zlib mingw-w64-clang-x86_64-brotli mingw-w64-clang-x86_64-zstd mingw-w64-clang-x86_64-nghttp2 mingw-w64-clang-x86_64-harfbuzz mingw-w64-clang-x86_64-SDL3 mingw-w64-clang-x86_64-ffmpeg
+          install: make mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-openssl mingw-w64-clang-x86_64-pkgconf mingw-w64-clang-x86_64-zlib mingw-w64-clang-x86_64-brotli mingw-w64-clang-x86_64-zstd mingw-w64-clang-x86_64-nghttp2 mingw-w64-clang-x86_64-harfbuzz mingw-w64-clang-x86_64-sdl3 mingw-w64-clang-x86_64-ffmpeg
 
       - name: Quanta (its own script for Windows)
         id: quanta

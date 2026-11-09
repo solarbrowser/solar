@@ -18,7 +18,7 @@ jobs:
       # (Not ANGLE: it is only built by hand, for the program's WebGL on Windows and macOS.)
       - uses: actions/checkout@v4
       - name: Fetch the submodules the tests use
-        run: git submodule update --init --depth 1 third_party/quanta third_party/skia tests/wpt
+        run: git submodule update --init --depth 1 third_party/quanta third_party/skia third_party/angle tests/wpt
       # (Quanta's own submodules: its makefile fetches PCRE2 and mimalloc, but not utf8proc, which StringBuiltin.cpp includes. --recursive: PCRE2 has a submodule of its own, deps/sljit, that its JIT includes. ICU4X, the one more, is not built here.)
       - name: Fetch what Quanta's makefile does not
         run: git -C third_party/quanta submodule update --init --recursive --depth 1 third_party/utf8proc third_party/pcre2 third_party/mimalloc
@@ -67,7 +67,18 @@ jobs:
         run: |
           brew install openssl@3 pkg-config zlib brotli zstd nghttp2 harfbuzz
           echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix zlib)/lib/pkgconfig" >> "$GITHUB_ENV"
-      - run: make -j"$(sysctl -n hw.ncpu)" test
+      # (The ANGLE headers: EGL and OpenGL ES, which macOS does not have.)
+      - name: ANGLE's headers
+        run: git submodule update --init --depth 1 third_party/angle
+      - run: make -j"$(sysctl -n hw.ncpu)" SOLAR_DEBUG_INFO=1 test
+      # A test that stops: where it did, by the debugger.
+      - name: Where a test stopped
+        if: failure()
+        run: |
+          for t in SessionTest StorageTest SettingsTest WireTest IpcTest; do
+            echo "== $t"
+            lldb --batch -o run -o "thread backtrace all" -- build/$t 2>&1 | tail -70 || true
+          done
 
   # The same, on IO completion ports.
   windows:
