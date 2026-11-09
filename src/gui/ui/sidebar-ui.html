@@ -9,18 +9,16 @@
   #sidehead { display: flex; align-items: center; flex: none; height: 44px; padding: 0 8px; gap: 2px; }
   #sidehead button { width: 32px; height: 32px; border-radius: 8px; }
   #sidehead button svg { width: 22px; height: 22px; }
+  #sidehead .win { width: 34px; height: 28px; margin-left: 0; }
+  #sidehead .win svg { width: 16px; height: 16px; }
   #drag { flex: 1; align-self: stretch; min-width: 12px; }
-  #controls { display: none; }
-  .controlled #controls { display: flex; gap: 0; }
-  .win { width: 30px; height: 30px; border-radius: 8px; }
-  .win svg { width: 16px; height: 16px; }
-  #wclose:hover { background: #d93a3a; }
-  #wclose:hover svg { color: #fff; }
+  #controls { margin: 0; }
   #fieldrow { position: relative; flex: none; padding: 2px 10px 10px; }
   #field { margin: 0; height: 40px; border-radius: 12px; }
   #progress { left: 10px; right: 10px; bottom: 6px; width: auto; border-radius: 1px; }
   #progress.on { width: auto; animation: none; }
-  #tabs { flex: 1; min-height: 0; overflow: hidden; padding: 4px 10px 8px; display: flex; flex-wrap: wrap; align-content: flex-start; }
+  #list { flex: 1; min-height: 0; overflow: hidden; padding: 4px 10px 8px; }
+  #tabs { display: flex; flex-wrap: wrap; align-content: flex-start; }
   .tab { position: relative; display: flex; align-items: center; width: 100%; height: 38px; margin-bottom: 2px; padding: 0 6px 0 12px; border-radius: 10px; color: var(--dim); }
   .tab:hover { background: var(--tab-hover); }
   .tab.active { background: var(--bar); color: var(--text); box-shadow: 0 1px 2px rgba(25, 35, 70, 0.14); }
@@ -29,10 +27,11 @@
   .tab.pinned.active { background: var(--bar); }
   .tab.pinned .label, .tab.pinned .close { display: none; }
   .tab.pinned .icon { margin: 0; width: 22px; height: 22px; }
-  #foot { display: flex; align-items: center; flex: none; height: 52px; padding: 0 10px; gap: 4px; border-top: 1px solid var(--bar-edge); }
-  #foot #newtab { flex: 1; width: auto; height: 36px; border-radius: 10px; justify-content: flex-start; padding: 0 10px; color: var(--dim); }
-  #foot #newtab svg { width: 20px; height: 20px; margin-right: 10px; }
-  #foot #menuButton { width: 36px; height: 36px; border-radius: 10px; margin: 0; }
+  #newtab { width: 100%; height: 38px; margin-top: 2px; padding: 0 12px; justify-content: flex-start; font-size: 13px; color: var(--dim); }
+  #newtab svg { width: 18px; height: 18px; margin-right: 10px; color: var(--dim); }
+  #newtab:hover { background: var(--tab-hover); color: var(--text); }
+  #foot { display: flex; align-items: center; flex: none; height: 48px; padding: 0 10px; border-top: 1px solid var(--bar-edge); }
+  #foot #menuButton { margin: 0; }
   #menu { top: auto; bottom: 56px; left: 10px; right: auto; }
 </style>
 </head>
@@ -41,12 +40,12 @@
   <div id="sidehead">
     <button id="back" title="Back" disabled>{{icon:chevron-left}}</button>
     <button id="forward" title="Forward" disabled>{{icon:chevron-right}}</button>
-    <button id="reload" title="Reload">{{icon:reload}}</button>
+    <button id="reload" title="Reload">{{icon:refresh}}</button>
     <div id="drag"></div>
     <div id="controls">
-      <button class="win" id="wmin" title="Minimize">{{icon:minimize}}</button>
-      <button class="win" id="wmax" title="Maximize">{{icon:crop-square}}</button>
-      <button class="win" id="wclose" title="Close">{{icon:close}}</button>
+      <button class="win" id="wmin" title="Minimize"></button>
+      <button class="win" id="wmax" title="Maximize"></button>
+      <button class="win" id="wclose" title="Close"></button>
     </div>
   </div>
   <div id="fieldrow">
@@ -57,9 +56,11 @@
     </div>
     <div id="progress"></div>
   </div>
-  <div id="tabs"></div>
-  <div id="foot">
+  <div id="list">
+    <div id="tabs"></div>
     <button id="newtab" title="New tab">{{icon:add}}<span>New tab</span></button>
+  </div>
+  <div id="foot">
     <button id="menuButton" title="Menu">{{icon:hamburger-menu}}</button>
   </div>
 </div>

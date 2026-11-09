@@ -8,9 +8,11 @@
   #side { position: absolute; left: 0; top: 0; bottom: 0; width: 240px; display: flex; flex-direction: column; background: var(--strip); border-right: 1px solid var(--bar-edge); }
   #sidehead { display: flex; align-items: center; flex: none; height: 48px; padding: 0 8px 0 12px; }
   #drag { flex: 1; align-self: stretch; min-width: 20px; }
-  #newtab { width: 32px; height: 32px; border-radius: 8px; }
-  #newtab svg { width: 20px; height: 20px; }
-  #tabs { flex: 1; min-height: 0; overflow: hidden; padding: 4px 8px 8px; display: flex; flex-wrap: wrap; align-content: flex-start; }
+  #list { flex: 1; min-height: 0; overflow: hidden; padding: 4px 8px 8px; }
+  #newtab { width: 100%; height: 36px; margin-top: 2px; padding: 0 10px; justify-content: flex-start; font-size: 13px; color: var(--dim); }
+  #newtab svg { width: 18px; height: 18px; margin-right: 10px; color: var(--dim); }
+  #newtab:hover { background: var(--tab-hover); color: var(--text); }
+  #tabs { display: flex; flex-wrap: wrap; align-content: flex-start; }
   .tab { width: 100%; }
   .tab.pinned { width: 68px; height: 44px; margin: 0 6px 6px 0; padding: 0; justify-content: center; background: var(--tab-hover); }
   .tab.pinned:nth-child(3n) { margin-right: 0; }
@@ -23,26 +25,22 @@
   #bar { position: absolute; left: 240px; right: 0; top: 0; padding-right: 0; }
   #menu { top: 52px; }
   #progress { position: absolute; left: 0; right: 0; top: 47px; bottom: auto; }
-  #controls { display: none; margin-left: 4px; }
-  .controlled #controls { display: flex; }
-  .win { width: 46px; height: 47px; border-radius: 0; }
-  .win svg { width: 16px; height: 16px; }
-  #wclose:hover { background: #d93a3a; }
-  #wclose:hover svg { color: #fff; }
 </style>
 </head>
 <body data-axis="y">
 <div id="side">
   <div id="sidehead">
     <div id="drag"></div>
-    <button id="newtab" title="New tab">{{icon:add}}</button>
   </div>
-  <div id="tabs"></div>
+  <div id="list">
+    <div id="tabs"></div>
+    <button id="newtab" title="New tab">{{icon:add}}<span>New tab</span></button>
+  </div>
 </div>
 <div id="bar">
   <button id="back" title="Back" disabled>{{icon:chevron-left}}</button>
   <button id="forward" title="Forward" disabled>{{icon:chevron-right}}</button>
-  <button id="reload" title="Reload">{{icon:reload}}</button>
+  <button id="reload" title="Reload">{{icon:refresh}}</button>
   <div id="field">
     <span id="site">{{icon:public}}</span>
     <div id="shown">Search or enter an address</div>
@@ -50,9 +48,9 @@
   </div>
   <button id="menuButton" title="Menu">{{icon:hamburger-menu}}</button>
   <div id="controls">
-    <button class="win" id="wmin" title="Minimize">{{icon:minimize}}</button>
-    <button class="win" id="wmax" title="Maximize">{{icon:crop-square}}</button>
-    <button class="win" id="wclose" title="Close">{{icon:close}}</button>
+    <button class="win" id="wmin" title="Minimize"></button>
+    <button class="win" id="wmax" title="Maximize"></button>
+    <button class="win" id="wclose" title="Close"></button>
   </div>
 </div>
 <div id="progress"></div>

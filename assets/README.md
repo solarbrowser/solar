@@ -34,7 +34,7 @@ different sets can live in the same folder without clashing.
 |---|---|
 | `mdi--chevron-left.svg` | Back |
 | `mdi--chevron-right.svg` | Forward |
-| `mdi--reload.svg` | Reload |
+| `mdi--refresh.svg` | Reload |
 | `mdi--close.svg` | Close a tab, close the window |
 | `mdi--add.svg` | New tab |
 | `mdi--minimize.svg` | Minimize the window |

@@ -212,7 +212,14 @@
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") { if (menuOpen) setMenu(false); hideTabMenu(); } });
   $("wmin").addEventListener("click", () => send("min"));
   $("wmax").addEventListener("click", () => send("max"));
-  const maxIcon = '{{icon:crop-square}}', restoreIcon = '{{icon:image-filter-none}}';
+  // The buttons of the window are drawn alike (one line, one weight), not taken from the set of icons, whose signs for them are of different weights.
+  const stroke = (shapes) => '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' + shapes + "</svg>";
+  const minIcon = stroke('<path d="M3.5 8h9"/>');
+  const maxIcon = stroke('<rect x="3.5" y="3.5" width="9" height="9" rx="1.8"/>');
+  const restoreIcon = stroke('<rect x="3.5" y="6" width="6.5" height="6.5" rx="1.5"/><path d="M6 6V5a1.5 1.5 0 0 1 1.5-1.5H11A1.5 1.5 0 0 1 12.5 5v3.5A1.5 1.5 0 0 1 11 10h-1"/>');
+  $("wmin").innerHTML = minIcon;
+  $("wmax").innerHTML = maxIcon;
+  $("wclose").innerHTML = stroke('<path d="M4.2 4.2l7.6 7.6M11.8 4.2l-7.6 7.6"/>');
   $("wclose").addEventListener("click", () => send("quit"));
   window.addEventListener("resize", reportDrag);
   $("back").addEventListener("click", () => send("back"));

@@ -16,12 +16,7 @@
   #newtab { width: 30px; height: 30px; margin: 0 4px 3px 4px; border-radius: 15px; }
   #newtab svg { width: 20px; height: 20px; }
   #drag { flex: 1; align-self: stretch; min-width: 20px; }
-  .win { width: 46px; height: 40px; border-radius: 0; }
-  .win svg { width: 16px; height: 16px; }
-  #wclose:hover { background: #d93a3a; }
-  #wclose:hover svg { color: #fff; }
-  #controls { display: none; }
-  .controlled #controls { display: flex; }
+  #controls { align-self: center; }
 </style>
 </head>
 <body>
@@ -30,15 +25,15 @@
   <button id="newtab" title="New tab">{{icon:add}}</button>
   <div id="drag"></div>
   <div id="controls">
-    <button class="win" id="wmin" title="Minimize">{{icon:minimize}}</button>
-    <button class="win" id="wmax" title="Maximize">{{icon:crop-square}}</button>
-    <button class="win" id="wclose" title="Close">{{icon:close}}</button>
+    <button class="win" id="wmin" title="Minimize"></button>
+    <button class="win" id="wmax" title="Maximize"></button>
+    <button class="win" id="wclose" title="Close"></button>
   </div>
 </div>
 <div id="bar">
   <button id="back" title="Back" disabled>{{icon:chevron-left}}</button>
   <button id="forward" title="Forward" disabled>{{icon:chevron-right}}</button>
-  <button id="reload" title="Reload">{{icon:reload}}</button>
+  <button id="reload" title="Reload">{{icon:refresh}}</button>
   <div id="field">
     <span id="site">{{icon:public}}</span>
     <div id="shown">Search or enter an address</div>

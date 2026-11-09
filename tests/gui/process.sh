@@ -5,6 +5,8 @@ export SDL_VIDEODRIVER=dummy SOLAR_GUI_CPU=1
 pass=0; fail=0
 check() { if [ "$2" = "ok" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL $1"; fi; }
 dir=$(mktemp -d); trap 'rm -rf "$dir"' EXIT
+# (The settings are the test's own: the user's, which may put the tabs at the side or give the window the system's bar, change what is looked at.)
+export SOLAR_SETTINGS_FILE="$dir/settings.conf"
 printf '<body style="margin:0;background:#c00"><input style="width:300px;height:40px;margin:10px"><p>process test</p>' > "$dir/page.html"
 
 # It paints (a picture of the window, made by the page's process and shown by the browser's).

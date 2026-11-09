@@ -35,14 +35,14 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; overflow: hidden; font: 14px/1.2 system-ui, "Noto Sans", "DejaVu Sans", Arial, sans-serif; color: var(--text); -webkit-user-select: none; user-select: none; }
   #bar { position: relative; background: var(--bar); display: flex; align-items: center; height: 48px; padding: 0 10px; gap: 4px; border-bottom: 1px solid var(--bar-edge); }
-  button { all: unset; box-sizing: border-box; display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 18px; cursor: default; }
-  svg { width: 24px; height: 24px; }
+  button { all: unset; box-sizing: border-box; display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 8px; cursor: default; }
+  svg { width: 22px; height: 22px; }
   button svg { color: var(--icon); }
   button:hover { background: var(--button-hover); }
   button:active { background: var(--button-down); }
   button[disabled] { pointer-events: none; }
   button[disabled] svg { color: var(--icon-off); }
-  #field { position: relative; flex: 1; display: flex; align-items: center; height: 38px; margin: 0 8px; padding: 0 14px 0 12px; border-radius: 19px; background: var(--field); border: 2px solid transparent; }
+  #field { position: relative; flex: 1; display: flex; align-items: center; height: 36px; margin: 0 8px; padding: 0 12px 0 10px; border-radius: 10px; background: var(--field); border: 2px solid transparent; }
   #field:hover { background: var(--field-hover); }
   #field.focused { background: var(--field-focus); border-color: var(--accent); }
   #site { display: flex; align-items: center; justify-content: center; flex: none; width: 20px; height: 20px; margin-right: 8px; }
@@ -55,6 +55,12 @@
   #field.focused #shown { display: none; }
   #field.focused #address { display: block; }
   #menuButton { margin-left: 2px; }
+  #controls { display: none; align-items: center; margin: 0 8px 0 6px; }
+  .controlled #controls { display: flex; }
+  .win { width: 36px; height: 28px; margin-left: 2px; border-radius: 8px; }
+  .win svg { width: 16px; height: 16px; color: var(--icon); }
+  #wclose:hover { background: #d93a3a; }
+  #wclose:hover svg { color: #fff; }
   #menu { display: none; position: absolute; top: 92px; right: 10px; width: 270px; padding: 6px; border-radius: 12px; background: var(--bar); border: 1px solid var(--bar-edge); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28); }
   #menu.open { display: block; }
   #tabmenu { display: none; position: absolute; z-index: 20; width: 190px; padding: 6px; border-radius: 12px; background: var(--bar); border: 1px solid var(--bar-edge); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28); }
