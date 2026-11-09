@@ -118,12 +118,36 @@ jobs:
         continue-on-error: true
         run: make -j"$(sysctl -n hw.ncpu)" ICU4X=0 solar 2>&1 | tee program.log
 
+      # The program is run with no window (SDL's dummy driver): a page is drawn by the pages' process (a picture of it, made by the process) and the window is taken as it is (the interface
+      # and the page): both are in the artifacts of the run, to be looked at.
+      - name: The program runs
+        id: run
+        if: steps.program.outcome == 'success'
+        continue-on-error: true
+        run: |
+          mkdir -p smoke
+          printf '<body style="margin:0;background:#c00"><h1 style="color:#fff;font:700 40px sans-serif;padding:24px">Solar on macOS</h1><p style="color:#fff;padding:0 24px">the page is drawn by the pages process</p>' > smoke/page.html
+          export SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy SOLAR_GUI_CPU=1 SOLAR_SANDBOX=off SOLAR_SETTINGS_FILE="$PWD/smoke/settings.conf"
+          SOLAR_GUI_SHOT="$PWD/smoke/page.png" SOLAR_GUI_SETTLE=1500 timeout 90 ./solar "file://$PWD/smoke/page.html" > smoke/page.log 2>&1 || echo "exit code $?" >> smoke/page.log
+          SOLAR_BROWSER_SCRIPT="wait:5000;shot:$PWD/smoke/window.bmp;wait:300" timeout 90 ./solar "file://$PWD/smoke/page.html" > smoke/window.log 2>&1 &
+          pid=$!
+          for i in $(seq 1 120); do sleep 0.5; [ -f smoke/window.bmp ] && break; done
+          sleep 1
+          kill $pid 2>/dev/null || true
+          sips -s format png smoke/window.bmp --out smoke/window.png || true
+          ls -la smoke
+          cat smoke/page.log | tail -20
+          test -s smoke/page.png
+
       - name: Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: macos-${{ matrix.arch }}-logs
           path: |
+            smoke/*.png
+            smoke/*.bmp
+            smoke/*.log
             program.log
             third_party/quanta/build/errors.log
             third_party/skia/out/Static/.ninja_log
@@ -142,6 +166,7 @@ jobs:
             echo "| Skia | ${{ steps.skia.outcome }} |"
             echo "| Network layer tests | ${{ steps.network.outcome }} |"
             echo "| The program (make solar) | ${{ steps.program.outcome }} |"
+            echo "| The program runs and draws a page | ${{ steps.run.outcome }} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
   windows:
