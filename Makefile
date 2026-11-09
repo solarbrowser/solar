@@ -36,7 +36,12 @@ SKIA_DIR = third_party/skia
 # (Skia is built with OpenGL and Vulkan: gn gen out/StaticVk with the args of out/Static and skia_use_vulkan = true. GPU_TEST_UTILS is defined by that build and changes
 # the layout of what the headers declare, so it is defined here too.)
 SKIA_OUT = $(SKIA_DIR)/out/StaticVk
+ifeq ($(shell uname -s),Linux)
 SKIA_CFLAGS = -I$(SKIA_DIR) -DSK_RELEASE -DSK_VULKAN -DGPU_TEST_UTILS=1 -I$(SKIA_DIR)/third_party/externals/vulkan-headers/include
+else
+# (Skia is built with Metal or Direct3D and OpenGL elsewhere, not Vulkan: docs/porting.md.)
+SKIA_CFLAGS = -I$(SKIA_DIR) -DSK_RELEASE -DGPU_TEST_UTILS=1
+endif
 # (Skia's own static libraries, in one group: they refer to each other)
 SKIA_LIBS = -Wl,--start-group $(SKIA_OUT)/libskia.a $(SKIA_OUT)/libsvg.a $(SKIA_OUT)/libskresources.a $(SKIA_OUT)/libskshaper.a $(SKIA_OUT)/libraw_ptr.a $(SKIA_OUT)/liballocator_core.a $(SKIA_OUT)/liballocator_base.a \
             $(SKIA_OUT)/libfreetype2.a $(SKIA_OUT)/libpng.a $(SKIA_OUT)/libjpeg.a $(SKIA_OUT)/libwebp.a $(SKIA_OUT)/libwebp_sse41.a \

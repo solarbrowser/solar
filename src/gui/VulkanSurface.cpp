@@ -4,6 +4,15 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+#include "solar/gui/GpuSurfaceInternal.h"
+
+// Vulkan is how the window is drawn on Linux, where Skia is built with it (SK_VULKAN); elsewhere there is none of it, and the window is drawn on by the other backend.
+#if !defined(SK_VULKAN)
+namespace solar::gui {
+std::unique_ptr<GpuSurface> MakeVulkanSurface(SDL_Window*) { return nullptr; }
+}  // namespace solar::gui
+#else
+
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 
@@ -425,3 +434,5 @@ std::unique_ptr<GpuSurface> MakeVulkanSurface(SDL_Window* window) {
 }
 
 }  // namespace solar::gui
+
+#endif  // SK_VULKAN

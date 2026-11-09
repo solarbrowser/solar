@@ -42,6 +42,10 @@ jobs:
           key: quanta-${{ runner.os }}-noicu-${{ steps.quanta.outputs.revision }}
 
       # (Without Intl: it is built on ICU4X, a submodule of Quanta's that this job does not fetch, and a Rust library; the tests here need neither.)
+      # (Ubuntu 24.04 lets a process make a user namespace but takes its capabilities in it away, which a sandbox needs to write the map of its user: the runner is let do what a machine
+      # that has not that restriction does.)
+      - name: Let a process have the capabilities of its user namespace
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - run: make -j"$(nproc)" ICU4X=0 test
 
       # Quanta's makefile keeps the compiler's messages in a file, not in the log.
