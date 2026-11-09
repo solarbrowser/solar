@@ -6,6 +6,8 @@
 
 #include "solar/net/Ipc.h"
 
+#include <fcntl.h>
+
 #include <cerrno>
 #include <cmath>
 #include <sys/uio.h>
@@ -202,7 +204,14 @@ Channel::~Channel() {
 
 std::pair<int, int> Channel::MakePair() {
   int fds[2];
+#if defined(SOCK_CLOEXEC)
   if (::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, fds) != 0) return {-1, -1};
+#else
+  // (macOS has no SOCK_CLOEXEC: the flag is put on after, which leaves a moment in which a process that is started on another thread could keep them.)
+  if (::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0) return {-1, -1};
+  ::fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+  ::fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+#endif
   return {fds[0], fds[1]};
 }
 

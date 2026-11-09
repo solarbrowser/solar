@@ -373,7 +373,9 @@ SandboxPolicy GpuPolicy() {
 }
 
 int GpuMain(int controlFd) {
+#if defined(__linux__)
   ::prctl(PR_SET_PDEATHSIG, SIGKILL);
+#endif
   ::signal(SIGPIPE, SIG_IGN);
   net::ipc::Channel control(controlFd);
   // (The namespaces cannot be entered once the process has threads, and the GPU's thread and the driver's make some.)

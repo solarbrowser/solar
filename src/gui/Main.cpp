@@ -1169,7 +1169,9 @@ int main(int argc, char** argv) {
   std::setbuf(stdout, nullptr);
   if (argc >= 2 && std::strcmp(argv[1], "--renderer") == 0) {
     // The renderer process: it ends if the browser does, and a connection that is shut is not a signal.
+#if defined(__linux__)
     ::prctl(PR_SET_PDEATHSIG, SIGKILL);
+#endif
     ::signal(SIGPIPE, SIG_IGN);
     char* pageArguments[] = {argv[0], argc > 2 ? argv[2] : nullptr, nullptr};
     // (The interface's process is not the page: what is set for looking at the page, a picture of it and what a user would do in it, is not for the interface.)

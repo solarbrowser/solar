@@ -11,6 +11,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <atomic>
+#include <string>
 #include <utility>
 
 namespace solar::gui {
@@ -40,6 +42,7 @@ void SharedMemory::Reset() {
 bool SharedMemory::Create(size_t size) {
   Reset();
   if (size == 0) return false;
+#if defined(__linux__)
   const int fd = ::memfd_create("solar-frame", MFD_CLOEXEC | MFD_ALLOW_SEALING);
   if (fd < 0) return false;
   // (Sealed: the memory cannot be made smaller by whoever else has it, which would fault the one reading it.)
@@ -47,6 +50,20 @@ bool SharedMemory::Create(size_t size) {
     ::close(fd);
     return false;
   }
+#else
+  // (Elsewhere on POSIX: a named piece of shared memory that has its name taken away at once, so that only the descriptors reach it. It cannot be sealed: the reader maps
+  // what it is told the size of and the sender is the browser's own process.)
+  static std::atomic<unsigned> counter{0};
+  const std::string name = "/solar-" + std::to_string(::getpid()) + "-" + std::to_string(counter.fetch_add(1));
+  const int fd = ::shm_open(name.c_str(), O_RDWR | O_CREAT | O_EXCL, 0600);
+  if (fd < 0) return false;
+  ::shm_unlink(name.c_str());
+  ::fcntl(fd, F_SETFD, FD_CLOEXEC);
+  if (::ftruncate(fd, static_cast<off_t>(size)) != 0) {
+    ::close(fd);
+    return false;
+  }
+#endif
   void* mapped = ::mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   if (mapped == MAP_FAILED) {
     ::close(fd);
