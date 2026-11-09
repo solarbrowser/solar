@@ -43,6 +43,9 @@ int main() {
   Check("a start page is made an address", s.Set("start", " example.org/x ") && s.Get("start") == "https://example.org/x" && s.StartAddress() == "https://example.org/x");
   Check("one that is no address is not (a script)", !s.Set("start", "javascript:alert(1)") && s.Get("start") == "https://example.org/x");
   Check("one with a line end is not", !s.Set("start", "https://a.test/\nsearch=evil") && s.Get("search") == "google");
+  Check("the folder of downloads is the system's until one is chosen", s.Get("downloads").empty() && s.DownloadDirectory().empty() && !s.AskWhereToSave());
+  Check("a folder is taken (a full path), and not what is not one", s.Set("downloads", "/home/x/files") && s.DownloadDirectory() == "/home/x/files" && !s.Set("downloads", "relative/dir") && !s.Set("downloads", "/a/../../etc") && s.DownloadDirectory() == "/home/x/files" && s.Set("downloads", ""));
+  Check("asking is on or off", s.Set("downloadAsk", "on") && s.AskWhereToSave() && !s.Set("downloadAsk", "maybe") && s.AskWhereToSave() && s.Set("downloadAsk", "off"));
   Check("the empty one is the new tab's page", s.Set("start", "") && s.StartAddress() == kNewTabAddress);
   Check("the system's bar is chosen", s.Set("titlebar", "system") && s.SystemTitleBar());
   setenv("SOLAR_SYSTEM_TITLE", "0", 1);

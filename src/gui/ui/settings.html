@@ -64,7 +64,7 @@
   <button class="entry" data-page="startup">{{icon:home}}<span>On startup</span></button>
   <hr>
   <button class="entry soon">{{icon:security}}<span>Privacy &amp; security</span></button>
-  <button class="entry soon">{{icon:tray-download}}<span>Downloads</span></button>
+  <button class="entry" data-page="downloads">{{icon:tray-download}}<span>Downloads</span></button>
   <button class="entry soon">{{icon:public}}<span>Languages</span></button>
   <button class="entry soon">{{icon:settings}}<span>Accessibility</span></button>
   <button class="entry soon">{{icon:history}}<span>About</span></button>
@@ -110,6 +110,21 @@
     </div>
   </section>
 
+  <section class="page" id="downloads" hidden>
+    <h1>Downloads</h1>
+    <p class="lead">Where the files go that you download.</p>
+    <div class="card">
+      <div class="row">
+        <div class="label"><b>Folder</b><span>Where files are kept. Empty: the downloads folder of your system.</span></div>
+        <div class="control"><input id="folder" type="text" spellcheck="false" autocomplete="off" placeholder="System default"></div>
+      </div>
+      <div class="row">
+        <div class="label"><b>Ask where to save each file</b><span>A window opens for each download, to choose the place and the name.</span></div>
+        <div class="control"><button class="switch" id="ask" role="switch"><span class="knob"></span></button></div>
+      </div>
+    </div>
+  </section>
+
   <section class="page" id="startup" hidden>
     <h1>On startup</h1>
     <p class="lead">What Solar opens when it is started.</p>
@@ -136,6 +151,8 @@
     $("engine").value = values.search;
     if (document.activeElement !== $("start")) $("start").value = values.start || "";
     $("titlebar").className = "switch" + (values.titlebar === "system" ? " on" : "");
+    $("ask").className = "switch" + (values.downloadAsk === "on" ? " on" : "");
+    if (document.activeElement !== $("folder")) $("folder").value = values.downloads || "";
   };
 
   globalThis.__solarUiState = (next) => {
@@ -152,6 +169,10 @@
   const commitStart = () => set("start", $("start").value);
   $("start").addEventListener("keydown", (e) => { if (e.key === "Enter") { commitStart(); $("start").blur(); } });
   $("start").addEventListener("blur", commitStart);
+  const commitFolder = () => set("downloads", $("folder").value);
+  $("folder").addEventListener("keydown", (e) => { if (e.key === "Enter") { commitFolder(); $("folder").blur(); } });
+  $("folder").addEventListener("blur", commitFolder);
+  $("ask").addEventListener("click", () => set("downloadAsk", values.downloadAsk === "on" ? "off" : "on"));
   $("titlebar").addEventListener("click", () => set("titlebar", values.titlebar === "system" ? "app" : "system"));
 
   // The pages of the settings: one is shown, the one the list at the side says.

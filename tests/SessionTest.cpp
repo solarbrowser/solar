@@ -18,6 +18,7 @@
 
 #include "solar/gui/Services.h"
 #include "solar/gui/Session.h"
+#include "solar/gui/Settings.h"
 #include "solar/gui/Wire.h"
 #include "solar/net/Ipc.h"
 #include "solar/net/PageFetch.h"
@@ -285,6 +286,9 @@ struct World {
 }  // namespace
 
 int main() {
+  // (The settings are the test's own: the user's decide where downloads go and whether they are asked about.)
+  setenv("SOLAR_SETTINGS_FILE", (std::filesystem::temp_directory_path() / "solar-session-settings.conf").c_str(), 1);
+  std::filesystem::remove(std::filesystem::temp_directory_path() / "solar-session-settings.conf");
   std::atomic<int> servedA{0}, servedB{0};
   std::mutex postMutex;
   std::string lastPost;
@@ -547,6 +551,57 @@ int main() {
     Check("(download) with all that was sent", !path.empty() && std::filesystem::file_size(path) == 5000);
     Check("(download) the page stays, and no renderer was made for the file", session.current() == 1 && world.started.size() == 1);
     session.ClearDownloads();
+    unsetenv("SOLAR_DOWNLOAD_DIR");
+    std::filesystem::remove_all(directory);
+  }
+  // A file that is asked about is kept where the user says, or not at all.
+  for (const bool cancel : {false, true}) {
+    const std::filesystem::path directory = std::filesystem::temp_directory_path() / "solar-session-ask";
+    std::filesystem::remove_all(directory);
+    setenv("SOLAR_DOWNLOAD_DIR", (directory / "default").c_str(), 1);
+    gui::Settings::Instance().Set("downloadAsk", "on");
+    gui::BrowserServices services;
+    World world;
+    std::atomic<int> asked{0};
+    gui::Session::Events events;
+    events.message = [&](uint32_t host, uint8_t type, std::string bytes, int fd) {
+      if (fd >= 0) ::close(fd);
+      world.session->Handle(host, type, bytes);
+    };
+    events.gone = [](uint32_t, bool) {};
+    events.shown = [](uint32_t) {};
+    events.askSave = [&](uint32_t id, const std::string& suggested) {
+      ++asked;
+      // (The user takes a while, and says another place and another name.)
+      std::thread([&, id, suggested] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        world.session->ChooseDownloadPath(id, cancel ? "" : (directory / "chosen" / "mine.zip").string());
+      }).detach();
+    };
+    world.session = std::make_unique<gui::Session>(services, world.Launcher(), std::move(events), false);
+    gui::Session& session = *world.session;
+    const std::string label = cancel ? "(ask, no) " : "(ask) ";
+    session.Open(A + "/doc");
+    Fake* one = world.FakeStartedFor(0);
+    Check(label + "the page", one && one->Ended(1) && world.WaitCurrent(one));
+    one->Go(A + "/file.zip");
+    for (int i = 0; i < 150 && asked.load() == 0; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    Check(label + "the user is asked", asked.load() == 1);
+    std::string path;
+    for (int i = 0; i < 200 && path.empty() && !cancel; ++i) {
+      path = session.DownloadPath(1);
+      if (path.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    if (cancel) std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    bool strays = false;
+    if (std::filesystem::exists(directory)) {
+      for (const auto& entry : std::filesystem::recursive_directory_iterator(directory)) {
+        if (entry.is_regular_file() && entry.path().filename() != "mine.zip") strays = true;
+      }
+    }
+    if (cancel) Check(label + "nothing is kept, no file is left aside", session.DownloadPath(1).empty() && !strays, [&] { std::string l; if (std::filesystem::exists(directory)) for (const auto& e : std::filesystem::recursive_directory_iterator(directory)) l += e.path().string() + " "; return l; }());
+    else Check(label + "it is kept where the user said, with all of it, and nothing is left aside", path == (directory / "chosen" / "mine.zip").string() && std::filesystem::file_size(path) == 5000 && !strays, path);
+    gui::Settings::Instance().Set("downloadAsk", "off");
     unsetenv("SOLAR_DOWNLOAD_DIR");
     std::filesystem::remove_all(directory);
   }

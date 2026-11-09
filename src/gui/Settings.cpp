@@ -26,6 +26,8 @@ const std::map<std::string, std::string>& Defaults() {
       {"search", "duckduckgo"},  // the id of a search engine
       {"start", ""},             // an address; empty: the page of a new tab
       {"tabs", "top"},           // top: the tabs along the top of the window; side: in a column at its side; sidebar: the column has the buttons and the address as well
+      {"downloads", ""},         // the folder files are kept in; empty: the system's folder of downloads
+      {"downloadAsk", "off"},    // on: each file is asked where it is to be kept
       {"titlebar", "app"},       // app: the browser draws the buttons of the window; system: the system's bar
   };
   return defaults;
@@ -106,6 +108,19 @@ bool Settings::Set(const std::string& key, const std::string& rawValue) {
     bool known = false;
     for (const SearchEngine& engine : Engines()) known = known || value == engine.id;
     if (!known) return false;
+  } else if (key == "downloadAsk") {
+    if (value != "on" && value != "off") return false;
+  } else if (key == "downloads") {
+    // (A folder as a full path, or from the user's own: ~/Downloads/Solar. Empty is the system's.)
+    while (!value.empty() && value.front() == ' ') value.erase(value.begin());
+    while (!value.empty() && value.back() == ' ') value.pop_back();
+    if (value.rfind("~/", 0) == 0) {
+      const char* home = std::getenv("HOME");
+      if (!home) return false;
+      value = std::string(home) + value.substr(1);
+    }
+    const bool absolute = value.empty() || value[0] == '/' || (value.size() > 2 && value[1] == ':' && (value[2] == '\\' || value[2] == '/'));
+    if (!absolute || value.find("..") != std::string::npos) return false;
   } else if (key == "tabs") {
     if (value != "top" && value != "side" && value != "sidebar") return false;
   } else if (key == "titlebar") {
@@ -182,6 +197,8 @@ std::string Settings::StartAddress() const {
   const std::string start = Get("start");
   return start.empty() ? kNewTabAddress : start;
 }
+
+std::string Settings::DownloadDirectory() const { return Get("downloads"); }
 
 bool Settings::SystemTitleBar() const {
   const char* forced = std::getenv("SOLAR_SYSTEM_TITLE");

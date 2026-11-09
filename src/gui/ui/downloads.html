@@ -1,0 +1,85 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Downloads</title>
+<style>
+  :root { --bg: #f4f5f8; --card: #ffffff; --edge: #dfe2ea; --text: #1b1f27; --dim: #697181; --accent: #3b6cf6; --pick: rgba(30, 40, 70, 0.07); --track: #e6e9f0; --bad: #d93a3a; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #15171c; --card: #1e2129; --edge: #2c303a; --text: #e8eaf0; --dim: #949bab; --accent: #7a9bff; --pick: rgba(255, 255, 255, 0.07); --track: #2f333d; --bad: #f06a6a; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, "Noto Sans", "DejaVu Sans", Arial, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 44px 32px 80px; }
+  .top { display: flex; align-items: center; margin-bottom: 24px; }
+  h1 { flex: 1; margin: 0; font-size: 26px; font-weight: 600; }
+  button { all: unset; box-sizing: border-box; display: flex; align-items: center; justify-content: center; cursor: default; }
+  .clear { height: 34px; padding: 0 14px; border-radius: 8px; color: var(--accent); }
+  .clear:hover { background: var(--pick); }
+  .list { background: var(--card); border: 1px solid var(--edge); border-radius: 12px; overflow: hidden; }
+  .row { display: flex; align-items: center; gap: 14px; padding: 14px 18px; }
+  .row + .row { border-top: 1px solid var(--edge); }
+  .row.done:hover { background: var(--pick); }
+  .mark { flex: none; width: 22px; height: 22px; color: var(--dim); }
+  .mark svg { width: 22px; height: 22px; }
+  .info { flex: 1; min-width: 0; }
+  .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .meta { margin-top: 2px; color: var(--dim); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .meta.failed { color: var(--bad); }
+  .bar { height: 4px; margin-top: 8px; border-radius: 2px; background: var(--track); }
+  .bar i { display: block; height: 4px; border-radius: 2px; background: var(--accent); }
+  .act { flex: none; width: 34px; height: 34px; border-radius: 8px; color: var(--dim); }
+  .act:hover { background: var(--pick); color: var(--text); }
+  .act svg { width: 20px; height: 20px; }
+  .none { padding: 48px 20px; color: var(--dim); text-align: center; }
+</style>
+</head>
+<body>
+<main>
+  <div class="top"><h1>Downloads</h1><button class="clear" id="clear">Clear list</button></div>
+  <div class="list" id="list"></div>
+</main>
+<script>
+(() => {
+  "use strict";
+  const send = (text) => { if (typeof __solarUiSend === "function") __solarUiSend(text); };
+  const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const bytes = (n) => (n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(0) + " KB" : n < 1073741824 ? (n / 1048576).toFixed(1) + " MB" : (n / 1073741824).toFixed(2) + " GB");
+  const site = (u) => { const m = /^[a-z]+:\/\/([^\/?#]*)/.exec(u || ""); return m ? m[1] : ""; };
+  const list = document.getElementById("list");
+  let downloads = [];
+  const render = () => {
+    document.getElementById("clear").style.display = downloads.some((d) => d.state !== "running") ? "flex" : "none";
+    if (!downloads.length) { list.innerHTML = '<div class="none">Nothing has been downloaded.</div>'; return; }
+    let html = "";
+    for (const d of downloads) {
+      let meta = esc(site(d.url)), bar = "", action = "";
+      if (d.asking) meta = "Choose where to keep it";
+      else if (d.state === "running") {
+        meta = (d.total ? bytes(d.received) + " of " + bytes(d.total) : bytes(d.received)) + " · " + esc(site(d.url));
+        bar = '<div class="bar"><i style="width:' + (d.total ? Math.min(100, Math.round(100 * d.received / d.total)) : 30) + '%"></i></div>';
+        action = '<button class="act" data-do="dl-cancel\t' + d.id + '" title="Cancel">{{icon:close}}</button>';
+      } else if (d.state === "done") {
+        meta = bytes(d.total || d.received) + " · " + esc(site(d.url));
+        action = '<button class="act" data-do="dl-folder\t' + d.id + '" title="Show in folder">{{icon:open-in-new}}</button>';
+      } else {
+        meta = (d.state === "failed" ? "Failed" : "Cancelled") + " · " + esc(site(d.url));
+      }
+      html += '<div class="row ' + d.state + '" data-open="' + (d.state === "done" && !d.asking ? d.id : 0) + '"><div class="mark">{{icon:tray-download}}</div><div class="info"><div class="name">' + esc(d.name) + '</div><div class="meta' + (d.state === "failed" ? " failed" : "") + '">' + meta + "</div>" + bar + "</div>" + action + "</div>";
+    }
+    list.innerHTML = html;
+  };
+  globalThis.__solarUiState = (next) => { if (next.downloads) { downloads = next.downloads; render(); } };
+  list.addEventListener("click", (e) => {
+    const act = e.target.closest ? e.target.closest("button") : null;
+    if (act && act.dataset.do) { send(act.dataset.do); return; }
+    const row = e.target.closest ? e.target.closest(".row") : null;
+    if (row && Number(row.dataset.open) > 0) send("dl-open\t" + row.dataset.open);
+  });
+  document.getElementById("clear").addEventListener("click", () => send("dl-clear"));
+  render();
+  send("ready");
+})();
+</script>
+</body>
+</html>

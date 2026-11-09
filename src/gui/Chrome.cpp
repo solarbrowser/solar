@@ -65,6 +65,8 @@ std::string SettingsDocument() {
   return ExpandIcons(text);
 }
 
+std::string DownloadsDocument() { return ExpandIcons(Joined(solar::web::kScriptDownloadsPage)); }
+
 std::string AddressFromInput(const std::string& input, const std::string& searchAddress) {
   size_t first = 0, last = input.size();
   while (first < last && std::isspace(static_cast<unsigned char>(input[first]))) ++first;

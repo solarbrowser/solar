@@ -25,6 +25,7 @@
 #include <thread>
 
 #include "solar/gui/Chrome.h"
+#include "solar/gui/Settings.h"
 #include "solar/net/HttpClient.h"
 #include "solar/url/Origin.h"
 #include "solar/url/Parser.h"
@@ -76,6 +77,7 @@ std::string NormalAddress(const std::string& text) {
 std::string DownloadDirectory() {
   namespace fs = std::filesystem;
   if (const char* forced = std::getenv("SOLAR_DOWNLOAD_DIR")) return forced;
+  if (const std::string chosen = Settings::Instance().DownloadDirectory(); !chosen.empty()) return chosen;
 #if defined(_WIN32)
   if (const char* profile = std::getenv("USERPROFILE")) return (fs::path(profile) / "Downloads").string();
 #else
@@ -248,6 +250,8 @@ struct Session::Impl : std::enable_shared_from_this<Session::Impl> {
     uint64_t received = 0, total = 0;
     enum class State { Running, Done, Failed, Cancelled } state = State::Running;
     uint64_t serial = 0;  // of the navigation that is bringing it
+    bool asking = false;  // the user is being asked where it is to be kept (it is in a file of its own until then)
+    std::string chosen;   // where the user said
   };
   std::vector<Download> downloads;  // (under the lock; the oldest first)
   uint32_t nextDownload = 1;
@@ -328,6 +332,8 @@ struct Session::Impl : std::enable_shared_from_this<Session::Impl> {
   // The tab of a renderer that was made for an address that turned out to be a file has no page: it is given the page of a new tab (or, if it has one, let be).
   void AbandonPending(const std::shared_ptr<Host>& host);
   void FinishDownload(uint32_t id, Download::State state);
+  void MoveChosen(uint32_t id);
+  std::string DownloadsJsonLocked(size_t most);
   void DownloadProgress(uint32_t id, uint64_t received);
   void PushState();
   uint32_t NewTab(const std::string& address, bool activate);
@@ -874,7 +880,7 @@ void Session::Impl::OnNavigate(const std::shared_ptr<Host>& host, wire::Navigate
   if (parsed->scheme == "solar") {
     // The browser's own pages are served from its memory, to the renderer that was made for them and to no other.
     const std::string where = url::Serialize(*parsed);
-    if ((where != kNewTabAddress && where != kSettingsAddress) || SiteFor(*parsed) != host->site) return NavError(*host, request.id, "unsupported scheme");
+    if ((where != kNewTabAddress && where != kSettingsAddress && where != kDownloadsAddress) || SiteFor(*parsed) != host->site) return NavError(*host, request.id, "unsupported scheme");
     host->infos[request.id] = {kind, entry};
     request.kind = kind;
     request.entry = entry;
@@ -1077,12 +1083,16 @@ void Navigation::BeginDownload(const net::HttpResponseHead& head, const url::Url
   std::error_code error;
   std::filesystem::create_directories(directory, error);
   const std::string disposition = head.Header("content-disposition") ? std::string(*head.Header("content-disposition")) : "";
-  const std::string path = FreePath(directory, DownloadName(disposition, finalUrl));
+  const std::string suggested = FreePath(directory, DownloadName(disposition, finalUrl));
+  // When the user is asked where it is to be kept, it comes into a file of its own in the meantime.
+  const bool ask = Settings::Instance().AskWhereToSave() && session->events.askSave;
+  const std::string path = ask ? FreePath(directory, std::filesystem::path(suggested).filename().string() + ".part") : suggested;
   file.open(path, std::ios::binary | std::ios::trunc);
   Session::Impl::Download record;
   record.url = url::Serialize(finalUrl);
-  record.name = std::filesystem::path(path).filename().string();
+  record.name = std::filesystem::path(suggested).filename().string();
   record.path = path;
+  record.asking = ask;
   record.serial = serial;
   if (const auto length = head.Header("content-length")) record.total = static_cast<uint64_t>(std::strtoull(std::string(*length).c_str(), nullptr, 10));
   if (!file) {
@@ -1107,6 +1117,7 @@ void Navigation::BeginDownload(const net::HttpResponseHead& head, const url::Url
     session->AbandonPending(from);
   }
   session->PushState();
+  if (ask && file) session->events.askSave(downloadId, suggested);
   if (!file) {
     handle.Cancel();
     Finish();
@@ -1149,16 +1160,58 @@ void Session::Impl::DownloadProgress(uint32_t id, uint64_t received) {
 }
 
 void Session::Impl::FinishDownload(uint32_t id, Download::State state) {
+  bool move = false;
   {
     std::lock_guard<std::mutex> lock(mutex);
     for (Download& d : downloads) {
       if (d.id == id) {
         d.state = state;
         if (state == Download::State::Done && d.total == 0) d.total = d.received;
+        move = state == Download::State::Done && d.asking && !d.chosen.empty();
+        if (state != Download::State::Done && d.asking) {
+          std::error_code error;
+          std::filesystem::remove(d.path, error);
+        }
       }
     }
   }
+  if (move) MoveChosen(id);
   PushState();
+}
+
+// The file that was kept aside while the user was asked goes to the place that was chosen.
+void Session::Impl::MoveChosen(uint32_t id) {
+  std::string from, to;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    for (Download& d : downloads) {
+      if (d.id == id && d.asking && !d.chosen.empty()) {
+        from = d.path;
+        to = d.chosen;
+      }
+    }
+  }
+  if (from.empty()) return;
+  std::error_code error;
+  std::filesystem::create_directories(std::filesystem::path(to).parent_path(), error);
+  std::filesystem::rename(from, to, error);
+  if (error) {
+    // (Another disk: copied, and the one that was aside taken away.)
+    std::filesystem::copy_file(from, to, std::filesystem::copy_options::overwrite_existing, error);
+    if (!error) std::filesystem::remove(from);
+  }
+  std::lock_guard<std::mutex> lock(mutex);
+  for (Download& d : downloads) {
+    if (d.id == id) {
+      if (error) {
+        d.state = Download::State::Failed;
+      } else {
+        d.path = to;
+        d.name = std::filesystem::path(to).filename().string();
+        d.asking = false;
+      }
+    }
+  }
 }
 
 // ---- The interface ----
@@ -1254,8 +1307,10 @@ void Session::Impl::OnChromeNavigate(const std::shared_ptr<Host>& host, const wi
 void Session::Impl::OnInternalNavigate(const std::shared_ptr<Host>& host, const wire::Navigate& request) {
   host->active.insert(request.id);
   const std::optional<url::Url> parsed = url::Parse(request.url);
-  const bool settings = parsed && url::Serialize(*parsed) == kSettingsAddress;
-  Serve(*host, request.id, settings ? kSettingsAddress : kNewTabAddress, settings ? SettingsDocument() : NewTabDocument());
+  const std::string where = parsed ? url::Serialize(*parsed) : "";
+  if (where == kSettingsAddress) Serve(*host, request.id, kSettingsAddress, SettingsDocument());
+  else if (where == kDownloadsAddress) Serve(*host, request.id, kDownloadsAddress, DownloadsDocument());
+  else Serve(*host, request.id, kNewTabAddress, NewTabDocument());
   host->active.erase(request.id);
 }
 
@@ -1281,7 +1336,33 @@ void Session::Impl::SetLoading(uint32_t tab, bool value) {
   PushState();
 }
 
+// The downloads as a list in JSON, the newest first, `most` of them (the lock is held).
+std::string Session::Impl::DownloadsJsonLocked(size_t most) {
+  std::string json = "[";
+  bool first = true;
+  size_t count = 0;
+  for (auto it = downloads.rbegin(); it != downloads.rend() && count < most; ++it, ++count) {
+    if (!first) json += ",";
+    first = false;
+    const char* state = it->state == Download::State::Running ? "running" : it->state == Download::State::Done ? "done" : it->state == Download::State::Failed ? "failed" : "cancelled";
+    json += "{\"id\":" + std::to_string(it->id) + ",\"name\":" + JsonString(it->name) + ",\"url\":" + JsonString(it->url) + ",\"received\":" + std::to_string(it->received) + ",\"total\":" + std::to_string(it->total) +
+            ",\"state\":\"" + state + "\",\"asking\":" + (it->asking && it->chosen.empty() ? "true" : "false") + "}";
+  }
+  return json + "]";
+}
+
 void Session::Impl::PushState() {
+  // The page of the downloads is told them all, whether there is an interface or not.
+  std::vector<std::shared_ptr<Host>> pages;
+  std::string everything;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    for (auto& [id, host] : hosts) {
+      if (!host->gone && host->site == std::string("solar:") + kDownloadsAddress) pages.push_back(host);
+    }
+    if (!pages.empty()) everything = "{\"downloads\":" + DownloadsJsonLocked(200) + "}";
+  }
+  for (auto& page : pages) SendTo(*page, wire::ToRenderer::UiState, everything);
   std::shared_ptr<Host> bar = Find(chromeId.load());
   if (!bar || bar->gone) return;
   std::string json;
@@ -1301,19 +1382,7 @@ void Session::Impl::PushState() {
       json += ",\"url\":" + JsonString(addressOf(*t)) + ",\"title\":" + JsonString(t->title) + ",\"back\":" + (t->index > 0 ? "true" : "false") + ",\"forward\":" + (t->index + 1 < static_cast<int>(t->entries.size()) ? "true" : "false") +
               ",\"loading\":" + (t->loading ? "true" : "false");
     }
-    {
-      // The downloads, the newest first (the last eight).
-      json += ",\"downloads\":[";
-      bool firstDownload = true;
-      int shownCount = 0;
-      for (auto it = downloads.rbegin(); it != downloads.rend() && shownCount < 8; ++it, ++shownCount) {
-        if (!firstDownload) json += ",";
-        firstDownload = false;
-        const char* state = it->state == Download::State::Running ? "running" : it->state == Download::State::Done ? "done" : it->state == Download::State::Failed ? "failed" : "cancelled";
-        json += "{\"id\":" + std::to_string(it->id) + ",\"name\":" + JsonString(it->name) + ",\"received\":" + std::to_string(it->received) + ",\"total\":" + std::to_string(it->total) + ",\"state\":\"" + state + "\"}";
-      }
-      json += "]";
-    }
+    json += ",\"downloads\":" + DownloadsJsonLocked(8);
     if (const TabState* t = ActiveTab()) json += ",\"zoom\":" + std::to_string(static_cast<int>(std::lround(t->zoom * 100)));
     json += std::string(",\"controls\":") + (windowControls ? "true" : "false") + ",\"maximized\":" + (maximized ? "true" : "false") + "}";
   }
@@ -1518,10 +1587,51 @@ void Session::SetWindowFlags(bool controls, bool maximized) {
 
 void Session::PushState() { impl_->services.Post([impl = impl_] { impl->PushState(); }); }
 
+void Session::ChooseDownloadPath(uint32_t id, const std::string& path) {
+  impl_->services.Post([impl = impl_, id, path] {
+    bool cancel = path.empty();
+    uint64_t serial = 0;
+    bool finished = false;
+    {
+      std::lock_guard<std::mutex> lock(impl->mutex);
+      for (Impl::Download& d : impl->downloads) {
+        if (d.id != id || !d.asking) continue;
+        if (cancel) {
+          d.state = Impl::Download::State::Cancelled;
+          serial = d.serial;
+          std::error_code error;
+          std::filesystem::remove(d.path, error);
+          d.asking = false;
+        } else {
+          d.chosen = path;
+          d.name = std::filesystem::path(path).filename().string();
+          finished = d.state == Impl::Download::State::Done;
+        }
+      }
+    }
+    if (cancel && serial) {
+      const auto found = impl->navigations.find(serial);
+      if (found != impl->navigations.end()) {
+        found->second->handle.Cancel();
+        found->second->file.close();
+        found->second->downloadId = 0;
+        impl->navigations.erase(found);
+      }
+    }
+    if (finished) impl->MoveChosen(id);
+    impl->PushState();
+  });
+}
+
+bool Session::IsDownloadsPage(uint32_t host) const {
+  std::shared_ptr<Host> found = impl_->Find(host);
+  return found && !found->gone && found->site == std::string("solar:") + kDownloadsAddress;
+}
+
 std::string Session::DownloadPath(uint32_t id) const {
   std::lock_guard<std::mutex> lock(impl_->mutex);
   for (const Impl::Download& d : impl_->downloads) {
-    if (d.id == id && d.state == Impl::Download::State::Done) return d.path;
+    if (d.id == id && d.state == Impl::Download::State::Done && !d.asking) return d.path;
   }
   return "";
 }
@@ -1544,6 +1654,16 @@ void Session::CancelDownload(uint32_t id) {
       found->second->file.close();
       found->second->downloadId = 0;
       impl->navigations.erase(found);
+    }
+    {
+      std::lock_guard<std::mutex> lock(impl->mutex);
+      for (Impl::Download& d : impl->downloads) {
+        if (d.id == id && d.asking && d.state == Impl::Download::State::Cancelled) {
+          std::error_code error;
+          std::filesystem::remove(d.path, error);
+          d.asking = false;
+        }
+      }
     }
     impl->PushState();
   });

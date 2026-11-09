@@ -42,7 +42,7 @@ struct Message {
   std::string bytes;
   int fd = -1;
 };
-constexpr uint8_t kGone = 0xFE, kShown = 0xFD;
+constexpr uint8_t kGone = 0xFE, kShown = 0xFD, kAskSave = 0xFC;
 
 // What the window knows of one page's process: the pictures it can make, mapped to be read.
 struct View {
@@ -98,6 +98,8 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
   events.message = [&](uint32_t host, uint8_t type, std::string bytes, int fd) { push(Message{host, type, std::move(bytes), fd}); };
   events.gone = [&](uint32_t host, bool fatal) { push(Message{host, kGone, std::string(1, fatal ? 1 : 0), -1}); };
   events.shown = [&](uint32_t host) { push(Message{host, kShown, "", -1}); };
+  // A download is asked about: the window asks the user where it is to be kept (the number is in `host`, the suggested path in the bytes).
+  events.askSave = [&](uint32_t id, const std::string& suggested) { push(Message{id, kAskSave, suggested, -1}); };
   Session session(services, std::move(launcher), std::move(events), allowFiles);
 
   std::map<uint32_t, View> views;
@@ -216,6 +218,28 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
       titles.erase(message.host);
       stopAudioOf(message.host);
       if (!message.bytes.empty() && message.bytes[0] != 0) running = false;
+      return;
+    }
+    if (message.type == kAskSave) {
+      // (SOLAR_DOWNLOAD_PICK=folder: for trying it without a dialog to press: the answer is that folder, or "cancel".)
+      if (const char* pick = std::getenv("SOLAR_DOWNLOAD_PICK")) {
+        const std::string chosen = std::strcmp(pick, "cancel") == 0 ? "" : (std::filesystem::path(pick) / std::filesystem::path(message.bytes).filename()).string();
+        session.ChooseDownloadPath(message.host, chosen);
+        return;
+      }
+      struct Question { uint32_t id; };
+      auto* question = new Question{message.host};
+      const std::string suggested = message.bytes;
+      SDL_ShowSaveFileDialog([](void* data, const char* const* files, int) {
+        // (From any thread: the answer is handed to the window's own.)
+        std::unique_ptr<Question> asked(static_cast<Question*>(data));
+        SDL_Event answer{};
+        answer.type = SDL_EVENT_USER;
+        answer.user.code = 3;
+        answer.user.data1 = new std::string(files && files[0] ? files[0] : "");
+        answer.user.data2 = reinterpret_cast<void*>(static_cast<uintptr_t>(asked->id));
+        SDL_PushEvent(&answer);
+      }, question, window, nullptr, 0, suggested.c_str());
       return;
     }
     if (message.type == kShown) {
@@ -409,11 +433,16 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
       }
       case wire::ToBrowser::UiCommand: {
         // What the interface asks (only its own process is heard).
-        const bool fromBar = message.host == session.chrome(), fromSettings = !fromBar && session.IsSettings(message.host);
-        if (!fromBar && !fromSettings) break;
+        const bool fromBar = message.host == session.chrome(), fromSettings = !fromBar && session.IsSettings(message.host), fromDownloads = !fromBar && !fromSettings && session.IsDownloadsPage(message.host);
+        if (!fromBar && !fromSettings && !fromDownloads) break;
         const std::string& text = message.bytes;
         const size_t tab = text.find('\t');
         const std::string verb = text.substr(0, tab), rest = tab == std::string::npos ? "" : text.substr(tab + 1);
+        if (fromDownloads && verb != "ready" && verb.rfind("dl-", 0) != 0) break;  // (the page of the downloads asks of the downloads and of nothing else)
+        if (fromDownloads && verb == "ready") {
+          session.PushState();
+          break;
+        }
         if (fromSettings) {
           // The settings page may read and change the settings, and do nothing else.
           if (verb == "ready") {
@@ -456,6 +485,7 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
         else if (verb == "reload") session.Reload();
         else if (verb == "focus") barFocused = rest == "1";
         else if (verb == "zoom") session.Zoom(std::atoi(rest.c_str()));
+        else if (verb == "downloads-page") session.NewTab(kDownloadsAddress);
         else if (verb == "dl-open" || verb == "dl-folder") {
           // A file that was downloaded is opened by the system's program for it, or the folder it is in is shown.
           const int number = std::atoi(rest.c_str());
@@ -739,6 +769,15 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
           break;
         }
         case SDL_EVENT_USER: {
+          if (event.user.code == 3) {
+            // The user answered where a download is to be kept (or did not).
+            auto* answer = static_cast<std::string*>(event.user.data1);
+            const uint32_t id = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(event.user.data2));
+            session.ChooseDownloadPath(id, answer ? *answer : "");
+            delete answer;
+            forward = false;
+            break;
+          }
           if (event.user.code == 2) {
             // (A picture of the window, for looking at: the script asked for it.)
             char* path = static_cast<char*>(event.user.data1);
@@ -875,6 +914,9 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
               barFocused = true;
               session.SendChrome(wire::ToRenderer::UiState, "{\"focusAddress\":true}");
             }
+            forward = false;
+          } else if (ctrl && input.key == SDLK_J) {
+            session.NewTab(kDownloadsAddress);
             forward = false;
           } else if (ctrl && input.key == SDLK_F) {
             if (!noBar && !fullscreen) {

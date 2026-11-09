@@ -136,7 +136,7 @@ $(GEN_DIR)/IconsTable.cpp: $(ICONS) $(BUILD_DIR)/EmbedIcons
 	@$(BUILD_DIR)/EmbedIcons $(ICONS) > $@
 
 # The documents of the browser's own pages (src/gui/ui): each is embedded as a string (EmbedScripts <Name> <file>); the interface's two layouts share a style and a script.
-UI_DOCUMENTS = ChromeUi:chrome.html SideTabsUi:sidetabs-ui.html SidebarUi:sidebar-ui.html NewTab:newtab.html SettingsPage:settings.html UiCommonCss:ui-common.css UiCommonJs:ui-common.js UiMenu:ui-menu.html
+UI_DOCUMENTS = ChromeUi:chrome.html SideTabsUi:sidetabs-ui.html SidebarUi:sidebar-ui.html NewTab:newtab.html SettingsPage:settings.html UiCommonCss:ui-common.css UiCommonJs:ui-common.js UiMenu:ui-menu.html DownloadsPage:downloads.html
 define UI_DOCUMENT_RULE
 $$(GEN_DIR)/$(word 1,$(subst :, ,$(1)))Script.cpp: src/gui/ui/$(word 2,$(subst :, ,$(1))) $$(BUILD_DIR)/EmbedScripts
 	@mkdir -p $$(GEN_DIR)
@@ -283,7 +283,7 @@ $(BUILD_DIR)/WireTest: $(OBJ_DIR)/tests/WireTest.o $(OBJ_DIR)/src/gui/GlWire.o $
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS)
 
-$(BUILD_DIR)/SessionTest: $(OBJ_DIR)/tests/SessionTest.o $(OBJ_DIR)/src/web-api/Storage.o $(OBJ_DIR)/src/gui/Services.o $(OBJ_DIR)/src/gui/Session.o $(OBJ_DIR)/src/gui/Chrome.o $(UI_DOCUMENT_OBJECTS) $(OBJ_DIR)/src/gui/Wire.o $(OBJ_DIR)/tests/support/TestServer.o $(URL_OBJECTS) $(NET_OBJECTS)
+$(BUILD_DIR)/SessionTest: $(OBJ_DIR)/tests/SessionTest.o $(OBJ_DIR)/src/web-api/Storage.o $(OBJ_DIR)/src/gui/Services.o $(OBJ_DIR)/src/gui/Session.o $(OBJ_DIR)/src/gui/Chrome.o $(OBJ_DIR)/src/gui/Settings.o $(UI_DOCUMENT_OBJECTS) $(OBJ_DIR)/src/gui/Wire.o $(OBJ_DIR)/tests/support/TestServer.o $(URL_OBJECTS) $(NET_OBJECTS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS)
 

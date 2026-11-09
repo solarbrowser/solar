@@ -70,6 +70,8 @@
   #dlpanel .bar i { display: block; height: 3px; border-radius: 2px; background: var(--accent); }
   #dlpanel .file button { width: 30px; height: 30px; border-radius: 8px; }
   #dlpanel .file button svg { width: 18px; height: 18px; }
+  #dlpanel .all { width: 100%; height: 34px; margin-top: 4px; border-radius: 8px; color: var(--accent); font-size: 13px; }
+  #dlpanel .all:hover { background: var(--button-hover); }
   #dlpanel .none { padding: 18px 12px; color: var(--dim); text-align: center; }
   #findbar { display: none; position: absolute; z-index: 20; align-items: center; width: 372px; height: 44px; padding: 0 6px 0 12px; border-radius: 12px; background: var(--bar); border: 1px solid var(--bar-edge); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28); }
   #findbar.open { display: flex; }

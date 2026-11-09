@@ -35,6 +35,9 @@ class Settings {
   std::string SearchAddress() const;
   // The address a window starts at when it is not given one: the page of a new tab, or the one the user chose.
   std::string StartAddress() const;
+  // Where downloads are kept (the user's folder, or the system's), and whether each is asked about.
+  std::string DownloadDirectory() const;
+  bool AskWhereToSave() const { return Get("downloadAsk") == "on"; }
   // Whether the window has the system's bar (a setting, and SOLAR_SYSTEM_TITLE=1 which overrides it).
   bool SystemTitleBar() const;
 

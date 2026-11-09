@@ -254,7 +254,10 @@
     if (!downloads.length) html += '<div class="none">Nothing has been downloaded.</div>';
     for (const d of downloads) {
       let meta = "", bar = "", action = "";
-      if (d.state === "running") {
+      if (d.asking) {
+        meta = "Choose where to keep it";
+        action = '<button data-do="dl-cancel\t' + d.id + '" title="Cancel">{{icon:close}}</button>';
+      } else if (d.state === "running") {
         meta = d.total ? bytes(d.received) + " of " + bytes(d.total) : bytes(d.received);
         bar = '<div class="bar"><i style="width:' + (d.total ? Math.min(100, Math.round(100 * d.received / d.total)) : 30) + '%"></i></div>';
         action = '<button data-do="dl-cancel\t' + d.id + '" title="Cancel">{{icon:close}}</button>';
@@ -266,9 +269,10 @@
       }
       html += '<div class="file" data-open="' + (d.state === "done" ? d.id : 0) + '"><div class="info"><div class="name">' + esc(d.name) + '</div><div class="meta' + (d.state === "failed" ? " failed" : "") + '">' + meta + "</div>" + bar + "</div>" + action + "</div>";
     }
+    html += '<button class="all" data-do="downloads-page">Show all downloads</button>';
     dlPanel.innerHTML = html;
     // (How tall the interface is to be while the list is open: the list, and room around it.)
-    dlOverlay = 4 + 44 + Math.max(1, downloads.length) * 56 + 20 + (88 - barTop);
+    dlOverlay = 4 + 44 + Math.max(1, downloads.length) * 56 + 50 + (88 - barTop);
   };
   const placeDownloads = () => {
     // (Under the button, at the right; in the column that has everything, above its foot.)
@@ -286,7 +290,7 @@
   dlPanel.addEventListener("mousedown", (e) => {
     const act = e.target.closest ? e.target.closest("button") : null;
     const file = e.target.closest ? e.target.closest(".file") : null;
-    if (act && act.dataset.do) { send(act.dataset.do); return; }
+    if (act && act.dataset.do) { send(act.dataset.do); if (act.dataset.do === "downloads-page") setDownloads(false); return; }
     if (file && Number(file.dataset.open) > 0) send("dl-open\t" + file.dataset.open);
   });
   dlPanel.addEventListener("click", (e) => {

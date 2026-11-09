@@ -36,6 +36,8 @@ class Session {
     std::function<void(uint32_t host, uint8_t type, std::string bytes, int fd)> message;
     // A renderer is gone, from a thread of the session's. `fatal`: it was the one the window showed, or the window shows none and there is none to come.
     std::function<void(uint32_t host, bool fatal)> gone;
+    // A download is to be asked about: where it is to be kept (the suggestion is a full path); the answer is ChooseDownloadPath. From a thread of the session's.
+    std::function<void(uint32_t id, const std::string& suggested)> askSave;
     // The window shows this renderer now (0: a tab that has no page yet, or none).
     std::function<void(uint32_t host)> shown;
   };
@@ -67,6 +69,10 @@ class Session {
   // Downloads: what was asked for that is a file and not a page is kept in the user's folder of downloads, and the interface is told how far it is. The path of one that is finished (empty for
   // others), one that is ended before it is done, and the list made empty of the ones that are over.
   std::string DownloadPath(uint32_t id) const;
+  // Where the user chose a download is to be kept (empty: it is not wanted).
+  void ChooseDownloadPath(uint32_t id, const std::string& path);
+  // Whether the renderer is the one of the page of the downloads (solar://downloads/).
+  bool IsDownloadsPage(uint32_t host) const;
   void CancelDownload(uint32_t id);
   void ClearDownloads();
   double ActiveZoom() const;
