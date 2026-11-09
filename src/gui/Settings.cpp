@@ -25,7 +25,7 @@ const std::map<std::string, std::string>& Defaults() {
       {"theme", "system"},      // system, light, dark
       {"search", "duckduckgo"},  // the id of a search engine
       {"start", ""},             // an address; empty: the page of a new tab
-      {"tabs", "top"},           // top: the tabs along the top of the window; side: in a column at its side
+      {"tabs", "top"},           // top: the tabs along the top of the window; side: in a column at its side; sidebar: the column has the buttons and the address as well
       {"titlebar", "app"},       // app: the browser draws the buttons of the window; system: the system's bar
   };
   return defaults;
@@ -98,7 +98,7 @@ bool Settings::Set(const std::string& key, const std::string& rawValue) {
     for (const SearchEngine& engine : Engines()) known = known || value == engine.id;
     if (!known) return false;
   } else if (key == "tabs") {
-    if (value != "top" && value != "side") return false;
+    if (value != "top" && value != "side" && value != "sidebar") return false;
   } else if (key == "titlebar") {
     if (value != "app" && value != "system") return false;
   } else if (key == "start") {

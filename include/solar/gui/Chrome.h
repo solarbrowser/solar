@@ -17,12 +17,16 @@ constexpr int kChromeHeight = 88;
 // With the tabs at the side: the bar of the address alone is at the top, and the column of the tabs is this wide at the left.
 constexpr int kToolbarHeight = 48;
 constexpr int kSideWidth = 240;
+// The column that has everything: this wide.
+constexpr int kSidebarWidth = 272;
 // (Of which the strip of the tabs, above the bar of the address.)
 constexpr int kTabStripHeight = 40;
 // The address that document is at (the browser answers a navigation to it for the interface's process, and for no other).
 constexpr const char* kChromeAddress = "solar://chrome/";
 // The same interface with the tabs in a column at the side (src/gui/ui/sidetabs-ui.html): the picture of it is the whole window, clear where the page is.
 constexpr const char* kSideTabsAddress = "solar://sidetabs/";
+// And with everything in the column (the buttons, the address, the tabs; no bar along the top): src/gui/ui/sidebar-ui.html.
+constexpr const char* kSidebarAddress = "solar://sidebar/";
 // The page of a new tab: the browser's own, served from its memory to the renderer that is made for it.
 constexpr const char* kNewTabAddress = "solar://newtab/";
 // The settings page: the browser's own too, a renderer of its own that may ask the browser to change a setting (and nothing else).
@@ -38,6 +42,7 @@ extern const Icon kIcons[];
 // The document of the interface, and of a new tab. In the interface's, {{icon:name}} is the icon of that name.
 std::string ChromeDocument();
 std::string SideTabsDocument();
+std::string SidebarDocument();
 // Whether the address is of one of the two layouts of the interface (the process that has it draws the bar, may ask the browser for things, and its picture has parts that are clear).
 bool IsInterfaceAddress(const std::string& address);
 std::string NewTabDocument();

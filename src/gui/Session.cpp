@@ -95,6 +95,7 @@ struct Session::Impl : std::enable_shared_from_this<Session::Impl> {
     std::vector<std::string> entries;
     int index = -1;
     std::string title;      // what the page is called
+    bool pinned = false;    // kept at the start of the tabs, small
     bool loading = false;   // an address is being gone to
   };
   std::map<uint32_t, TabState> tabs;
@@ -893,7 +894,7 @@ void Session::Impl::StartChrome(const std::string& geometry, const std::string& 
 void Session::Impl::OnChromeNavigate(const std::shared_ptr<Host>& host, const wire::Navigate& request) {
   // The interface's process is given its one document, from the browser's own memory, and nothing else: it has no network to ask for more.
   if (request.url != host->site || !IsInterfaceAddress(request.url)) return NavError(*host, request.id, "the interface may not go anywhere");
-  Serve(*host, request.id, request.url, request.url == kSideTabsAddress ? SideTabsDocument() : ChromeDocument());
+  Serve(*host, request.id, request.url, request.url == kSideTabsAddress ? SideTabsDocument() : request.url == kSidebarAddress ? SidebarDocument() : ChromeDocument());
 }
 
 void Session::Impl::OnInternalNavigate(const std::shared_ptr<Host>& host, const wire::Navigate& request) {
@@ -939,7 +940,7 @@ void Session::Impl::PushState() {
       const TabState& t = tabs.at(id);
       if (!first) json += ",";
       first = false;
-      json += "{\"id\":" + std::to_string(id) + ",\"title\":" + JsonString(t.title) + ",\"url\":" + JsonString(addressOf(t)) + ",\"loading\":" + (t.loading ? "true" : "false") + "}";
+      json += "{\"id\":" + std::to_string(id) + ",\"title\":" + JsonString(t.title) + ",\"url\":" + JsonString(addressOf(t)) + ",\"loading\":" + (t.loading ? "true" : "false") + ",\"pinned\":" + (t.pinned ? "true" : "false") + "}";
     }
     json += "],\"active\":" + std::to_string(active);
     if (const TabState* t = ActiveTab()) {
@@ -1002,8 +1003,38 @@ void Session::MoveTab(uint32_t tab, size_t index) {
       std::lock_guard<std::mutex> lock(impl->mutex);
       const auto where = std::find(impl->order.begin(), impl->order.end(), tab);
       if (where == impl->order.end()) return;
+      const auto found = impl->tabs.find(tab);
+      const bool pinned = found != impl->tabs.end() && found->second.pinned;
+      size_t pins = 0;
+      for (uint32_t other : impl->order) {
+        const auto o = impl->tabs.find(other);
+        if (other != tab && o != impl->tabs.end() && o->second.pinned) ++pins;
+      }
       impl->order.erase(where);
-      impl->order.insert(impl->order.begin() + static_cast<std::ptrdiff_t>(std::min(index, impl->order.size())), tab);
+      // (The pinned tabs are the first ones: a tab stays on its own side of them.)
+      const size_t place = pinned ? std::min(index, pins) : std::clamp(index, pins, impl->order.size());
+      impl->order.insert(impl->order.begin() + static_cast<std::ptrdiff_t>(std::min(place, impl->order.size())), tab);
+    }
+    impl->PushState();
+  });
+}
+
+void Session::PinTab(uint32_t tab, bool pinned) {
+  impl_->services.Post([impl = impl_, tab, pinned] {
+    {
+      std::lock_guard<std::mutex> lock(impl->mutex);
+      const auto found = impl->tabs.find(tab);
+      const auto where = std::find(impl->order.begin(), impl->order.end(), tab);
+      if (found == impl->tabs.end() || where == impl->order.end() || found->second.pinned == pinned) return;
+      found->second.pinned = pinned;
+      impl->order.erase(where);
+      size_t pins = 0;
+      for (uint32_t other : impl->order) {
+        const auto o = impl->tabs.find(other);
+        if (o != impl->tabs.end() && o->second.pinned) ++pins;
+      }
+      // (A tab that is pinned goes after the pinned ones; one that is not goes first among the others.)
+      impl->order.insert(impl->order.begin() + static_cast<std::ptrdiff_t>(pins), tab);
     }
     impl->PushState();
   });

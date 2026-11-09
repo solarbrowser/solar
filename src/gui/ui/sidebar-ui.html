@@ -1,0 +1,77 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Solar</title>
+<style>
+{{include:css}}
+  #side { position: absolute; left: 0; top: 0; bottom: 0; width: 272px; display: flex; flex-direction: column; background: var(--strip); border-right: 1px solid var(--bar-edge); }
+  #sidehead { display: flex; align-items: center; flex: none; height: 44px; padding: 0 8px; gap: 2px; }
+  #sidehead button { width: 32px; height: 32px; border-radius: 8px; }
+  #sidehead button svg { width: 22px; height: 22px; }
+  #drag { flex: 1; align-self: stretch; min-width: 12px; }
+  #controls { display: none; }
+  .controlled #controls { display: flex; gap: 0; }
+  .win { width: 30px; height: 30px; border-radius: 8px; }
+  .win svg { width: 16px; height: 16px; }
+  #wclose:hover { background: #d93a3a; }
+  #wclose:hover svg { color: #fff; }
+  #fieldrow { position: relative; flex: none; padding: 2px 10px 10px; }
+  #field { margin: 0; height: 40px; border-radius: 12px; }
+  #progress { left: 10px; right: 10px; bottom: 6px; width: auto; border-radius: 1px; }
+  #progress.on { width: auto; animation: none; }
+  #tabs { flex: 1; min-height: 0; overflow: hidden; padding: 4px 10px 8px; display: flex; flex-wrap: wrap; align-content: flex-start; }
+  .tab { position: relative; display: flex; align-items: center; width: 100%; height: 38px; margin-bottom: 2px; padding: 0 6px 0 12px; border-radius: 10px; color: var(--dim); }
+  .tab:hover { background: var(--tab-hover); }
+  .tab.active { background: var(--bar); color: var(--text); box-shadow: 0 1px 2px rgba(25, 35, 70, 0.14); }
+  .tab.pinned { width: 80px; height: 48px; margin: 0 8px 8px 0; padding: 0; justify-content: center; background: var(--tab-hover); border-radius: 12px; }
+  .tab.pinned:nth-child(3n) { margin-right: 0; }
+  .tab.pinned.active { background: var(--bar); }
+  .tab.pinned .label, .tab.pinned .close { display: none; }
+  .tab.pinned .icon { margin: 0; width: 22px; height: 22px; }
+  #foot { display: flex; align-items: center; flex: none; height: 52px; padding: 0 10px; gap: 4px; border-top: 1px solid var(--bar-edge); }
+  #foot #newtab { flex: 1; width: auto; height: 36px; border-radius: 10px; justify-content: flex-start; padding: 0 10px; color: var(--dim); }
+  #foot #newtab svg { width: 20px; height: 20px; margin-right: 10px; }
+  #foot #menuButton { width: 36px; height: 36px; border-radius: 10px; margin: 0; }
+  #menu { top: auto; bottom: 56px; left: 10px; right: auto; }
+</style>
+</head>
+<body data-axis="y">
+<div id="side">
+  <div id="sidehead">
+    <button id="back" title="Back" disabled>{{icon:chevron-left}}</button>
+    <button id="forward" title="Forward" disabled>{{icon:chevron-right}}</button>
+    <button id="reload" title="Reload">{{icon:reload}}</button>
+    <div id="drag"></div>
+    <div id="controls">
+      <button class="win" id="wmin" title="Minimize">{{icon:minimize}}</button>
+      <button class="win" id="wmax" title="Maximize">{{icon:crop-square}}</button>
+      <button class="win" id="wclose" title="Close">{{icon:close}}</button>
+    </div>
+  </div>
+  <div id="fieldrow">
+    <div id="field">
+      <span id="site">{{icon:public}}</span>
+      <div id="shown">Search or enter an address</div>
+      <input id="address" type="text" spellcheck="false" autocomplete="off" placeholder="Search or enter an address">
+    </div>
+    <div id="progress"></div>
+  </div>
+  <div id="tabs"></div>
+  <div id="foot">
+    <button id="newtab" title="New tab">{{icon:add}}<span>New tab</span></button>
+    <button id="menuButton" title="Menu">{{icon:hamburger-menu}}</button>
+  </div>
+</div>
+<div id="menu">
+  <button class="item" data-do="newtab">{{icon:add}}<span>New tab</span><small>Ctrl+T</small></button>
+  <hr>
+  <button class="item" data-do="settings">{{icon:settings}}<span>Settings</span></button>
+  <hr>
+  <button class="item" data-do="quit">{{icon:close}}<span>Exit</span></button>
+</div>
+<script>
+{{include:js}}
+</script>
+</body>
+</html>

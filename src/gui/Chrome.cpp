@@ -49,7 +49,9 @@ std::string ChromeDocument() { return ExpandInterface(Joined(solar::web::kScript
 
 std::string SideTabsDocument() { return ExpandInterface(Joined(solar::web::kScriptSideTabsUi)); }
 
-bool IsInterfaceAddress(const std::string& address) { return address == kChromeAddress || address == kSideTabsAddress; }
+std::string SidebarDocument() { return ExpandInterface(Joined(solar::web::kScriptSidebarUi)); }
+
+bool IsInterfaceAddress(const std::string& address) { return address == kChromeAddress || address == kSideTabsAddress || address == kSidebarAddress; }
 
 std::string NewTabDocument() {
   std::string text;

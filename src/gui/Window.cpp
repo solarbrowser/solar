@@ -121,7 +121,9 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
   int overlay = 0;
   // Where the tabs are: along the top (the bar is the top of the window, 88 points), or in a column at the side (the bar of the address is 48 points high at the top, and the column 240 wide at the left; the
   // picture of the interface is then the whole window, clear where the page is).
-  bool sideTabs = Settings::Instance().Get("tabs") == "side";
+  const auto layoutOf = [](const std::string& name) { return name == "sidebar" ? 2 : name == "side" ? 1 : 0; };
+  int layout = layoutOf(Settings::Instance().Get("tabs"));  // 0: the tabs along the top, 1: in a column with the bar at the top, 2: everything in the column
+  bool sideTabs = layout != 0;  // (the interface has the whole window)
   const bool noBar = std::getenv("SOLAR_NO_CHROME") != nullptr;
   // (The window has no bar of the system's by default; the interface draws the buttons of the window then. SOLAR_SYSTEM_TITLE=1 gives it the system's.)
   const bool borderless = (SDL_GetWindowFlags(window) & SDL_WINDOW_BORDERLESS) != 0;
@@ -137,8 +139,9 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
   bool running = true;
 
   // The height of the bar in pixels (what it is in points, at the density of the window).
-  const auto barPoints = [&] { return fullscreen || noBar ? 0 : (sideTabs ? kToolbarHeight : kChromeHeight); };
-  const auto leftPoints = [&] { return fullscreen || noBar || !sideTabs ? 0 : kSideWidth; };
+  const auto chromeVisible = [&] { return !fullscreen && !noBar; };
+  const auto barPoints = [&] { return !chromeVisible() ? 0 : layout == 0 ? kChromeHeight : layout == 1 ? kToolbarHeight : 0; };
+  const auto leftPoints = [&] { return !chromeVisible() ? 0 : layout == 1 ? kSideWidth : layout == 2 ? kSidebarWidth : 0; };
   const auto barPixels = [&] { return static_cast<int>(std::lround(barPoints() * SDL_GetWindowPixelDensity(window))); };
   const auto leftPixels = [&] { return static_cast<int>(std::lround(leftPoints() * SDL_GetWindowPixelDensity(window))); };
   const auto dark = [] { return Settings::Instance().Get("theme") == "dark"; };  // ("system" is light until the system's colours are read)
@@ -157,7 +160,7 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
     }
     return out.bytes();
   };
-  const auto chromeAddress = [&] { return std::string(sideTabs ? kSideTabsAddress : kChromeAddress); };
+  const auto chromeAddress = [&] { return std::string(layout == 2 ? kSidebarAddress : layout == 1 ? kSideTabsAddress : kChromeAddress); };
   const auto compose = [&] {
     if (dark()) SDL_SetRenderDrawColor(renderer, 21, 23, 28, 255);
     else SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
@@ -165,11 +168,12 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
     int outW = 0, outH = 0;
     SDL_GetRenderOutputSize(renderer, &outW, &outH);
     const int bar = std::min(barPixels(), outH), left = std::min(leftPixels(), outW);
+    const bool showChrome = chromeVisible();
     if (texture) {
       const SDL_FRect page{static_cast<float>(left), static_cast<float>(bar), static_cast<float>(outW - left), static_cast<float>(outH - bar)};
       SDL_RenderTexture(renderer, texture, nullptr, &page);
     }
-    if (barTexture && bar > 0) {
+    if (barTexture && showChrome) {
       // (The interface's picture is as large as the interface was told it is: laid over the window from its corner.)
       const float height = sideTabs ? static_cast<float>(outH) : barTextureW > 0 ? static_cast<float>(barTextureH) * static_cast<float>(outW) / static_cast<float>(barTextureW) : static_cast<float>(bar);
       const SDL_FRect top{0, 0, static_cast<float>(outW), height};
@@ -417,9 +421,10 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
                 sendGeometry();
                 present();
               }
-              const bool wantSide = Settings::Instance().Get("tabs") == "side";
-              if (wantSide != sideTabs) {
-                sideTabs = wantSide;
+              const int wantLayout = layoutOf(Settings::Instance().Get("tabs"));
+              if (wantLayout != layout) {
+                layout = wantLayout;
+                sideTabs = layout != 0;
                 overlay = 0;
                 barFocused = false;
                 capture = 0;
@@ -474,6 +479,10 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
           const size_t second = rest.find('\t');
           const int number = std::atoi(rest.c_str()), place = second == std::string::npos ? -1 : std::atoi(rest.c_str() + second + 1);
           if (number > 0 && place >= 0) session.MoveTab(static_cast<uint32_t>(number), static_cast<size_t>(place));
+        } else if (verb == "pin") {
+          const size_t second = rest.find('\t');
+          const int number = std::atoi(rest.c_str());
+          if (number > 0 && second != std::string::npos) session.PinTab(static_cast<uint32_t>(number), rest[second + 1] == '1');
         } else if (verb == "min") SDL_MinimizeWindow(window);
         else if (verb == "max") {
           if (SDL_GetWindowFlags(window) & SDL_WINDOW_MAXIMIZED) SDL_RestoreWindow(window);
@@ -525,6 +534,26 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
           ask.user.code = 2;
           ask.user.data1 = SDL_strdup(step.c_str() + 5);
           SDL_PushEvent(&ask);
+        }
+        else if (step.rfind("rclick:", 0) == 0) {
+          // The right button, at x,y.
+          float x = 0, y = 0;
+          std::sscanf(step.c_str() + 7, "%f,%f", &x, &y);
+          SDL_Event motion{};
+          motion.type = SDL_EVENT_MOUSE_MOTION;
+          motion.motion.x = x;
+          motion.motion.y = y;
+          SDL_PushEvent(&motion);
+          for (const bool down : {true, false}) {
+            SDL_Event press{};
+            press.type = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+            press.button.button = SDL_BUTTON_RIGHT;
+            press.button.down = down;
+            press.button.x = x;
+            press.button.y = y;
+            SDL_PushEvent(&press);
+            std::this_thread::sleep_for(std::chrono::milliseconds(40));
+          }
         }
         else if (step.rfind("click:", 0) == 0 || step.rfind("move:", 0) == 0) {
           // (A click or a move of the pointer, as the user's: x,y in points.)

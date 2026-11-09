@@ -32,7 +32,7 @@
     for (const t of state.tabs) {
       const blank = /^solar:\/\/newtab/.test(t.url) || !t.url;
       const name = nameOf(t);
-      html += '<div class="tab' + (t.id === state.active ? " active" : "") + (t.loading ? " loading" : "") + (blank ? " blank" : "") + '" data-id="' + t.id + '">' + (icons[t.id] && !blank ? '<img class="icon" src="' + icons[t.id] + '">' : '<span class="icon"></span>') + '<span class="label">' + esc(name) + '</span><button class="close" data-id="' + t.id + '">' + cross + "</button></div>";
+      html += '<div class="tab' + (t.id === state.active ? " active" : "") + (t.loading ? " loading" : "") + (blank ? " blank" : "") + (t.pinned ? " pinned" : "") + '" data-id="' + t.id + '" title="' + esc(name).replace(/"/g, "&quot;") + '">' + (icons[t.id] && !blank ? '<img class="icon" src="' + icons[t.id] + '">' : '<span class="icon"></span>') + '<span class="label">' + esc(name) + '</span><button class="close" data-id="' + t.id + '">' + cross + "</button></div>";
     }
     tabsBox.innerHTML = html;
   };
@@ -119,8 +119,9 @@
     const tab = e.target.closest ? e.target.closest(".tab") : null;
     if (close) { send("close\t" + close.dataset.id); return; }
     if (!tab) return;
+    if (e.button === 2) { const at = { clientX: e.clientX, clientY: e.clientY }; setTimeout(() => showTabMenu(tab, at), 0); return; }
     send("activate\t" + tab.dataset.id);
-    if (e.button !== 0) return;
+    if (e.button !== 0 || tab.classList.contains("pinned")) return;
     const els = Array.from(tabsBox.children);
     drag = { id: Number(tab.dataset.id), els, rects: els.map((el) => el.getBoundingClientRect()), from: els.indexOf(tab), to: els.indexOf(tab), at: pointer(e), moved: false };
   });
@@ -138,6 +139,7 @@
     const centre = startOf(mine) + sizeOf(mine) / 2 + d;
     let to = 0;
     drag.rects.forEach((r, j) => { if (j !== drag.from && startOf(r) + sizeOf(r) / 2 < centre) to++; });
+    to = Math.max(to, drag.els.filter((el) => el.classList.contains("pinned")).length);
     drag.to = to;
     drag.els.forEach((el, j) => {
       let shift = 0;
@@ -166,11 +168,35 @@
   // The menu comes down over the page: the browser makes this page taller for as long as it is open.
   const menu = $("menu");
   let menuOpen = false;
+  // The tab's menu (the right button on a tab): pin or unpin it, close it, a new tab.
+  const tabMenu = document.createElement("div");
+  tabMenu.id = "tabmenu";
+  document.body.appendChild(tabMenu);
+  let tabMenuFor = 0, lastOverlay = 0;
+  const syncOverlay = () => {
+    const wanted = menuOpen ? 88 + 4 + 3 * 38 + 2 * 13 + 20 : tabMenuFor ? 150 : 0;
+    if (wanted !== lastOverlay) { lastOverlay = wanted; send("overlay\t" + wanted); }
+  };
+  const hideTabMenu = () => { if (tabMenuFor) { tabMenuFor = 0; tabMenu.className = ""; syncOverlay(); } };
+  const showTabMenu = (tab, e) => {
+    const id = Number(tab.dataset.id), pinned = tab.classList.contains("pinned");
+    tabMenuFor = id;
+    tabMenu.innerHTML = '<button class="item" data-do="pin\t' + id + "\t" + (pinned ? "0" : "1") + '"><span>' + (pinned ? "Unpin tab" : "Pin tab") + '</span></button><button class="item" data-do="close\t' + id + '"><span>Close tab</span></button><hr><button class="item" data-do="newtab"><span>New tab</span></button>';
+    tabMenu.setAttribute("style", "left:" + Math.max(4, Math.min(e.clientX, window.innerWidth - 196)) + "px;top:" + (e.clientY + 6) + "px");
+    tabMenu.className = "open";
+    syncOverlay();
+  };
+  tabMenu.addEventListener("click", (e) => {
+    const item = e.target.closest ? e.target.closest(".item") : null;
+    if (!item) return;
+    hideTabMenu();
+    send(item.dataset.do);
+  });
   const setMenu = (open) => {
     if (open === menuOpen) return;
     menuOpen = open;
     menu.className = open ? "open" : "";
-    send("overlay\t" + (open ? 88 + 4 + 3 * 38 + 2 * 13 + 20 : 0));
+    syncOverlay();
   };
   $("menuButton").addEventListener("click", () => setMenu(!menuOpen));
   menu.addEventListener("click", (e) => {
@@ -181,8 +207,9 @@
   });
   document.addEventListener("mousedown", (e) => {
     if (menuOpen && !(e.target.closest && (e.target.closest("#menu") || e.target.closest("#menuButton")))) setMenu(false);
+    if (tabMenuFor && !(e.target.closest && e.target.closest("#tabmenu"))) hideTabMenu();
   });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && menuOpen) setMenu(false); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { if (menuOpen) setMenu(false); hideTabMenu(); } });
   $("wmin").addEventListener("click", () => send("min"));
   $("wmax").addEventListener("click", () => send("max"));
   const maxIcon = '{{icon:crop-square}}', restoreIcon = '{{icon:image-filter-none}}';

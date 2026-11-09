@@ -2713,6 +2713,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
             bool proceed = true;
             document->focusByKeyboard = false;
             solar::html::RunInRealm(*realm, [&] { proceed = solar::html::DispatchPointer(document, pressTarget, "mousedown", event.button.x, event.button.y, pressButton, 1 << pressButton); });
+            dirty = true;  // (a script may have changed the page for any button: the right one too)
             // (A script may have taken the element away.)
             if (proceed && event.button.button == SDL_BUTTON_LEFT && document->hoverElement) solar::dom::SetPressedElement(document, document->hoverElement);
             if (proceed && event.button.button == SDL_BUTTON_LEFT && pressTarget) {

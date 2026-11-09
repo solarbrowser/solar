@@ -10,6 +10,9 @@
   .tab { position: relative; display: flex; align-items: center; flex: 0 1 220px; min-width: 44px; width: 220px; height: 34px; padding: 0 6px 0 12px; border-radius: 10px 10px 0 0; color: var(--dim); }
   .tab:hover { background: var(--tab-hover); }
   .tab.active { background: var(--bar); color: var(--text); }
+  .tab.pinned { flex: none; width: 40px; min-width: 40px; padding: 0; justify-content: center; }
+  .tab.pinned .label, .tab.pinned .close { display: none; }
+  .tab.pinned .icon { margin: 0; }
   #newtab { width: 30px; height: 30px; margin: 0 4px 3px 4px; border-radius: 15px; }
   #newtab svg { width: 20px; height: 20px; }
   #drag { flex: 1; align-self: stretch; min-width: 20px; }

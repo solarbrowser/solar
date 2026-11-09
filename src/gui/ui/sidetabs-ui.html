@@ -10,12 +10,19 @@
   #drag { flex: 1; align-self: stretch; min-width: 20px; }
   #newtab { width: 32px; height: 32px; border-radius: 8px; }
   #newtab svg { width: 20px; height: 20px; }
-  #tabs { flex: 1; min-height: 0; overflow: hidden; padding: 4px 8px 8px; }
+  #tabs { flex: 1; min-height: 0; overflow: hidden; padding: 4px 8px 8px; display: flex; flex-wrap: wrap; align-content: flex-start; }
+  .tab { width: 100%; }
+  .tab.pinned { width: 68px; height: 44px; margin: 0 6px 6px 0; padding: 0; justify-content: center; background: var(--tab-hover); }
+  .tab.pinned:nth-child(3n) { margin-right: 0; }
+  .tab.pinned.active { background: var(--bar); }
+  .tab.pinned .label, .tab.pinned .close { display: none; }
+  .tab.pinned .icon { margin: 0; width: 20px; height: 20px; }
   .tab { position: relative; display: flex; align-items: center; height: 36px; margin-bottom: 2px; padding: 0 6px 0 10px; border-radius: 8px; color: var(--dim); }
   .tab:hover { background: var(--tab-hover); }
   .tab.active { background: var(--bar); color: var(--text); box-shadow: 0 1px 2px rgba(25, 35, 70, 0.14); }
   #bar { position: absolute; left: 240px; right: 0; top: 0; padding-right: 0; }
   #menu { top: 52px; }
+  #progress { position: absolute; left: 0; right: 0; top: 47px; bottom: auto; }
   #controls { display: none; margin-left: 4px; }
   .controlled #controls { display: flex; }
   .win { width: 46px; height: 47px; border-radius: 0; }
@@ -47,8 +54,8 @@
     <button class="win" id="wmax" title="Maximize">{{icon:crop-square}}</button>
     <button class="win" id="wclose" title="Close">{{icon:close}}</button>
   </div>
-  <div id="progress"></div>
 </div>
+<div id="progress"></div>
 <div id="menu">
   <button class="item" data-do="newtab">{{icon:add}}<span>New tab</span><small>Ctrl+T</small></button>
   <hr>

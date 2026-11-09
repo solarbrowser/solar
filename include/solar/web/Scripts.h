@@ -17,6 +17,7 @@ extern const char* const kScriptFontLoading[];
 extern const char* const kScriptLayout[];
 extern const char* const kScriptAnimations[];
 extern const char* const kScriptWebApi[];  // (src/web-api/js)
+extern const char* const kScriptSidebarUi[];  // (src/gui/ui/sidebar-ui.html)
 extern const char* const kScriptSideTabsUi[];  // (src/gui/ui/sidetabs-ui.html)
 extern const char* const kScriptUiCommonCss[];  // (src/gui/ui/ui-common.css, in both layouts of the interface)
 extern const char* const kScriptUiCommonJs[];  // (src/gui/ui/ui-common.js)
