@@ -89,6 +89,7 @@
       if (t) { icons[t.id] = next.icon.data; iconSite[t.id] = siteOf(t.url); renderTabs(); }
       return;
     }
+    if (next.downloads && globalThis.__solarDownloads) globalThis.__solarDownloads(next.downloads);
     const before = state.active;
     state = Object.assign(state, next);
     render();
@@ -182,11 +183,11 @@
   let tabMenuFor = 0, lastOverlay = "0";
   const barTop = Number(document.body.dataset.top || 88);
   const FIND_WIDTH = 372;
-  let findOpen = false;
+  let findOpen = false, dlOpen = false, dlOverlay = 0;
   const syncOverlay = () => {
     // (A menu has the window; the find box has only the place it is in.)
-    let wanted = menuOpen ? 88 + 4 + 3 * 38 + 2 * 13 + 20 : tabMenuFor ? 150 : findOpen ? 62 : 0;
-    const place = !menuOpen && !tabMenuFor && findOpen ? "\t" + Math.max(0, window.innerWidth - FIND_WIDTH - 16) + "\t" + (window.innerWidth - 8) : "";
+    let wanted = menuOpen ? 88 + 4 + 3 * 38 + 2 * 13 + 20 : tabMenuFor ? 150 : dlOpen ? dlOverlay : findOpen ? 62 : 0;
+    const place = !menuOpen && !tabMenuFor && !dlOpen && findOpen ? "\t" + Math.max(0, window.innerWidth - FIND_WIDTH - 16) + "\t" + (window.innerWidth - 8) : "";
     const key = wanted + place;
     if (key !== lastOverlay) { lastOverlay = key; send("overlay\t" + wanted + place); }
   };
@@ -240,6 +241,67 @@
   findBar.querySelector(".next").addEventListener("click", () => findAsk(1));
   findBar.querySelector(".shut").addEventListener("click", closeFind);
   globalThis.__solarFindUi = { open: () => setTimeout(openFind, 0), show: showFind, close: closeFind, isOpen: () => findOpen };
+  // The downloads: a button that is there while there is something in the list, and the list (a file is opened by pressing it, a download that goes on is stopped by its cross).
+  const dlPanel = document.createElement("div");
+  dlPanel.id = "dlpanel";
+  document.body.appendChild(dlPanel);
+  const dlButton = $("dlbutton");
+  let downloads = [], seenDownload = 0;
+  const bytes = (n) => (n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(0) + " KB" : n < 1073741824 ? (n / 1048576).toFixed(1) + " MB" : (n / 1073741824).toFixed(2) + " GB");
+  const renderDownloads = () => {
+    let html = '<div class="head"><span>Downloads</span>' + (downloads.some((d) => d.state !== "running") ? '<button data-do="dl-clear">Clear</button>' : "") + "</div>";
+    if (!downloads.length) html += '<div class="none">Nothing has been downloaded.</div>';
+    for (const d of downloads) {
+      let meta = "", bar = "", action = "";
+      if (d.state === "running") {
+        meta = d.total ? bytes(d.received) + " of " + bytes(d.total) : bytes(d.received);
+        bar = '<div class="bar"><i style="width:' + (d.total ? Math.min(100, Math.round(100 * d.received / d.total)) : 30) + '%"></i></div>';
+        action = '<button data-do="dl-cancel\t' + d.id + '" title="Cancel">{{icon:close}}</button>';
+      } else if (d.state === "done") {
+        meta = bytes(d.total || d.received);
+        action = '<button data-do="dl-folder\t' + d.id + '" title="Show in folder">{{icon:open-in-new}}</button>';
+      } else {
+        meta = d.state === "failed" ? "Failed" : "Cancelled";
+      }
+      html += '<div class="file" data-open="' + (d.state === "done" ? d.id : 0) + '"><div class="info"><div class="name">' + esc(d.name) + '</div><div class="meta' + (d.state === "failed" ? " failed" : "") + '">' + meta + "</div>" + bar + "</div>" + action + "</div>";
+    }
+    dlPanel.innerHTML = html;
+    // (How tall the interface is to be while the list is open: the list, and room around it.)
+    dlOverlay = 4 + 44 + Math.max(1, downloads.length) * 56 + 20 + (88 - barTop);
+  };
+  const placeDownloads = () => {
+    // (Under the button, at the right; in the column that has everything, above its foot.)
+    if (barTop === 0) dlPanel.setAttribute("style", "left:10px;bottom:56px");
+    else dlPanel.setAttribute("style", "right:10px;top:" + (barTop + 4) + "px");
+  };
+  const setDownloads = (open) => {
+    if (open === dlOpen) return;
+    dlOpen = open;
+    dlPanel.className = open ? "open" : "";
+    if (open) { renderDownloads(); placeDownloads(); }
+    syncOverlay();
+  };
+  dlButton.addEventListener("click", () => setDownloads(!dlOpen));
+  dlPanel.addEventListener("mousedown", (e) => {
+    const act = e.target.closest ? e.target.closest("button") : null;
+    const file = e.target.closest ? e.target.closest(".file") : null;
+    if (act && act.dataset.do) { send(act.dataset.do); return; }
+    if (file && Number(file.dataset.open) > 0) send("dl-open\t" + file.dataset.open);
+  });
+  dlPanel.addEventListener("click", (e) => {
+    const act = e.target.closest ? e.target.closest("button") : null;
+    if (act && act.dataset.do === "dl-clear") send("dl-clear");
+  });
+  globalThis.__solarDownloads = (list) => {
+    downloads = list;
+    const running = list.some((d) => d.state === "running");
+    dlButton.className = list.length ? "on" + (running ? " busy" : "") : "";
+    // A download that is new has its list shown.
+    const newest = list.reduce((m, d) => Math.max(m, d.id), 0);
+    if (newest > seenDownload) { seenDownload = newest; setTimeout(() => setDownloads(true), 0); }
+    if (dlOpen) renderDownloads();
+    if (dlOpen && !list.length) setTimeout(() => setDownloads(false), 0);
+  };
   const setMenu = (open) => {
     if (open === menuOpen) return;
     menuOpen = open;
@@ -256,8 +318,9 @@
   document.addEventListener("mousedown", (e) => {
     if (menuOpen && !(e.target.closest && (e.target.closest("#menu") || e.target.closest("#menuButton")))) setMenu(false);
     if (tabMenuFor && !(e.target.closest && e.target.closest("#tabmenu"))) hideTabMenu();
+    if (dlOpen && !(e.target.closest && (e.target.closest("#dlpanel") || e.target.closest("#dlbutton")))) setDownloads(false);
   });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { if (menuOpen) setMenu(false); hideTabMenu(); } });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { if (menuOpen) setMenu(false); hideTabMenu(); setDownloads(false); } });
   $("wmin").addEventListener("click", () => send("min"));
   $("wmax").addEventListener("click", () => send("max"));
   // The buttons of the window are drawn alike (one line, one weight), not taken from the set of icons, whose signs for them are of different weights.

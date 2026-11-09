@@ -7,6 +7,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <map>
@@ -310,6 +311,8 @@ int main() {
         } else if (line.find("/landed") != std::string::npos) {
           ++redirectedHits;
           TestServer::SendAll(client, Response("200 OK", std::string(isB ? "B" : "A") + " landed", "Content-Type: text/html\r\n"));
+        } else if (line.find("/file.zip") != std::string::npos) {
+          TestServer::SendAll(client, Response("200 OK", std::string(5000, 'z'), "Content-Type: application/zip\r\nContent-Disposition: attachment; filename=\"my:file.zip\"\r\n"));
         } else if (line.find("/same-redirect") != std::string::npos) {
           TestServer::SendAll(client, Response("302 Found", "", "Location: /plain\r\n"));
         } else {
@@ -514,6 +517,39 @@ int main() {
     std::remove(path.c_str());
   }
 
+  // A file that is asked for is kept, and the page stays.
+  {
+    const std::filesystem::path directory = std::filesystem::temp_directory_path() / "solar-session-downloads";
+    std::filesystem::remove_all(directory);
+    setenv("SOLAR_DOWNLOAD_DIR", directory.c_str(), 1);
+    gui::BrowserServices services;
+    World world;
+    gui::Session::Events events;
+    events.message = [&](uint32_t host, uint8_t type, std::string bytes, int fd) {
+      if (fd >= 0) ::close(fd);
+      world.session->Handle(host, type, bytes);
+    };
+    events.gone = [](uint32_t, bool) {};
+    events.shown = [](uint32_t) {};
+    world.session = std::make_unique<gui::Session>(services, world.Launcher(), std::move(events), false);
+    gui::Session& session = *world.session;
+    session.Open(A + "/doc");
+    Fake* one = world.FakeStartedFor(0);
+    Check("(download) the page", one && one->Ended(1) && world.WaitCurrent(one));
+    const uint32_t file = one->Go(A + "/file.zip");
+    Check("(download) the page that asked is told the navigation is elsewhere", one->Wait([&] { return one->heard[file].transferred; }));
+    std::string path;
+    for (int i = 0; i < 150 && path.empty(); ++i) {
+      path = session.DownloadPath(1);
+      if (path.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    Check("(download) it is kept in the folder, under a name with nothing in it that is a path", !path.empty() && std::filesystem::path(path).parent_path() == directory && std::filesystem::path(path).filename() == "my_file.zip", path);
+    Check("(download) with all that was sent", !path.empty() && std::filesystem::file_size(path) == 5000);
+    Check("(download) the page stays, and no renderer was made for the file", session.current() == 1 && world.started.size() == 1);
+    session.ClearDownloads();
+    unsetenv("SOLAR_DOWNLOAD_DIR");
+    std::filesystem::remove_all(directory);
+  }
   // A renderer that cannot be started or that goes.
   {
     gui::BrowserServices services;  // (it outlives the session)

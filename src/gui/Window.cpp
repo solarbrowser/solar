@@ -10,7 +10,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cmath>
+#include <filesystem>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -454,6 +456,25 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
         else if (verb == "reload") session.Reload();
         else if (verb == "focus") barFocused = rest == "1";
         else if (verb == "zoom") session.Zoom(std::atoi(rest.c_str()));
+        else if (verb == "dl-open" || verb == "dl-folder") {
+          // A file that was downloaded is opened by the system's program for it, or the folder it is in is shown.
+          const int number = std::atoi(rest.c_str());
+          const std::string path = number > 0 ? session.DownloadPath(static_cast<uint32_t>(number)) : "";
+          if (!path.empty()) {
+            std::string target = verb == "dl-open" ? path : std::filesystem::path(path).parent_path().string();
+            std::string encoded = "file://";
+            for (unsigned char c : target) {
+              if (std::isalnum(c) || c == '/' || c == '-' || c == '_' || c == '.' || c == '~') encoded += static_cast<char>(c);
+              else {
+                char hex[4];
+                std::snprintf(hex, sizeof hex, "%%%02X", c);
+                encoded += hex;
+              }
+            }
+            SDL_OpenURL(encoded.c_str());
+          }
+        } else if (verb == "dl-cancel") session.CancelDownload(static_cast<uint32_t>(std::max(0, std::atoi(rest.c_str()))));
+        else if (verb == "dl-clear") session.ClearDownloads();
         else if (verb == "find") {
           // find\t<words>\t<what>: the shown page is asked to find them (what: 0 from the start, 1 the next, 2 the one before, 3 stop).
           const size_t second = rest.rfind('\t');

@@ -10,7 +10,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <condition_variable>
+#include <filesystem>
 #include <cstdio>
 #include <deque>
 #include <future>
@@ -69,6 +71,121 @@ std::string NormalAddress(const std::string& text) {
   return parsed ? url::Serialize(*parsed) : text;
 }
 
+
+// Where files are kept that are downloaded: the user's folder for them.
+std::string DownloadDirectory() {
+  namespace fs = std::filesystem;
+  if (const char* forced = std::getenv("SOLAR_DOWNLOAD_DIR")) return forced;
+#if defined(_WIN32)
+  if (const char* profile = std::getenv("USERPROFILE")) return (fs::path(profile) / "Downloads").string();
+#else
+  const char* home = std::getenv("HOME");
+  if (!home) return "";
+#if !defined(__APPLE__)
+  // (The folder the user's desktop says: a line XDG_DOWNLOAD_DIR="$HOME/Downloads" in ~/.config/user-dirs.dirs.)
+  std::ifstream dirs((std::getenv("XDG_CONFIG_HOME") ? std::string(std::getenv("XDG_CONFIG_HOME")) : std::string(home) + "/.config") + "/user-dirs.dirs");
+  std::string line;
+  while (std::getline(dirs, line)) {
+    if (line.rfind("XDG_DOWNLOAD_DIR=", 0) != 0) continue;
+    std::string value = line.substr(17);
+    if (value.size() >= 2 && value.front() == '"' && value.back() == '"') value = value.substr(1, value.size() - 2);
+    const std::string marker = "$HOME";
+    if (value.rfind(marker, 0) == 0) value = std::string(home) + value.substr(marker.size());
+    if (!value.empty() && value[0] == '/') return value;
+  }
+#endif
+  return (fs::path(home) / "Downloads").string();
+#endif
+  return "";
+}
+
+// The name a download is kept under: the one the server says, or the last part of the address; with nothing in it that is a path, a control, or a dot to start with.
+std::string DownloadName(const std::string& disposition, const url::Url& address) {
+  std::string name;
+  const auto unescape = [](const std::string& text) {
+    std::string out;
+    for (size_t i = 0; i < text.size(); ++i) {
+      if (text[i] == '%' && i + 2 < text.size() + 0 && std::isxdigit(static_cast<unsigned char>(text[i + 1])) && std::isxdigit(static_cast<unsigned char>(text[i + 2]))) {
+        out += static_cast<char>(std::stoi(text.substr(i + 1, 2), nullptr, 16));
+        i += 2;
+      } else {
+        out += text[i];
+      }
+    }
+    return out;
+  };
+  const size_t star = disposition.find("filename*=");
+  if (star != std::string::npos) {
+    std::string value = disposition.substr(star + 10);
+    value = value.substr(0, value.find(';'));
+    const size_t quote = value.find("''");
+    name = unescape(quote == std::string::npos ? value : value.substr(quote + 2));
+  }
+  if (name.empty()) {
+    const size_t plain = disposition.find("filename=");
+    if (plain != std::string::npos) {
+      std::string value = disposition.substr(plain + 9);
+      if (!value.empty() && value[0] == '"') {
+        const size_t end = value.find('"', 1);
+        value = value.substr(1, end == std::string::npos ? std::string::npos : end - 1);
+      } else {
+        value = value.substr(0, value.find(';'));
+      }
+      name = value;
+    }
+  }
+  if (name.empty()) {
+    const std::string path = address.path.empty() ? "" : url::Serialize(address);
+    const size_t query = path.find_first_of("?#");
+    const std::string clean = path.substr(0, query);
+    const size_t slash = clean.rfind('/');
+    name = unescape(slash == std::string::npos ? clean : clean.substr(slash + 1));
+  }
+  std::string safe;
+  for (unsigned char c : name) {
+    if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|' || c < 0x20) safe += '_';
+    else safe += static_cast<char>(c);
+  }
+  while (!safe.empty() && (safe.front() == '.' || safe.front() == ' ')) safe.erase(safe.begin());
+  if (safe.size() > 150) safe.resize(150);
+  return safe.empty() ? "download" : safe;
+}
+
+// A file that is not there yet: name, name (1), name (2) ...
+std::string FreePath(const std::string& directory, const std::string& name) {
+  namespace fs = std::filesystem;
+  std::error_code error;
+  const fs::path base = fs::path(directory) / name;
+  if (!fs::exists(base, error)) return base.string();
+  const std::string stem = base.stem().string(), extension = base.extension().string();
+  for (int i = 1; i < 10000; ++i) {
+    const fs::path candidate = fs::path(directory) / (stem + " (" + std::to_string(i) + ")" + extension);
+    if (!fs::exists(candidate, error)) return candidate.string();
+  }
+  return base.string();
+}
+
+// What is shown as a page and what is a file to keep: an attachment is kept; so is what is not text, a picture, a sound, a film or one of the few kinds of documents that are read as pages.
+bool IsDownload(const net::HttpResponseHead& head) {
+  if (head.status < 200 || head.status >= 300 || head.status == 204) return false;
+  const auto disposition = head.Header("content-disposition");
+  if (disposition) {
+    std::string lower(*disposition);
+    for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (lower.rfind("attachment", 0) == 0) return true;
+  }
+  const auto typeHeader = head.Header("content-type");
+  if (!typeHeader) return false;
+  std::string type(*typeHeader);
+  type = type.substr(0, type.find(';'));
+  for (char& c : type) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  while (!type.empty() && type.back() == ' ') type.pop_back();
+  if (type.empty() || type.rfind("text/", 0) == 0 || type.rfind("image/", 0) == 0 || type.rfind("audio/", 0) == 0 || type.rfind("video/", 0) == 0) return false;
+  for (const char* page : {"application/xhtml+xml", "application/xml", "application/json", "application/javascript", "application/x-javascript", "application/ecmascript", "application/rss+xml", "application/atom+xml", "application/ld+json", "application/manifest+json"}) {
+    if (type == page) return false;
+  }
+  return type.rfind("application/", 0) == 0 || type.rfind("font/", 0) == 0 || type.rfind("model/", 0) == 0 || type.rfind("multipart/", 0) == 0;
+}
 }  // namespace
 
 struct Navigation;
@@ -125,6 +242,15 @@ struct Session::Impl : std::enable_shared_from_this<Session::Impl> {
     bool loading = false;   // an address is being gone to
   };
   std::map<uint32_t, TabState> tabs;
+  struct Download {
+    uint32_t id = 0;
+    std::string url, name, path;
+    uint64_t received = 0, total = 0;
+    enum class State { Running, Done, Failed, Cancelled } state = State::Running;
+    uint64_t serial = 0;  // of the navigation that is bringing it
+  };
+  std::vector<Download> downloads;  // (under the lock; the oldest first)
+  uint32_t nextDownload = 1;
   std::map<std::string, double> siteZoom;  // what the user chose for a site (its host), for the pages of it
   std::vector<uint32_t> order;  // the tabs, as they are shown from left to right
   uint32_t active = 0;
@@ -199,6 +325,10 @@ struct Session::Impl : std::enable_shared_from_this<Session::Impl> {
   void SetLoading(uint32_t tab, bool value);
   void ApplySiteZoom(const std::shared_ptr<Host>& host);
   void ChangeZoom(int step);
+  // The tab of a renderer that was made for an address that turned out to be a file has no page: it is given the page of a new tab (or, if it has one, let be).
+  void AbandonPending(const std::shared_ptr<Host>& host);
+  void FinishDownload(uint32_t id, Download::State state);
+  void DownloadProgress(uint32_t id, uint64_t received);
   void PushState();
   uint32_t NewTab(const std::string& address, bool activate);
   // The icons of the pages: asked for by the renderer of a tab, fetched here, kept, and given to the interface for the tab.
@@ -237,6 +367,11 @@ struct Navigation : net::FetchHandler {
   wire::Navigate::Kind kind = wire::Navigate::Kind::New;
   int entry = -1;
   bool bodySent = false, ended = false, alive = true;
+  // When the response is a file: where it is going, and the download that is it.
+  std::ofstream file;
+  uint32_t downloadId = 0;
+  uint64_t received = 0;
+  std::chrono::steady_clock::time_point lastPush{};
 
   struct Event {
     enum class Type { Head, Body, End, Error } type;
@@ -246,6 +381,7 @@ struct Navigation : net::FetchHandler {
   std::vector<Event> buffered;
 
   void Emit(Event event) {
+    if (downloadId) return;  // (a file is not the renderer's)
     if (!target) {
       buffered.push_back(std::move(event));
       return;
@@ -299,6 +435,10 @@ struct Navigation : net::FetchHandler {
   void OnResponseHead(const net::HttpResponseHead& head, const url::Url& finalUrl) override {
     std::string type;
     if (auto value = head.Header("content-type")) type = std::string(*value);
+    if (!downloadId && IsDownload(head)) {
+      BeginDownload(head, finalUrl);
+      return;
+    }
     Event event{Event::Type::Head, head.status, type, url::Serialize(finalUrl)};
     if (target && SiteFor(finalUrl) != target->site) {
       // The server sent the page to another site: the renderer does not have the document; the one that is made for that site does.
@@ -319,19 +459,51 @@ struct Navigation : net::FetchHandler {
     if (target) target->tab_->AllowOrigin(url::SerializeOrigin(finalUrl));
     Emit(std::move(event));
   }
+  void BeginDownload(const net::HttpResponseHead& head, const url::Url& finalUrl);
   void OnBody(std::span<const uint8_t> data) override {
+    if (downloadId) {
+      file.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+      received += data.size();
+      const auto now = std::chrono::steady_clock::now();
+      if (!file) {
+        handle.Cancel();
+        session->FinishDownload(downloadId, Session::Impl::Download::State::Failed);
+        downloadId = 0;
+        Finish();
+        return;
+      }
+      if (now - lastPush > std::chrono::milliseconds(150)) {
+        lastPush = now;
+        session->DownloadProgress(downloadId, received);
+      }
+      return;
+    }
     bodySent = true;
     Emit(Event{Event::Type::Body, 0, std::string(reinterpret_cast<const char*>(data.data()), data.size()), ""});
   }
   void OnEnd() override {
+    if (downloadId) {
+      file.close();
+      session->DownloadProgress(downloadId, received);
+      session->FinishDownload(downloadId, Session::Impl::Download::State::Done);
+      Finish();
+      return;
+    }
     Emit(Event{Event::Type::End, 0, "", ""});
     Finish();
   }
   void OnError(std::string_view message) override {
+    if (downloadId) {
+      file.close();
+      session->FinishDownload(downloadId, Session::Impl::Download::State::Failed);
+      Finish();
+      return;
+    }
     Emit(Event{Event::Type::Error, 0, std::string(message), ""});
     Finish();
   }
   bool OnRestart() override {
+    if (downloadId) return false;  // (what was written is not taken back)
     // (Asked for again from the start, as long as the renderer has none of the body to take back.)
     if (bodySent || !target) return false;
     net::ipc::Writer out;
@@ -898,6 +1070,97 @@ void Session::Impl::OnHistoryGo(const std::shared_ptr<Host>& host, int delta) {
   GoToEntry(host->tab, target);
 }
 
+// ---- Downloads ----
+
+void Navigation::BeginDownload(const net::HttpResponseHead& head, const url::Url& finalUrl) {
+  const std::string directory = DownloadDirectory();
+  std::error_code error;
+  std::filesystem::create_directories(directory, error);
+  const std::string disposition = head.Header("content-disposition") ? std::string(*head.Header("content-disposition")) : "";
+  const std::string path = FreePath(directory, DownloadName(disposition, finalUrl));
+  file.open(path, std::ios::binary | std::ios::trunc);
+  Session::Impl::Download record;
+  record.url = url::Serialize(finalUrl);
+  record.name = std::filesystem::path(path).filename().string();
+  record.path = path;
+  record.serial = serial;
+  if (const auto length = head.Header("content-length")) record.total = static_cast<uint64_t>(std::strtoull(std::string(*length).c_str(), nullptr, 10));
+  if (!file) {
+    record.state = Session::Impl::Download::State::Failed;
+  }
+  {
+    std::lock_guard<std::mutex> lock(session->mutex);
+    record.id = session->nextDownload++;
+    downloadId = record.id;
+    session->downloads.push_back(record);
+    if (session->downloads.size() > 30) session->downloads.erase(session->downloads.begin());
+  }
+  // The page that asked stays as it is; a renderer that was made for the address, and has no page, is let go of.
+  if (target) {
+    std::shared_ptr<Host> from = target;
+    target = nullptr;
+    net::ipc::Writer out;
+    out.U32(id);
+    session->SendTo(*from, wire::ToRenderer::NavTransferred, out.bytes());
+    from->active.erase(id);
+    from->infos.erase(id);
+    session->AbandonPending(from);
+  }
+  session->PushState();
+  if (!file) {
+    handle.Cancel();
+    Finish();
+  }
+}
+
+void Session::Impl::AbandonPending(const std::shared_ptr<Host>& host) {
+  if (host->gone) return;
+  if (host->current) {
+    // (The page stays: the address was a file.)
+    SetLoading(host->tab, false);
+    return;
+  }
+  const uint32_t tab = host->tab;
+  Retire(host);
+  bool empty = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    const auto found = tabs.find(tab);
+    empty = found != tabs.end() && found->second.current == 0 && found->second.pending == 0;
+  }
+  if (!empty) {
+    SetLoading(tab, false);
+    return;
+  }
+  // (A tab that was made for a file has no page: it has the page of a new tab.)
+  Host::Expected expected;
+  expected.url = kNewTabAddress;
+  Transfer(tab, nullptr, 0, std::move(expected));
+}
+
+void Session::Impl::DownloadProgress(uint32_t id, uint64_t received) {
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    for (Download& d : downloads) {
+      if (d.id == id) d.received = received;
+    }
+  }
+  PushState();
+}
+
+void Session::Impl::FinishDownload(uint32_t id, Download::State state) {
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    for (Download& d : downloads) {
+      if (d.id == id) {
+        d.state = state;
+        if (state == Download::State::Done && d.total == 0) d.total = d.received;
+      }
+    }
+  }
+  PushState();
+}
+
 // ---- The interface ----
 
 namespace {
@@ -1037,6 +1300,19 @@ void Session::Impl::PushState() {
     if (const TabState* t = ActiveTab()) {
       json += ",\"url\":" + JsonString(addressOf(*t)) + ",\"title\":" + JsonString(t->title) + ",\"back\":" + (t->index > 0 ? "true" : "false") + ",\"forward\":" + (t->index + 1 < static_cast<int>(t->entries.size()) ? "true" : "false") +
               ",\"loading\":" + (t->loading ? "true" : "false");
+    }
+    {
+      // The downloads, the newest first (the last eight).
+      json += ",\"downloads\":[";
+      bool firstDownload = true;
+      int shownCount = 0;
+      for (auto it = downloads.rbegin(); it != downloads.rend() && shownCount < 8; ++it, ++shownCount) {
+        if (!firstDownload) json += ",";
+        firstDownload = false;
+        const char* state = it->state == Download::State::Running ? "running" : it->state == Download::State::Done ? "done" : it->state == Download::State::Failed ? "failed" : "cancelled";
+        json += "{\"id\":" + std::to_string(it->id) + ",\"name\":" + JsonString(it->name) + ",\"received\":" + std::to_string(it->received) + ",\"total\":" + std::to_string(it->total) + ",\"state\":\"" + state + "\"}";
+      }
+      json += "]";
     }
     if (const TabState* t = ActiveTab()) json += ",\"zoom\":" + std::to_string(static_cast<int>(std::lround(t->zoom * 100)));
     json += std::string(",\"controls\":") + (windowControls ? "true" : "false") + ",\"maximized\":" + (maximized ? "true" : "false") + "}";
@@ -1241,6 +1517,47 @@ void Session::SetWindowFlags(bool controls, bool maximized) {
 }
 
 void Session::PushState() { impl_->services.Post([impl = impl_] { impl->PushState(); }); }
+
+std::string Session::DownloadPath(uint32_t id) const {
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  for (const Impl::Download& d : impl_->downloads) {
+    if (d.id == id && d.state == Impl::Download::State::Done) return d.path;
+  }
+  return "";
+}
+
+void Session::CancelDownload(uint32_t id) {
+  impl_->services.Post([impl = impl_, id] {
+    uint64_t serial = 0;
+    {
+      std::lock_guard<std::mutex> lock(impl->mutex);
+      for (Impl::Download& d : impl->downloads) {
+        if (d.id == id && d.state == Impl::Download::State::Running) {
+          d.state = Impl::Download::State::Cancelled;
+          serial = d.serial;
+        }
+      }
+    }
+    const auto found = impl->navigations.find(serial);
+    if (serial && found != impl->navigations.end()) {
+      found->second->handle.Cancel();
+      found->second->file.close();
+      found->second->downloadId = 0;
+      impl->navigations.erase(found);
+    }
+    impl->PushState();
+  });
+}
+
+void Session::ClearDownloads() {
+  impl_->services.Post([impl = impl_] {
+    {
+      std::lock_guard<std::mutex> lock(impl->mutex);
+      impl->downloads.erase(std::remove_if(impl->downloads.begin(), impl->downloads.end(), [](const Impl::Download& d) { return d.state != Impl::Download::State::Running; }), impl->downloads.end());
+    }
+    impl->PushState();
+  });
+}
 
 bool Session::Send(uint32_t host, wire::ToRenderer type, const std::string& bytes) {
   std::shared_ptr<Host> found = impl_->Find(host);
