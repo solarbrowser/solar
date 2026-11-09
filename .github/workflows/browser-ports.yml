@@ -1,0 +1,210 @@
+name: Browser on macOS and Windows
+
+# The browser (the window, the pages' processes, the interface) is Linux's today; docs/porting.md says what stands in the way. This workflow is how it is found out, system by system, by
+# building each piece apart and saying which one fails: Quanta, Skia, the program, the tests. Nothing here stops a push (every step may fail and the job is allowed to): the summary at the
+# end of each job is the list of what works, and the log of a step is what is left to do.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ports-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: macOS (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            arch: arm64
+          - os: macos-13
+            arch: x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Submodules
+        id: submodules
+        continue-on-error: true
+        run: |
+          git submodule update --init --depth 1 third_party/quanta third_party/skia
+          git -C third_party/quanta submodule update --init --recursive --depth 1 third_party/utf8proc third_party/pcre2 third_party/mimalloc
+
+      - name: Dependencies
+        id: deps
+        continue-on-error: true
+        run: |
+          brew install sdl3 ffmpeg openssl@3 pkg-config zlib brotli zstd nghttp2 harfbuzz ninja
+          echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix zlib)/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - name: Revisions
+        id: revisions
+        run: |
+          echo "quanta=$(git rev-parse HEAD:third_party/quanta)" >> "$GITHUB_OUTPUT"
+          echo "skia=$(git rev-parse HEAD:third_party/skia)" >> "$GITHUB_OUTPUT"
+
+      # Quanta, the engine (without Intl: ICU4X is a Rust library of its own, built later).
+      - name: Cache Quanta
+        uses: actions/cache@v4
+        with:
+          path: third_party/quanta/build
+          key: quanta-${{ matrix.os }}-noicu-${{ steps.revisions.outputs.quanta }}
+      - name: Quanta
+        id: quanta
+        continue-on-error: true
+        run: make -C third_party/quanta lib ICU4X=0 -j"$(sysctl -n hw.ncpu)"
+
+      # Skia, with Metal and OpenGL (the Linux build has Vulkan and OpenGL: Makefile's SKIA_* are Linux's).
+      - name: Cache Skia
+        uses: actions/cache@v4
+        with:
+          path: |
+            third_party/skia/out
+            third_party/skia/third_party/externals
+          key: skia-${{ matrix.os }}-${{ steps.revisions.outputs.skia }}
+      - name: Skia
+        id: skia
+        continue-on-error: true
+        working-directory: third_party/skia
+        run: |
+          python3 tools/git-sync-deps
+          python3 bin/fetch-gn
+          bin/gn gen out/Static --args='cc="clang" cxx="clang++" is_debug=false is_official_build=false skia_use_system_freetype2=false skia_use_system_harfbuzz=false skia_use_harfbuzz=false skia_enable_skshaper=true skia_enable_skunicode=false skia_use_icu=false skia_use_icu4x=false skia_use_fontconfig=false skia_enable_fontmgr_custom_empty=true skia_use_gl=true skia_use_metal=true skia_use_vulkan=false skia_enable_tools=false skia_enable_pdf=false skia_use_expat=true skia_use_xps=false skia_enable_svg=true skia_enable_skottie=false'
+          ninja -C out/Static
+
+      - name: The network layer and the URL library (tests)
+        id: network
+        continue-on-error: true
+        run: make -j"$(sysctl -n hw.ncpu)" ICU4X=0 test
+
+      - name: The program
+        id: program
+        continue-on-error: true
+        run: make -j"$(sysctl -n hw.ncpu)" ICU4X=0 solar 2>&1 | tee program.log
+
+      - name: Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}-logs
+          path: |
+            program.log
+            third_party/quanta/build/errors.log
+            third_party/skia/out/Static/.ninja_log
+          if-no-files-found: ignore
+
+      - name: What works
+        if: always()
+        run: |
+          {
+            echo "### macOS ${{ matrix.arch }}"
+            echo "| Piece | Result |"
+            echo "|---|---|"
+            echo "| Submodules | ${{ steps.submodules.outcome }} |"
+            echo "| Dependencies | ${{ steps.deps.outcome }} |"
+            echo "| Quanta | ${{ steps.quanta.outcome }} |"
+            echo "| Skia | ${{ steps.skia.outcome }} |"
+            echo "| Network layer tests | ${{ steps.network.outcome }} |"
+            echo "| The program (make solar) | ${{ steps.program.outcome }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  windows:
+    name: Windows (x86_64)
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Submodules
+        id: submodules
+        continue-on-error: true
+        shell: bash
+        run: |
+          git submodule update --init --depth 1 third_party/quanta third_party/skia
+          git -C third_party/quanta submodule update --init --recursive --depth 1 third_party/utf8proc third_party/pcre2 third_party/mimalloc
+
+      - name: Revisions
+        id: revisions
+        shell: bash
+        run: |
+          echo "quanta=$(git rev-parse HEAD:third_party/quanta)" >> "$GITHUB_OUTPUT"
+          echo "skia=$(git rev-parse HEAD:third_party/skia)" >> "$GITHUB_OUTPUT"
+
+      # Skia with clang-cl and the Microsoft library: the ABI that the program has to be built with as well (the MSYS2 toolchain the network layer is built with here is the other one,
+      # MinGW's: what is built for one cannot be linked with the other). Whether the program is moved to clang-cl is decided by what this step and the next say.
+      - name: Cache Skia
+        uses: actions/cache@v4
+        with:
+          path: |
+            third_party/skia/out
+            third_party/skia/third_party/externals
+          key: skia-windows-${{ steps.revisions.outputs.skia }}
+      - name: Skia (clang-cl)
+        id: skia
+        continue-on-error: true
+        working-directory: third_party/skia
+        shell: pwsh
+        run: |
+          python tools/git-sync-deps
+          python bin/fetch-gn
+          $version = (clang --version | Select-String 'version (\d+)').Matches[0].Groups[1].Value
+          bin/gn gen out/Static --args="clang_win=`"C:\Program Files\LLVM`" clang_win_version=$version is_debug=false is_official_build=false skia_use_system_freetype2=false skia_use_harfbuzz=false skia_enable_skshaper=true skia_enable_skunicode=false skia_use_icu=false skia_use_icu4x=false skia_use_fontconfig=false skia_enable_fontmgr_custom_empty=true skia_use_gl=true skia_use_angle=false skia_use_vulkan=false skia_enable_tools=false skia_enable_pdf=false skia_use_expat=true skia_use_xps=false skia_enable_svg=true skia_enable_skottie=false"
+          choco install ninja -y
+          ninja -C out/Static
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: true
+          install: make mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-openssl mingw-w64-clang-x86_64-pkgconf mingw-w64-clang-x86_64-zlib mingw-w64-clang-x86_64-brotli mingw-w64-clang-x86_64-zstd mingw-w64-clang-x86_64-nghttp2 mingw-w64-clang-x86_64-harfbuzz mingw-w64-clang-x86_64-SDL3 mingw-w64-clang-x86_64-ffmpeg
+
+      - name: Quanta (its own script for Windows)
+        id: quanta
+        continue-on-error: true
+        shell: msys2 {0}
+        run: |
+          make -C third_party/quanta lib ICU4X=0 -j"$(nproc)"
+
+      - name: The network layer and the URL library (tests)
+        id: network
+        continue-on-error: true
+        shell: msys2 {0}
+        run: make -j"$(nproc)" ICU4X=0 test
+
+      - name: The program
+        id: program
+        continue-on-error: true
+        shell: msys2 {0}
+        run: make -j"$(nproc)" ICU4X=0 solar 2>&1 | tee program.log
+
+      - name: Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-logs
+          path: |
+            program.log
+            third_party/quanta/build/errors.log
+            third_party/skia/out/Static/.ninja_log
+          if-no-files-found: ignore
+
+      - name: What works
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### Windows"
+            echo "| Piece | Result |"
+            echo "|---|---|"
+            echo "| Submodules | ${{ steps.submodules.outcome }} |"
+            echo "| Skia (clang-cl) | ${{ steps.skia.outcome }} |"
+            echo "| Quanta | ${{ steps.quanta.outcome }} |"
+            echo "| Network layer tests | ${{ steps.network.outcome }} |"
+            echo "| The program (make solar) | ${{ steps.program.outcome }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
