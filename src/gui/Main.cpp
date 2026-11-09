@@ -76,6 +76,7 @@
 #include "solar/paint/GlRuntime.h"
 #include "solar/gui/Services.h"
 #include "solar/gui/Chrome.h"
+#include "solar/gui/Platform.h"
 #include "solar/gui/Sandbox.h"
 #include "solar/gui/Settings.h"
 #include "solar/gui/UiNatives.h"
@@ -1139,10 +1140,9 @@ solar::gui::SandboxPolicy RendererPolicy(const std::string& given) {
 // The renderer as a process of its own: the program started again with its two connections (the window's and the network's) as descriptors 3 and 4, and nothing else of the browser's
 // (every other descriptor is closed for it). It ends when the browser does.
 pid_t SpawnRenderer(int windowFd, int networkFd, int gpuFd, int glFd, const std::string& url) {
-  char self[4096];
-  const ssize_t length = ::readlink("/proc/self/exe", self, sizeof(self) - 1);
-  if (length <= 0) return -1;
-  self[length] = 0;
+  const std::string selfPath = solar::gui::ExecutablePath();
+  if (selfPath.empty()) return -1;
+  const char* self = selfPath.c_str();
   // (The descriptors are moved out of the way of 3 and 4 first, so that putting them there does not close one of them.)
   const int high1 = ::fcntl(windowFd, F_DUPFD_CLOEXEC, 10), high2 = ::fcntl(networkFd, F_DUPFD_CLOEXEC, 10), high3 = gpuFd >= 0 ? ::fcntl(gpuFd, F_DUPFD_CLOEXEC, 10) : -1, high4 = glFd >= 0 ? ::fcntl(glFd, F_DUPFD_CLOEXEC, 10) : -1;
   if (high1 < 0 || high2 < 0) return -1;
@@ -1152,13 +1152,12 @@ pid_t SpawnRenderer(int windowFd, int networkFd, int gpuFd, int glFd, const std:
   posix_spawn_file_actions_adddup2(&actions, high2, 4);
   if (high3 >= 0) posix_spawn_file_actions_adddup2(&actions, high3, 5);
   if (high4 >= 0) posix_spawn_file_actions_adddup2(&actions, high4, 6);
-  posix_spawn_file_actions_addclosefrom_np(&actions, high4 >= 0 ? 7 : high3 >= 0 ? 6 : 5);
   std::vector<std::string> words = {"solar", "--renderer", url};
   std::vector<char*> arguments;
   for (std::string& word : words) arguments.push_back(word.data());
   arguments.push_back(nullptr);
   pid_t child = -1;
-  const int status = ::posix_spawn(&child, self, &actions, nullptr, arguments.data(), environ);
+  const int status = solar::gui::SpawnKeepingOnly(&child, self, &actions, high4 >= 0 ? 7 : high3 >= 0 ? 6 : 5, arguments.data());
   posix_spawn_file_actions_destroy(&actions);
   ::close(high1);
   ::close(high2);

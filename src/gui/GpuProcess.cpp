@@ -5,6 +5,7 @@
  */
 
 #include "solar/gui/GpuProcess.h"
+#include "solar/gui/Platform.h"
 
 #include <fcntl.h>
 #include <signal.h>
@@ -493,20 +494,19 @@ std::unique_ptr<GpuHost> GpuHost::Start(std::string* why) {
     if (std::string(wanted) == "cpu") return fail("SOLAR_GUI_GPU=cpu");
   }
   char self[4096];
-  const ssize_t length = ::readlink("/proc/self/exe", self, sizeof(self) - 1);
-  if (length <= 0) return fail("cannot find the program");
-  self[length] = 0;
+  const std::string selfPath = solar::gui::ExecutablePath();
+  if (selfPath.empty()) return fail("cannot find the program");
+  std::snprintf(self, sizeof(self), "%s", selfPath.c_str());
   const auto pair = net::ipc::Channel::MakePair();
   if (pair.first < 0) return fail("no connection");
   const int high = ::fcntl(pair.second, F_DUPFD_CLOEXEC, 10);
   posix_spawn_file_actions_t actions;
   posix_spawn_file_actions_init(&actions);
   posix_spawn_file_actions_adddup2(&actions, high, 3);
-  posix_spawn_file_actions_addclosefrom_np(&actions, 4);
   char arg0[] = "solar", arg1[] = "--gpu";
   char* arguments[] = {arg0, arg1, nullptr};
   pid_t child = -1;
-  const int status = ::posix_spawn(&child, self, &actions, nullptr, arguments, environ);
+  const int status = solar::gui::SpawnKeepingOnly(&child, self, &actions, 4, arguments);
   posix_spawn_file_actions_destroy(&actions);
   ::close(high);
   ::close(pair.second);

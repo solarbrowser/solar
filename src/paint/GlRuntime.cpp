@@ -43,6 +43,7 @@ static void* dlsym(void* handle, const char* name) { return reinterpret_cast<voi
 #include <vector>
 
 #include "solar/paint/GlApi.h"
+#include "solar/gui/Platform.h"
 #include "solar/paint/GlRuntime.h"
 
 // ANGLE's own tokens of eglext_angle.h (the header is not in the machine's).
@@ -68,13 +69,8 @@ namespace {
 
 void* OpenLibrary(const char* const* names) {
   // The ones that are shipped with the program (ANGLE's, in a directory beside it or beside it) come first; then the machine's.
-  char self[4096];
-  std::string directory;
-  const ssize_t length = readlink("/proc/self/exe", self, sizeof self - 1);
-  if (length > 0) {
-    directory.assign(self, static_cast<size_t>(length));
-    directory.resize(directory.rfind('/') + 1);
-  }
+  std::string directory = solar::gui::ExecutablePath();
+  directory.resize(directory.empty() ? 0 : directory.find_last_of("/\\") + 1);
   if (!directory.empty()) {
     // (SOLAR_GL_NATIVE=1: the machine's own EGL, not ANGLE: the GPU's process has the page's drawing share textures with WebGL, which is on one EGL only.)
     const bool native = std::getenv("SOLAR_GL_NATIVE") != nullptr;
@@ -136,7 +132,7 @@ bool EnsureEgl() {
   Egl& egl = TheEgl();
   if (egl.tried) return egl.ok;
   egl.tried = true;
-  setenv("EGL_LOG_LEVEL", "fatal", 0);
+  solar::gui::SetEnvironment("EGL_LOG_LEVEL", "fatal", false);
 #if defined(__APPLE__)
   static const char* const eglNames[] = {"libEGL.dylib", nullptr};
   static const char* const glNames[] = {"libGLESv2.dylib", nullptr};
