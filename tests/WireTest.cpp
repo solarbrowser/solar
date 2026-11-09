@@ -151,12 +151,15 @@ int main() {
     int none = 5;
     Check("next message has no descriptor", window.ReceiveRaw(type, bytes, &none) && type == static_cast<uint8_t>(wire::ToBrowser::Quit) && none == -1);
     // Whoever has the memory cannot make it smaller (the reader would fault).
+#if defined(__linux__)
+    // (Sealing is Linux's: elsewhere the memory is not sealed and the size is what is looked at.)
     Check("memory cannot be shrunk", ::ftruncate(memory.fd(), 10) != 0 && ::ftruncate(mapped.fd(), 10) != 0);
     // Memory that is not sealed is not taken.
     const int plain = ::memfd_create("plain", MFD_CLOEXEC);
     Check("plain memory made", plain >= 0 && ::ftruncate(plain, 4096) == 0);
     SharedMemory unsealed;
     Check("memory not sealed is refused", !unsealed.Adopt(plain, 4096, false));
+#endif
     // Memory smaller than it was said to be is not mapped.
     SharedMemory small;
     Check("small memory made", small.Create(100));

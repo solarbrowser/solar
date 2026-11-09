@@ -441,7 +441,10 @@ void RunAll(int mode) {
 int main() {
   RunAll(0);
   RunAll(1);
+#if !defined(_WIN32)
+  // (The page's side of the connection to the network service is a channel between processes: Windows has none yet.)
   RunAll(2);
+#endif
   std::printf("page fetch: %d/%d passed\n", total - failed, total);
   return failed == 0 ? 0 : 1;
 }

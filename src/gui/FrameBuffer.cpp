@@ -79,9 +79,14 @@ bool SharedMemory::Adopt(int fd, size_t size, bool writable) {
   Reset();
   // (The memory has to be as large as it was said to be: a smaller one would be read past its end.)
   struct stat info;
+#if defined(__linux__)
   const int seals = fd >= 0 ? ::fcntl(fd, F_GET_SEALS) : -1;
   const int needed = F_SEAL_SHRINK | F_SEAL_GROW;
-  if (size == 0 || seals < 0 || (seals & needed) != needed || ::fstat(fd, &info) != 0 || static_cast<size_t>(info.st_size) < size) {
+  const bool sealed = seals >= 0 && (seals & needed) == needed;
+#else
+  const bool sealed = fd >= 0;  // (Memory is not sealed elsewhere: the size is looked at, and the one that sends it is the browser's own process.)
+#endif
+  if (size == 0 || !sealed || ::fstat(fd, &info) != 0 || static_cast<size_t>(info.st_size) < size) {
     ::close(fd);
     return false;
   }

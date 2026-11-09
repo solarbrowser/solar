@@ -75,7 +75,22 @@ bool EnterNamespacesImpl(std::string& problems) {
 
 // ---- Landlock ----
 
-int LandlockCreate(const landlock_ruleset_attr* attr, size_t size, uint32_t flags) { return static_cast<int>(::syscall(SYS_landlock_create_ruleset, attr, size, flags)); }
+// (The headers of an older kernel do not have what the newer ones of Landlock have: the rights of ABI 5 and 6, and the field of the scopes. They are the kernel's own numbers, and a kernel
+// that is older than the ruleset it is asked for says so: the version is asked first, and only what it has is used.)
+#ifndef LANDLOCK_ACCESS_FS_IOCTL_DEV
+#define LANDLOCK_ACCESS_FS_IOCTL_DEV (1ULL << 15)
+#endif
+#ifndef LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET
+#define LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET (1ULL << 0)
+#define LANDLOCK_SCOPE_SIGNAL (1ULL << 1)
+#endif
+struct SolarLandlockAttr {
+  uint64_t handled_access_fs;
+  uint64_t handled_access_net;
+  uint64_t scoped;
+};
+
+int LandlockCreate(const SolarLandlockAttr* attr, size_t size, uint32_t flags) { return static_cast<int>(::syscall(SYS_landlock_create_ruleset, attr, size, flags)); }
 int LandlockAdd(int ruleset, landlock_rule_type type, const void* attr) { return static_cast<int>(::syscall(SYS_landlock_add_rule, ruleset, type, attr, 0)); }
 int LandlockRestrict(int ruleset) { return static_cast<int>(::syscall(SYS_landlock_restrict_self, ruleset, 0)); }
 
@@ -92,7 +107,7 @@ bool EnterLandlock(const SandboxPolicy& policy, std::string& problems) {
   if (abi >= 2) fsAll |= LANDLOCK_ACCESS_FS_REFER;
   if (abi >= 3) fsAll |= LANDLOCK_ACCESS_FS_TRUNCATE;
   if (abi >= 5) fsAll |= LANDLOCK_ACCESS_FS_IOCTL_DEV;
-  landlock_ruleset_attr attr{};
+  SolarLandlockAttr attr{};
   attr.handled_access_fs = fsAll;
   if (abi >= 4) attr.handled_access_net = LANDLOCK_ACCESS_NET_BIND_TCP | LANDLOCK_ACCESS_NET_CONNECT_TCP;
   if (abi >= 6) attr.scoped = LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET | LANDLOCK_SCOPE_SIGNAL;
