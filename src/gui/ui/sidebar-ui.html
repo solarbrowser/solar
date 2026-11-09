@@ -35,7 +35,7 @@
   #menu { top: auto; bottom: 56px; left: 10px; right: auto; }
 </style>
 </head>
-<body data-axis="y">
+<body data-axis="y" data-top="0">
 <div id="side">
   <div id="sidehead">
     <button id="back" title="Back" disabled>{{icon:chevron-left}}</button>
@@ -53,6 +53,7 @@
       <span id="site">{{icon:public}}</span>
       <div id="shown">Search or enter an address</div>
       <input id="address" type="text" spellcheck="false" autocomplete="off" placeholder="Search or enter an address">
+    <button id="zoomchip" title="Reset the zoom"></button>
     </div>
     <div id="progress"></div>
   </div>

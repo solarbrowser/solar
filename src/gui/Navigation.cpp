@@ -63,6 +63,9 @@ void RemoteNavigation::Handle(wire::ToRenderer type, const std::string& bytes) {
     case wire::ToRenderer::UiState:
       if (ui_) ui_(bytes);
       return;
+    case wire::ToRenderer::Find:
+      if (find_) find_(bytes);
+      return;
     case wire::ToRenderer::NavHead: {
       wire::NavHead head;
       if (!wire::Read(in, head)) return;

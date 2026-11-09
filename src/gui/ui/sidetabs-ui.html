@@ -27,7 +27,7 @@
   #progress { position: absolute; left: 0; right: 0; top: 47px; bottom: auto; }
 </style>
 </head>
-<body data-axis="y">
+<body data-axis="y" data-top="48">
 <div id="side">
   <div id="sidehead">
     <div id="drag"></div>
@@ -45,6 +45,7 @@
     <span id="site">{{icon:public}}</span>
     <div id="shown">Search or enter an address</div>
     <input id="address" type="text" spellcheck="false" autocomplete="off" placeholder="Search or enter an address">
+    <button id="zoomchip" title="Reset the zoom"></button>
   </div>
   <button id="menuButton" title="Menu">{{icon:hamburger-menu}}</button>
   <div id="controls">

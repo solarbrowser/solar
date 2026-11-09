@@ -61,6 +61,10 @@ class Session {
   uint32_t activeTab() const;
   void Activate(uint32_t tab);
   void CycleTab(int delta);
+  // The page of the shown tab is made larger or smaller (`step` 1 or -1 along the levels, 0 for 100%): it is laid out for a window that is that much smaller, and drawn that much larger. What was
+  // chosen is kept for the site, so that its other pages and tabs have it. The factor of the shown tab (1 is 100%).
+  void Zoom(int step);
+  double ActiveZoom() const;
   // The tab is put at this place among the tabs (0 is the first).
   void MoveTab(uint32_t tab, size_t index);
   // A tab is pinned (kept small at the start of the tabs, for what is always at hand) or not.

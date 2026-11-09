@@ -52,6 +52,16 @@
   #shown b { font-weight: 400; color: var(--text); }
   #shown i { font-style: normal; }
   #address { display: none; flex: 1; min-width: 0; border: none; outline: 1px solid transparent; background: transparent; color: var(--text); font: inherit; padding: 0; -webkit-user-select: text; user-select: text; }
+  #findbar { display: none; position: absolute; z-index: 20; align-items: center; width: 372px; height: 44px; padding: 0 6px 0 12px; border-radius: 12px; background: var(--bar); border: 1px solid var(--bar-edge); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28); }
+  #findbar.open { display: flex; }
+  #findbar input { flex: 1; min-width: 0; height: 30px; border: none; outline: 1px solid transparent; background: transparent; color: var(--text); font: inherit; font-size: 14px; padding: 0; -webkit-user-select: text; user-select: text; }
+  #findbar .count { flex: none; margin: 0 6px; color: var(--dim); font-size: 12px; white-space: nowrap; }
+  #findbar .count.none { color: #d93a3a; }
+  #findbar button { width: 30px; height: 30px; border-radius: 8px; }
+  #findbar button svg { width: 18px; height: 18px; }
+  #zoomchip { display: none; flex: none; width: auto; height: 22px; margin-left: 6px; padding: 0 8px; border-radius: 6px; background: var(--button-hover); color: var(--text); font-size: 12px; }
+  #zoomchip.on { display: flex; }
+  #field.focused #zoomchip { display: none; }
   #field.focused #shown { display: none; }
   #field.focused #address { display: block; }
   #menuButton { margin-left: 2px; }

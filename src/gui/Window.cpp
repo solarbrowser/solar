@@ -119,6 +119,7 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
   bool fullscreen = false, barFocused = false;
   // The interface may be taller than its bar for a while (a menu that comes down over the page): how many points more.
   int overlay = 0;
+  int overlayLeft = 0, overlayRight = 0;  // where it is, across the window (none: all of it, as a menu is)
   // Where the tabs are: along the top (the bar is the top of the window, 88 points), or in a column at the side (the bar of the address is 48 points high at the top, and the column 240 wide at the left; the
   // picture of the interface is then the whole window, clear where the page is).
   const auto layoutOf = [](const std::string& name) { return name == "sidebar" ? 2 : name == "side" ? 1 : 0; };
@@ -452,6 +453,17 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
         else if (verb == "forward") session.Forward();
         else if (verb == "reload") session.Reload();
         else if (verb == "focus") barFocused = rest == "1";
+        else if (verb == "zoom") session.Zoom(std::atoi(rest.c_str()));
+        else if (verb == "find") {
+          // find\t<words>\t<what>: the shown page is asked to find them (what: 0 from the start, 1 the next, 2 the one before, 3 stop).
+          const size_t second = rest.rfind('\t');
+          if (second != std::string::npos) {
+            Writer out;
+            out.String(rest.substr(0, second));
+            out.U8(static_cast<uint8_t>(std::clamp(std::atoi(rest.c_str() + second + 1), 0, 3)));
+            session.Send(session.current(), wire::ToRenderer::Find, out.bytes());
+          }
+        }
         else if (verb == "ready") {
           session.PushState();
           session.SendChrome(wire::ToRenderer::UiState, Settings::Instance().Json());
@@ -459,6 +471,11 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
         else if (verb == "overlay") {
           // The interface asks to be taller (a menu) or to be as it was: it takes the keys while it is, and the window tells the pages and it how large they are.
           const int wanted = std::clamp(std::atoi(rest.c_str()), 0, 600);
+          int left = 0, right = 0;
+          const size_t first = rest.find('\t');
+          if (first != std::string::npos) std::sscanf(rest.c_str() + first + 1, "%d\t%d", &left, &right);
+          overlayLeft = wanted > 0 ? left : 0;
+          overlayRight = wanted > 0 ? right : 0;
           if (wanted != overlay) {
             overlay = wanted;
             barFocused = wanted > 0;
@@ -501,6 +518,12 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
             g_hit.dragBottom = std::clamp(bottom, 0, 200);
           }
         }
+        break;
+      }
+      case wire::ToBrowser::FindResult: {
+        // How many matches the shown page has: the interface says it in the find box.
+        const uint32_t count = in.U32(), index = in.U32();
+        if (shown && in.ok()) session.SendChrome(wire::ToRenderer::UiState, "{\"find\":{\"count\":" + std::to_string(count) + ",\"index\":" + std::to_string(index) + "}}");
         break;
       }
       case wire::ToBrowser::Quit:
@@ -732,6 +755,12 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
           break;
         }
         case SDL_EVENT_MOUSE_WHEEL:
+          // (The wheel with the control key held is the zoom, not the scroll.)
+          if ((SDL_GetModState() & SDL_KMOD_CTRL) != 0 && event.wheel.y != 0) {
+            session.Zoom(event.wheel.y > 0 ? 1 : -1);
+            forward = false;
+            break;
+          }
           input.kind = wire::Input::Kind::Wheel;
           input.x = event.wheel.x;
           input.y = event.wheel.y;
@@ -780,7 +809,13 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
           const float y = input.kind == wire::Input::Kind::Wheel ? input.yrel : input.y;
           const float x = input.kind == wire::Input::Kind::Wheel ? input.xrel : input.x;
           // (With the tabs at the side the interface also has the column at the left, and the whole window while a menu is open.)
-          const bool inBar = y < barExtent || x < leftPts || (sideTabs && overlay > 0);
+          bool inBar = y < barExtent || x < leftPts;
+          if (overlay > 0) {
+            // What comes down over the page (a menu) has all the window with the tabs at the side, or the band under the bar along the top; what has a place of its own (the find box) has that place.
+            const float bottom = barPts + static_cast<float>(overlay);
+            if (overlayRight > overlayLeft) inBar = inBar || (y < bottom && x >= overlayLeft && x < overlayRight);
+            else inBar = inBar || sideTabs || y < bottom;
+          }
           const int side = capture ? capture : (inBar ? 1 : 2);
           if (input.kind == wire::Input::Kind::ButtonDown) {
             capture = side;
@@ -800,6 +835,17 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
             input.y -= barPts;
             input.x -= leftPts;
           }
+          if (side == 2) {
+            // (The page is laid out for a window that is smaller by the zoom: what it is pointed at is in its own measure.)
+            const float zoom = static_cast<float>(session.ActiveZoom());
+            if (input.kind == wire::Input::Kind::Wheel) {
+              input.xrel /= zoom;
+              input.yrel /= zoom;
+            } else {
+              input.x /= zoom;
+              input.y /= zoom;
+            }
+          }
         } else if (input.kind == wire::Input::Kind::KeyDown && !input.repeat) {
           // What the browser does with the keys before the page sees them.
           const bool ctrl = (input.mod & SDL_KMOD_CTRL) != 0, alt = (input.mod & SDL_KMOD_ALT) != 0;
@@ -808,6 +854,21 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
               barFocused = true;
               session.SendChrome(wire::ToRenderer::UiState, "{\"focusAddress\":true}");
             }
+            forward = false;
+          } else if (ctrl && input.key == SDLK_F) {
+            if (!noBar && !fullscreen) {
+              barFocused = true;
+              session.SendChrome(wire::ToRenderer::UiState, "{\"openFind\":true}");
+            }
+            forward = false;
+          } else if (ctrl && (input.key == SDLK_EQUALS || input.key == SDLK_PLUS || input.key == SDLK_KP_PLUS)) {
+            session.Zoom(1);
+            forward = false;
+          } else if (ctrl && (input.key == SDLK_MINUS || input.key == SDLK_KP_MINUS)) {
+            session.Zoom(-1);
+            forward = false;
+          } else if (ctrl && (input.key == SDLK_0 || input.key == SDLK_KP_0)) {
+            session.Zoom(0);
             forward = false;
           } else if (ctrl && input.key == SDLK_T) {
             session.NewTab("");

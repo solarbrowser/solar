@@ -69,6 +69,8 @@
     if (!field.classList.contains("focused")) address.value = /^solar:\/\/newtab/.test(url) ? "" : url;
     $("wmax").innerHTML = state.maximized ? restoreIcon : maxIcon;
     $("wmax").title = state.maximized ? "Restore" : "Maximize";
+    $("zoomchip").textContent = (state.zoom || 100) + "%";
+    $("zoomchip").className = state.zoom && state.zoom !== 100 ? "on" : "";
     renderTabs();
     document.documentElement.className = state.controls ? "controlled" : "";
     document.body.className = (state.loading ? "loading " : "") + (state.controls ? "controlled" : "");
@@ -80,6 +82,8 @@
 
   const shownUrl = () => (/^solar:\/\/newtab/.test(state.url) ? "" : state.url);
   globalThis.__solarUiState = (next) => {
+    if (next.openFind) { globalThis.__solarFindUi.open(); return; }
+    if (next.find) { globalThis.__solarFindUi.show(next.find); return; }
     if (next.icon) {
       const t = state.tabs.find((x) => x.id === next.icon.tab);
       if (t) { icons[t.id] = next.icon.data; iconSite[t.id] = siteOf(t.url); renderTabs(); }
@@ -89,7 +93,7 @@
     state = Object.assign(state, next);
     render();
     // (Another tab: what was being typed is for the tab it was typed in.)
-    if (next.active !== undefined && next.active !== before) address.value = shownUrl();
+    if (next.active !== undefined && next.active !== before) { address.value = shownUrl(); if (globalThis.__solarFindUi) globalThis.__solarFindUi.close(); }
     if (next.focusAddress) edit();
     if (next.blur) address.blur();
   };
@@ -167,6 +171,7 @@
     }
   });
   $("newtab").addEventListener("click", () => send("newtab"));
+  $("zoomchip").addEventListener("click", () => send("zoom\t0"));
   // The menu comes down over the page: the browser makes this page taller for as long as it is open.
   const menu = $("menu");
   let menuOpen = false;
@@ -174,10 +179,16 @@
   const tabMenu = document.createElement("div");
   tabMenu.id = "tabmenu";
   document.body.appendChild(tabMenu);
-  let tabMenuFor = 0, lastOverlay = 0;
+  let tabMenuFor = 0, lastOverlay = "0";
+  const barTop = Number(document.body.dataset.top || 88);
+  const FIND_WIDTH = 372;
+  let findOpen = false;
   const syncOverlay = () => {
-    const wanted = menuOpen ? 88 + 4 + 3 * 38 + 2 * 13 + 20 : tabMenuFor ? 150 : 0;
-    if (wanted !== lastOverlay) { lastOverlay = wanted; send("overlay\t" + wanted); }
+    // (A menu has the window; the find box has only the place it is in.)
+    let wanted = menuOpen ? 88 + 4 + 3 * 38 + 2 * 13 + 20 : tabMenuFor ? 150 : findOpen ? 62 : 0;
+    const place = !menuOpen && !tabMenuFor && findOpen ? "\t" + Math.max(0, window.innerWidth - FIND_WIDTH - 16) + "\t" + (window.innerWidth - 8) : "";
+    const key = wanted + place;
+    if (key !== lastOverlay) { lastOverlay = key; send("overlay\t" + wanted + place); }
   };
   const hideTabMenu = () => { if (tabMenuFor) { tabMenuFor = 0; tabMenu.className = ""; syncOverlay(); } };
   const showTabMenu = (tab, e) => {
@@ -194,6 +205,41 @@
     hideTabMenu();
     send(item.dataset.do);
   });
+  // The find box (Ctrl+F): over the page, at the top right; what is typed is looked for in the page, Enter goes to the next match, Shift+Enter to the one before, Escape closes it.
+  const findBar = document.createElement("div");
+  findBar.id = "findbar";
+  findBar.innerHTML = '<input type="text" spellcheck="false" autocomplete="off" placeholder="Find in page"><span class="count"></span><button class="prev" title="Previous">{{icon:chevron-left}}</button><button class="next" title="Next">{{icon:chevron-right}}</button><button class="shut" title="Close">{{icon:close}}</button>';
+  document.body.appendChild(findBar);
+  const findInput = findBar.querySelector("input"), findCount = findBar.querySelector(".count");
+  const findAsk = (what) => send("find\t" + findInput.value + "\t" + what);
+  const showFind = (result) => {
+    if (!findInput.value) { findCount.textContent = ""; findCount.className = "count"; return; }
+    findCount.textContent = result && result.count ? result.index + "/" + result.count : "0/0";
+    findCount.className = "count" + (result && result.count ? "" : " none");
+  };
+  const closeFind = () => {
+    if (!findOpen) return;
+    findOpen = false;
+    findBar.className = "";
+    send("find\t\t3");
+    syncOverlay();
+  };
+  const openFind = () => {
+    findBar.setAttribute("style", "top:" + (barTop + 8) + "px;left:" + Math.max(0, window.innerWidth - FIND_WIDTH - 16) + "px");
+    if (!findOpen) { findOpen = true; findBar.className = "open"; syncOverlay(); }
+    findInput.focus();
+    findInput.select();
+    if (findInput.value) findAsk(0);
+  };
+  findInput.addEventListener("input", () => { if (findInput.value) findAsk(0); else { send("find\t\t3"); showFind(null); } });
+  findInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") findAsk(e.shiftKey ? 2 : 1);
+    else if (e.key === "Escape") closeFind();
+  });
+  findBar.querySelector(".prev").addEventListener("click", () => findAsk(2));
+  findBar.querySelector(".next").addEventListener("click", () => findAsk(1));
+  findBar.querySelector(".shut").addEventListener("click", closeFind);
+  globalThis.__solarFindUi = { open: () => setTimeout(openFind, 0), show: showFind, close: closeFind, isOpen: () => findOpen };
   const setMenu = (open) => {
     if (open === menuOpen) return;
     menuOpen = open;

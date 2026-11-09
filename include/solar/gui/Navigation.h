@@ -35,6 +35,8 @@ class RemoteNavigation {
   void SetGoTo(std::function<void(std::string, int)> goTo) { goTo_ = std::move(goTo); }
   // The interface page's: the state of the browser, as a JSON text, on the page's thread.
   void SetUiHandler(std::function<void(std::string)> handler) { ui_ = std::move(handler); }
+  // The browser asks the page to find words in it (the bytes of a Find message), on the page's thread.
+  void SetFindHandler(std::function<void(std::string)> handler) { find_ = std::move(handler); }
   // What a navigation that went to another process ends with (the page stays where it is).
   static constexpr const char* kTransferred = "navigation moved to another process";
   // What the browser said (from any thread: it is put on the loop of the page).
@@ -47,6 +49,7 @@ class RemoteNavigation {
   net::ipc::Channel& link_;
   std::function<void(std::string, int)> goTo_;
   std::function<void(std::string)> ui_;
+  std::function<void(std::string)> find_;
   uint32_t next_ = 1;
   std::map<uint32_t, net::FetchHandler*> pending_;  // (the page's thread)
 };

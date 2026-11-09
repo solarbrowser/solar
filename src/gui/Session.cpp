@@ -8,6 +8,8 @@
 
 #include <unistd.h>
 
+#include <algorithm>
+#include <cmath>
 #include <condition_variable>
 #include <cstdio>
 #include <deque>
@@ -32,6 +34,29 @@ namespace {
 
 constexpr size_t kMostNavigations = 64;
 constexpr size_t kLargestFile = size_t{256} << 20;
+
+// A window's size, as the page is told it for a zoom: the page is laid out for a window `zoom` times smaller and drawn `zoom` times larger.
+std::string ZoomedGeometry(const std::string& bytes, double zoom) {
+  net::ipc::Reader in(bytes);
+  wire::Geometry g;
+  if (!wire::Read(in, g) || zoom == 1.0) return bytes;
+  g.width = std::max(1, static_cast<int>(g.width / zoom));
+  g.height = std::max(1, static_cast<int>(g.height / zoom));
+  g.density = static_cast<float>(std::clamp(g.density * zoom, 0.25, 16.0));
+  net::ipc::Writer out;
+  wire::Write(out, g);
+  return out.bytes();
+}
+
+// The host of an address (what zoom is kept by).
+std::string HostOf(const std::string& address) {
+  const size_t scheme = address.find("://");
+  if (scheme == std::string::npos) return "";
+  const size_t start = scheme + 3, end = address.find_first_of("/?#", start);
+  return address.substr(start, end == std::string::npos ? std::string::npos : end - start);
+}
+
+constexpr double kZoomLevels[] = {0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 5.0};
 
 // The site of an address: the web's registrable domain, and for the browser's own pages (solar://newtab/) the page.
 std::string SiteFor(const url::Url& address) {
@@ -96,9 +121,11 @@ struct Session::Impl : std::enable_shared_from_this<Session::Impl> {
     int index = -1;
     std::string title;      // what the page is called
     bool pinned = false;    // kept at the start of the tabs, small
+    double zoom = 1.0;      // how much larger the page is drawn than it is laid out
     bool loading = false;   // an address is being gone to
   };
   std::map<uint32_t, TabState> tabs;
+  std::map<std::string, double> siteZoom;  // what the user chose for a site (its host), for the pages of it
   std::vector<uint32_t> order;  // the tabs, as they are shown from left to right
   uint32_t active = 0;
   uint32_t nextTab = 1;
@@ -170,6 +197,8 @@ struct Session::Impl : std::enable_shared_from_this<Session::Impl> {
   void OnInternalNavigate(const std::shared_ptr<Host>& host, const wire::Navigate& request);
   void Serve(Host& host, uint32_t id, const std::string& address, const std::string& document);
   void SetLoading(uint32_t tab, bool value);
+  void ApplySiteZoom(const std::shared_ptr<Host>& host);
+  void ChangeZoom(int step);
   void PushState();
   uint32_t NewTab(const std::string& address, bool activate);
   // The icons of the pages: asked for by the renderer of a tab, fetched here, kept, and given to the interface for the tab.
@@ -378,7 +407,15 @@ std::shared_ptr<Host> Session::Impl::StartHost(uint32_t tab, const std::string& 
     hosts[host->id] = host;
     size = resize;
   }
-  if (size && !chrome) SendTo(*host, wire::ToRenderer::Resize, *size);
+  if (size && !chrome) {
+    double zoom = 1.0;
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      const auto found = tabs.find(tab);
+      if (found != tabs.end()) zoom = found->second.zoom;
+    }
+    SendTo(*host, wire::ToRenderer::Resize, ZoomedGeometry(*size, zoom));
+  }
   host->reader = std::thread([this, raw = host.get(), id = host->id] {
     uint8_t type = 0;
     std::string bytes;
@@ -740,7 +777,61 @@ void Session::Impl::OnCommitted(const std::shared_ptr<Host>& host, const std::st
     }
   }
   if (!host->current) Swap(host);
+  ApplySiteZoom(host);
   SetLoading(host->tab, false);
+}
+
+// The tab has the zoom that was chosen for the site it is on (100% where none was), and its page is told when that is not what it was.
+void Session::Impl::ApplySiteZoom(const std::shared_ptr<Host>& host) {
+  std::string base;
+  double zoom = 1.0;
+  bool changed = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    const auto found = tabs.find(host->tab);
+    if (found == tabs.end()) return;
+    TabState& t = found->second;
+    const std::string address = t.index >= 0 && t.index < static_cast<int>(t.entries.size()) ? t.entries[static_cast<size_t>(t.index)] : "";
+    const auto chosen = siteZoom.find(HostOf(address));
+    zoom = chosen == siteZoom.end() ? 1.0 : chosen->second;
+    if (zoom != t.zoom) {
+      t.zoom = zoom;
+      changed = true;
+    }
+    if (resize) base = *resize;
+  }
+  if (changed && !base.empty()) SendTo(*host, wire::ToRenderer::Resize, ZoomedGeometry(base, zoom));
+  if (changed) PushState();
+}
+
+void Session::Impl::ChangeZoom(int step) {
+  std::shared_ptr<Host> host;
+  std::string base;
+  double zoom = 1.0;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    TabState* t = ActiveTab();
+    if (!t) return;
+    size_t at = 0;
+    for (size_t i = 0; i < std::size(kZoomLevels); ++i) {
+      if (std::abs(kZoomLevels[i] - t->zoom) < std::abs(kZoomLevels[at] - t->zoom)) at = i;
+    }
+    if (step == 0) at = 7;
+    else if (step > 0 && at + 1 < std::size(kZoomLevels)) ++at;
+    else if (step < 0 && at > 0) --at;
+    zoom = kZoomLevels[at];
+    t->zoom = zoom;
+    const std::string address = t->index >= 0 && t->index < static_cast<int>(t->entries.size()) ? t->entries[static_cast<size_t>(t->index)] : "";
+    if (!HostOf(address).empty()) {
+      if (zoom == 1.0) siteZoom.erase(HostOf(address));
+      else siteZoom[HostOf(address)] = zoom;
+    }
+    const auto current = hosts.find(t->current);
+    if (current != hosts.end()) host = current->second;
+    if (resize) base = *resize;
+  }
+  if (host && !base.empty()) SendTo(*host, wire::ToRenderer::Resize, ZoomedGeometry(base, zoom));
+  PushState();
 }
 
 void Session::Impl::GoToEntry(uint32_t tab, int entry) {
@@ -947,6 +1038,7 @@ void Session::Impl::PushState() {
       json += ",\"url\":" + JsonString(addressOf(*t)) + ",\"title\":" + JsonString(t->title) + ",\"back\":" + (t->index > 0 ? "true" : "false") + ",\"forward\":" + (t->index + 1 < static_cast<int>(t->entries.size()) ? "true" : "false") +
               ",\"loading\":" + (t->loading ? "true" : "false");
     }
+    if (const TabState* t = ActiveTab()) json += ",\"zoom\":" + std::to_string(static_cast<int>(std::lround(t->zoom * 100)));
     json += std::string(",\"controls\":") + (windowControls ? "true" : "false") + ",\"maximized\":" + (maximized ? "true" : "false") + "}";
   }
   SendTo(*bar, wire::ToRenderer::UiState, json);
@@ -1164,7 +1256,29 @@ void Session::Broadcast(wire::ToRenderer type, const std::string& bytes) {
     if (type == wire::ToRenderer::Resize) impl_->resize = bytes;
     for (auto& [id, host] : impl_->hosts) if (!host->chrome) all.push_back(host);
   }
-  for (auto& host : all) impl_->SendTo(*host, type, bytes);
+  for (auto& host : all) {
+    if (type != wire::ToRenderer::Resize) {
+      impl_->SendTo(*host, type, bytes);
+      continue;
+    }
+    double zoom = 1.0;
+    {
+      std::lock_guard<std::mutex> lock(impl_->mutex);
+      const auto found = impl_->tabs.find(host->tab);
+      if (found != impl_->tabs.end()) zoom = found->second.zoom;
+    }
+    impl_->SendTo(*host, type, ZoomedGeometry(bytes, zoom));
+  }
+}
+
+void Session::Zoom(int step) {
+  impl_->services.Post([impl = impl_, step] { impl->ChangeZoom(step); });
+}
+
+double Session::ActiveZoom() const {
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  const auto found = impl_->tabs.find(impl_->active);
+  return found == impl_->tabs.end() ? 1.0 : found->second.zoom;
 }
 
 bool Session::Handle(uint32_t hostId, uint8_t type, const std::string& bytes) {

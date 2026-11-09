@@ -28,6 +28,8 @@ enum class ToRenderer : uint8_t {
   AudioQueued = 16,
   // What the window's own page (the browser's interface, a renderer of its own) is told: the state of the browser (a JSON text), when it changes.
   UiState = 18,
+  // Find in the page (String words, U8 what: 0 find them from the start, 1 the next, 2 the one before, 3 stop): the page selects the match and scrolls to it, and says how many there are (FindResult).
+  Find = 20,
   // The answer to a storage request (U32 id, bool ok, then the bytes that were asked for).
   StorageReply = 24,
 };
@@ -47,6 +49,8 @@ enum class ToBrowser : uint8_t {
   UiCommand = 64,
   // The address of the icon the page has (a text): the browser fetches it, as the page is not to be trusted with what the interface shows.
   Favicon = 65,
+  // How many matches the page has for the words it was asked to find, and which is the one that is selected (U32 count, U32 index from 1; 0 for none).
+  FindResult = 66,
 };
 
 // A document to take: the browser is trusted to fetch it, the page is not trusted to say what it is, so the address is checked there.

@@ -1334,6 +1334,102 @@ int PageMain(Shared& shared, int argc, char** argv) {
     solar::html::RunInRealm(*realm, [&] { realm->Evaluate("globalThis.__solarUiState && globalThis.__solarUiState(" + state + ")", "ui"); });
   });
   bool dirty = true;
+  // Find in the page: the matches of the words in the text of the document (not of its scripts and styles), the one that is selected, and the page scrolled to it.
+  struct FindMatch {
+    solar::dom::Node* node;
+    uint32_t start, end;  // in UTF-16 units, as a selection has them
+  };
+  std::string findWords;
+  std::vector<FindMatch> findMatches;
+  int findAt = -1;
+  const auto findScan = [&](const std::string& words) {
+    findMatches.clear();
+    findAt = -1;
+    findWords = words;
+    if (words.empty() || !document) return;
+    const auto lower = [](std::string text) {
+      for (char& c : text) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      return text;
+    };
+    const std::string needle = lower(words);
+    std::vector<solar::dom::Node*> stack, order;
+    const auto pushChildren = [&](solar::dom::Node* parent) {
+      std::vector<solar::dom::Node*> children;
+      for (solar::dom::Node* child = parent->firstChild; child; child = child->nextSibling) children.push_back(child);
+      for (auto it = children.rbegin(); it != children.rend(); ++it) stack.push_back(*it);
+    };
+    pushChildren(document);
+    while (!stack.empty()) {
+      solar::dom::Node* node = stack.back();
+      stack.pop_back();
+      if (node->IsElement()) {
+        auto* element = static_cast<solar::dom::Element*>(node);
+        if (element->IsHtml("script") || element->IsHtml("style") || element->IsHtml("noscript") || element->IsHtml("template") || element->IsHtml("head")) continue;
+      } else if (node->IsText()) {
+        order.push_back(node);
+      }
+      pushChildren(node);
+    }
+    for (solar::dom::Node* node : order) {
+      const std::string& data = static_cast<solar::dom::CharacterData*>(node)->Data();
+      const std::string hay = lower(data);
+      for (size_t at = hay.find(needle); at != std::string::npos; at = hay.find(needle, at + needle.size())) {
+        findMatches.push_back({node, static_cast<uint32_t>(solar::layout::UnitsBeforeByte(data, at)), static_cast<uint32_t>(solar::layout::UnitsBeforeByte(data, at + needle.size()))});
+        if (findMatches.size() >= 5000) return;
+      }
+    }
+  };
+  const auto findShow = [&] {
+    if (shared.browserLink) {
+      solar::net::ipc::Writer out;
+      out.U32(static_cast<uint32_t>(findMatches.size()));
+      out.U32(findAt >= 0 ? static_cast<uint32_t>(findAt + 1) : 0);
+      shared.browserLink->SendRaw(static_cast<uint8_t>(solar::gui::wire::ToBrowser::FindResult), out.bytes());
+    }
+  };
+  const auto findSelect = [&] {
+    if (findAt < 0 || findAt >= static_cast<int>(findMatches.size()) || !realm || !document) return;
+    const FindMatch& match = findMatches[static_cast<size_t>(findAt)];
+    solar::html::RunInRealm(*realm, [&] { solar::html::SelectText(document, match.node, match.start, match.node, match.end); });
+    // The page is scrolled to the match when it is not in view: a third of the way down.
+    if (solar::layout::Tree* tree = document->layoutTree.get(); tree && match.node->parentNode && match.node->parentNode->IsElement()) {
+      const std::vector<solar::layout::Rect> rects = solar::layout::ClientRects(*tree, static_cast<solar::dom::Element*>(match.node->parentNode));
+      if (!rects.empty()) {
+        const double viewport = shared.height.load(), top = rects.front().y;
+        if (top < 0 || top > viewport - 40) {
+          UiCommand command;
+          command.kind = UiCommand::Kind::ScrollTo;
+          command.x = tree->scroll[document].first;
+          command.y = std::max(0.0, tree->scroll[document].second + top - viewport / 3);
+          shared.Post(std::move(command));
+        }
+      }
+    }
+    dirty = true;
+  };
+  navigator.SetFindHandler([&](std::string bytes) {
+    solar::net::ipc::Reader in(bytes);
+    const std::string words = in.String(size_t{1} << 12);
+    const uint8_t what = in.U8();
+    if (!in.ok()) return;
+    if (what == 3) {
+      if (document) solar::html::RunInRealm(*realm, [&] { solar::html::ClearSelection(document); });
+      findMatches.clear();
+      findAt = -1;
+      findWords.clear();
+      dirty = true;
+      return;
+    }
+    if (what == 0 || words != findWords) {
+      findScan(words);
+      findAt = findMatches.empty() ? -1 : 0;
+    } else if (!findMatches.empty()) {
+      const int count = static_cast<int>(findMatches.size());
+      findAt = what == 1 ? (findAt + 1) % count : (findAt + count - 1) % count;
+    }
+    findSelect();
+    findShow();
+  });
   bool loadingPage = false, firstEarly = true;  // (see paintEarly)
   Clock::time_point nextEarly = Clock::now();
   double builtX = 0, builtY = 0;  // the scroll the list the window has was made at
