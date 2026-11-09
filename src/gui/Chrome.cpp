@@ -38,7 +38,7 @@ static std::string Joined(const char* const* pieces) {
 
 // The two layouts of the interface share a style and a script: {{include:css}} and {{include:js}}.
 static std::string ExpandInterface(std::string text) {
-  for (const auto& [name, pieces] : {std::pair<const char*, const char* const*>{"{{include:css}}", solar::web::kScriptUiCommonCss}, {"{{include:js}}", solar::web::kScriptUiCommonJs}}) {
+  for (const auto& [name, pieces] : {std::pair<const char*, const char* const*>{"{{include:css}}", solar::web::kScriptUiCommonCss}, {"{{include:js}}", solar::web::kScriptUiCommonJs}, {"{{include:menu}}", solar::web::kScriptUiMenu}}) {
     const size_t at = text.find(name);
     if (at != std::string::npos) text.replace(at, std::strlen(name), Joined(pieces));
   }

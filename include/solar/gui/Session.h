@@ -64,6 +64,11 @@ class Session {
   // The page of the shown tab is made larger or smaller (`step` 1 or -1 along the levels, 0 for 100%): it is laid out for a window that is that much smaller, and drawn that much larger. What was
   // chosen is kept for the site, so that its other pages and tabs have it. The factor of the shown tab (1 is 100%).
   void Zoom(int step);
+  // Downloads: what was asked for that is a file and not a page is kept in the user's folder of downloads, and the interface is told how far it is. The path of one that is finished (empty for
+  // others), one that is ended before it is done, and the list made empty of the ones that are over.
+  std::string DownloadPath(uint32_t id) const;
+  void CancelDownload(uint32_t id);
+  void ClearDownloads();
   double ActiveZoom() const;
   // The tab is put at this place among the tabs (0 is the first).
   void MoveTab(uint32_t tab, size_t index);

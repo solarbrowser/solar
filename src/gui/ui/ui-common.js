@@ -70,6 +70,7 @@
     $("wmax").innerHTML = state.maximized ? restoreIcon : maxIcon;
     $("wmax").title = state.maximized ? "Restore" : "Maximize";
     $("zoomchip").textContent = (state.zoom || 100) + "%";
+    $("menuzoom").textContent = (state.zoom || 100) + "%";
     $("zoomchip").className = state.zoom && state.zoom !== 100 ? "on" : "";
     renderTabs();
     document.documentElement.className = state.controls ? "controlled" : "";
@@ -186,7 +187,7 @@
   let findOpen = false, dlOpen = false, dlOverlay = 0;
   const syncOverlay = () => {
     // (A menu has the window; the find box has only the place it is in.)
-    let wanted = menuOpen ? 88 + 4 + 3 * 38 + 2 * 13 + 20 : tabMenuFor ? 150 : dlOpen ? dlOverlay : findOpen ? 62 : 0;
+    let wanted = menuOpen ? 330 : tabMenuFor ? 150 : dlOpen ? dlOverlay : findOpen ? 62 : 0;
     const place = !menuOpen && !tabMenuFor && !dlOpen && findOpen ? "\t" + Math.max(0, window.innerWidth - FIND_WIDTH - 16) + "\t" + (window.innerWidth - 8) : "";
     const key = wanted + place;
     if (key !== lastOverlay) { lastOverlay = key; send("overlay\t" + wanted + place); }
@@ -310,10 +311,15 @@
   };
   $("menuButton").addEventListener("click", () => setMenu(!menuOpen));
   menu.addEventListener("click", (e) => {
+    // (The zoom is changed with the menu left open, so that it can be changed again.)
+    const zoom = e.target.closest ? e.target.closest("[data-zoom]") : null;
+    if (zoom) { send("zoom\t" + zoom.dataset.zoom); return; }
     const item = e.target.closest ? e.target.closest(".item") : null;
-    if (!item) return;
+    if (!item || !item.dataset.do) return;
     setMenu(false);
-    send(item.dataset.do);
+    if (item.dataset.do === "downloads") setTimeout(() => setDownloads(true), 0);
+    else if (item.dataset.do === "find") globalThis.__solarFindUi.open();
+    else send(item.dataset.do);
   });
   document.addEventListener("mousedown", (e) => {
     if (menuOpen && !(e.target.closest && (e.target.closest("#menu") || e.target.closest("#menuButton")))) setMenu(false);

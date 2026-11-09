@@ -136,7 +136,7 @@ $(GEN_DIR)/IconsTable.cpp: $(ICONS) $(BUILD_DIR)/EmbedIcons
 	@$(BUILD_DIR)/EmbedIcons $(ICONS) > $@
 
 # The documents of the browser's own pages (src/gui/ui): each is embedded as a string (EmbedScripts <Name> <file>); the interface's two layouts share a style and a script.
-UI_DOCUMENTS = ChromeUi:chrome.html SideTabsUi:sidetabs-ui.html SidebarUi:sidebar-ui.html NewTab:newtab.html SettingsPage:settings.html UiCommonCss:ui-common.css UiCommonJs:ui-common.js
+UI_DOCUMENTS = ChromeUi:chrome.html SideTabsUi:sidetabs-ui.html SidebarUi:sidebar-ui.html NewTab:newtab.html SettingsPage:settings.html UiCommonCss:ui-common.css UiCommonJs:ui-common.js UiMenu:ui-menu.html
 define UI_DOCUMENT_RULE
 $$(GEN_DIR)/$(word 1,$(subst :, ,$(1)))Script.cpp: src/gui/ui/$(word 2,$(subst :, ,$(1))) $$(BUILD_DIR)/EmbedScripts
 	@mkdir -p $$(GEN_DIR)
