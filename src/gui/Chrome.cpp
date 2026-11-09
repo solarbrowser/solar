@@ -16,6 +16,18 @@ namespace solar::gui {
 std::string ChromeDocument() {
   std::string text;
   for (const char* const* piece = solar::web::kScriptChromeUi; *piece; ++piece) text += *piece;
+  // Where the page says {{icon:name}}, the icon is put.
+  for (size_t at = 0; (at = text.find("{{icon:", at)) != std::string::npos;) {
+    const size_t end = text.find("}}", at);
+    if (end == std::string::npos) break;
+    const std::string name = text.substr(at + 7, end - at - 7);
+    std::string svg;
+    for (const Icon* icon = kIcons; icon->name; ++icon) {
+      if (name == icon->name) svg = icon->svg;
+    }
+    text.replace(at, end + 2 - at, svg);
+    at += svg.size();
+  }
   return text;
 }
 

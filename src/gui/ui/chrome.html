@@ -55,20 +55,20 @@
   .tab .label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
   .tab .close { flex: none; width: 20px; height: 20px; margin-left: 4px; border-radius: 10px; opacity: 0; }
   .tab:hover .close, .tab.active .close { opacity: 1; }
-  .tab .close svg { width: 14px; height: 14px; color: var(--dim); }
+  .tab .close svg { width: 16px; height: 16px; color: var(--dim); }
   .tab .close:hover { background: var(--button-hover); }
   #newtab { width: 30px; height: 30px; margin: 0 4px 3px 4px; border-radius: 15px; }
-  #newtab svg { width: 16px; height: 16px; }
+  #newtab svg { width: 20px; height: 20px; }
   #drag { flex: 1; align-self: stretch; min-width: 20px; }
   .win { width: 46px; height: 40px; border-radius: 0; }
-  .win svg { width: 14px; height: 14px; }
+  .win svg { width: 16px; height: 16px; }
   #wclose:hover { background: #d93a3a; }
   #wclose:hover svg { color: #fff; }
   #controls { display: none; }
   .controlled #controls { display: flex; }
   #bar { position: relative; display: flex; align-items: center; height: 48px; padding: 0 10px; gap: 4px; border-bottom: 1px solid var(--bar-edge); }
   button { all: unset; box-sizing: border-box; display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 18px; cursor: default; }
-  svg { width: 20px; height: 20px; }
+  svg { width: 24px; height: 24px; }
   button svg { color: var(--icon); }
   button:hover { background: var(--button-hover); }
   button:active { background: var(--button-down); }
@@ -78,7 +78,7 @@
   #field:hover { background: var(--field-hover); }
   #field.focused { background: var(--field-focus); border-color: var(--accent); }
   #site { display: flex; align-items: center; justify-content: center; flex: none; width: 20px; height: 20px; margin-right: 8px; }
-  #site svg { width: 16px; height: 16px; }
+  #site svg { width: 18px; height: 18px; }
   #site svg { color: var(--dim); }
   #field.secure #site svg { color: var(--secure); }
   #field.insecure #site svg { color: var(--warning); }
@@ -96,20 +96,20 @@
 <body>
 <div id="strip">
   <div id="tabs"></div>
-  <button id="newtab" title="New tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg></button>
+  <button id="newtab" title="New tab">{{icon:add}}</button>
   <div id="drag"></div>
   <div id="controls">
-    <button class="win" id="wmin" title="Minimize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/></svg></button>
-    <button class="win" id="wmax" title="Maximize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="1"/></svg></button>
-    <button class="win" id="wclose" title="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    <button class="win" id="wmin" title="Minimize">{{icon:minimize}}</button>
+    <button class="win" id="wmax" title="Maximize">{{icon:crop-square}}</button>
+    <button class="win" id="wclose" title="Close">{{icon:close}}</button>
   </div>
 </div>
 <div id="bar">
-  <button id="back" title="Back" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg></button>
-  <button id="forward" title="Forward" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></button>
-  <button id="reload" title="Reload"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v5h-5"/></svg></button>
+  <button id="back" title="Back" disabled>{{icon:chevron-left}}</button>
+  <button id="forward" title="Forward" disabled>{{icon:chevron-right}}</button>
+  <button id="reload" title="Reload">{{icon:reload}}</button>
   <div id="field">
-    <span id="site"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18"/></svg></span>
+    <span id="site">{{icon:public}}</span>
     <div id="shown">Search or enter an address</div>
     <input id="address" type="text" spellcheck="false" autocomplete="off" placeholder="Search or enter an address">
   </div>
@@ -121,8 +121,8 @@
   const $ = (id) => document.getElementById(id);
   const send = (text) => { if (typeof __solarUiSend === "function") __solarUiSend(text); };
   const field = $("field"), address = $("address"), shown = $("shown"), site = $("site");
-  const lock = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>';
-  const open = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16.5v.01"/></svg>';
+  const lock = '{{icon:security}}';
+  const open = '{{icon:security-off}}';
   const globe = site.innerHTML;
   let state = { url: "", title: "", back: false, forward: false, loading: false, tabs: [], active: 0, controls: false, maximized: false };
   const esc = (t) => t.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
@@ -135,7 +135,7 @@
     const m = /^[a-z]+:\/\/([^\/?#]*)/.exec(t.url);
     return m ? m[1].replace(/^www\./, "") : t.url;
   };
-  const cross = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+  const cross = '{{icon:close}}';
   // The pictures the browser fetched for the tabs: kept for the site the tab is on, dropped when the tab goes to another.
   const icons = {}, iconSite = {};
   const siteOf = (url) => { const m = /^[a-z]+:\/\/([^\/?#]*)/.exec(url || ""); return m ? m[1] : ""; };
@@ -183,6 +183,8 @@
     field.className = (field.classList.contains("focused") ? "focused " : "") + kind;
     site.innerHTML = kind === "secure" ? lock : kind === "insecure" ? open : globe;
     if (!field.classList.contains("focused")) address.value = /^solar:\/\/newtab/.test(url) ? "" : url;
+    $("wmax").innerHTML = state.maximized ? restoreIcon : maxIcon;
+    $("wmax").title = state.maximized ? "Restore" : "Maximize";
     renderTabs();
     document.documentElement.className = state.controls ? "controlled" : "";
     document.body.className = (state.loading ? "loading " : "") + (state.controls ? "controlled" : "");
@@ -232,6 +234,7 @@
   $("newtab").addEventListener("click", () => send("newtab"));
   $("wmin").addEventListener("click", () => send("min"));
   $("wmax").addEventListener("click", () => send("max"));
+  const maxIcon = '{{icon:crop-square}}', restoreIcon = '{{icon:image-filter-none}}';
   $("wclose").addEventListener("click", () => send("quit"));
   window.addEventListener("resize", reportDrag);
   $("back").addEventListener("click", () => send("back"));

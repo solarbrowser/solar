@@ -21,7 +21,14 @@ constexpr const char* kChromeAddress = "solar://chrome/";
 // The page of a new tab: the browser's own, served from its memory to the renderer that is made for it.
 constexpr const char* kNewTabAddress = "solar://newtab/";
 
-// The document of the interface, and of a new tab.
+// The icons that were embedded when the program was built (assets/icons): the name, and the svg, drawn in the colour of the text. The table ends with a null name.
+struct Icon {
+  const char* name;
+  const char* svg;
+};
+extern const Icon kIcons[];
+
+// The document of the interface, and of a new tab. In the interface's, {{icon:name}} is the icon of that name.
 std::string ChromeDocument();
 std::string NewTabDocument();
 
