@@ -164,6 +164,7 @@ class Shared {
   // The connections to the browser: its network (the descriptor), and the one the window's messages come on (navigations are asked on it and answered on it).
   int networkFd = -1;
   int gpuFd = -1;  // the connection to the GPU's process, if the page has one
+  bool transparentBackground = false;  // the picture is not made white first (the browser's interface has parts of it that are not there: a menu over the page)
   bool sandboxed = false;  // the process is shut in (what it may not use, it does not)
   solar::net::ipc::Channel* browserLink = nullptr;
   // Where the answers to navigations go (the page sets it when it is ready for them; what comes before is not kept: nothing was asked yet).

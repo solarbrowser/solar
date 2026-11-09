@@ -75,6 +75,7 @@
 #include "solar/gui/Services.h"
 #include "solar/gui/Chrome.h"
 #include "solar/gui/Sandbox.h"
+#include "solar/gui/Settings.h"
 #include "solar/gui/UiNatives.h"
 #include "solar/gui/Renderer.h"
 #include "solar/gui/Window.h"
@@ -266,7 +267,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
       solar::webapi::InstallMediaNatives(realm);
       solar::webapi::InstallWebAudioNatives(realm);
       // (The browser's own interface page, and no other, can ask the browser for things.)
-      if (uiLink_ && pageUrl_.rfind(solar::gui::kChromeAddress, 0) == 0) solar::gui::InstallUiNatives(realm, *uiLink_);
+      if (uiLink_ && (solar::gui::IsInterfaceAddress(pageUrl_) || pageUrl_ == solar::gui::kSettingsAddress)) solar::gui::InstallUiNatives(realm, *uiLink_);
       solar::webapi::InstallCanvasNatives(realm);
       solar::webapi::InstallWebGlNatives(realm);
       solar::webapi::InstallImageLoadNatives(realm);
@@ -1023,6 +1024,8 @@ int RendererMain(int fd, int networkFd, int argc, char** argv, bool sandboxed = 
   solar::net::ipc::Channel link(fd);
   Shared shared;
   shared.sandboxed = sandboxed;
+  shared.transparentBackground = argc > 1 && argv[1] && solar::gui::IsInterfaceAddress(argv[1]);
+  if (shared.transparentBackground) solar::paint::SetTransparentCanvas(true);
   shared.gpuFd = gpuFd;
   solar::gui::InstallRemoteAudio(link);
   solar::gui::InstallRemoteStorage(link);
@@ -1169,7 +1172,8 @@ int main(int argc, char** argv) {
     ::signal(SIGPIPE, SIG_IGN);
     char* pageArguments[] = {argv[0], argc > 2 ? argv[2] : nullptr, nullptr};
     // (The interface's process is not the page: what is set for looking at the page, a picture of it and what a user would do in it, is not for the interface.)
-    if (argc > 2 && std::strcmp(argv[2], solar::gui::kChromeAddress) == 0) {
+    const bool isChrome = argc > 2 && solar::gui::IsInterfaceAddress(argv[2]);
+    if (isChrome || (argc > 2 && std::strcmp(argv[2], solar::gui::kSettingsAddress) == 0)) {
       ::unsetenv("SOLAR_GUI_SHOT");
       ::unsetenv("SOLAR_GUI_SCRIPT");
       ::unsetenv("SOLAR_GUI_SETTLE");
@@ -1188,7 +1192,8 @@ int main(int argc, char** argv) {
         return 1;
       }
     }
-    const int gpuFd = ::fcntl(5, F_GETFD) >= 0 ? 5 : -1;
+    // (The interface's picture is made by the page's own process: it has parts that are not there, which the GPU's process does not draw.)
+    const int gpuFd = !isChrome && ::fcntl(5, F_GETFD) >= 0 ? 5 : -1;
     const int glFd = ::fcntl(6, F_GETFD) >= 0 ? 6 : -1;
     // (WebGL is run by the GPU's process where there is one: this process has no GPU.)
     if (glFd >= 0) solar::paint::gl::SetBackend(solar::gui::MakeRemoteGlBackend(glFd).release());
@@ -1204,8 +1209,7 @@ int main(int argc, char** argv) {
   if (const char* given = std::getenv("SOLAR_GUI_SIZE")) std::sscanf(given, "%dx%d", &windowW, &windowH);
   // The window shows the pictures the page makes (the page draws them with the CPU for now; a process for the GPU to come), through a texture SDL puts on the screen.
   // (The window has no bar of the system's: the interface draws the tabs where it would be, and the buttons of the window. SOLAR_SYSTEM_TITLE=1 keeps the system's bar.)
-  const char* systemTitle = std::getenv("SOLAR_SYSTEM_TITLE");
-  const bool systemBar = systemTitle && *systemTitle && std::strcmp(systemTitle, "0") != 0;
+  const bool systemBar = solar::gui::Settings::Instance().SystemTitleBar();
   SDL_Window* window = SDL_CreateWindow("Solar", windowW, windowH, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | (systemBar ? 0 : SDL_WINDOW_BORDERLESS));
   SDL_Renderer* renderer = window ? SDL_CreateRenderer(window, nullptr) : nullptr;
   if (!renderer) {
@@ -1256,7 +1260,7 @@ int main(int argc, char** argv) {
   {
     solar::gui::BrowserServices services;
     // (A page that was asked for by a file may be taken to files; one that came from the network may not.)
-    const std::string given = argc > 1 ? argv[1] : "https://example.com/";
+    const std::string given = argc > 1 ? argv[1] : solar::gui::Settings::Instance().StartAddress();
     const std::string address = AddressOf(given);
     result = solar::gui::RunWindow(window, renderer, services, std::move(launcher), address.starts_with("file://"), address);
   }

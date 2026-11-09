@@ -373,7 +373,7 @@ void RunCompositor(Shared& shared, net::ipc::Channel& link, int gpuFd) {
       if (!surface) continue;
       SkCanvas* canvas = surface->getCanvas();
       canvas->resetMatrix();
-      canvas->clear(SK_ColorWHITE);
+      canvas->clear(shared.transparentBackground ? SK_ColorTRANSPARENT : SK_ColorWHITE);
       canvas->scale(density, density);
       if (frame.list) painter.Draw(*frame.list, *canvas, x, y);
       DrawScrollbar(*canvas, shape);

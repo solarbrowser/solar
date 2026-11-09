@@ -34,6 +34,8 @@ struct Popup {
   size_t hover = static_cast<size_t>(-1), top = 0;
 };
 void SetPopup(const Popup& popup);
+// The document's canvas is not filled with white first (what the page's own background does not cover stays clear): for the browser's interface, which is partly over a page.
+void SetTransparentCanvas(bool transparent);
 // Where the list of `select` is, in the coordinates of the document, how tall each row is and how many rows it shows; false for a select with no box.
 struct PopupGeometry {
   double x = 0, y = 0, width = 0, height = 0, rowHeight = 0;

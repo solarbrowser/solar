@@ -1,0 +1,168 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Settings</title>
+<style>
+  :root {
+    --bg: #f4f5f8; --side: #eceef3; --card: #ffffff; --edge: #dfe2ea; --text: #1b1f27; --dim: #697181;
+    --accent: #3b6cf6; --pick: rgba(30, 40, 70, 0.08); --field: #eff1f6; --on: #3b6cf6; --off: #b4bac8; --knob: #ffffff;
+    --shadow: 0 1px 2px rgba(25, 35, 70, 0.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15171c; --side: #1b1e25; --card: #1e2129; --edge: #2c303a; --text: #e8eaf0; --dim: #949bab;
+      --accent: #7a9bff; --pick: rgba(255, 255, 255, 0.08); --field: #292d37; --on: #7a9bff; --off: #4d5362; --knob: #14161b;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; color: var(--text); font: 15px/1.45 system-ui, "Noto Sans", "DejaVu Sans", Arial, sans-serif; }
+  body { display: flex; background: var(--bg); }
+
+  nav { flex: none; width: 250px; height: 100%; padding: 20px 12px; background: var(--side); }
+  .entry { all: unset; box-sizing: border-box; display: flex; align-items: center; width: 100%; height: 38px; padding: 0 12px; margin-bottom: 2px; border-radius: 8px; color: var(--text); cursor: default; }
+  .entry svg { flex: none; width: 20px; height: 20px; margin-right: 12px; color: var(--dim); }
+  .entry:hover { background: var(--pick); }
+  .entry.on { background: var(--pick); font-weight: 500; }
+  .entry.on svg { color: var(--text); }
+  .entry.soon { color: var(--dim); opacity: 0.5; pointer-events: none; }
+  nav hr { border: none; border-top: 1px solid var(--edge); margin: 12px 12px; }
+
+  main { flex: 1; min-width: 0; height: 100%; overflow: auto; }
+  .page { max-width: 740px; margin: 0 auto; padding: 44px 40px 80px; }
+  .page[hidden] { display: none; }
+  h1 { margin: 0; font-size: 26px; font-weight: 600; }
+  .lead { margin: 6px 0 28px; color: var(--dim); }
+  .card { background: var(--card); border: 1px solid var(--edge); border-radius: 12px; box-shadow: var(--shadow); }
+  .card + .card { margin-top: 16px; }
+  .row { display: flex; align-items: center; gap: 28px; padding: 18px 22px; }
+  .row + .row { border-top: 1px solid var(--edge); }
+  .label { flex: 1; min-width: 0; }
+  .label b { display: block; font-weight: 500; }
+  .label span { display: block; margin-top: 2px; color: var(--dim); font-size: 13px; }
+  .control { flex: none; }
+  .segmented { display: flex; padding: 3px; gap: 2px; border-radius: 10px; background: var(--field); }
+  .segmented button { all: unset; box-sizing: border-box; padding: 7px 18px; border-radius: 9px; color: var(--dim); font-size: 14px; cursor: default; }
+  .segmented button:hover { color: var(--text); }
+  .segmented button.on { background: var(--card); color: var(--text); font-weight: 500; box-shadow: 0 1px 2px rgba(25, 35, 70, 0.2); }
+  select, input[type=text] { height: 38px; padding: 0 14px; border: 1px solid var(--edge); border-radius: 11px; background: var(--field); color: var(--text); font: inherit; font-size: 14px; outline: 1px solid transparent; }
+  select { min-width: 200px; }
+  input[type=text] { width: 280px; }
+  input[type=text]:focus, select:focus { border-color: var(--accent); background: var(--card); }
+  .switch { all: unset; box-sizing: border-box; position: relative; display: block; width: 46px; height: 27px; border-radius: 14px; background: var(--off); cursor: default; }
+  .switch .knob { position: absolute; top: 3px; left: 3px; width: 21px; height: 21px; border-radius: 11px; background: var(--knob); }
+  .switch.on { background: var(--on); }
+  .switch.on .knob { left: 22px; }
+  .note { margin: 14px 4px 0; color: var(--dim); font-size: 13px; }
+</style>
+</head>
+<body>
+<nav>
+  <button class="entry on" data-page="appearance">{{icon:tune}}<span>Appearance</span></button>
+  <button class="entry" data-page="search">{{icon:search}}<span>Search</span></button>
+  <button class="entry" data-page="startup">{{icon:home}}<span>On startup</span></button>
+  <hr>
+  <button class="entry soon">{{icon:security}}<span>Privacy &amp; security</span></button>
+  <button class="entry soon">{{icon:tray-download}}<span>Downloads</span></button>
+  <button class="entry soon">{{icon:public}}<span>Languages</span></button>
+  <button class="entry soon">{{icon:settings}}<span>Accessibility</span></button>
+  <button class="entry soon">{{icon:history}}<span>About</span></button>
+</nav>
+<main>
+  <section class="page" id="appearance">
+    <h1>Appearance</h1>
+    <p class="lead">How the browser looks and where its tabs are.</p>
+    <div class="card">
+      <div class="row">
+        <div class="label"><b>Theme</b><span>Colours of the browser and of the pages that follow the system's colours.</span></div>
+        <div class="control segmented" id="theme">
+          <button data-value="system">System</button>
+          <button data-value="light">Light</button>
+          <button data-value="dark">Dark</button>
+        </div>
+      </div>
+      <div class="row">
+        <div class="label"><b>Tabs</b><span>Along the top of the window, or in a column at its side.</span></div>
+        <div class="control segmented" id="tabs">
+          <button data-value="top">Top</button>
+          <button data-value="side">Side</button>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="row">
+        <div class="label"><b>Use the system's title bar</b><span>The bar with the buttons of the window that the system draws. Takes effect the next time Solar starts.</span></div>
+        <div class="control"><button class="switch" id="titlebar" role="switch"><span class="knob"></span></button></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="page" id="search" hidden>
+    <h1>Search</h1>
+    <p class="lead">What happens to the words typed in the address bar.</p>
+    <div class="card">
+      <div class="row">
+        <div class="label"><b>Search engine</b><span>Used when what is typed is not an address.</span></div>
+        <div class="control"><select id="engine"></select></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="page" id="startup" hidden>
+    <h1>On startup</h1>
+    <p class="lead">What Solar opens when it is started.</p>
+    <div class="card">
+      <div class="row">
+        <div class="label"><b>Start page</b><span>The page Solar opens when it is started without an address. Empty: a new tab.</span></div>
+        <div class="control"><input id="start" type="text" spellcheck="false" autocomplete="off" placeholder="New tab"></div>
+      </div>
+    </div>
+  </section>
+</main>
+<script>
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const send = (text) => { if (typeof __solarUiSend === "function") __solarUiSend(text); };
+  const set = (key, value) => send("set\t" + key + "\t" + value);
+  let values = {};
+
+  const segment = (box, value) => { for (const b of box.children) b.className = b.dataset.value === value ? "on" : ""; };
+  const render = () => {
+    segment($("theme"), values.theme);
+    segment($("tabs"), values.tabs);
+    $("engine").value = values.search;
+    if (document.activeElement !== $("start")) $("start").value = values.start || "";
+    $("titlebar").className = "switch" + (values.titlebar === "system" ? " on" : "");
+  };
+
+  globalThis.__solarUiState = (next) => {
+    if (next.engines && $("engine").options.length === 0) {
+      for (const e of next.engines) { const o = document.createElement("option"); o.value = e.id; o.textContent = e.name; $("engine").appendChild(o); }
+    }
+    if (next.settings) { values = next.settings; render(); }
+  };
+
+  for (const id of ["theme", "tabs"]) {
+    $(id).addEventListener("click", (e) => { const b = e.target.closest ? e.target.closest("button") : null; if (b) set(id, b.dataset.value); });
+  }
+  $("engine").addEventListener("change", () => set("search", $("engine").value));
+  const commitStart = () => set("start", $("start").value);
+  $("start").addEventListener("keydown", (e) => { if (e.key === "Enter") { commitStart(); $("start").blur(); } });
+  $("start").addEventListener("blur", commitStart);
+  $("titlebar").addEventListener("click", () => set("titlebar", values.titlebar === "system" ? "app" : "system"));
+
+  // The pages of the settings: one is shown, the one the list at the side says.
+  document.querySelector("nav").addEventListener("click", (e) => {
+    const entry = e.target.closest ? e.target.closest(".entry") : null;
+    if (!entry || !entry.dataset.page) return;
+    for (const other of document.querySelectorAll(".entry")) other.className = other.className.replace(/\s*\bon\b/, "");
+    entry.className += " on";
+    for (const page of document.querySelectorAll(".page")) page.hidden = page.id !== entry.dataset.page;
+  });
+  send("ready");
+})();
+</script>
+</body>
+</html>

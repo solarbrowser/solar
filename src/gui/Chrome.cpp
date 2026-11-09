@@ -8,15 +8,14 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 
 #include "solar/web/Scripts.h"
 
 namespace solar::gui {
 
-std::string ChromeDocument() {
-  std::string text;
-  for (const char* const* piece = solar::web::kScriptChromeUi; *piece; ++piece) text += *piece;
-  // Where the page says {{icon:name}}, the icon is put.
+// Where a page says {{icon:name}}, the icon is put.
+static std::string ExpandIcons(std::string text) {
   for (size_t at = 0; (at = text.find("{{icon:", at)) != std::string::npos;) {
     const size_t end = text.find("}}", at);
     if (end == std::string::npos) break;
@@ -31,13 +30,40 @@ std::string ChromeDocument() {
   return text;
 }
 
+static std::string Joined(const char* const* pieces) {
+  std::string text;
+  for (const char* const* piece = pieces; *piece; ++piece) text += *piece;
+  return text;
+}
+
+// The two layouts of the interface share a style and a script: {{include:css}} and {{include:js}}.
+static std::string ExpandInterface(std::string text) {
+  for (const auto& [name, pieces] : {std::pair<const char*, const char* const*>{"{{include:css}}", solar::web::kScriptUiCommonCss}, {"{{include:js}}", solar::web::kScriptUiCommonJs}}) {
+    const size_t at = text.find(name);
+    if (at != std::string::npos) text.replace(at, std::strlen(name), Joined(pieces));
+  }
+  return ExpandIcons(text);
+}
+
+std::string ChromeDocument() { return ExpandInterface(Joined(solar::web::kScriptChromeUi)); }
+
+std::string SideTabsDocument() { return ExpandInterface(Joined(solar::web::kScriptSideTabsUi)); }
+
+bool IsInterfaceAddress(const std::string& address) { return address == kChromeAddress || address == kSideTabsAddress; }
+
 std::string NewTabDocument() {
   std::string text;
   for (const char* const* piece = solar::web::kScriptNewTab; *piece; ++piece) text += *piece;
   return text;
 }
 
-std::string AddressFromInput(const std::string& input) {
+std::string SettingsDocument() {
+  std::string text;
+  for (const char* const* piece = solar::web::kScriptSettingsPage; *piece; ++piece) text += *piece;
+  return ExpandIcons(text);
+}
+
+std::string AddressFromInput(const std::string& input, const std::string& searchAddress) {
   size_t first = 0, last = input.size();
   while (first < last && std::isspace(static_cast<unsigned char>(input[first]))) ++first;
   while (last > first && std::isspace(static_cast<unsigned char>(input[last - 1]))) --last;
@@ -47,7 +73,7 @@ std::string AddressFromInput(const std::string& input) {
     const std::string p = prefix;
     return text.size() >= p.size() && std::equal(p.begin(), p.end(), text.begin(), [](char a, char b) { return a == std::tolower(static_cast<unsigned char>(b)); });
   };
-  if (startsWith("http://") || startsWith("https://") || startsWith("file://") || startsWith("about:") || startsWith("data:")) return text;
+  if (startsWith("http://") || startsWith("https://") || startsWith("file://") || startsWith("about:") || startsWith("data:") || startsWith("solar://")) return text;
   const bool spaces = text.find(' ') != std::string::npos;
   if (!spaces) {
     const std::string host = text.substr(0, text.find_first_of("/?#"));
@@ -71,7 +97,7 @@ std::string AddressFromInput(const std::string& input) {
       query += hex[c & 15];
     }
   }
-  return "https://html.duckduckgo.com/html/?q=" + query;
+  return searchAddress + query;
 }
 
 }  // namespace solar::gui

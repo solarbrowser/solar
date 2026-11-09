@@ -164,10 +164,10 @@ struct Session::Impl : std::enable_shared_from_this<Session::Impl> {
   }
 
   std::shared_ptr<Host> StartHost(uint32_t tab, const std::string& site, const std::string& url, std::optional<Host::Expected> expected, bool chrome = false);
-  void StartChrome(const std::string& geometry);
+  void StartChrome(const std::string& geometry, const std::string& address);
   void OnChromeNavigate(const std::shared_ptr<Host>& host, const wire::Navigate& request);
   void OnInternalNavigate(const std::shared_ptr<Host>& host, const wire::Navigate& request);
-  void Serve(Host& host, uint32_t id, const char* address, const std::string& document);
+  void Serve(Host& host, uint32_t id, const std::string& address, const std::string& document);
   void SetLoading(uint32_t tab, bool value);
   void PushState();
   uint32_t NewTab(const std::string& address, bool activate);
@@ -435,8 +435,9 @@ void Session::Impl::OnGone(uint32_t id) {
   const bool wasCurrent = host->current;
   Retire(host, wasCurrent);
   if (host->chrome) {
-    // (The interface's process is gone: the window goes on without a bar.)
-    chromeId.store(0);
+    // (The interface's process is gone: the window goes on without a bar. A new one may already be there: it is not the one that is gone.)
+    uint32_t expected = id;
+    chromeId.compare_exchange_strong(expected, 0);
     events.gone(id, false);
     return;
   }
@@ -662,7 +663,8 @@ void Session::Impl::OnNavigate(const std::shared_ptr<Host>& host, wire::Navigate
   }
   if (parsed->scheme == "solar") {
     // The browser's own pages are served from its memory, to the renderer that was made for them and to no other.
-    if (url::Serialize(*parsed) != kNewTabAddress || SiteFor(*parsed) != host->site) return NavError(*host, request.id, "unsupported scheme");
+    const std::string where = url::Serialize(*parsed);
+    if ((where != kNewTabAddress && where != kSettingsAddress) || SiteFor(*parsed) != host->site) return NavError(*host, request.id, "unsupported scheme");
     host->infos[request.id] = {kind, entry};
     request.kind = kind;
     request.entry = entry;
@@ -876,8 +878,13 @@ void Session::Impl::PushIcon(uint32_t tab, const std::string& address, const std
   SendTo(*bar, wire::ToRenderer::UiState, "{\"icon\":{\"tab\":" + std::to_string(tab) + ",\"url\":" + JsonString(address) + ",\"data\":" + JsonString(data) + "}}");
 }
 
-void Session::Impl::StartChrome(const std::string& geometry) {
-  std::shared_ptr<Host> host = StartHost(0, "solar", kChromeAddress, std::nullopt, true);
+void Session::Impl::StartChrome(const std::string& geometry, const std::string& address) {
+  // (An interface that is there is let go: the window has another layout of it.)
+  if (std::shared_ptr<Host> before = Find(chromeId.load())) {
+    chromeId.store(0);
+    Retire(before);
+  }
+  std::shared_ptr<Host> host = StartHost(0, address, address, std::nullopt, true);
   if (!host) return;
   SendTo(*host, wire::ToRenderer::Resize, geometry);
   chromeId.store(host->id);
@@ -885,17 +892,19 @@ void Session::Impl::StartChrome(const std::string& geometry) {
 
 void Session::Impl::OnChromeNavigate(const std::shared_ptr<Host>& host, const wire::Navigate& request) {
   // The interface's process is given its one document, from the browser's own memory, and nothing else: it has no network to ask for more.
-  if (request.url != kChromeAddress) return NavError(*host, request.id, "the interface may not go anywhere");
-  Serve(*host, request.id, kChromeAddress, ChromeDocument());
+  if (request.url != host->site || !IsInterfaceAddress(request.url)) return NavError(*host, request.id, "the interface may not go anywhere");
+  Serve(*host, request.id, request.url, request.url == kSideTabsAddress ? SideTabsDocument() : ChromeDocument());
 }
 
 void Session::Impl::OnInternalNavigate(const std::shared_ptr<Host>& host, const wire::Navigate& request) {
   host->active.insert(request.id);
-  Serve(*host, request.id, kNewTabAddress, NewTabDocument());
+  const std::optional<url::Url> parsed = url::Parse(request.url);
+  const bool settings = parsed && url::Serialize(*parsed) == kSettingsAddress;
+  Serve(*host, request.id, settings ? kSettingsAddress : kNewTabAddress, settings ? SettingsDocument() : NewTabDocument());
   host->active.erase(request.id);
 }
 
-void Session::Impl::Serve(Host& host, uint32_t id, const char* address, const std::string& document) {
+void Session::Impl::Serve(Host& host, uint32_t id, const std::string& address, const std::string& document) {
   net::ipc::Writer head;
   wire::Write(head, wire::NavHead{id, 200, "text/html; charset=utf-8", address});
   SendTo(host, wire::ToRenderer::NavHead, head.bytes());
@@ -1058,9 +1067,17 @@ void Session::Reload() {
   });
 }
 
-void Session::OpenChrome(const std::string& geometry) { impl_->services.Post([impl = impl_, geometry] { impl->StartChrome(geometry); }); }
+void Session::OpenChrome(const std::string& geometry, const std::string& address) {
+  if (!IsInterfaceAddress(address)) return;
+  impl_->services.Post([impl = impl_, geometry, address] { impl->StartChrome(geometry, address); });
+}
 
 uint32_t Session::chrome() const { return impl_->chromeId.load(); }
+
+bool Session::IsSettings(uint32_t host) const {
+  std::shared_ptr<Host> found = impl_->Find(host);
+  return found && !found->gone && found->site == std::string("solar:") + kSettingsAddress;
+}
 
 void Session::SendChrome(wire::ToRenderer type, const std::string& bytes) { Send(impl_->chromeId.load(), type, bytes); }
 

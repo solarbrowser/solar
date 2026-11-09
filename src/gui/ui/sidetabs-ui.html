@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Solar</title>
+<style>
+{{include:css}}
+  #side { position: absolute; left: 0; top: 0; bottom: 0; width: 240px; display: flex; flex-direction: column; background: var(--strip); border-right: 1px solid var(--bar-edge); }
+  #sidehead { display: flex; align-items: center; flex: none; height: 48px; padding: 0 8px 0 12px; }
+  #drag { flex: 1; align-self: stretch; min-width: 20px; }
+  #newtab { width: 32px; height: 32px; border-radius: 8px; }
+  #newtab svg { width: 20px; height: 20px; }
+  #tabs { flex: 1; min-height: 0; overflow: hidden; padding: 4px 8px 8px; }
+  .tab { position: relative; display: flex; align-items: center; height: 36px; margin-bottom: 2px; padding: 0 6px 0 10px; border-radius: 8px; color: var(--dim); }
+  .tab:hover { background: var(--tab-hover); }
+  .tab.active { background: var(--bar); color: var(--text); box-shadow: 0 1px 2px rgba(25, 35, 70, 0.14); }
+  #bar { position: absolute; left: 240px; right: 0; top: 0; padding-right: 0; }
+  #menu { top: 52px; }
+  #controls { display: none; margin-left: 4px; }
+  .controlled #controls { display: flex; }
+  .win { width: 46px; height: 47px; border-radius: 0; }
+  .win svg { width: 16px; height: 16px; }
+  #wclose:hover { background: #d93a3a; }
+  #wclose:hover svg { color: #fff; }
+</style>
+</head>
+<body>
+<div id="side">
+  <div id="sidehead">
+    <div id="drag"></div>
+    <button id="newtab" title="New tab">{{icon:add}}</button>
+  </div>
+  <div id="tabs"></div>
+</div>
+<div id="bar">
+  <button id="back" title="Back" disabled>{{icon:chevron-left}}</button>
+  <button id="forward" title="Forward" disabled>{{icon:chevron-right}}</button>
+  <button id="reload" title="Reload">{{icon:reload}}</button>
+  <div id="field">
+    <span id="site">{{icon:public}}</span>
+    <div id="shown">Search or enter an address</div>
+    <input id="address" type="text" spellcheck="false" autocomplete="off" placeholder="Search or enter an address">
+  </div>
+  <button id="menuButton" title="Menu">{{icon:hamburger-menu}}</button>
+  <div id="controls">
+    <button class="win" id="wmin" title="Minimize">{{icon:minimize}}</button>
+    <button class="win" id="wmax" title="Maximize">{{icon:crop-square}}</button>
+    <button class="win" id="wclose" title="Close">{{icon:close}}</button>
+  </div>
+  <div id="progress"></div>
+</div>
+<div id="menu">
+  <button class="item" data-do="newtab">{{icon:add}}<span>New tab</span><small>Ctrl+T</small></button>
+  <hr>
+  <button class="item" data-do="settings">{{icon:settings}}<span>Settings</span></button>
+  <hr>
+  <button class="item" data-do="quit">{{icon:close}}<span>Exit</span></button>
+</div>
+<script>
+{{include:js}}
+</script>
+</body>
+</html>

@@ -65,8 +65,11 @@ class Session {
   void SetWindowFlags(bool controls, bool maximized);
   // The browser's interface: its renderer is started (`geometry` is the size it is told first, a Resize message's bytes) and told the state of the browser as it changes. It is not a page of
   // the window's history; what it says (Handle) is the window's to act on. 0 while there is none.
-  void OpenChrome(const std::string& geometry);
+  // `address` says which layout of the interface it is (kChromeAddress, kSideTabsAddress); one that is already there is ended and replaced.
+  void OpenChrome(const std::string& geometry, const std::string& address = "solar://chrome/");
   uint32_t chrome() const;
+  // Whether the renderer is the one of the settings page (solar://settings/), which may change the settings.
+  bool IsSettings(uint32_t host) const;
   void SendChrome(wire::ToRenderer type, const std::string& bytes);
   // The title the shown page has (for the interface).
   void SetTitle(uint32_t host, const std::string& title);

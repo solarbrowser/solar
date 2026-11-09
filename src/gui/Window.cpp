@@ -23,6 +23,7 @@
 
 #include "solar/gui/Chrome.h"
 #include "solar/gui/FrameBuffer.h"
+#include "solar/gui/Settings.h"
 #include "solar/gui/SdlAudio.h"
 #include "solar/gui/Wire.h"
 
@@ -51,7 +52,7 @@ struct View {
 // Where the window may be taken hold of to be moved, and its edges to be resized, when the system's bar is not there: the interface says which part of the strip of the tabs is empty.
 struct HitState {
   std::mutex mutex;
-  int dragLeft = 0, dragRight = 0;
+  int dragLeft = 0, dragRight = 0, dragBottom = kTabStripHeight;
   bool borderless = false, maximized = false, fullscreen = false;
 };
 HitState g_hit;
@@ -73,7 +74,7 @@ SDL_HitTestResult HitTest(SDL_Window* window, const SDL_Point* point, void*) {
     if (left) return SDL_HITTEST_RESIZE_LEFT;
     if (right) return SDL_HITTEST_RESIZE_RIGHT;
   }
-  if (!g_hit.fullscreen && point->y < kTabStripHeight && point->x >= g_hit.dragLeft && point->x < g_hit.dragRight) return SDL_HITTEST_DRAGGABLE;
+  if (!g_hit.fullscreen && point->y < g_hit.dragBottom && point->x >= g_hit.dragLeft && point->x < g_hit.dragRight) return SDL_HITTEST_DRAGGABLE;
   return SDL_HITTEST_NORMAL;
 }
 
@@ -116,6 +117,11 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
   const bool frameLog = std::getenv("SOLAR_FRAME_LOG") != nullptr;  // (the time between the pictures of the page, for looking at how smooth it is)
   auto lastFrame = std::chrono::steady_clock::now();
   bool fullscreen = false, barFocused = false;
+  // The interface may be taller than its bar for a while (a menu that comes down over the page): how many points more.
+  int overlay = 0;
+  // Where the tabs are: along the top (the bar is the top of the window, 88 points), or in a column at the side (the bar of the address is 48 points high at the top, and the column 240 wide at the left; the
+  // picture of the interface is then the whole window, clear where the page is).
+  bool sideTabs = Settings::Instance().Get("tabs") == "side";
   const bool noBar = std::getenv("SOLAR_NO_CHROME") != nullptr;
   // (The window has no bar of the system's by default; the interface draws the buttons of the window then. SOLAR_SYSTEM_TITLE=1 gives it the system's.)
   const bool borderless = (SDL_GetWindowFlags(window) & SDL_WINDOW_BORDERLESS) != 0;
@@ -131,20 +137,40 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
   bool running = true;
 
   // The height of the bar in pixels (what it is in points, at the density of the window).
-  const auto barPoints = [&] { return fullscreen || noBar ? 0 : kChromeHeight; };
-  const auto barPixels = [&] { return fullscreen || noBar ? 0 : static_cast<int>(std::lround(kChromeHeight * SDL_GetWindowPixelDensity(window))); };
+  const auto barPoints = [&] { return fullscreen || noBar ? 0 : (sideTabs ? kToolbarHeight : kChromeHeight); };
+  const auto leftPoints = [&] { return fullscreen || noBar || !sideTabs ? 0 : kSideWidth; };
+  const auto barPixels = [&] { return static_cast<int>(std::lround(barPoints() * SDL_GetWindowPixelDensity(window))); };
+  const auto leftPixels = [&] { return static_cast<int>(std::lround(leftPoints() * SDL_GetWindowPixelDensity(window))); };
+  // What the interface is told its size is: the bar (and what comes down from it), or the whole window with the tabs at the side.
+  const auto chromeGeometry = [&] {
+    int w = 0, h = 0, pw = 0, ph = 0;
+    SDL_GetWindowSize(window, &w, &h);
+    SDL_GetWindowSizeInPixels(window, &pw, &ph);
+    const float density = SDL_GetWindowPixelDensity(window);
+    Writer out;
+    if (sideTabs) {
+      wire::Write(out, wire::Geometry{w, std::max(1, h), pw, std::max(1, ph), density});
+    } else {
+      const int extra = barPoints() > 0 ? overlay : 0;
+      wire::Write(out, wire::Geometry{w, kChromeHeight + extra, pw, static_cast<int>(std::lround((kChromeHeight + extra) * density)), density});
+    }
+    return out.bytes();
+  };
+  const auto chromeAddress = [&] { return std::string(sideTabs ? kSideTabsAddress : kChromeAddress); };
   const auto compose = [&] {
     SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
     SDL_RenderClear(renderer);
     int outW = 0, outH = 0;
     SDL_GetRenderOutputSize(renderer, &outW, &outH);
-    const int bar = std::min(barPixels(), outH);
+    const int bar = std::min(barPixels(), outH), left = std::min(leftPixels(), outW);
     if (texture) {
-      const SDL_FRect page{0, static_cast<float>(bar), static_cast<float>(outW), static_cast<float>(outH - bar)};
+      const SDL_FRect page{static_cast<float>(left), static_cast<float>(bar), static_cast<float>(outW - left), static_cast<float>(outH - bar)};
       SDL_RenderTexture(renderer, texture, nullptr, &page);
     }
     if (barTexture && bar > 0) {
-      const SDL_FRect top{0, 0, static_cast<float>(outW), static_cast<float>(bar)};
+      // (The interface's picture is as large as the interface was told it is: laid over the window from its corner.)
+      const float height = sideTabs ? static_cast<float>(outH) : barTextureW > 0 ? static_cast<float>(barTextureH) * static_cast<float>(outW) / static_cast<float>(barTextureW) : static_cast<float>(bar);
+      const SDL_FRect top{0, 0, static_cast<float>(outW), height};
       SDL_RenderTexture(renderer, barTexture, nullptr, &top);
     }
   };
@@ -157,13 +183,11 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
     SDL_GetWindowSize(window, &w, &h);
     SDL_GetWindowSizeInPixels(window, &pw, &ph);
     const float density = SDL_GetWindowPixelDensity(window);
-    const int bar = barPixels(), barPts = barPoints();
+    const int bar = barPixels(), barPts = barPoints(), left = leftPixels(), leftPts = leftPoints();
     Writer out;
-    wire::Write(out, wire::Geometry{w, std::max(1, h - barPts), pw, std::max(1, ph - bar), density});
+    wire::Write(out, wire::Geometry{std::max(1, w - leftPts), std::max(1, h - barPts), std::max(1, pw - left), std::max(1, ph - bar), density});
     session.Broadcast(wire::ToRenderer::Resize, out.bytes());
-    Writer barOut;
-    wire::Write(barOut, wire::Geometry{w, kChromeHeight, pw, static_cast<int>(std::lround(kChromeHeight * density)), density});
-    session.SendChrome(wire::ToRenderer::Resize, barOut.bytes());
+    session.SendChrome(wire::ToRenderer::Resize, chromeGeometry());
   };
   const auto stopAudioOf = [&](uint32_t host) {
     for (auto it = audio.begin(); it != audio.end();) it = (it->first >> 32) == host ? audio.erase(it) : std::next(it);
@@ -251,6 +275,7 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
             barTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, shape.width, shape.height);
             barTextureW = shape.width;
             barTextureH = shape.height;
+            if (barTexture) SDL_SetTextureBlendMode(barTexture, SDL_BLENDMODE_BLEND_PREMULTIPLIED);
           }
           if (barTexture) {
             SDL_UpdateTexture(barTexture, nullptr, buffer->second.data(), shape.stride);
@@ -371,19 +396,59 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
       }
       case wire::ToBrowser::UiCommand: {
         // What the interface asks (only its own process is heard).
-        if (message.host != session.chrome()) break;
+        const bool fromBar = message.host == session.chrome(), fromSettings = !fromBar && session.IsSettings(message.host);
+        if (!fromBar && !fromSettings) break;
         const std::string& text = message.bytes;
         const size_t tab = text.find('\t');
         const std::string verb = text.substr(0, tab), rest = tab == std::string::npos ? "" : text.substr(tab + 1);
+        if (fromSettings) {
+          // The settings page may read and change the settings, and do nothing else.
+          if (verb == "ready") {
+            session.Send(message.host, wire::ToRenderer::UiState, Settings::Instance().Json());
+          } else if (verb == "set") {
+            const size_t second = rest.find('\t');
+            if (second != std::string::npos && Settings::Instance().Set(rest.substr(0, second), rest.substr(second + 1))) {
+              session.Send(message.host, wire::ToRenderer::UiState, Settings::Instance().Json());
+              // The tabs are moved to the other layout at once: another interface is started for it, and the pages are told how large they are now.
+              const bool wantSide = Settings::Instance().Get("tabs") == "side";
+              if (wantSide != sideTabs) {
+                sideTabs = wantSide;
+                overlay = 0;
+                barFocused = false;
+                capture = 0;
+                if (barTexture) SDL_DestroyTexture(barTexture);
+                barTexture = nullptr;
+                if (!noBar) session.OpenChrome(chromeGeometry(), chromeAddress());
+                sendGeometry();
+                present();
+              } else {
+                session.SendChrome(wire::ToRenderer::UiState, Settings::Instance().Json());
+              }
+            }
+          }
+          break;
+        }
         if (verb == "go") {
-          const std::string where = AddressFromInput(rest);
+          const std::string where = AddressFromInput(rest, Settings::Instance().SearchAddress());
           barFocused = false;
           if (!where.empty()) session.Go(where);
         } else if (verb == "back") session.Back();
         else if (verb == "forward") session.Forward();
         else if (verb == "reload") session.Reload();
         else if (verb == "focus") barFocused = rest == "1";
-        else if (verb == "ready") session.PushState();
+        else if (verb == "ready") {
+          session.PushState();
+          session.SendChrome(wire::ToRenderer::UiState, Settings::Instance().Json());
+        } else if (verb == "settings") session.NewTab(kSettingsAddress);
+        else if (verb == "overlay") {
+          // The interface asks to be taller (a menu) or to be as it was: it takes the keys while it is, and the window tells the pages and it how large they are.
+          const int wanted = std::clamp(std::atoi(rest.c_str()), 0, 600);
+          if (wanted != overlay) {
+            overlay = wanted;
+            barFocused = wanted > 0;
+            if (!sideTabs) sendGeometry();
+          }
+        }
         else if (verb == "newtab") {
           session.NewTab("");
           if (!noBar) {
@@ -403,11 +468,12 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
           else SDL_MaximizeWindow(window);
         } else if (verb == "quit") running = false;
         else if (verb == "drag") {
-          int left = 0, right = 0;
-          if (std::sscanf(rest.c_str(), "%d,%d", &left, &right) == 2) {
+          int left = 0, right = 0, bottom = kTabStripHeight;
+          if (std::sscanf(rest.c_str(), "%d,%d,%d", &left, &right, &bottom) >= 2) {
             std::lock_guard<std::mutex> lock(g_hit.mutex);
             g_hit.dragLeft = left;
             g_hit.dragRight = right;
+            g_hit.dragBottom = std::clamp(bottom, 0, 200);
           }
         }
         break;
@@ -419,15 +485,7 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
     }
   };
 
-  {
-    int w = 0, pw = 0, ph = 0;
-    SDL_GetWindowSize(window, &w, &ph);
-    SDL_GetWindowSizeInPixels(window, &pw, &ph);
-    const float density = SDL_GetWindowPixelDensity(window);
-    Writer barOut;
-    wire::Write(barOut, wire::Geometry{w, kChromeHeight, pw, static_cast<int>(std::lround(kChromeHeight * density)), density});
-    if (!std::getenv("SOLAR_NO_CHROME")) session.OpenChrome(barOut.bytes());
-  }
+  if (!noBar) session.OpenChrome(chromeGeometry(), chromeAddress());
   session.SetWindowFlags(borderless, false);
   session.Open(address);
   sendGeometry();
@@ -632,12 +690,16 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
       }
       if (forward) {
         uint32_t target = session.current();
-        const float barPts = static_cast<float>(barPoints());
+        const float barPts = static_cast<float>(barPoints()), leftPts = static_cast<float>(leftPoints());
+        const float barExtent = barPts > 0 ? barPts + (sideTabs ? 0.0f : static_cast<float>(overlay)) : 0;
         const bool mouse = input.kind == wire::Input::Kind::Motion || input.kind == wire::Input::Kind::ButtonDown || input.kind == wire::Input::Kind::ButtonUp || input.kind == wire::Input::Kind::Wheel;
         if (mouse) {
           // The bar is the top of the window and the page the rest (its y starts under the bar); a button that went down in one keeps what follows until it is up.
           const float y = input.kind == wire::Input::Kind::Wheel ? input.yrel : input.y;
-          const int side = capture ? capture : (y < barPts ? 1 : 2);
+          const float x = input.kind == wire::Input::Kind::Wheel ? input.xrel : input.x;
+          // (With the tabs at the side the interface also has the column at the left, and the whole window while a menu is open.)
+          const bool inBar = y < barExtent || x < leftPts || (sideTabs && overlay > 0);
+          const int side = capture ? capture : (inBar ? 1 : 2);
           if (input.kind == wire::Input::Kind::ButtonDown) {
             capture = side;
             if (side == 2 && barFocused) {
@@ -651,8 +713,10 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
             target = session.chrome();
           } else if (input.kind == wire::Input::Kind::Wheel) {
             input.yrel -= barPts;
+            input.xrel -= leftPts;
           } else {
             input.y -= barPts;
+            input.x -= leftPts;
           }
         } else if (input.kind == wire::Input::Kind::KeyDown && !input.repeat) {
           // What the browser does with the keys before the page sees them.

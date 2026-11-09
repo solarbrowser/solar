@@ -34,6 +34,10 @@
 
 namespace solar::paint {
 
+static std::atomic<bool> g_transparentCanvas{false};
+void SetTransparentCanvas(bool transparent) { g_transparentCanvas = transparent; }
+
+
 namespace {
 
 std::atomic<bool> g_caretOn{true};  // the caret blinks: it is drawn in the frames that are made while this is set
@@ -468,7 +472,7 @@ class Painter {
     const layout::Rect extent = layout::ScrollableOverflow(tree_, *tree_.root, html->element());
     out.width = F(std::max(tree_.viewportWidth, extent.Right()));
     out.height = F(std::max(tree_.viewportHeight, extent.Bottom()));
-    Fill(RectF{0, 0, out.width, out.height}, Color{255, 255, 255, 255});
+    if (!g_transparentCanvas.load()) Fill(RectF{0, 0, out.width, out.height}, Color{255, 255, 255, 255});
     Color canvas = BackgroundOf(*html);
     const Box* body = nullptr;
     for (const auto& child : html->children) {

@@ -124,11 +124,6 @@ $(GEN_DIR)/WebApiWorkerScript.cpp: $(WEB_API_WORKER_JS) $(BUILD_DIR)/EmbedScript
 	@echo "[EMBED] $@"
 	@$(BUILD_DIR)/EmbedScripts WebApiWorker $(WEB_API_WORKER_JS) > $@
 
-$(GEN_DIR)/ChromeUiScript.cpp: src/gui/ui/chrome.html $(BUILD_DIR)/EmbedScripts
-	@mkdir -p $(GEN_DIR)
-	@echo "[EMBED] $@"
-	@$(BUILD_DIR)/EmbedScripts ChromeUi src/gui/ui/chrome.html > $@
-
 $(BUILD_DIR)/EmbedIcons: tools/EmbedIcons.cpp
 	@mkdir -p $(BUILD_DIR)
 	@echo "[BUILD] $<"
@@ -140,10 +135,16 @@ $(GEN_DIR)/IconsTable.cpp: $(ICONS) $(BUILD_DIR)/EmbedIcons
 	@echo "[EMBED] $@"
 	@$(BUILD_DIR)/EmbedIcons $(ICONS) > $@
 
-$(GEN_DIR)/NewTabScript.cpp: src/gui/ui/newtab.html $(BUILD_DIR)/EmbedScripts
-	@mkdir -p $(GEN_DIR)
-	@echo "[EMBED] $@"
-	@$(BUILD_DIR)/EmbedScripts NewTab src/gui/ui/newtab.html > $@
+# The documents of the browser's own pages (src/gui/ui): each is embedded as a string (EmbedScripts <Name> <file>); the interface's two layouts share a style and a script.
+UI_DOCUMENTS = ChromeUi:chrome.html SideTabsUi:sidetabs-ui.html NewTab:newtab.html SettingsPage:settings.html UiCommonCss:ui-common.css UiCommonJs:ui-common.js
+define UI_DOCUMENT_RULE
+$$(GEN_DIR)/$(word 1,$(subst :, ,$(1)))Script.cpp: src/gui/ui/$(word 2,$(subst :, ,$(1))) $$(BUILD_DIR)/EmbedScripts
+	@mkdir -p $$(GEN_DIR)
+	@echo "[EMBED] $$@"
+	@$$(BUILD_DIR)/EmbedScripts $(word 1,$(subst :, ,$(1))) src/gui/ui/$(word 2,$(subst :, ,$(1))) > $$@
+endef
+$(foreach doc,$(UI_DOCUMENTS),$(eval $(call UI_DOCUMENT_RULE,$(doc))))
+UI_DOCUMENT_OBJECTS = $(foreach doc,$(UI_DOCUMENTS),$(OBJ_DIR)/$(GEN_DIR)/$(word 1,$(subst :, ,$(doc)))Script.o) $(OBJ_DIR)/$(GEN_DIR)/IconsTable.o
 
 XHR_JS = $(sort $(wildcard src/web/js/xhr-*.js))
 $(GEN_DIR)/XhrScript.cpp: $(XHR_JS) $(BUILD_DIR)/EmbedScripts
@@ -228,7 +229,7 @@ $(QUANTA_LIBS): | quanta
 # The browser: a page in a window (src/gui), and solar-cli, the command line for what is under it (addresses, fetches), which the tests and tools use.
 $(OBJ_DIR)/src/paint/SkiaPainter.o $(OBJ_DIR)/src/paint/ListCodec.o $(OBJ_DIR)/src/paint/Canvas.o $(OBJ_DIR)/src/paint/CanvasNatives.o $(OBJ_DIR)/src/paint/WebGl.o $(OBJ_DIR)/src/paint/GlRuntime.o $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/gui/Compositor.o $(OBJ_DIR)/src/gui/Window.o $(OBJ_DIR)/src/gui/GpuRaster.o $(OBJ_DIR)/src/gui/GpuProcess.o $(OBJ_DIR)/src/gui/GpuClient.o $(OBJ_DIR)/src/gui/GpuSurface.o $(OBJ_DIR)/src/gui/VulkanSurface.o $(OBJ_DIR)/src/gui/SdlAudio.o: CXXFLAGS += $(SKIA_CFLAGS) $(SDL_CFLAGS)
 
-solar: $(OBJ_DIR)/src/paint/Canvas.o $(OBJ_DIR)/src/paint/CanvasNatives.o $(OBJ_DIR)/src/paint/WebGl.o $(OBJ_DIR)/src/paint/GlRuntime.o $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/gui/Compositor.o $(OBJ_DIR)/src/gui/Window.o $(OBJ_DIR)/src/gui/SdlAudio.o $(OBJ_DIR)/src/gui/GpuSurface.o $(OBJ_DIR)/src/gui/VulkanSurface.o $(OBJ_DIR)/src/gui/Wire.o $(OBJ_DIR)/src/gui/FrameBuffer.o $(OBJ_DIR)/src/gui/Navigation.o $(OBJ_DIR)/src/gui/RemoteAudio.o $(OBJ_DIR)/src/gui/RemoteStorage.o $(OBJ_DIR)/src/gui/Services.o $(OBJ_DIR)/src/gui/Session.o $(OBJ_DIR)/src/gui/Chrome.o $(OBJ_DIR)/src/gui/UiNatives.o $(OBJ_DIR)/$(GEN_DIR)/ChromeUiScript.o $(OBJ_DIR)/$(GEN_DIR)/NewTabScript.o $(OBJ_DIR)/$(GEN_DIR)/IconsTable.o $(OBJ_DIR)/src/gui/Sandbox.o $(OBJ_DIR)/src/gui/GpuRaster.o $(OBJ_DIR)/src/gui/GpuProcess.o $(OBJ_DIR)/src/gui/GpuClient.o $(OBJ_DIR)/src/gui/GpuWire.o $(OBJ_DIR)/src/gui/GlWire.o $(OBJ_DIR)/src/gui/RemoteGl.o $(OBJ_DIR)/src/paint/SkiaPainter.o $(OBJ_DIR)/src/paint/ListCodec.o $(PAINT_OBJECTS) $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
+solar: $(OBJ_DIR)/src/paint/Canvas.o $(OBJ_DIR)/src/paint/CanvasNatives.o $(OBJ_DIR)/src/paint/WebGl.o $(OBJ_DIR)/src/paint/GlRuntime.o $(OBJ_DIR)/src/gui/Main.o $(OBJ_DIR)/src/gui/Compositor.o $(OBJ_DIR)/src/gui/Window.o $(OBJ_DIR)/src/gui/SdlAudio.o $(OBJ_DIR)/src/gui/GpuSurface.o $(OBJ_DIR)/src/gui/VulkanSurface.o $(OBJ_DIR)/src/gui/Wire.o $(OBJ_DIR)/src/gui/FrameBuffer.o $(OBJ_DIR)/src/gui/Navigation.o $(OBJ_DIR)/src/gui/RemoteAudio.o $(OBJ_DIR)/src/gui/RemoteStorage.o $(OBJ_DIR)/src/gui/Services.o $(OBJ_DIR)/src/gui/Session.o $(OBJ_DIR)/src/gui/Chrome.o $(OBJ_DIR)/src/gui/UiNatives.o $(UI_DOCUMENT_OBJECTS) $(OBJ_DIR)/src/gui/Settings.o $(OBJ_DIR)/src/gui/Sandbox.o $(OBJ_DIR)/src/gui/GpuRaster.o $(OBJ_DIR)/src/gui/GpuProcess.o $(OBJ_DIR)/src/gui/GpuClient.o $(OBJ_DIR)/src/gui/GpuWire.o $(OBJ_DIR)/src/gui/GlWire.o $(OBJ_DIR)/src/gui/RemoteGl.o $(OBJ_DIR)/src/paint/SkiaPainter.o $(OBJ_DIR)/src/paint/ListCodec.o $(PAINT_OBJECTS) $(URL_OBJECTS) $(NET_OBJECTS) $(DOM_OBJECTS) $(CSS_OBJECTS) $(FONT_OBJECTS) $(LAYOUT_OBJECTS) $(TEXT_OBJECTS) $(HTML_OBJECTS) $(WEB_OBJECTS) $(QUANTA_LIBS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS) $(HARFBUZZ_LIBS) $(SKIA_LIBS) $(SDL_LIBS)
 
@@ -282,11 +283,15 @@ $(BUILD_DIR)/WireTest: $(OBJ_DIR)/tests/WireTest.o $(OBJ_DIR)/src/gui/GlWire.o $
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS)
 
-$(BUILD_DIR)/SessionTest: $(OBJ_DIR)/tests/SessionTest.o $(OBJ_DIR)/src/web-api/Storage.o $(OBJ_DIR)/src/gui/Services.o $(OBJ_DIR)/src/gui/Session.o $(OBJ_DIR)/src/gui/Chrome.o $(OBJ_DIR)/$(GEN_DIR)/ChromeUiScript.o $(OBJ_DIR)/$(GEN_DIR)/NewTabScript.o $(OBJ_DIR)/$(GEN_DIR)/IconsTable.o $(OBJ_DIR)/src/gui/Wire.o $(OBJ_DIR)/tests/support/TestServer.o $(URL_OBJECTS) $(NET_OBJECTS)
+$(BUILD_DIR)/SessionTest: $(OBJ_DIR)/tests/SessionTest.o $(OBJ_DIR)/src/web-api/Storage.o $(OBJ_DIR)/src/gui/Services.o $(OBJ_DIR)/src/gui/Session.o $(OBJ_DIR)/src/gui/Chrome.o $(UI_DOCUMENT_OBJECTS) $(OBJ_DIR)/src/gui/Wire.o $(OBJ_DIR)/tests/support/TestServer.o $(URL_OBJECTS) $(NET_OBJECTS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) $(QUANTA_LINK) -o $@ $^ $(NET_LIBS)
 
 $(BUILD_DIR)/SandboxTest: $(OBJ_DIR)/tests/SandboxTest.o $(OBJ_DIR)/src/gui/Sandbox.o $(OBJ_DIR)/src/gui/FrameBuffer.o
+	@echo "[LINK] $@"
+	@$(CXX) $(CXXFLAGS) -o $@ $^ -lpthread
+
+$(BUILD_DIR)/SettingsTest: $(OBJ_DIR)/tests/SettingsTest.o $(OBJ_DIR)/src/gui/Settings.o $(OBJ_DIR)/src/gui/Chrome.o $(UI_DOCUMENT_OBJECTS) $(URL_OBJECTS)
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^ -lpthread
 
@@ -408,7 +413,7 @@ $(BUILD_DIR)/GenIdnaTables: tools/GenIdnaTables.cpp
 WPT_ANY = $(shell cat tests/wpt-solar/anyjs-passing.txt)
 
 PORTABLE_TESTS = FontTest BidiTest CssValuesTest HtmlTokenizerTest UrlTest SearchParamsTest ValidationErrorTest NormalizerTest PublicSuffixTest CookiesTest HttpCacheTest FetchHeadersTest CorsTest Http1ParserTest ContentDecoderTest AddressRaceTest HstsTest
-NET_TESTS = LoopTest ResolverTest NetTest HttpClientTest TlsTest Http2Test NetworkThreadTest PageFetchTest IpcTest WireTest SessionTest SandboxTest StorageTest
+NET_TESTS = LoopTest ResolverTest NetTest HttpClientTest TlsTest Http2Test NetworkThreadTest PageFetchTest IpcTest WireTest SessionTest SandboxTest StorageTest SettingsTest
 QUANTA_TESTS = UrlBindingsTest UrlRealmsTest FetchBindingsTest DomTest HtmlTreeTest ListCodecTest
 ifeq ($(PLATFORM),linux)
 TESTS = $(PORTABLE_TESTS) $(NET_TESTS) $(QUANTA_TESTS)
