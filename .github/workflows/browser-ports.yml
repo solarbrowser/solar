@@ -89,7 +89,8 @@ jobs:
           python3 tools/git-sync-deps
           python3 bin/fetch-gn
           bin/gn gen out/Static --args='cc="clang" cxx="clang++" is_debug=false is_official_build=false skia_use_system_freetype2=false skia_use_system_harfbuzz=false skia_use_harfbuzz=false skia_enable_skshaper=true skia_enable_skunicode=false skia_use_icu=false skia_use_icu4x=false skia_use_fontconfig=false skia_enable_fontmgr_custom_empty=true skia_use_gl=true skia_use_metal=true skia_use_vulkan=false skia_enable_tools=false skia_enable_pdf=false skia_use_expat=true skia_use_xps=false skia_enable_svg=true skia_enable_skottie=false'
-          ninja -C out/Static
+          # (Only the libraries the program links: the default target also makes gen/skia.h, whose script needs a warning-free gn that the runners' one is not.)
+          ninja -C out/Static skia svg skresources skshaper
       - name: Save Skia
         if: steps.skia.outcome == 'success'
         uses: actions/cache/save@v4
@@ -179,7 +180,8 @@ jobs:
           $version = (clang --version | Select-String 'version (\d+)').Matches[0].Groups[1].Value
           bin/gn gen out/Static --args="clang_win=`"C:\Program Files\LLVM`" clang_win_version=$version is_debug=false is_official_build=false skia_use_system_freetype2=false skia_use_harfbuzz=false skia_enable_skshaper=true skia_enable_skunicode=false skia_use_icu=false skia_use_icu4x=false skia_use_fontconfig=false skia_enable_fontmgr_custom_empty=true skia_use_gl=true skia_use_angle=false skia_use_vulkan=false skia_enable_tools=false skia_enable_pdf=false skia_use_expat=true skia_use_xps=false skia_enable_svg=true skia_enable_skottie=false"
           choco install ninja -y
-          ninja -C out/Static
+          # (Only the libraries the program links: the default target also makes gen/skia.h, whose script needs a warning-free gn that the runners' one is not.)
+          ninja -C out/Static skia svg skresources skshaper
       - name: Save Skia
         if: steps.skia.outcome == 'success'
         uses: actions/cache/save@v4
