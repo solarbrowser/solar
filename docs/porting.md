@@ -41,3 +41,11 @@ two systems, found by looking at the code (not by building there: none of this h
 Every step above needs the system to compile and to run: a Mac (Apple silicon, and an Intel one for the other architecture) and a Windows machine, or CI jobs that do the whole
 build and keep the log. The CI file has the macOS and Windows jobs for the network layer; the next step for each is a job that builds Skia and Quanta and then `make solar`,
 allowed to fail until it does, so that each push says what is left.
+
+## The workflow that finds out
+
+`.github/workflows/browser-ports.yml` builds the pieces apart on macOS (Apple silicon and Intel) and on Windows, and ends each job with a table of which worked: the submodules, Quanta,
+Skia, the network layer's tests, and `make solar`. A job may fail without stopping anything. Run it from the Actions tab (it is also run by each push to `main`), and the step that fails first
+is the next thing to do: its log is what to read, and the artifacts of the run have the compiler's messages (`program.log`, Quanta's `errors.log`, Skia's ninja log).
+Known before it runs: `make solar` will not link yet (the Makefile's Skia libraries and flags are Linux's: Vulkan, `-lGL`, `--start-group`), and the Windows program is built with MinGW's
+ABI while Skia there is built with clang-cl's, which cannot be linked together.
