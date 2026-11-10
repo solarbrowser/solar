@@ -1181,6 +1181,7 @@ int main(int argc, char** argv) {
       ::unsetenv("SOLAR_GUI_SHOT");
       ::unsetenv("SOLAR_GUI_SCRIPT");
       ::unsetenv("SOLAR_GUI_SETTLE");
+      ::unsetenv("SOLAR_GUI_TIMES");  // (the interface's own timings would be mixed with the page's in one log)
     }
     const solar::gui::SandboxMode mode = solar::gui::SandboxModeFromEnvironment();
     if (mode != solar::gui::SandboxMode::Off) {
