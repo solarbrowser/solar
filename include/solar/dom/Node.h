@@ -317,6 +317,7 @@ struct Element : Node {
   // A script element's "already started" and "parser document" flags.
   bool scriptStarted = false;
   bool scriptParserInserted = false;
+  bool scriptForceAsync = true;  // a script a page makes is async until its async is set (the parser's is not)
 
   // What animations give to properties of the element (pseudo-element name → property → value), which the cascade takes over the declared ones.
   std::map<std::string, std::map<std::string, std::string>> animatedValues;

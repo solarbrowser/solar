@@ -525,6 +525,23 @@ void PrepareScript(dom::Element* script) {
   const bool hasSource = script->FindAttribute("", "src") != nullptr;
   if (!hasSource && script->DescendantText().empty()) return;
   script->scriptStarted = true;
+  // A classic script with a source that is async (the default for one a page makes) starts to come now and runs, as a task, when it is here: waiting for it where it runs would hold
+  // the page, and every script that is waited for in the middle of that wait, until this one and all of those have arrived.
+  if (hasSource && g_environment && LowerType(script) == "text/javascript" && !script->FindAttribute("", "nomodule") && (script->scriptForceAsync || script->FindAttribute("", "async"))) {
+    const dom::Attr* source = script->FindAttribute("", "src");
+    const std::string address = Resolve(source->value, BaseOf(document));
+    if (!address.empty() && !g_environment->SkipScript(address)) {
+      dom::Document* owner = document;
+      if (g_environment->WhenScriptReady(address, [owner, script] {
+            QueueTask(owner, "script", script, [script] {
+              if (script->nodeDocument && script->nodeDocument->realm) RunScript(*script->nodeDocument->realm, script->nodeDocument, script);
+            });
+          })) {
+        // (kept alive until it is ready: a script that is taken out of the tree meanwhile still runs, as the standard has it)
+        return;
+      }
+    }
+  }
   // A module script, and one with a source, wait for a task of their own.
   if (hasSource || LowerType(script) == "module") {
     QueueTask(document, "script", script, [script] {
@@ -1417,6 +1434,22 @@ Value SetScriptText(Context& ctx, Value t, qe::Args args, Value) {
   return qe::Undefined();
 }
 
+// "async": the attribute's, or the flag a script has that a page made, until the page sets it (then the attribute is what it says).
+Value GetScriptAsync(Context& ctx, Value t, qe::Args, Value) {
+  dom::Element* self = reflect::ThisHtml(ctx, t);
+  if (!self) return qe::Undefined();
+  return qe::FromBool(self->scriptForceAsync || self->FindAttribute("", "async") != nullptr);
+}
+
+Value SetScriptAsync(Context& ctx, Value t, qe::Args args, Value) {
+  dom::Element* self = reflect::ThisHtml(ctx, t);
+  if (!self || args.empty()) return qe::Undefined();
+  self->scriptForceAsync = false;
+  if (args[0].to_boolean()) dom::SetAttribute(ctx, self, "async", "");
+  else dom::RemoveAttribute(self, "async");
+  return qe::Undefined();
+}
+
 constexpr char kType[] = "type";
 constexpr char kCharset[] = "charset";
 constexpr char kAsync[] = "async";
@@ -1430,6 +1463,7 @@ void DefineScriptMembers(Context&, Object* prototype) {
   qe::DefineAccessor(prototype, "src", reflect::GetUrl<kSrc>, dom::Reactions<reflect::SetString<kSrc>>);
   qe::DefineAccessor(prototype, "type", reflect::GetString<kType>, dom::Reactions<reflect::SetString<kType>>);
   qe::DefineAccessor(prototype, "charset", reflect::GetString<kCharset>, dom::Reactions<reflect::SetString<kCharset>>);
+  qe::DefineAccessor(prototype, "async", GetScriptAsync, dom::Reactions<SetScriptAsync>);
   qe::DefineAccessor(prototype, "defer", reflect::GetFlag<kDefer>, dom::Reactions<reflect::SetFlag<kDefer>>);
   qe::DefineAccessor(prototype, "noModule", reflect::GetFlag<kNoModule>, dom::Reactions<reflect::SetFlag<kNoModule>>);
   qe::DefineAccessor(prototype, "integrity", reflect::GetString<kIntegrity>, dom::Reactions<reflect::SetString<kIntegrity>>);

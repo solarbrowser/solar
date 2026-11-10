@@ -363,6 +363,7 @@ Element* TreeBuilder::CreateElementForToken(const Token& token, std::string_view
   if (scriptHandler_) retained_.Append(qe::FromObject(element));
   if (element->IsHtml("script")) {
     element->scriptParserInserted = true;
+    element->scriptForceAsync = false;
     // A script made by the fragment parser is never run.
     element->scriptStarted = fragmentContext_ != nullptr;
   }

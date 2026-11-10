@@ -62,6 +62,10 @@ class FrameEnvironment {
   // Whether the script at this URL is one the page is to go without (the test harness, which is already in place).
   virtual bool SkipScript(const std::string&) { return false; }
 
+  // The script at `address` is wanted (one a page's script made): it starts to come now, and `ready` is called once it is here (at once if it is). False where the environment cannot say
+  // when (the script is then loaded where it is run, and the page waits for it there).
+  virtual bool WhenScriptReady(const std::string&, std::function<void()>) { return false; }
+
   // The resource at `url` will be asked for soon (the modules a module imports): start getting it, without waiting.
   virtual void Prefetch(const std::string&) {}
 

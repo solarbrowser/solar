@@ -325,6 +325,8 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     std::string body, contentType;
     solar::net::FetchHandle handle;
     Clock::time_point started = Clock::now();
+    std::vector<std::function<void()>> whenDone;  // asked to be called when it is here
+    bool queued = false, counted = false;  // a picture that waits its turn / one that is on the way and counted
     double headersMs = -1;  // from the start to the first answer
     void OnResponse(const solar::net::PageResponse& response) override {
       headersMs = std::chrono::duration<double, std::milli>(Clock::now() - started).count();
@@ -350,6 +352,14 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     }
     void Finish() {
       done = true;
+      if (counted) {
+        counted = false;
+        --owner->imagesInFlight_;
+        owner->StartQueuedImages();
+      }
+      auto callbacks = std::move(whenDone);
+      whenDone.clear();
+      struct Run { std::vector<std::function<void()>>& list; ~Run() { for (auto& call : list) call(); } } run{callbacks};
       if (owner->timing_) std::fprintf(stderr, "  fetch %5.0f ms  %7zu bytes  %s\n", std::chrono::duration<double, std::milli>(Clock::now() - started).count(), body.size(), url.substr(0, 100).c_str());
       if (owner->waiting_ == this) owner->loop_.Stop();
       if (owner->layoutImages_.erase(url)) {
@@ -362,9 +372,33 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
 
   // What the page asks the network for a resource of its own (a script, a style sheet, a picture, a font): a Fetch Standard request of the kind it is, from the page, which the
   // network service applies the rules of fetching to (CORS where the kind has it, Opaque Response Blocking where it has none).
+  // Pictures come after what the page needs to run: only so many are on the way at once (a page of two hundred of them would otherwise keep its scripts and style sheets in the
+  // same line as them), and a picture that is waited for goes first.
+  static constexpr int kMaxImagesInFlight = 8;
+  void StartQueuedImages() {
+    while (imagesInFlight_ < kMaxImagesInFlight && !queuedImages_.empty()) {
+      Resource* next = queuedImages_.front();
+      queuedImages_.pop_front();
+      if (!next->queued) continue;
+      next->queued = false;
+      StartNow(*next);
+    }
+  }
   void FetchResource(Resource& resource) {
+    if (resource.kind == Kind::Image && imagesInFlight_ >= kMaxImagesInFlight) {
+      resource.queued = true;
+      queuedImages_.push_back(&resource);
+      return;
+    }
+    StartNow(resource);
+  }
+  void StartNow(Resource& resource) {
     std::optional<solar::url::Url> parsed = solar::url::Parse(resource.url);
     if (!parsed) return;
+    if (resource.kind == Kind::Image) {
+      resource.counted = true;
+      ++imagesInFlight_;
+    }
     solar::net::PageRequest request;
     request.url = *parsed;
     request.pageUrl = solar::url::Parse(pageUrl_).value_or(*parsed);
@@ -529,6 +563,10 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     // The page's own tasks run while a resource is waited for, even when layout is what asked for it: they see the tree as the page left it.
     solar::dom::CommittedViewSuspend suspend;
     waiting_ = resource;
+    if (resource->queued) {
+      resource->queued = false;
+      StartNow(*resource);
+    }
     const auto waitStart = Clock::now();
     double inPump = 0, inIdle = 0;
     auto since = [](Clock::time_point t) { return std::chrono::duration<double, std::milli>(Clock::now() - t).count(); };
@@ -557,6 +595,14 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     waited_ += thisWait;
     if (timing_ && thisWait > 300) std::fprintf(stderr, "  waited %.0f ms (page tasks %.0f, painting %.0f; asked %.0f ms before, answer after %.0f ms) for %s\n", thisWait, inPump, inIdle, std::chrono::duration<double, std::milli>(waitStart - resource->started).count(), resource->headersMs, resource->url.substr(0, 110).c_str());
     waiting_ = nullptr;
+  }
+
+  bool WhenScriptReady(const std::string& address, std::function<void()> ready) override {
+    Resource* resource = Start(address, Kind::Script);
+    if (!resource) return false;
+    if (resource->done) ready();
+    else resource->whenDone.push_back(std::move(ready));
+    return true;
   }
 
   void Prefetch(const std::string& url) override { Start(url, Kind::Module); }  // (the modules a module imports)
@@ -786,6 +832,8 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
   std::map<std::string, std::pair<std::string, std::shared_ptr<qe::Script>>> scripts_;
   std::vector<std::unique_ptr<RealmBundle>> bundles_;
   std::map<std::string, std::unique_ptr<Resource>> resources_;
+  std::deque<Resource*> queuedImages_;
+  int imagesInFlight_ = 0;
   qe::Realm* pageRealm_ = nullptr;
   bool swControlled_ = false, bypassWorker_ = false;
   uint32_t nextSw_ = 1, nextNavigation_ = 1;

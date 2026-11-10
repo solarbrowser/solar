@@ -138,7 +138,7 @@ int main() {
       const H2Request& request = seen[0];
       Check("the pseudo-headers", request.scheme == "https" && request.authority == "127.0.0.1:" + std::to_string(server.port()), request.authority);
       Check("the default headers are there, in lower case",
-            request.Header("user-agent").starts_with("Solar/") && request.Header("accept") == "*/*" &&
+            request.Header("user-agent").starts_with("Mozilla/5.0 (") && request.Header("user-agent").ends_with(" Solar/1.0") && request.Header("accept") == "*/*" &&
                 request.Header("accept-encoding") == "gzip, deflate, br, zstd");
       bool connectionSpecific = false;
       for (const auto& [name, value] : request.headers) {
