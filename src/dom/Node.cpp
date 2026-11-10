@@ -149,8 +149,15 @@ struct IdIndex {
   std::unordered_set<Element*> iframes;           // the iframe elements in the tree of the document (not those in shadow trees)
 };
 std::unordered_map<const Document*, IdIndex>& IdIndexes() {
-  static std::unordered_map<const Document*, IdIndex> indexes;
-  return indexes;
+  // (Never destroyed: nodes are destroyed while the program ends, and look in it then.)
+  static auto* indexes = new std::unordered_map<const Document*, IdIndex>;
+  return *indexes;
+}
+// The nodes that are in an index of some document. An element that is destroyed while it is in one (it was taken from the tree some way that did not say so, or its document was another by
+// then) would be looked at again by SyncIds after it is gone: the destructor takes it out.
+std::unordered_set<const Node*>& InNameIndex() {
+  static auto* nodes = new std::unordered_set<const Node*>;
+  return *nodes;
 }
 bool IsNameCandidate(const Element* element) {
   bool hasId = false;
@@ -206,9 +213,11 @@ void NoteNamedSubtree(Node* root, Document* document, bool add) {
     Element* element = static_cast<Element*>(n);
     if (add) {
       index.dirty.insert(element);
+      InNameIndex().insert(element);
       if (IsNameCandidate(element)) index.nameCandidates.insert(element);
       if (element->IsHtml("iframe")) index.iframes.insert(element);
     } else {
+      InNameIndex().erase(element);
       index.dirty.erase(element);
       DropFromId(index, element);
       index.nameCandidates.erase(element);
@@ -241,7 +250,27 @@ const std::unordered_set<Element*>* IframeElementsOf(Document* document) {
   const auto found = IdIndexes().find(document);
   return found == IdIndexes().end() ? &none : &found->second.iframes;
 }
-void ForgetNamedElements(Document* document) { IdIndexes().erase(document); }
+void ForgetNamedElements(Document* document) {
+  const auto found = IdIndexes().find(document);
+  if (found == IdIndexes().end()) return;
+  // (What was in it is not in an index any more; a node that is in the index of another document stays in the set.)
+  for (Element* element : found->second.dirty) InNameIndex().erase(element);
+  for (Element* element : found->second.nameCandidates) InNameIndex().erase(element);
+  for (Element* element : found->second.iframes) InNameIndex().erase(element);
+  for (const auto& [element, id] : found->second.idOf) InNameIndex().erase(element);
+  IdIndexes().erase(found);
+}
+// A node that is destroyed is taken out of every index it is in (see InNameIndex).
+static void ForgetDestroyedNode(Node* node) {
+  if (!InNameIndex().erase(node)) return;
+  Element* element = static_cast<Element*>(node);
+  for (auto& [document, index] : IdIndexes()) {
+    index.dirty.erase(element);
+    index.nameCandidates.erase(element);
+    index.iframes.erase(element);
+    DropFromId(index, element);
+  }
+}
 static void NoteAttributeName(const Attr* attribute, Element* element = nullptr) {
   if (!attribute->namespaceUri.empty()) return;
   if (attribute->localName == "id" || attribute->localName == "name") {
@@ -250,6 +279,7 @@ static void NoteAttributeName(const Attr* attribute, Element* element = nullptr)
       if (Document* document = DocumentOfTree(element)) {
         IdIndex& index = IdIndexes()[document];
         index.dirty.insert(element);
+        InNameIndex().insert(element);
         index.nameCandidates.insert(element);
       }
     }
@@ -457,6 +487,7 @@ size_t g_liveNodes = 0;
 Node::Node() { ++g_liveNodes; }
 Node::~Node() {
   --g_liveNodes;
+  if (!InNameIndex().empty()) ForgetDestroyedNode(this);
   if (g_mediaAttached.load(std::memory_order_relaxed) > 0 && g_mediaDetach) g_mediaDetach(this);
   if (g_canvasAttached.load(std::memory_order_relaxed) > 0 && g_canvasDetach) g_canvasDetach(this);
   if (controlDirty) {
