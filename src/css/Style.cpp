@@ -1158,8 +1158,30 @@ struct ShareFeatures {
   std::unordered_set<uint64_t> positionKeys;
   std::vector<ComplexSelector> positionSelectors;  // the ones that have no key: what they match is looked at
   bool positionAny = false;
+  // The same for everything that asks of the tree around an element, not only by number: first, last, only, empty, the siblings before it, :has(). An element no such selector can
+  // be for is styled the same when a child is put in or taken out beside it (a parent of two thousand children is not styled again two thousand times for each one).
+  std::unordered_set<uint64_t> structureKeys;
+  std::vector<ComplexSelector> structureSelectors;
+  bool structureAny = false;
 };
 ShareFeatures g_shareFeatures;
+
+// Whether a selector of the document or of the user agent that asks of the tree around an element can be for it.
+bool ElementAsksStructure(const dom::Element* element) {
+  if (g_shareFeatures.structureAny) return true;
+  const ElementKeys own(element);
+  if (!own.usable) return true;
+  for (uint64_t key : own.keys) {
+    if (g_shareFeatures.structureKeys.count(key)) return true;
+  }
+  if (!g_shareFeatures.structureSelectors.empty()) {
+    MatchContext context;
+    for (const ComplexSelector& selector : g_shareFeatures.structureSelectors) {
+      if (MatchesComplex(selector, element, context)) return true;
+    }
+  }
+  return false;
+}
 
 // The styles of an element: the plain one, and those of its pseudo-elements and of the variants (animations suppressed, the starting style).
 struct StyleEntry {
@@ -1592,14 +1614,27 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   const bool attrStays = attrEffect != AttrEffect::Unknown;  // (it stays, or it reaches only what the keys are for: that is looked at below)
   const bool basicButParent = reuse.allowed && !shadowed && !entry.shadowed && entry.serial == element->serial && entry.parent == parentNode && (attrSame || attrStays) && entry.animInherit == ev.animInherit;
   const bool basic = basicButParent && parentSame && attrSame;
-  const bool structureOk = (!reuse.structural || (entry.children == ev.children && (!parent || entry.parentChildren == pv.children))) &&
-                           (!reuse.sibling || !parent || (entry.parentChildAttr == pv.childAttr && entry.parentChildren == pv.children));
+  int structureMatters = -1;
+  const auto matters = [&] {
+    if (structureMatters < 0) structureMatters = ElementAsksStructure(element) ? 1 : 0;
+    return structureMatters == 1;
+  };
+  const bool structureOk = ((!reuse.structural || (entry.children == ev.children && (!parent || entry.parentChildren == pv.children))) &&
+                            (!reuse.sibling || !parent || (entry.parentChildAttr == pv.childAttr && entry.parentChildren == pv.children))) ||
+                           !matters();
   bool good = basic;
   bool goodButForHas = false;  // everything that makes a style good held except what :has() looks at below the element
   bool goodButStructure = false;  // everything held except that the children of the element, or of its parent, are others than they were
   const bool animSame = entry.anim == ev.anim;
-  if (good && reuse.structural) good = entry.children == ev.children && (!parent || entry.parentChildren == pv.children);
-  if (good && reuse.sibling) good = !parent || (entry.parentChildAttr == pv.childAttr && entry.parentChildren == pv.children);
+  // (An element that no selector asks the place of is not another where the children round it are: the numbers it keeps are brought up to date, and its style stays.)
+  if (good && reuse.structural && !(entry.children == ev.children && (!parent || entry.parentChildren == pv.children))) {
+    good = !matters();
+    if (good) { entry.children = ev.children; entry.parentChildren = parent ? pv.children : 0; }
+  }
+  if (good && reuse.sibling && parent && !(entry.parentChildAttr == pv.childAttr && entry.parentChildren == pv.children)) {
+    good = !matters();
+    if (good) { entry.parentChildAttr = pv.childAttr; entry.parentChildren = pv.children; }
+  }
   // (What the rules that apply are told by is other around the element, or its children are others: the rules are looked at again for it, and what is worked out stays where they come to the same.)
   if (basicButParent && !good && entry.plain.built && !(reuse.has && entry.plain.has.any)) goodButStructure = true;
   if (good && reuse.has) {
@@ -3855,7 +3890,8 @@ void ScanComplex(const ComplexSelector& selector, SelectorFeatures& f, bool inAn
         case SimpleSelector::Kind::Not: case SimpleSelector::Kind::Is: case SimpleSelector::Kind::Where: case SimpleSelector::Kind::Nesting:
           if (simple.list) ScanList(*simple.list, f, ancestor, owner ? owner : &compound);
           break;
-        case SimpleSelector::Kind::Host: f.dynamic = true; break;
+        // (:host is for a shadow host and what a shadow tree gives it: those elements are not reused by their styles in any case -- `shadowed` in Validate -- and nothing else can be matched by it.)
+        case SimpleSelector::Kind::Host: break;
         default: break;
       }
     }
@@ -3927,6 +3963,87 @@ void NotePositionKeys(const SelectorList& list, ShareFeatures& out) {
       if (out.positionSelectors.size() > 64) { out.positionAny = true; return; }
       out.positionSelectors.push_back(selector);
     }
+  }
+}
+
+bool ComplexAsksStructure(const ComplexSelector& selector);
+
+bool SimpleAsksStructure(const SimpleSelector& simple) {
+  if (simple.kind == SimpleSelector::Kind::Nth || simple.kind == SimpleSelector::Kind::Has) return true;
+  if (simple.kind == SimpleSelector::Kind::Pseudo) {
+    switch (simple.pseudo) {
+      case PseudoClass::Empty: case PseudoClass::FirstChild: case PseudoClass::LastChild: case PseudoClass::OnlyChild:
+      case PseudoClass::FirstOfType: case PseudoClass::LastOfType: case PseudoClass::OnlyOfType: return true;
+      default: break;
+    }
+  }
+  if (simple.list) for (const ComplexSelector& inner : *simple.list) if (ComplexAsksStructure(inner)) return true;
+  return false;
+}
+
+bool ComplexAsksStructure(const ComplexSelector& selector) {
+  for (const Combinator c : selector.combinators) if (c == Combinator::NextSibling || c == Combinator::SubsequentSibling) return true;
+  if (selector.leading == Combinator::NextSibling || selector.leading == Combinator::SubsequentSibling) return true;
+  for (const CompoundSelector& compound : selector.compounds) for (const SimpleSelector& simple : compound.simples) if (SimpleAsksStructure(simple)) return true;
+  return false;
+}
+
+bool SimpleIsNested(const SimpleSelector& simple) {
+  if (simple.kind == SimpleSelector::Kind::Nesting) return true;
+  if (simple.list) for (const ComplexSelector& inner : *simple.list) for (const CompoundSelector& compound : inner.compounds) for (const SimpleSelector& s : compound.simples) if (SimpleIsNested(s)) return true;
+  return false;
+}
+
+// The elements that the selectors that ask of the tree around an element (its place, its siblings before it, what is under it) can be for: the keys of each compound of a selector
+// that asks it -- not only the subject, an element above it that has a sibling before it styles what is under it. A compound that has no key of its own is looked at by what it matches.
+void NoteStructureKeys(const SelectorList& list, ShareFeatures& out) {
+  for (const ComplexSelector& selector : list) {
+    if (selector.compounds.empty()) { out.structureAny = true; return; }
+    if (!ComplexAsksStructure(selector)) continue;
+    for (const CompoundSelector& compound : selector.compounds) for (const SimpleSelector& simple : compound.simples) if (SimpleIsNested(simple)) { out.structureAny = true; return; }  // (what a nested rule is for is its parent's)
+    for (size_t at = 0; at < selector.compounds.size(); ++at) {
+      const CompoundSelector& compound = selector.compounds[at];
+      const Combinator before = at == 0 ? selector.leading : selector.combinators[at - 1];
+      bool asks = before == Combinator::NextSibling || before == Combinator::SubsequentSibling;
+      for (const SimpleSelector& simple : compound.simples) if (SimpleAsksStructure(simple)) asks = true;
+      if (!asks) continue;
+      bool found = false;
+      for (const SimpleSelector& simple : compound.simples) {
+        if (simple.kind == SimpleSelector::Kind::Id) { out.structureKeys.insert(KeyHash(1, simple.name, false)); found = true; break; }
+      }
+      if (!found) for (const SimpleSelector& simple : compound.simples) {
+        if (simple.kind == SimpleSelector::Kind::Class) { out.structureKeys.insert(KeyHash(2, simple.name, false)); found = true; break; }
+      }
+      if (!found) for (const SimpleSelector& simple : compound.simples) {
+        if (simple.kind == SimpleSelector::Kind::Type && !simple.name.empty() && simple.name != "*") { out.structureKeys.insert(KeyHash(3, simple.name, true)); found = true; break; }
+      }
+      if (!found) {
+        if (out.structureSelectors.size() > 64) { out.structureAny = true; return; }
+        // (What it asks of the tree is left out: whether the element has it now is what changes. What is left of it is what the element must be.)
+        CompoundSelector stripped;
+        for (const SimpleSelector& simple : compound.simples) if (!SimpleAsksStructure(simple)) stripped.simples.push_back(simple);
+        if (stripped.simples.empty()) { out.structureAny = true; return; }
+        ComplexSelector single;
+        single.compounds.push_back(std::move(stripped));
+        out.structureSelectors.push_back(std::move(single));
+      }
+    }
+  }
+}
+
+void NoteStructureKeysOfRules(const std::vector<CssRule*>& rules, ShareFeatures& out, int depth) {
+  if (depth > 12) { out.structureAny = true; return; }
+  for (const CssRule* rule : rules) {
+    if (rule->selectors) {
+      NoteStructureKeys(*rule->selectors, out);
+      if (!rule->rules.empty() && rule->kind != RuleKind::Media) {
+        // (A style rule with rules inside it: they are nested in it, and what they are for is told by it as well.)
+        for (const ComplexSelector& selector : *rule->selectors) if (ComplexAsksStructure(selector)) { out.structureAny = true; return; }
+      }
+    }
+    if (rule->kind == RuleKind::Scope) { out.structureAny = true; return; }
+    NoteStructureKeysOfRules(rule->rules, out, depth + 1);
+    if (rule->kind == RuleKind::Import && rule->importedSheet) NoteStructureKeysOfRules(rule->importedSheet->rules, out, depth + 1);
   }
 }
 
@@ -4003,6 +4120,8 @@ StyleReuse StyleReuseFor(dom::Document* document) {
     share.attributes = f.attributes;
     share.attributes.insert(ua.attributes.begin(), ua.attributes.end());
     for (const CssStyleSheet* sheet : sheets) NotePositionKeysOfRules(const_cast<CssStyleSheet*>(sheet)->rules, share, 0);
+    for (const CssStyleSheet* sheet : sheets) NoteStructureKeysOfRules(const_cast<CssStyleSheet*>(sheet)->rules, share, 0);
+    for (const UserAgentRule& rule : UserAgentRules()) NoteStructureKeys(rule.selectors, share);
     for (const UserAgentRule& rule : UserAgentRules()) NotePositionKeys(rule.selectors, share);
     g_shareFeatures = std::move(share);
   }
