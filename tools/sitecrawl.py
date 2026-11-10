@@ -247,7 +247,8 @@ def command_compare(args):
         print("  - %s (now %s)" % (u, new[u]["status"]))
     faster, slower = [], []
     for u in new:
-        if u in old and old[u]["loaded_ms"] and new[u]["loaded_ms"]:
+        # (A site that did not finish has only the time its document took: it is not compared.)
+        if u in old and old[u]["status"] == "ok" and new[u]["status"] == "ok" and old[u]["loaded_ms"] and new[u]["loaded_ms"]:
             ratio = new[u]["loaded_ms"] / old[u]["loaded_ms"]
             (faster if ratio < 0.8 else slower if ratio > 1.25 else []).append((ratio, u, old[u]["loaded_ms"], new[u]["loaded_ms"]))
     print("Faster by a fifth or more: %d" % len(faster))
