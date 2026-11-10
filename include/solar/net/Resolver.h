@@ -42,7 +42,7 @@ class Resolver {
 };
 
 struct SystemResolverOptions {
-  size_t threads = 4;
+  size_t threads = 32;
   // How long an answer is reused. The system's resolver does not say how long a record is good
   // for, so this is a fixed time.
   std::chrono::milliseconds cacheTtl{60000};

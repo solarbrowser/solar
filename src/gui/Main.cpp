@@ -325,7 +325,9 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     std::string body, contentType;
     solar::net::FetchHandle handle;
     Clock::time_point started = Clock::now();
+    double headersMs = -1;  // from the start to the first answer
     void OnResponse(const solar::net::PageResponse& response) override {
+      headersMs = std::chrono::duration<double, std::milli>(Clock::now() - started).count();
       status = response.status;
       for (const auto& [name, value] : response.headers) {
         std::string lower = name;
@@ -528,22 +530,32 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     solar::dom::CommittedViewSuspend suspend;
     waiting_ = resource;
     const auto waitStart = Clock::now();
+    double inPump = 0, inIdle = 0;
+    auto since = [](Clock::time_point t) { return std::chrono::duration<double, std::milli>(Clock::now() - t).count(); };
     while (!resource->done) {
       // (In the middle of working out a style nothing of the page runs: its script would change what the computation holds.)
       static const bool tasksInStyle = std::getenv("SOLAR_TASKS_IN_STYLE") != nullptr;
       if (!tasksInStyle && solar::css::StyleComputationActive()) {
         events_.StepNetworkOnly(std::chrono::milliseconds(8));
+        const auto t = Clock::now();
         if (pump_) pump_();
+        inPump += since(t);
         continue;
       }
       events_.Step(std::chrono::milliseconds(std::getenv("SOLAR_SLICE") ? std::atoi(std::getenv("SOLAR_SLICE")) : 8));
+      const auto tp = Clock::now();
       if (pump_) pump_();
+      inPump += since(tp);
       // (What the page has so far can be shown while what it waits for comes, unless that is a style sheet.)
-      if (idle_ && !resource->done && !solar::html::LoadingStyleSheet()) idle_();
+      if (idle_ && !resource->done && !solar::html::LoadingStyleSheet()) {
+        const auto ti = Clock::now();
+        idle_();
+        inIdle += since(ti);
+      }
     }
     const double thisWait = std::chrono::duration<double, std::milli>(Clock::now() - waitStart).count();
     waited_ += thisWait;
-    if (timing_ && thisWait > 300) std::fprintf(stderr, "  waited %.0f ms for %s\n", thisWait, resource->url.substr(0, 110).c_str());
+    if (timing_ && thisWait > 300) std::fprintf(stderr, "  waited %.0f ms (page tasks %.0f, painting %.0f; asked %.0f ms before, answer after %.0f ms) for %s\n", thisWait, inPump, inIdle, std::chrono::duration<double, std::milli>(waitStart - resource->started).count(), resource->headersMs, resource->url.substr(0, 110).c_str());
     waiting_ = nullptr;
   }
 
