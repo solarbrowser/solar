@@ -9,6 +9,7 @@
 #include <string>
 
 #include "solar/dom/CustomElements.h"
+#include "solar/net/UserAgent.h"
 #include "solar/dom/NodeBindingsInternal.h"
 #include "solar/html/HtmlBindings.h"
 #include "solar/dom/MediaHook.h"
@@ -1034,7 +1035,7 @@ const char* const kWindowScript = R"JS(
     Object.defineProperty(globalThis, "performance", { value: new Performance(), writable: true, enumerable: true, configurable: true });
   }
   if (typeof navigator === "undefined") {
-    const navigator = { userAgent: "Mozilla/5.0 (X11; Linux x86_64) Solar/1.0", appName: "Netscape", appVersion: "5.0 (X11)", appCodeName: "Mozilla", platform: "Linux x86_64", product: "Gecko", productSub: "20030107", vendor: "", vendorSub: "", language: "en-US", languages: Object.freeze(["en-US"]), onLine: true, cookieEnabled: true, hardwareConcurrency: 4, webdriver: false, maxTouchPoints: 0, doNotTrack: null, pdfViewerEnabled: false };
+    const navigator = { userAgent: "__SOLAR_USER_AGENT__", appName: "Netscape", appVersion: "__SOLAR_APP_VERSION__", appCodeName: "Mozilla", platform: "__SOLAR_PLATFORM__", product: "Gecko", productSub: "20030107", vendor: "", vendorSub: "", language: "en-US", languages: Object.freeze(["en-US"]), onLine: true, cookieEnabled: true, hardwareConcurrency: 4, webdriver: false, maxTouchPoints: 0, doNotTrack: null, pdfViewerEnabled: false };
     Object.defineProperty(navigator, Symbol.toStringTag, { value: "Navigator", configurable: true });
     Object.defineProperty(globalThis, "navigator", { value: navigator, writable: true, enumerable: true, configurable: true });
   }
@@ -1597,7 +1598,18 @@ void InstallWindowOn(Host& host, dom::Document* document, Quanta::Embed::Realm* 
   if constexpr (std::is_same_v<Host, qe::Realm>) {
     if (document && qe::IsObject(qe::FromObject(document->globalObject))) qe::SetWindowProxyTarget(qe::FromObject(document->globalObject), host);
   }
-  host.Evaluate(kWindowScript, "window.js");
+  {
+    // (The navigator says what the requests say: one User-Agent.)
+    std::string script = kWindowScript;
+    const auto put = [&](const std::string& token, const std::string& value) {
+      for (size_t at; (at = script.find(token)) != std::string::npos;) script.replace(at, token.size(), value);
+    };
+    const std::string agent = net::DefaultUserAgent();
+    put("__SOLAR_USER_AGENT__", agent);
+    put("__SOLAR_APP_VERSION__", agent.rfind("Mozilla/", 0) == 0 ? agent.substr(8) : agent);
+    put("__SOLAR_PLATFORM__", net::NavigatorPlatform());
+    host.Evaluate(script, "window.js");
+  }
   host.Evaluate(kEventHandlerScript, "handlers.js");
   { const auto platform = host.Evaluate(kPlatformScript, "platform.js"); if (!platform.ok) std::fprintf(stderr, "platform.js: %s\n", platform.error.c_str()); }
   // SOLAR_PRELUDE=file runs a script of the developer's before anything of the page's, for looking into what a site does.

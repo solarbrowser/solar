@@ -449,7 +449,7 @@ int main() {
     Result r = s.Get(Origin(server) + "/", options);
     const std::string head = log.Head(0);
     Check("custom headers are sent", r.ended && Has(head, "X-Two: 2\r\n") && Has(head, "User-Agent: Custom/1\r\n") && Has(head, "Accept: text/html\r\n"), head);
-    Check("a given header replaces the default", !Has(head, "User-Agent: Solar") && !Has(head, "Accept: */*"), head);
+    Check("a given header replaces the default", !Has(head, "Solar/1.0") && !Has(head, "Accept: */*"), head);
 
     const std::vector<std::pair<std::string, std::string>> refused = {
         {"X", "a\r\nInjected: yes"}, {"X", "a\nb"}, {"X", std::string("a\0b", 3)}, {"Bad Name", "v"}, {"", "v"}, {"X:Y", "v"},
@@ -467,8 +467,8 @@ int main() {
   // ---- User-Agent ----
   {
     const std::string fallback = solar::net::DefaultUserAgent();
-    Check("the default says what Solar is and what it runs on", fallback.starts_with("Solar/Developer (") && fallback.find("; rv:development) ") != std::string::npos &&
-              fallback.ends_with(" Quanta/2.0.0-alpha") && fallback.find_first_of("\r\n") == std::string::npos, fallback);
+    Check("the default is shaped as Chrome's, with Solar's name at its end", fallback.starts_with("Mozilla/5.0 (") && fallback.find(") AppleWebKit/537.36 (KHTML, like Gecko) Chrome/") != std::string::npos &&
+              fallback.ends_with(" Safari/537.36 Solar/1.0") && fallback.find_first_of("\r\n") == std::string::npos, fallback);
     const bool knownSystem = fallback.find("Linux") != std::string::npos || fallback.find("Windows") != std::string::npos ||
                              fallback.find("Macintosh") != std::string::npos;
     Check("with the system in the parentheses", knownSystem, fallback);
@@ -483,7 +483,7 @@ int main() {
     configured.userAgent = "Custom/9.9 (from settings)";
     Session custom(configured);
     custom.Get(Origin(server) + "/");
-    Check("the client's setting replaces it", Has(log.Head(1), "User-Agent: Custom/9.9 (from settings)\r\n") && !Has(log.Head(1), "Solar/Developer"), log.Head(1));
+    Check("the client's setting replaces it", Has(log.Head(1), "User-Agent: Custom/9.9 (from settings)\r\n") && !Has(log.Head(1), "Solar/1.0"), log.Head(1));
 
     FetchOptions own;
     own.headers = {{"User-Agent", "PerFetch/1"}};
