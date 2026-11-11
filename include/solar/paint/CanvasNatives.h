@@ -48,9 +48,16 @@ struct Natives {
       surface->second->Publish();
       const auto attached = elements.find(id);
       if (attached == elements.end()) return;
-      for (dom::Element* element : attached->second) {
-        dom::NoteDamage(element, dom::kDamageAttributes);
-        dom::NoteTreeChangeAt(element);
+      // (An element that was destroyed since -- the collector took it, and its destructor took it out of the registry -- is not touched: this list kept its address only.)
+      auto& list = attached->second;
+      for (auto at = list.begin(); at != list.end();) {
+        if (!CanvasOf(*at)) {
+          at = list.erase(at);
+          continue;
+        }
+        dom::NoteDamage(*at, dom::kDamageAttributes);
+        dom::NoteTreeChangeAt(*at);
+        ++at;
       }
     });
   }
