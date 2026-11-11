@@ -11,6 +11,7 @@
 #include "FfmpegApi.h"
 #include "MseInternal.h"
 
+#include <atomic>
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -66,6 +67,19 @@ struct Player::Impl {
   std::shared_ptr<VideoFrame> current;
   uint64_t serial = 0;
   size_t maxFrames = 12;
+  size_t frameBytes = 4;  // what one decoded picture takes (set when the size is known)
+  // How many players there are in the process: a page of twenty-eight autoplaying videos (a carousel) would otherwise keep the pictures it is allowed for one in each,
+  // gigabytes of them; what the pictures may take together is shared among them (one video alone keeps what it did).
+  struct Counted {
+    Counted() { ++count; }
+    ~Counted() { --count; }
+    static inline std::atomic<int> count{0};
+  } counted;
+  size_t FrameLimit() const {
+    const int players = std::max(1, Counted::count.load());
+    const size_t budget = std::clamp<size_t>((size_t{384} << 20) / static_cast<size_t>(players), size_t{24} << 20, size_t{96} << 20);
+    return std::clamp<size_t>(budget / std::max<size_t>(frameBytes, 1), 3, 16);
+  }
   bool eof = false;
   double decodedEnd = 0;  // how far the decoding has got (media time)
 
@@ -243,7 +257,10 @@ struct Player::Impl {
       out = g_api.avcodec_alloc_context3(codec);
       if (!out || g_api.avcodec_parameters_to_context(out, stream->codecpar) < 0) return false;
       out->pkt_timebase = stream->time_base;
-      out->thread_count = 0;
+      // Every thread of a frame-threaded decoder holds pictures of its own: all the cores for one video that plays alone, fewer as more of them are open (a page of twenty-eight
+      // autoplaying videos took five gigabytes with every decoder on twelve threads).
+      const int players = Counted::count.load();
+      out->thread_count = players <= 1 ? 4 : players <= 3 ? 2 : 1;
       out->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
       return g_api.avcodec_open2(out, codec, nullptr) >= 0;
     };
@@ -271,7 +288,7 @@ struct Player::Impl {
       sar = ratio.num > 0 && ratio.den > 0 ? static_cast<double>(ratio.num) / ratio.den : 1;
       st.videoWidth = static_cast<int>(std::lround(vctx->width * sar));
       st.videoHeight = vctx->height;
-      const size_t frameBytes = static_cast<size_t>(std::max(1, vctx->width)) * std::max(1, vctx->height) * 4;
+      frameBytes = static_cast<size_t>(std::max(1, vctx->width)) * std::max(1, vctx->height) * 4;
       maxFrames = std::clamp<size_t>((size_t{96} << 20) / frameBytes, 3, 16);
     }
     if (aIndex >= 0 && Factory()) {
@@ -294,7 +311,7 @@ struct Player::Impl {
 
   // Whether the thread should wait before decoding more: what it has decoded is as much as it keeps.
   bool Full() {
-    if (vIndex >= 0 && queue.size() >= maxFrames) return true;
+    if (vIndex >= 0 && queue.size() >= FrameLimit()) return true;
     if (aIndex >= 0 && audio && static_cast<double>(audio->QueuedFrames()) > kOutRate * 0.6) return true;
     return false;
   }
@@ -374,7 +391,7 @@ struct Player::Impl {
   void PushVideo(std::shared_ptr<VideoFrame> frame) {
     std::unique_lock lock(m);
     // Waits for room (the picture is decoded: it is kept until the window has taken the ones before it).
-    while (queue.size() >= maxFrames && !stop && !seekTo.has_value()) cv.wait_for(lock, std::chrono::milliseconds(5));
+    while (queue.size() >= FrameLimit() && !stop && !seekTo.has_value()) cv.wait_for(lock, std::chrono::milliseconds(5));
     if (stop || seekTo.has_value()) return;
     frame->serial = ++serial;
     decodedEnd = std::max(decodedEnd, frame->pts);
