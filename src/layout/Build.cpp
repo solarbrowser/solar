@@ -823,7 +823,7 @@ class Builder {
       return found->second.style;
     }
     ++read;
-    const auto readFrom = std::chrono::steady_clock::now();
+    const auto readFrom = debug ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point();  // (the clock is read only when it is looked at: it was a call for every style read)
     std::shared_ptr<const BoxStyle> style = Logicalize(ReadStyle(lc_.ctx, element, pseudo));
     if (debug) {
       static double readMs = 0;
