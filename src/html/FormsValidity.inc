@@ -511,6 +511,9 @@ const char* const kValidityScript = R"JS(
 
   // ---- :valid, :invalid, :in-range and :out-of-range (asked by style, src/css/SelectorMatch.cpp) ----
   setHelper("validity", (el, kind) => {
+    // :checked (4) and :indeterminate (5): what the control is now (the user's choice or the script's), not what the markup said.
+    if (kind === 4) return el instanceof HTMLInputElement ? (typeOf(el) === "checkbox" || typeOf(el) === "radio") && el.checked : el instanceof HTMLOptionElement ? el.selected : false;
+    if (kind === 5) return el instanceof HTMLInputElement && typeOf(el) === "checkbox" && el.indeterminate;
     if (kind <= 1) {
       let invalid;
       if (el instanceof HTMLFormElement) invalid = controlsOf(el).some((c) => willValidate(c) && invalidNow(c));

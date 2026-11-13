@@ -330,9 +330,13 @@ bool MatchesPseudo(PseudoClass pseudo, const Element* element, const MatchContex
       if (IsHtmlNamed(element, {"input"})) {
         const dom::Attr* type = element->FindAttribute("", "type");
         const std::string value = type ? LowerAscii(type->Value()) : "";
-        return (value == "checkbox" || value == "radio") && element->FindAttribute("", "checked");
+        if (value != "checkbox" && value != "radio") return false;
+        // What the control is now, as the user or a script made it: the script that keeps it is asked (the attribute is only what it starts as).
+        return dom::g_validityQuery ? dom::g_validityQuery(element, 4) : element->FindAttribute("", "checked") != nullptr;
       }
-      return IsHtmlNamed(element, {"option"}) && element->FindAttribute("", "selected");
+      if (!IsHtmlNamed(element, {"option"})) return false;
+      return dom::g_validityQuery ? dom::g_validityQuery(element, 4) : element->FindAttribute("", "selected") != nullptr;
+    case PseudoClass::Indeterminate: return dom::g_validityQuery && IsHtmlNamed(element, {"input"}) && dom::g_validityQuery(element, 5);
     case PseudoClass::Disabled: return IsDisabled(element);
     case PseudoClass::Enabled: return IsFormControl(element) && !IsDisabled(element);
     case PseudoClass::Required: return IsHtmlNamed(element, {"input", "select", "textarea"}) && element->FindAttribute("", "required");

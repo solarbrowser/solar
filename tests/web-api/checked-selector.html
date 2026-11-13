@@ -1,0 +1,26 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>:checked follows what the control is now</title>
+<style>
+  input, option { outline: 0 solid gray; }
+  input:checked, option:checked { outline-width: 3px; }
+  .chk { display: none; }
+  .chk:checked + .img { box-shadow: 0 0 0 3px rgb(57, 105, 239); }
+  .img { width: 20px; height: 20px; }
+</style>
+<input id="a" type="checkbox" checked>
+<input id="b" type="checkbox">
+<input id="r" type="radio" name="g">
+<select id="s"><option id="o1">one</option><option id="o2" selected>two</option></select>
+<label><input id="h" class="chk" type="checkbox"><div id="i" class="img"></div></label>
+<script>
+const w = (id) => getComputedStyle(document.getElementById(id)).outlineWidth;
+const shadow = () => getComputedStyle(document.getElementById("i")).boxShadow;
+console.log("start", w("a"), w("b"), w("o1"), w("o2"), shadow());   // 3px 0px 0px 3px none
+document.getElementById("a").checked = false;
+document.getElementById("b").click();
+document.getElementById("r").checked = true;
+document.getElementById("s").value = "one";
+document.querySelector("label").click();
+console.log("after", w("a"), w("b"), w("r"), w("o1"), w("o2"), shadow());  // 0px 3px 3px 3px 0px rgb(57, 105, 239) 0px 0px 0px 3px
+</script>
