@@ -578,6 +578,13 @@ std::shared_ptr<Host> Session::Impl::StartHost(uint32_t tab, const std::string& 
   }
   host->link = std::make_unique<net::ipc::Channel>(windowPair.first);
   host->tab_ = services.OpenTab(networkPair.first, *host->link);
+  // The renderer is made for this page: its origin is the one it may ask the network for from the start. (A service worker of the site answers the navigation in the renderer, before
+  // any response comes from here, and its own fetch of the page was refused until the head of a response had named the origin: soundcloud was a network error on every visit after
+  // the first. The interface's pages have no site to ask for.)
+  if (!chrome) {
+    const auto made = url::Parse(url);
+    if (made && (made->scheme == "http" || made->scheme == "https")) host->tab_->AllowOrigin(url::SerializeOrigin(*made));
+  }
   std::optional<std::string> size;
   {
     std::lock_guard<std::mutex> lock(mutex);
@@ -829,6 +836,10 @@ void Session::Impl::StartNavigation(const std::shared_ptr<Host>& host, uint32_t 
   host->infos[id] = {kind, entry};
   navigations[navigation->serial] = navigation;
   const std::string text = url::Serialize(address);
+  // The renderer is on its way to this address, and what answers for it may be in the renderer (a service worker of the site is asked for the navigation before any response comes
+  // from here, and asks the network for the page): its origin is the one the renderer is made for. It was allowed only when the response's head arrived, which with a worker
+  // answering never does, and the worker's own fetch was refused ("the page is not the one this was made for"): soundcloud's navigation was a network error on every visit after its first.
+  if ((address.scheme == "http" || address.scheme == "https") && host->tab_) host->tab_->AllowOrigin(url::SerializeOrigin(address));
   if (address.scheme == "file") {
     std::ifstream file(FileOfAddress(text), std::ios::binary);
     std::stringstream contents;
@@ -1030,6 +1041,7 @@ void Session::Impl::GoToEntry(uint32_t tab, int entry) {
     net::ipc::Writer out;
     out.String(address);
     out.I32(entry);
+    if ((parsed->scheme == "http" || parsed->scheme == "https") && now->tab_) now->tab_->AllowOrigin(url::SerializeOrigin(*parsed));  // (the renderer asks the network for it, through a service worker of the site or not)
     SendTo(*now, wire::ToRenderer::GoTo, out.bytes());
     return;
   }
@@ -1056,6 +1068,7 @@ void Session::Impl::GoNew(uint32_t tab, const std::string& address) {
     net::ipc::Writer out;
     out.String(url::Serialize(*parsed));
     out.I32(-1);
+    if ((parsed->scheme == "http" || parsed->scheme == "https") && now->tab_) now->tab_->AllowOrigin(url::SerializeOrigin(*parsed));  // (the renderer asks the network for it, through a service worker of the site or not)
     SendTo(*now, wire::ToRenderer::GoTo, out.bytes());
     return;
   }
