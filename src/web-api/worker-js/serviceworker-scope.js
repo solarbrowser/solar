@@ -456,10 +456,18 @@
     const answer = FetchEvent.answer(event);
     if (!answer) { reply({ kind: "fallback" }); ExtendableEvent.close(event); return; }
     busy(answer.then((response) => {
-      if (!(response instanceof Response)) throw new TypeError("The FetchEvent resulted in a network error response: the promise was resolved with something other than a Response.");
+      if (!(response instanceof Response)) {
+        let what;
+        try { what = response === undefined ? "undefined" : response === null ? "null" : (response.constructor && response.constructor.name || typeof response) + (typeof response.status === "number" ? " with a status" : ""); } catch (e) { what = "?"; }
+        throw new TypeError("The FetchEvent resulted in a network error response: the promise was resolved with something other than a Response (" + what + ").");
+      }
+      // An opaque response (the worker's fetch of another origin without CORS: a script, a picture, a style sheet) has its bytes kept from every script, the worker's too, and here
+      // nothing else holds them: what the page asked for is got from the network as if the worker had not answered it (a worker that hands such a response on, as soundcloud's does
+      // for its scripts, asks for just that; what it would have kept in a cache is not served).
+      if (response.type === "opaque") return null;
       return responseData(response);
     }).then(
-      (data) => reply({ kind: "response", response: data }, [data.body]),
+      (data) => (data === null ? (reply({ kind: "fallback" }), ExtendableEvent.close(event)) : reply({ kind: "response", response: data }, [data.body])),
       (error) => reply({ kind: "error", error: String(error && error.message || error) })));
   };
   // The program asks for a navigation (no page asks): __solarSwNavigate(id, url, method, body, bodyType) answers through __solarSwNavigateDone(id, mode, status, contentType, body, url).
@@ -468,7 +476,7 @@
     const descriptor = { url, method, headers: bodyType ? [["content-type", bodyType]] : [], body };
     serveFetch({ ...descriptor, mode: "navigate", credentials: "include", cache: "default", redirect: "manual", referrer: referrer || "", referrerPolicy: referrerPolicy || "" }, "", random(), (result) => {
       if (result.kind === "fallback") navigationDone(id, 1, 0, "", undefined, "");
-      else if (result.kind === "error") navigationDone(id, 2, 0, "", undefined, "");
+      else if (result.kind === "error") { console.log("service worker: the answer to the navigation to " + url + " was an error: " + result.error); navigationDone(id, 2, 0, "", undefined, ""); }
       else {
         const d = result.response;
         if (d.hiddenRedirect) { navigationDone(id, 0, d.hiddenRedirect.status, "", undefined, d.url || descriptor.url, d.hiddenRedirect.location); return; }
