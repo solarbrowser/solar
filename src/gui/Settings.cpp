@@ -28,6 +28,7 @@ const std::map<std::string, std::string>& Defaults() {
       {"tabs", "top"},           // top: the tabs along the top of the window; side: in a column at its side; sidebar: the column has the buttons and the address as well
       {"downloads", ""},         // the folder files are kept in; empty: the system's folder of downloads
       {"downloadAsk", "off"},    // on: each file is asked where it is to be kept
+      {"blockAds", "on"},        // on: the requests of advertisements and trackers (the lists of the content blocker) are refused
       {"titlebar", "app"},       // app: the browser draws the buttons of the window; system: the system's bar
   };
   return defaults;
@@ -108,7 +109,7 @@ bool Settings::Set(const std::string& key, const std::string& rawValue) {
     bool known = false;
     for (const SearchEngine& engine : Engines()) known = known || value == engine.id;
     if (!known) return false;
-  } else if (key == "downloadAsk") {
+  } else if (key == "downloadAsk" || key == "blockAds") {
     if (value != "on" && value != "off") return false;
   } else if (key == "downloads") {
     // (A folder as a full path, or from the user's own: ~/Downloads/Solar. Empty is the system's.)

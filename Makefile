@@ -166,7 +166,15 @@ $$(GEN_DIR)/$(word 1,$(subst :, ,$(1)))Script.cpp: src/gui/ui/$(word 2,$(subst :
 	@$$(BUILD_DIR)/EmbedScripts $(word 1,$(subst :, ,$(1))) src/gui/ui/$(word 2,$(subst :, ,$(1))) > $$@
 endef
 $(foreach doc,$(UI_DOCUMENTS),$(eval $(call UI_DOCUMENT_RULE,$(doc))))
-UI_DOCUMENT_OBJECTS = $(foreach doc,$(UI_DOCUMENTS),$(OBJ_DIR)/$(GEN_DIR)/$(word 1,$(subst :, ,$(doc)))Script.o) $(OBJ_DIR)/$(GEN_DIR)/IconsTable.o
+
+# The filter lists of the content blocker (assets/filters), embedded as data.
+FILTER_LISTS = $(sort $(wildcard assets/filters/*.txt))
+$(GEN_DIR)/FilterListsScript.cpp: $(FILTER_LISTS) $(BUILD_DIR)/EmbedScripts
+	@mkdir -p $(GEN_DIR)
+	@echo "[EMBED] $@"
+	@$(BUILD_DIR)/EmbedScripts FilterLists $(FILTER_LISTS) > $@
+
+UI_DOCUMENT_OBJECTS = $(OBJ_DIR)/$(GEN_DIR)/FilterListsScript.o $(foreach doc,$(UI_DOCUMENTS),$(OBJ_DIR)/$(GEN_DIR)/$(word 1,$(subst :, ,$(doc)))Script.o) $(OBJ_DIR)/$(GEN_DIR)/IconsTable.o
 
 XHR_JS = $(sort $(wildcard src/web/js/xhr-*.js))
 $(GEN_DIR)/XhrScript.cpp: $(XHR_JS) $(BUILD_DIR)/EmbedScripts
@@ -282,6 +290,10 @@ $(BUILD_DIR)/NetTest: $(OBJ_DIR)/tests/NetTest.o $(OBJ_DIR)/tests/support/TestSe
 	@$(CXX) $(CXXFLAGS) -Itests -o $@ $^ $(NET_LIBS)
 
 $(BUILD_DIR)/AddressRaceTest: $(OBJ_DIR)/tests/AddressRaceTest.o $(OBJ_DIR)/src/net/AddressRace.o
+	@echo "[LINK] $@"
+	@$(CXX) $(CXXFLAGS) -o $@ $^
+
+$(BUILD_DIR)/ContentFilterTest: $(OBJ_DIR)/tests/ContentFilterTest.o $(OBJ_DIR)/src/net/ContentFilter.o
 	@echo "[LINK] $@"
 	@$(CXX) $(CXXFLAGS) -o $@ $^
 
@@ -434,7 +446,7 @@ $(BUILD_DIR)/GenIdnaTables: tools/GenIdnaTables.cpp
 # The .any.js files that pass whole (tests/wpt-solar/anyjs-passing.txt: url, dom, webidl, encoding, fetch, streams, FileAPI and our own); the rest of WPT's are not run.
 WPT_ANY = $(shell cat tests/wpt-solar/anyjs-passing.txt)
 
-PORTABLE_TESTS = FontTest BidiTest CssValuesTest HtmlTokenizerTest UrlTest SearchParamsTest ValidationErrorTest NormalizerTest PublicSuffixTest CookiesTest HttpCacheTest FetchHeadersTest CorsTest Http1ParserTest ContentDecoderTest AddressRaceTest HstsTest
+PORTABLE_TESTS = FontTest BidiTest CssValuesTest HtmlTokenizerTest UrlTest SearchParamsTest ValidationErrorTest NormalizerTest PublicSuffixTest CookiesTest HttpCacheTest FetchHeadersTest CorsTest Http1ParserTest ContentDecoderTest AddressRaceTest HstsTest ContentFilterTest
 PORTABLE_NET_TESTS = LoopTest ResolverTest NetTest HttpClientTest TlsTest Http2Test NetworkThreadTest PageFetchTest
 # What reaches into POSIX (descriptors passed between processes, setenv, the browser's processes): not on Windows yet. And what is Linux's own: the sandbox.
 POSIX_TESTS = IpcTest WireTest SessionTest StorageTest SettingsTest

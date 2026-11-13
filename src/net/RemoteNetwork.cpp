@@ -20,6 +20,14 @@
 
 namespace solar::net {
 
+namespace {
+std::shared_ptr<const RequestBlocker> g_blocker;
+}
+
+void SetRequestBlocker(RequestBlocker blocker) {
+  std::atomic_store(&g_blocker, blocker ? std::make_shared<const RequestBlocker>(std::move(blocker)) : std::shared_ptr<const RequestBlocker>());
+}
+
 using ipc::Message;
 using ipc::Reader;
 using ipc::Writer;
@@ -381,6 +389,10 @@ void NetworkServiceHost::Impl::Handle(Message type, const std::string& bytes) {
       // A page asks for the account of its own origin and no other's: what it names as its address is checked against what it was made for.
       if (!allowed.count(url::SerializeOrigin(request.pageUrl))) { RefuseFetch(id, "Failed to fetch (the page is not the one this was made for)"); return; }
       if (request.url.scheme != "http" && request.url.scheme != "https") { RefuseFetch(id, "Failed to fetch (not an address of the network)"); return; }
+      if (std::shared_ptr<const RequestBlocker> blocker = std::atomic_load(&g_blocker); blocker && (*blocker)(request)) {
+        RefuseFetch(id, "Failed to fetch (blocked by the content blocker)");
+        return;
+      }
       auto fetch = std::make_unique<HostFetch>(*this, id);
       HostFetch* raw = fetch.get();
       fetches[id] = std::move(fetch);

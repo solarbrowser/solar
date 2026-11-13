@@ -18,11 +18,16 @@
 #include <sstream>
 #include <thread>
 
+#include "solar/gui/Settings.h"
+#include "solar/net/ContentFilter.h"
 #include "solar/net/HttpClient.h"
 #include "solar/net/Loop.h"
 #include "solar/net/NetworkThread.h"
 #include "solar/net/RemoteNetwork.h"
 #include "solar/url/Origin.h"
+#include "solar/url/PublicSuffix.h"
+#include "solar/url/UrlApi.h"
+#include "solar/web/Scripts.h"
 #include "solar/web-api/Storage.h"
 #include "solar/url/Parser.h"
 #include "solar/url/Serializer.h"
@@ -112,7 +117,57 @@ struct BrowserServices::Tab::Impl {
   Impl(BrowserServices::Impl& s, net::ipc::Channel& l) : services(s), link(l) {}
 };
 
+namespace {
+
+// The content blocker: the network rules of the lists in assets/filters (EasyList, EasyPrivacy, the cookie notice list), read on the first request that needs them (on the host's thread: some
+// 40 ms), and a setting (blockAds) that turns them off.
+std::atomic<uint64_t> g_blocked{0};
+
+const net::ContentFilter& Filter() {
+  static const net::ContentFilter filter = [] {
+    net::ContentFilter f;
+    for (const char* const* piece = web::kScriptFilterLists; *piece; ++piece) f.AddList(*piece);
+    f.Finish();
+    return f;
+  }();
+  return filter;
+}
+
+uint16_t FilterTypeOf(net::RequestDestination destination) {
+  switch (destination) {
+    case net::RequestDestination::Script:
+    case net::RequestDestination::Module: return net::kFilterScript;
+    case net::RequestDestination::Image: return net::kFilterImage;
+    case net::RequestDestination::Style: return net::kFilterStyle;
+    case net::RequestDestination::Media: return net::kFilterMedia;
+    case net::RequestDestination::Font: return net::kFilterFont;
+    case net::RequestDestination::Fetch: return net::kFilterXhr;
+    case net::RequestDestination::Document: return net::kFilterSubdocument;
+    default: return net::kFilterOther;
+  }
+}
+
+bool BlockedByFilter(const net::PageRequest& request) {
+  static const bool forced_off = std::getenv("SOLAR_NO_BLOCK") != nullptr;
+  if (forced_off || Settings::Instance().Get("blockAds") != "on") return false;
+  if (request.destination == net::RequestDestination::Document) return false;  // (the page asked for itself is the user's own choice)
+  const std::string address = url::Serialize(request.url, true);
+  const std::string host = url::GetHostname(request.url);
+  const std::string pageHost = url::GetHostname(request.pageUrl);
+  const bool thirdParty = !url::IsSameSite(request.url, request.pageUrl);
+  const bool blocked = Filter().Blocks({address, host, pageHost, FilterTypeOf(request.destination), thirdParty});
+  if (blocked) {
+    const uint64_t n = ++g_blocked;
+    if (std::getenv("SOLAR_BLOCK_LOG")) std::fprintf(stderr, "[blocker] #%llu %s (page %s)\n", static_cast<unsigned long long>(n), address.c_str(), pageHost.c_str());
+  }
+  return blocked;
+}
+
+}  // namespace
+
 BrowserServices::BrowserServices() : impl_(std::make_unique<Impl>()) {
+  net::SetRequestBlocker(BlockedByFilter);
+
   Impl* impl = impl_.get();
   impl->network = std::make_unique<net::ThreadedNetworkService>(*impl->loop);
   std::promise<void> ready;

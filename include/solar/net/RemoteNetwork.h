@@ -6,12 +6,14 @@
 
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <string>
 
 #include "solar/net/HttpClient.h"
 #include "solar/net/Ipc.h"
 #include "solar/net/Loop.h"
+#include "solar/net/PageFetch.h"
 
 namespace solar::net {
 
@@ -42,6 +44,10 @@ class RemoteNetworkService final : public NetworkService {
 
 // The service's end of the connection of a page: it reads what the page asks, checks it, has `network` do it, and says what happens. The page is one that is tied to an origin (a
 // renderer is locked to the site it was made for): what it asks for another origin's account is refused. Its handlers hear from `hostLoop`, which the caller runs.
+// Asked for each request a page makes, before it is fetched: true refuses it (the content blocker). Set once by the browser process; none by default. Called on the network host's thread.
+using RequestBlocker = std::function<bool(const PageRequest&)>;
+void SetRequestBlocker(RequestBlocker blocker);
+
 class NetworkServiceHost {
  public:
   // Takes the descriptor of the connection. `lockedOrigin` is the origin the page is allowed to ask for (serialized); it can be changed by SetOrigin when the page goes somewhere.
