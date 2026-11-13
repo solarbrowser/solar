@@ -325,7 +325,7 @@
 
   const makeAnimation = (el, pseudo, entry, order) => {
     const rule = keyframesFor(el, entry.name);
-    const effect = new KeyframeEffect(el, null, 0);
+    const effect = new S.KeyframeEffect(el, null, 0);
     const effectSlot = S.effectSlots.get(effect);
     effectSlot.pseudo = pseudoName(pseudo);
     effectSlot.timing = timingOf(entry);

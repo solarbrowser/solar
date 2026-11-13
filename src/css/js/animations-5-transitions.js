@@ -162,7 +162,7 @@
       }
     }
     const easing = S.parseEasing(params.timing) || S.parseEasing('ease');
-    const effect = new KeyframeEffect(el, null, 0);
+    const effect = new S.KeyframeEffect(el, null, 0);
     const effectSlot = S.effectSlots.get(effect);
     const linear = S.parseEasing('linear');
     effectSlot.pseudo = pseudo ? '::' + pseudo : null;

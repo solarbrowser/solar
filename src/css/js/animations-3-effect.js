@@ -353,6 +353,8 @@
   Object.defineProperty(KeyframeEffect.prototype, Symbol.toStringTag, { value: 'KeyframeEffect', configurable: true });
   globalThis.AnimationEffect = AnimationEffect;
   globalThis.KeyframeEffect = KeyframeEffect;
+  // (What the other scripts of this one make with it: not the global, which a page may have put a polyfill in the place of -- youtube does, and then `new KeyframeEffect` made an effect with no slot here.)
+  S.KeyframeEffect = KeyframeEffect;
 
   // ---- What an effect comes to ----
 
