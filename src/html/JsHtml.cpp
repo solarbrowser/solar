@@ -643,10 +643,28 @@ const char* const kPlatformScript = R"JS(
   const entries = [{ state: null, url: document.URL }];
   let index = 0;
   let scrollRestoration = "auto";
+  // The address a state is given, as the History API reads it: against the API base URL (an about:blank document has its creator's, which document.baseURI says, and not its own),
+  // and only where the document could have it: one of the origin it has (an about:blank or srcdoc document has its creator's, unless a sandbox leaves it none), and an address
+  // that does not parse is a SecurityError, not a TypeError. (youtube makes a hidden about:blank iframe of its own origin and calls replaceState(null, "", "/") in it.)
   const urlFor = (url) => {
-    const target = new URL(url === undefined || url === null ? document.URL : String(url), document.URL);
-    const here = new URL(document.URL);
-    if (target.origin !== here.origin && !(here.protocol === "file:" && target.protocol === "file:")) throw new DOMException("A history state object with URL '" + target.href + "' cannot be created in a document with origin '" + here.origin + "'.", "SecurityError");
+    const securityError = (what) => new DOMException(what, "SecurityError");
+    const inheritsOrigin = document.URL === "about:blank" || document.URL === "about:srcdoc";
+    let target;
+    try { target = new URL(url === undefined || url === null ? document.URL : String(url), inheritsOrigin ? document.baseURI : document.URL); }
+    catch (e) { throw securityError("A history state object with URL '" + String(url) + "' cannot be created in a document with origin '" + (inheritsOrigin ? "null" : new URL(document.URL).origin) + "'."); }
+    let hereOrigin, hereProtocol;
+    if (inheritsOrigin) {
+      const frame = window.frameElement;
+      const sandboxed = !!(frame && frame.hasAttribute("sandbox") && !String(frame.getAttribute("sandbox")).split(/\s+/).includes("allow-same-origin"));
+      const creator = new URL(document.baseURI);
+      hereOrigin = sandboxed ? "null" : creator.origin;
+      hereProtocol = creator.protocol;
+    } else {
+      const here = new URL(document.URL);
+      hereOrigin = here.origin;
+      hereProtocol = here.protocol;
+    }
+    if (target.origin !== hereOrigin && !(hereProtocol === "file:" && target.protocol === "file:")) throw securityError("A history state object with URL '" + target.href + "' cannot be created in a document with origin '" + hereOrigin + "'.");
     return target.href;
   };
   const history = Object.create(History.prototype);
