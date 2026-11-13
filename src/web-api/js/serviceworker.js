@@ -5,6 +5,8 @@
 // idle, and does not outlive its page (the next page starts the worker again from the source that was kept); push, sync and navigation preload are stubs.
 (() => {
   "use strict";
+  // (The URL made here: a page may put its own in the place of the global -- soundcloud's iframes do, with one that throws 'Invalid URL' for the address of the document -- and what this script reads with it is not for the page to change.)
+  const URL = globalThis.URL;
   const create = globalThis.__solarWorkerCreate, start = globalThis.__solarWorkerStart, terminate = globalThis.__solarWorkerTerminate;
   const kvRead = globalThis.__solarKvRead, kvWrite = globalThis.__solarKvWrite;
   const tellControlled = globalThis.__solarSwControlled, resourceDone = globalThis.__solarSwResourceDone;

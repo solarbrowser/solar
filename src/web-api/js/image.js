@@ -3,6 +3,8 @@
 // (src/web-api/ImageLoad.cpp) and decoded by the canvas's natives (Skia); a document's own images are loaded by layout as before. canvas.js draws from what is kept here.
 (() => {
   "use strict";
+  // (The URL made here: a page may put its own in the place of the global -- soundcloud's iframes do, with one that throws 'Invalid URL' for the address of the document -- and what this script reads with it is not for the page to change.)
+  const URL = globalThis.URL;
   const natives = globalThis.__solarImageNatives || {};
   const fetchN = globalThis.__solarImageFetch, decodeN = natives.decode, freeN = natives.free;
   delete globalThis.__solarImageFetch;

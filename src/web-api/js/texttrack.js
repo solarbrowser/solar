@@ -3,6 +3,8 @@
 // cuechange events. The cues are not drawn yet.
 (() => {
   "use strict";
+  // (The URL made here: a page may put its own in the place of the global -- soundcloud's iframes do, with one that throws 'Invalid URL' for the address of the document -- and what this script reads with it is not for the page to change.)
+  const URL = globalThis.URL;
   if (typeof HTMLMediaElement !== "function" || typeof document === "undefined") return;
   const define = (target, name, descriptor) => Object.defineProperty(target, name, { configurable: true, enumerable: true, ...descriptor });
   const hidden = (target, name, value) => Object.defineProperty(target, name, { value, writable: true, configurable: true, enumerable: false });

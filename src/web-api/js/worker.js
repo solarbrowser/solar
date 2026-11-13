@@ -2,6 +2,8 @@
 // program (src/web-api/Worker.cpp) and its global scope is src/web-api/worker-js/scope.js; what is said between the two goes over a MessageChannel.
 (() => {
   "use strict";
+  // (The URL made here: a page may put its own in the place of the global -- soundcloud's iframes do, with one that throws 'Invalid URL' for the address of the document -- and what this script reads with it is not for the page to change.)
+  const URL = globalThis.URL;
   const create = globalThis.__solarWorkerCreate;
   const start = globalThis.__solarWorkerStart;
   const terminate = globalThis.__solarWorkerTerminate;

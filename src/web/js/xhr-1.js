@@ -8,6 +8,8 @@
 // the loader can answer (the files of a page and its frames) is answered from it, which is the only way a request
 // can be synchronous; any other is sent with fetch, and only asynchronously.
 (function () {
+  // (The URL made here: a page may put its own in the place of the global -- soundcloud's iframes do, with one that throws 'Invalid URL' for the address of the document -- and what this script reads with it is not for the page to change.)
+  const URL = globalThis.URL;
   const load = __solarLoadText;
   const syncFetch = typeof __solarSyncFetch === "function" ? __solarSyncFetch : null;
   delete globalThis.__solarSyncFetch;

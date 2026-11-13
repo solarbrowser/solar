@@ -14,6 +14,8 @@ namespace {
 
 const char* const kReflectScript = R"JS(
 (function () {
+  // (The URL made here: a page may put its own in the place of the global -- soundcloud's iframes do, with one that throws 'Invalid URL' for the address of the document -- and what this script reads with it is not for the page to change.)
+  const URL = globalThis.URL;
   const define = (target, name, descriptor) => Object.defineProperty(target, name, { enumerable: true, configurable: true, ...descriptor });
   const proto = (name) => (typeof globalThis[name] === "function" ? globalThis[name].prototype : null);
   const has = (target, name) => Object.prototype.hasOwnProperty.call(target, name);

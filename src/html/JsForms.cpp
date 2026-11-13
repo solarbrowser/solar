@@ -19,6 +19,8 @@ namespace {
 
 const char* const kFormScript = R"JS(
 (function () {
+  // (The URL made here: a page may put its own in the place of the global -- soundcloud's iframes do, with one that throws 'Invalid URL' for the address of the document -- and what this script reads with it is not for the page to change.)
+  const URL = globalThis.URL;
   const setHelper = globalThis.__solarSetHelper;
   const submitPost = globalThis.__solarSubmitPost;
   const nativeChanged = globalThis.__solarFormChanged;

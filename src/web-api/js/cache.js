@@ -2,6 +2,8 @@
 // not by the realm, so that the page and a service worker of one origin see the same caches, and it is written to disk a moment after it changes.
 (() => {
   "use strict";
+  // (The URL made here: a page may put its own in the place of the global -- soundcloud's iframes do, with one that throws 'Invalid URL' for the address of the document -- and what this script reads with it is not for the page to change.)
+  const URL = globalThis.URL;
   if (typeof Request !== "function" || typeof Response !== "function") return;
   const N = {};
   for (const n of ["Names", "Open", "Has", "Delete", "Metas", "Body", "Put", "Remove", "Flush"]) { N[n] = globalThis["__solarCache" + n]; delete globalThis["__solarCache" + n]; }

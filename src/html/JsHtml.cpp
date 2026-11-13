@@ -632,6 +632,8 @@ namespace {
 // the visibility of the document, random values and idle callbacks.
 const char* const kPlatformScript = R"JS(
 (function () {
+  // (The URL made here: a page may put its own in the place of the global -- soundcloud's iframes do, with one that throws 'Invalid URL' for the address of the document -- and what this script reads with it is not for the page to change.)
+  const URL = globalThis.URL;
   const define = (target, name, value) => Object.defineProperty(target, name, { value, writable: true, enumerable: false, configurable: true });
   const moveUrl = globalThis.__solarMoveUrl;
   delete globalThis.__solarMoveUrl;
@@ -800,6 +802,8 @@ const char* const kPlatformScript = R"JS(
 
 const char* const kWindowScript = R"JS(
 (function () {
+  // (The URL made here: a page may put its own in the place of the global -- soundcloud's iframes do, with one that throws 'Invalid URL' for the address of the document -- and what this script reads with it is not for the page to change.)
+  const URL = globalThis.URL;
   const target = new EventTarget();
   __solarSetWindow(target);
   const getDocument = __solarDocument;

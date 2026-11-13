@@ -3,6 +3,8 @@
 // the sound are the program's, and tell what happened by a callback, which reads the state and the events.
 (() => {
   "use strict";
+  // (The URL made here: a page may put its own in the place of the global -- soundcloud's iframes do, with one that throws 'Invalid URL' for the address of the document -- and what this script reads with it is not for the page to change.)
+  const URL = globalThis.URL;
   const canPlayN = globalThis.__solarMediaCanPlay, openN = globalThis.__solarMediaOpen, controlN = globalThis.__solarMediaControl;
   const layoutN = globalThis.__solarMediaControlsLayout, stateN = globalThis.__solarMediaState, eventsN = globalThis.__solarMediaEvents, attachN = globalThis.__solarMediaAttach, openMseN = globalThis.__solarMediaOpenMse;
   // (mediasource.js, which comes after, takes CanPlay too and lets go of it.)

@@ -2,6 +2,8 @@
 // src/web-api/WebSocket.cpp), which tells what happens on it through one callback.
 (() => {
   "use strict";
+  // (The URL made here: a page may put its own in the place of the global -- soundcloud's iframes do, with one that throws 'Invalid URL' for the address of the document -- and what this script reads with it is not for the page to change.)
+  const URL = globalThis.URL;
   const open = globalThis.__solarSocketOpen;
   const send = globalThis.__solarSocketSend;
   const close = globalThis.__solarSocketClose;

@@ -3,6 +3,8 @@
 // page, in __solarWorkerPort.
 (() => {
   "use strict";
+  // (The URL made here: a page may put its own in the place of the global -- soundcloud's iframes do, with one that throws 'Invalid URL' for the address of the document -- and what this script reads with it is not for the page to change.)
+  const URL = globalThis.URL;
   const global = globalThis;
   const port = global.__solarWorkerPort;
   const info = JSON.parse(global.__solarWorkerInfoText);
