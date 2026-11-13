@@ -1365,6 +1365,13 @@ int PageMain(Shared& shared, int argc, char** argv) {
   std::optional<std::pair<std::string, int>> goToRequest;
   navigator.SetGoTo([&goToRequest](std::string address, int entry) { goToRequest = std::make_pair(std::move(address), entry); });
   shared.SetNavigationSink([&navigator](solar::gui::wire::ToRenderer type, std::string bytes) { navigator.Deliver(type, std::move(bytes)); });
+  // The sink names the navigator and, through it, the loop, which are this thread's: when the page ends they are destroyed, and the thread of the window's messages must not be
+  // handed one of them after that (a navigation delivered while the page was torn down posted to a loop that was gone: an abort in the mutex of Loop::Post). Taking the sink away
+  // waits for a delivery that is going on (it holds the same mutex), and none comes after. It is declared after the navigator and the loop, so it goes before them.
+  struct NavigationSinkGuard {
+    decltype(shared)& shared;
+    ~NavigationSinkGuard() { shared.SetNavigationSink(nullptr); }
+  } navigationSinkGuard{shared};
   solar::web::TimerHost timers;
   isolate->SetTimerProvider(timers.Provider());
   solar::web::JsEventLoop events(*loop, {[&] { isolate->PerformMicrotaskCheckpoint(); }, [&] { timers.RunDue(); }, [&] { return timers.NextDelayMs(); }});
