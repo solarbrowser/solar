@@ -192,6 +192,10 @@ Value Load(Context& ctx, Value, qe::Args args, Value) {
     if (auto blob = web::LookupBlobUrl(url)) return qe::FromWtf8(ctx, *blob->data);
     return qe::Undefined();
   }
+  if (url.rfind("data:", 0) == 0) {
+    if (auto text = html::DecodeDataUrlText(url)) return qe::FromWtf8(ctx, *text);
+    return qe::Undefined();
+  }
   if (g_host) {
     if (auto text = g_host->LoadScript(url)) return qe::FromWtf8(ctx, *text);
   }
