@@ -288,3 +288,153 @@ bool ContentFilter::Blocks(const FilterQuery& query) const {
 }
 
 }  // namespace solar::net
+
+// ---- The cosmetic rules ----
+
+namespace solar::net {
+
+namespace {
+
+bool IsSimpleName(std::string_view s) {
+  if (s.empty()) return false;
+  for (char c : s) {
+    if (!(IsAlnum(c) || (c >= 'A' && c <= 'Z') || c == '_' || c == '-')) return false;
+  }
+  return true;
+}
+
+bool Procedural(std::string_view s) {
+  for (const char* marker : {":has-text(", ":-abp-", ":xpath(", ":matches-css", ":upward(", ":style(", ":remove(", ":contains(", ":nth-ancestor(", ":min-text-length(", ":matches-attr(",
+                             ":matches-path(", ":matches-media(", ":watch-attr(", ":others(", ":not(:", "+js(", "{"}) {
+    if (s.find(marker) != std::string_view::npos) return true;
+  }
+  return !s.empty() && s[0] == '^';
+}
+
+// Whether the end of the selector (the compound after the last combinator) has a class or an id: those are found by them, and the others would be tried for every element.
+bool EndsWithClassOrId(std::string_view s) {
+  int depth = 0;
+  size_t start = 0;
+  for (size_t i = 0; i < s.size(); ++i) {
+    const char c = s[i];
+    if (c == '[' || c == '(') ++depth;
+    else if (c == ']' || c == ')') --depth;
+    else if (depth == 0 && (c == ' ' || c == '>' || c == '+' || c == '~' || c == ',')) start = i + 1;
+  }
+  depth = 0;
+  for (size_t i = start; i < s.size(); ++i) {
+    const char c = s[i];
+    if (c == '[' || c == '(') ++depth;
+    else if (c == ']' || c == ')') --depth;
+    else if (depth == 0 && (c == '.' || c == '#')) return true;
+  }
+  return false;
+}
+
+}  // namespace
+
+void CosmeticFilter::AddList(std::string_view text) {
+  size_t at = 0;
+  while (at < text.size()) {
+    size_t eol = text.find('\n', at);
+    if (eol == std::string_view::npos) eol = text.size();
+    ParseLine(Trim(text.substr(at, eol - at)));
+    at = eol + 1;
+  }
+}
+
+void CosmeticFilter::ParseLine(std::string_view line) {
+  if (line.empty() || line[0] == '!' || line[0] == '[') return;
+  // The mark that ends the domains: ## (hide) or #@# (an exception). The others (#?# #$# #%# #@?# #@$#) are for rules of more than a selector.
+  size_t mark = std::string_view::npos;
+  bool exception = false;
+  for (size_t i = line.find('#'); i != std::string_view::npos; i = line.find('#', i + 1)) {
+    if (line.compare(i, 2, "##") == 0) { mark = i; break; }
+    if (line.compare(i, 3, "#@#") == 0) { mark = i; exception = true; break; }
+    if (line.compare(i, 3, "#?#") == 0 || line.compare(i, 3, "#$#") == 0 || line.compare(i, 3, "#%#") == 0 || line.compare(i, 4, "#@$#") == 0 || line.compare(i, 4, "#@?#") == 0) return;
+  }
+  if (mark == std::string_view::npos) return;
+  std::string_view domainText = line.substr(0, mark);
+  std::string_view selector = Trim(line.substr(mark + (exception ? 3 : 2)));
+  if (selector.empty() || Procedural(selector)) return;
+  if (domainText.find_first_of(" \t/") != std::string_view::npos) return;  // (a network rule that has a ## in its address)
+
+  std::vector<std::string> include, exclude;
+  size_t from = 0;
+  while (from <= domainText.size() && !domainText.empty()) {
+    size_t comma = domainText.find(',', from);
+    if (comma == std::string_view::npos) comma = domainText.size();
+    std::string_view domain = domainText.substr(from, comma - from);
+    from = comma + 1;
+    if (domain.empty()) continue;
+    if (domain[0] == '~') exclude.push_back(Lower(domain.substr(1)));
+    else include.push_back(Lower(domain));
+  }
+  const std::string text(selector);
+  if (exception) {
+    exceptions_.push_back({text, std::move(include)});
+    return;
+  }
+  if (include.empty()) {
+    if (!exclude.empty()) return;
+    if (selector[0] == '#' && IsSimpleName(selector.substr(1))) ids_.insert(text.substr(1));
+    else if (selector[0] == '.' && IsSimpleName(selector.substr(1))) classes_.insert(text.substr(1));
+    else if (EndsWithClassOrId(selector)) genericSelectors_.push_back(text);
+    return;
+  }
+  for (const std::string& domain : include) byDomain_[domain].push_back({text, exclude});
+  ++specificCount_;
+}
+
+void CosmeticFilter::Finish() {
+  // An exception for every host takes the rule away.
+  std::unordered_set<std::string> everywhere;
+  for (const Exception& e : exceptions_) if (e.domains.empty()) everywhere.insert(e.selector);
+  for (const std::string& selector : everywhere) {
+    if (selector[0] == '#') ids_.erase(selector.substr(1));
+    else if (selector[0] == '.') classes_.erase(selector.substr(1));
+  }
+  genericSelectors_.erase(std::remove_if(genericSelectors_.begin(), genericSelectors_.end(), [&](const std::string& s) { return everywhere.count(s) > 0; }), genericSelectors_.end());
+}
+
+std::shared_ptr<const css::HideRules> CosmeticFilter::ForHost(const std::string& rawHost) const {
+  const std::string host = Lower(rawHost);
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto found = cache_.find(host);
+    if (found != cache_.end()) return found->second;
+  }
+  auto rules = std::make_shared<css::HideRules>();
+  rules->ids = &ids_;
+  rules->classes = &classes_;
+  rules->selectors = genericSelectors_;
+  std::vector<std::string> excepted;
+  for (const Exception& e : exceptions_) {
+    for (const std::string& d : e.domains) {
+      if (HostIsOrUnder(host, d)) { excepted.push_back(e.selector); break; }
+    }
+  }
+  for (size_t at = 0; at < host.size();) {
+    const auto found = byDomain_.find(host.substr(at));
+    if (found != byDomain_.end()) {
+      for (const Specific& rule : found->second) {
+        bool skip = false;
+        for (const std::string& d : rule.exclude) skip = skip || HostIsOrUnder(host, d);
+        if (!skip) rules->selectors.push_back(rule.selector);
+      }
+    }
+    const size_t dot = host.find('.', at);
+    if (dot == std::string::npos) break;
+    at = dot + 1;
+  }
+  for (const std::string& selector : excepted) {
+    if (selector[0] == '#') rules->exceptIds.push_back(selector.substr(1));
+    else if (selector[0] == '.') rules->exceptClasses.push_back(selector.substr(1));
+    rules->selectors.erase(std::remove(rules->selectors.begin(), rules->selectors.end(), selector), rules->selectors.end());
+  }
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (cache_.size() > 512) cache_.clear();
+  return cache_.emplace(host, std::move(rules)).first->second;
+}
+
+}  // namespace solar::net

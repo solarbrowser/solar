@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <fstream>
@@ -84,10 +85,38 @@ int main(int argc, char** argv) {
     ContentFilter f = Make("||Example.COM^\n");
     Check("case", Blocked(f, "https://EXAMPLE.com/A.js", "p.org"));
   }
+  {
+    CosmeticFilter c;
+    c.AddList("##.banner\n###top-ad\nsite.com##div.promo\nsite.com,other.org##.x > .y\n~good.site.com,site.com##.only\nsite.com#@#.banner\nsite.com#?#.proc\nsite.com##.a:has-text(Buy)\n!c\n");
+    c.Finish();
+    auto other = c.ForHost("news.org");
+    Check("generic class", other->classes->count("banner") == 1);
+    Check("generic id", other->ids->count("top-ad") == 1);
+    Check("no specific for another host", other->selectors.empty());
+    auto site = c.ForHost("www.site.com");
+    Check("specific by a parent domain", std::find(site->selectors.begin(), site->selectors.end(), "div.promo") != site->selectors.end());
+    Check("two domains", std::find(site->selectors.begin(), site->selectors.end(), ".x > .y") != site->selectors.end());
+    Check("excepted class", site->exceptClasses.size() == 1 && site->exceptClasses[0] == "banner");
+    Check("procedural left out", site->selectors.size() == 3);
+    auto good = c.ForHost("good.site.com");
+    Check("excluded host", std::find(good->selectors.begin(), good->selectors.end(), ".only") == good->selectors.end());
+    auto other2 = c.ForHost("other.org");
+    Check("other domain of the rule", !other2->selectors.empty() && other2->selectors[0] == ".x > .y");
+  }
   // The real lists, where given: how many rules, how long, a few addresses.
   for (int i = 1; i < argc; ++i) {
     std::ifstream in(argv[i]);
     std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    {
+      CosmeticFilter c;
+      auto c0 = std::chrono::steady_clock::now();
+      c.AddList(text);
+      c.Finish();
+      auto c1 = std::chrono::steady_clock::now();
+      std::printf("  cosmetic: %zu generic, %zu specific in %lld ms\n", c.GenericCount(), c.SpecificCount(), static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(c1 - c0).count()));
+      auto rules = c.ForHost("www.youtube.com");
+      std::printf("  youtube.com: %zu selectors\n", rules->selectors.size());
+    }
     ContentFilter f;
     auto t0 = std::chrono::steady_clock::now();
     f.AddList(text);

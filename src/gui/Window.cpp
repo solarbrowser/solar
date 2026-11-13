@@ -451,6 +451,7 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
             const size_t second = rest.find('\t');
             if (second != std::string::npos && Settings::Instance().Set(rest.substr(0, second), rest.substr(second + 1))) {
               session.Send(message.host, wire::ToRenderer::UiState, Settings::Instance().Json());
+              if (rest.rfind("blockAds\t", 0) == 0) session.Broadcast(wire::ToRenderer::Blocking, Settings::Instance().Get("blockAds") == "on" ? "\x01" : std::string(1, '\0'));
               // The tabs are moved to the other layout at once: another interface is started for it, and the pages are told how large they are now.
               // The colours too: the pages and the interface are told (they are given the size again, with the colours the user wants).
               if (rest.rfind("theme\t", 0) == 0) {

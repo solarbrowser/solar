@@ -26,6 +26,7 @@
 #include "solar/css/Color.h"
 #include "solar/css/Container.h"
 #include "solar/css/Cssom.h"
+#include "solar/css/HideRules.h"
 #include "solar/css/MediaQuery.h"
 #include "solar/css/Registry.h"
 #include "solar/css/Selectors.h"
@@ -2450,6 +2451,12 @@ void BuildUntimed(dom::Element* element, ElementStyle& style, const std::string&
       ++gatherer.ruleSerial;
       for (const DeclarationEntry& entry : rule.declarations) gatherer.Offer(entry, false, false, kUnlayered, best);
     }
+  }
+  // What the content blocker hides (the lists' cosmetic rules): important, and of the user agent, so no rule of the page wins over it.
+  if (pseudo.empty() && HiddenByBlocker(element, gatherer.matchContext)) {
+    static const DeclarationEntry hidden{"display", "none", true, "", "", ""};
+    ++gatherer.ruleSerial;
+    gatherer.Offer(hidden, false, false, kUnlayered, Specificity{});
   }
   // The width and height attributes of images and the like are declarations of no weight: any rule of the author wins over them.
   if (pseudo.empty() && (element->IsHtml() || (element->namespaceUri == dom::kSvgNamespace && element->localName == "svg"))) {

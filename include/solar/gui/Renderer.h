@@ -177,6 +177,7 @@ class Shared {
     std::lock_guard<std::mutex> lock(navigationMutex_);
     if (navigationSink_) navigationSink_(type, std::move(bytes));
   }
+  std::atomic<int> blocking{-1};  // what the browser said of the content blocker (1 on, 0 off, -1 not yet): said before the page is ready for it, so it is kept
   solar::gui::wire::Geometry initialGeometry;  // (what the window said first: the page starts knowing it)
   std::atomic<int> mods{0};  // the modifier keys (SDL's bits) as the last thing the user did had them
   void WakePage() { cv_.notify_all(); }

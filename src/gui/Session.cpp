@@ -601,6 +601,7 @@ std::shared_ptr<Host> Session::Impl::StartHost(uint32_t tab, const std::string& 
     }
     SendTo(*host, wire::ToRenderer::Resize, ZoomedGeometry(*size, zoom));
   }
+  if (!chrome) SendTo(*host, wire::ToRenderer::Blocking, Settings::Instance().Get("blockAds") == "on" ? "\x01" : std::string(1, '\0'));
   host->reader = std::thread([this, raw = host.get(), id = host->id] {
     uint8_t type = 0;
     std::string bytes;

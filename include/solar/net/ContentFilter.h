@@ -7,14 +7,21 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <unordered_map>
+#include <unordered_set>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include "solar/css/HideRules.h"
+
 // The network rules of the filter lists that block advertisements and trackers (Adblock Plus syntax: EasyList, EasyPrivacy, the cookie notice lists): `||host^`, `|start`, `end|`, `*`, `^`,
 // `@@` exceptions, and the options third-party, the kinds of resource, and domain=. A rule with an option that is not understood (redirect, csp, removeparam, popup...) is left out, and
-// so are the cosmetic rules (##) and the regular expressions: the filter blocks less than the list says, never more.
+// so are the regular expressions: the filter blocks less than the list says, never more. (The cosmetic rules, ##, are CosmeticFilter's.)
 namespace solar::net {
 
 enum FilterType : uint16_t {
@@ -70,6 +77,39 @@ class ContentFilter {
   std::vector<DomainSet> domains_;
   std::vector<std::pair<uint64_t, uint32_t>> index_;  // (hash of the key, rule), sorted by the hash
   std::vector<uint32_t> unindexed_;                   // rules with no key: tried for every request
+};
+
+// The cosmetic rules of the lists (`##.banner`, `site.com##div.ad`, and the exceptions `#@#`): what is to be hidden in a page, by its host. The rules that need more than a selector (:has-text, :xpath,
+// :-abp-..., scriptlets) are left out, as are the generic ones that no class, id or type of an element finds.
+class CosmeticFilter {
+ public:
+  void AddList(std::string_view text);
+  void Finish();
+
+  // What a page of the host has hidden. Kept for the next page of the host; safe to call from several threads once Finish has been called.
+  std::shared_ptr<const css::HideRules> ForHost(const std::string& host) const;
+
+  size_t GenericCount() const { return ids_.size() + classes_.size() + genericSelectors_.size(); }
+  size_t SpecificCount() const { return specificCount_; }
+
+ private:
+  struct Specific {
+    std::string selector;
+    std::vector<std::string> exclude;  // hosts (and what is under them) the rule is not for
+  };
+  struct Exception {
+    std::string selector;
+    std::vector<std::string> domains;  // empty: every host
+  };
+  void ParseLine(std::string_view line);
+
+  std::unordered_set<std::string> ids_, classes_;
+  std::vector<std::string> genericSelectors_;
+  std::unordered_map<std::string, std::vector<Specific>> byDomain_;
+  std::vector<Exception> exceptions_;
+  size_t specificCount_ = 0;
+  mutable std::mutex mutex_;
+  mutable std::map<std::string, std::shared_ptr<const css::HideRules>> cache_;
 };
 
 }  // namespace solar::net

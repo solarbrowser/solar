@@ -32,6 +32,8 @@ enum class ToRenderer : uint8_t {
   Find = 20,
   // The answer to a storage request (U32 id, bool ok, then the bytes that were asked for).
   StorageReply = 24,
+  // Whether the content blocker hides what the lists' cosmetic rules name (U8: 1 on, 0 off): sent when a page's process starts and when the setting changes.
+  Blocking = 36,
 };
 enum class ToBrowser : uint8_t {
   NewBuffer = 32, Frame, Title, Clipboard, Fullscreen, PointerLock, Quit,

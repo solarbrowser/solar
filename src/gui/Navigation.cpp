@@ -6,11 +6,54 @@
 
 #include "solar/gui/Navigation.h"
 
+#include "solar/css/HideRules.h"
+#include "solar/dom/Node.h"
+#include "solar/net/ContentFilter.h"
 #include "solar/net/Http1Parser.h"
+#include "solar/url/UrlApi.h"
 #include "solar/url/Parser.h"
+#include "solar/web/Scripts.h"
+
+#include <map>
 #include "solar/url/Serializer.h"
 
 namespace solar::gui {
+
+namespace {
+
+// The cosmetic rules of the content blocker (read from the lists on the first page that is hidden something from), and what each host of this process's pages has hidden.
+const net::CosmeticFilter& Cosmetics() {
+  static const net::CosmeticFilter* filter = [] {
+    auto* f = new net::CosmeticFilter;
+    for (const char* const* piece = web::kScriptFilterLists; *piece; ++piece) f->AddList(*piece);
+    f->Finish();
+    return f;
+  }();
+  return *filter;
+}
+
+const css::HideRules* HidesOf(dom::Document* document) {
+  // (Asked for every element's style: the last answer is kept for the document and its address.)
+  static dom::Document* lastDocument = nullptr;
+  static std::string lastAddress;
+  static const css::HideRules* lastRules = nullptr;
+  if (document == lastDocument && document->url == lastAddress) return lastRules;
+  static std::map<std::string, std::shared_ptr<const css::HideRules>> kept;  // (the page's thread only; kept as long as the process: a few hosts)
+  const css::HideRules* rules = nullptr;
+  const std::optional<url::Url> address = url::Parse(document->url);
+  if (address && (address->scheme == "http" || address->scheme == "https")) {
+    const std::string host = url::GetHostname(*address);
+    auto found = kept.find(host);
+    if (found == kept.end() && kept.size() < 1000) found = kept.emplace(host, Cosmetics().ForHost(host)).first;
+    if (found != kept.end()) rules = found->second.get();
+  }
+  lastDocument = document;
+  lastAddress = document->url;
+  lastRules = rules;
+  return rules;
+}
+
+}  // namespace
 
 uint32_t RemoteNavigation::Fetch(const url::Url& address, net::FetchHandler& handler, const net::FetchOptions& options, wire::Navigate::Kind kind, int entry) {
   const uint32_t id = next_++;
@@ -65,6 +108,10 @@ void RemoteNavigation::Handle(wire::ToRenderer type, const std::string& bytes) {
       return;
     case wire::ToRenderer::Find:
       if (find_) find_(bytes);
+      return;
+    case wire::ToRenderer::Blocking:
+      css::SetHideProvider(HidesOf);
+      css::SetContentHiding(!bytes.empty() && bytes[0] == 1);
       return;
     case wire::ToRenderer::NavHead: {
       wire::NavHead head;
