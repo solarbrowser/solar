@@ -1005,6 +1005,22 @@ const char* const kWindowScript = R"JS(
       if (String(value) in timing) return timing[String(value)] - timeOrigin;
       throw new DOMException("The mark '" + value + "' does not exist.", "SyntaxError");
     };
+    // A fetch or a request of a script that is done (what the page's own scripts ask of the network): Resource Timing has an entry of it. (Not the timings of the connection, which the page's process does not see.)
+    Object.defineProperty(globalThis, "__solarNoteResource", { value: (name, initiatorType, duration, size, status) => {
+      const end = now();
+      // (A request of XMLHttpRequest that is made by a fetch of the program has the entry that fetch made: it is the request's, not another's.)
+      if (initiatorType === "xmlhttprequest") {
+        const last = entries[entries.length - 1];
+        if (last && last.entryType === "resource" && last.initiatorType === "fetch" && last.name === String(name)) { last.initiatorType = "xmlhttprequest"; return; }
+      }
+      const entry = Object.assign(new PerformanceEntry(String(name), "resource", Math.max(0, end - duration), duration), {
+        initiatorType, nextHopProtocol: "h2", renderBlockingStatus: "non-blocking", responseStatus: status, transferSize: size + 300, encodedBodySize: size, decodedBodySize: size, deliveryType: "", contentType: "", workerStart: 0,
+        redirectStart: 0, redirectEnd: 0, fetchStart: Math.max(0, end - duration), domainLookupStart: Math.max(0, end - duration), domainLookupEnd: Math.max(0, end - duration), connectStart: Math.max(0, end - duration), connectEnd: Math.max(0, end - duration),
+        secureConnectionStart: Math.max(0, end - duration), requestStart: Math.max(0, end - duration), responseStart: end, responseEnd: end,
+      });
+      if (globalThis.PerformanceResourceTiming) Object.setPrototypeOf(entry, globalThis.PerformanceResourceTiming.prototype);
+      note(entry);
+    }, enumerable: false, configurable: true });
     class Performance extends EventTarget {
       get timeOrigin() { return timeOrigin; }
       get timing() { return timing; }
@@ -1043,7 +1059,10 @@ const char* const kWindowScript = R"JS(
         const types = options.entryTypes || (options.type ? [options.type] : []);
         for (const type of types) this.types.add(type);
         observers.add(this);
-        if (options.buffered) for (const entry of entries) if (this.types.has(entry.entryType)) this.queue.push(entry);
+        if (options.buffered) {
+          for (const entry of entries) if (this.types.has(entry.entryType)) this.queue.push(entry);
+          if (this.types.has("navigation")) this.queue.push(navigationEntry);
+        }
         if (this.queue.length) queueMicrotask(() => this.flush());
       }
       flush() { const batch = this.queue.splice(0); if (batch.length && observers.has(this)) this.callback({ getEntries: () => batch, getEntriesByType: (t) => batch.filter((e) => e.entryType === t), getEntriesByName: (n) => batch.filter((e) => e.name === n) }, this); }

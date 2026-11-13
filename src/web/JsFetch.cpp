@@ -91,6 +91,7 @@ void FetchOperation::OnResponseIn(const net::PageResponse& info) {
     r->headers = NewResponseHeaders(ctx, {});
   } else {
     r->type = info.type;
+    responseStatus = info.status;
     r->status = info.status;
     r->statusText = info.statusText;
     r->url = url::Serialize(info.url);
@@ -142,6 +143,17 @@ void FetchOperation::OnEndIn() {
     body->complete = true;
     qe::ReportExternalAllocation(body->bytes.size());
     body->Wake(true);
+  }
+  // (A resource of the page, for performance.getEntriesByType("resource") and the observers of it: scripts of the page read their own timings.)
+  {
+    Context& ctx = host.context();
+    Value note = qe::Get(ctx, qe::FromObject(ctx.get_global_object()), "__solarNoteResource");
+    if (qe::IsObject(note)) {
+      const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+      Value arguments[] = {qe::FromWtf8(ctx, address), qe::FromUtf8(ctx, "fetch"), qe::FromNumber(ms), qe::FromNumber(body ? static_cast<double>(body->bytes.size()) : 0.0), qe::FromNumber(responseStatus)};
+      qe::Call(ctx, note, qe::Undefined(), qe::Args(arguments, 5));
+      if (qe::HasException(ctx)) ctx.clear_exception();
+    }
   }
   if (host.config().afterScript) host.config().afterScript();
   Done();
@@ -397,6 +409,7 @@ Value Fetch(Context& ctx, Value, qe::Args args, Value newTarget) {
   auto operation = std::make_unique<FetchOperation>(*host);
   FetchOperation* op = operation.get();
   op->mode = request->mode;
+  op->address = url::Serialize(request->url, true);
 
   op->resolve = qe::Persistent(ctx, capability.resolve);
   op->reject = qe::Persistent(ctx, capability.reject);

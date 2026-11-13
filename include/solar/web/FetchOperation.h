@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <memory>
 #include <string>
 
@@ -35,6 +36,10 @@ struct FetchOperation : net::PageFetchHandler {
 
   net::RequestMode mode = net::RequestMode::Cors;
   // The integrity metadata of the request: its response is held back until the body is whole and has been checked.
+  // What Resource Timing says of it once it is done (performance.getEntriesByType("resource")).
+  std::string address;
+  int responseStatus = 0;
+  std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
   std::string integrity;
   bool integrityBuffering = false, integrityReleased = false;
   net::PageResponse integrityHead;

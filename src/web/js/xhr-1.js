@@ -179,8 +179,10 @@
   function run(self, id) {
     const s = internal.get(self);
     if (s.id !== id || !s.sendFlag) return;
+    const startedAt = globalThis.performance ? globalThis.performance.now() : 0;
     const finish = (status, statusText, headers, bytes, text) => {
       if (s.id !== id || !s.sendFlag) return;
+      if (typeof globalThis.__solarNoteResource === "function" && globalThis.performance) { try { globalThis.__solarNoteResource(s.url.replace(/#.*$/, ""), "xmlhttprequest", globalThis.performance.now() - startedAt, bytes ? bytes.length : 0, status); } catch (e) {} }
       s.status = status; s.statusText = statusText; s.responseHeaders = headers; s.bytes = bytes; s.text = text;
       s.responseUrl = s.url.replace(/#.*$/, "");
       if (s.async) {
