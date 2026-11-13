@@ -17,6 +17,7 @@
 #include <set>
 
 #include "solar/url/Origin.h"
+#include "solar/url/Serializer.h"
 
 namespace solar::net {
 
@@ -274,6 +275,7 @@ struct NetworkServiceHost::Impl {
   // What the page had in flight ends (on the host's thread).
   void CloseAll();
   void RefuseFetch(uint64_t id, const std::string& why) {
+    if (std::getenv("SOLAR_FETCH_LOG")) std::fprintf(stderr, "[fetch %llu] refused: %s\n", static_cast<unsigned long long>(id), why.c_str());
     ++refusedCount;
     Writer out;
     out.U64(id);
@@ -292,6 +294,7 @@ struct HostFetch final : PageFetchHandler {
   HostFetch(NetworkServiceHost::Impl& i, uint64_t number) : impl(i), id(number) {}
 
   void OnResponse(const PageResponse& response) override {
+    if (std::getenv("SOLAR_FETCH_LOG")) std::fprintf(stderr, "[fetch %llu] <- %d %s (type %d)\n", static_cast<unsigned long long>(id), response.status, url::Serialize(response.url, true).c_str(), static_cast<int>(response.type));
     Writer out;
     out.U64(id);
     ipc::Write(out, response);
@@ -319,6 +322,7 @@ struct HostFetch final : PageFetchHandler {
     Finished();
   }
   void OnError(std::string_view message) override {
+    if (std::getenv("SOLAR_FETCH_LOG")) std::fprintf(stderr, "[fetch %llu] !! %.*s\n", static_cast<unsigned long long>(id), static_cast<int>(message.size()), message.data());
     Writer out;
     out.U64(id);
     out.String(message);
@@ -389,10 +393,14 @@ void NetworkServiceHost::Impl::Handle(Message type, const std::string& bytes) {
       // A page asks for the account of its own origin and no other's: what it names as its address is checked against what it was made for.
       if (!allowed.count(url::SerializeOrigin(request.pageUrl))) { RefuseFetch(id, "Failed to fetch (the page is not the one this was made for)"); return; }
       if (request.url.scheme != "http" && request.url.scheme != "https") { RefuseFetch(id, "Failed to fetch (not an address of the network)"); return; }
+      // A document of a frame is asked for by the page that has the frame (the frames of other sites are in this process, as there are no processes for them yet): the frame's own origin is then the one
+      // its scripts ask the network as. (At most a few dozen of them.)
+      if (request.destination == RequestDestination::Document && allowed.size() < 64) allowed.insert(url::SerializeOrigin(request.url));
       if (std::shared_ptr<const RequestBlocker> blocker = std::atomic_load(&g_blocker); blocker && (*blocker)(request)) {
         RefuseFetch(id, "Failed to fetch (blocked by the content blocker)");
         return;
       }
+      if (std::getenv("SOLAR_FETCH_LOG")) std::fprintf(stderr, "[fetch %llu] -> %s %s (page %s, %s, body %zu)\n", static_cast<unsigned long long>(id), request.method.c_str(), url::Serialize(request.url, true).c_str(), url::Serialize(request.pageUrl, true).c_str(), request.credentials == RequestCredentials::Omit ? "omit" : "credentials", request.body ? request.body->size() : size_t{0});
       auto fetch = std::make_unique<HostFetch>(*this, id);
       HostFetch* raw = fetch.get();
       fetches[id] = std::move(fetch);

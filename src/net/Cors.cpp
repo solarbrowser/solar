@@ -6,6 +6,9 @@
 
 #include "solar/net/Cors.h"
 
+#include <cstdio>
+#include <cstdlib>
+
 #include <algorithm>
 #include <functional>
 
@@ -102,6 +105,10 @@ bool PreflightPermission::AllowsHeader(std::string_view name) const {
 PreflightVerdict CheckPreflightResponse(const HttpResponseHead& response, std::string_view origin, bool includeCredentials, std::string_view method,
                                         const std::vector<std::string>& unsafeHeaders) {
   PreflightVerdict verdict;
+  if (std::getenv("SOLAR_FETCH_LOG")) {
+    std::fprintf(stderr, "[preflight] origin %.*s credentials %d status %d\n", static_cast<int>(origin.size()), origin.data(), includeCredentials, response.status);
+    for (const auto& [name, value] : response.headers) std::fprintf(stderr, "    %s: %s\n", name.c_str(), value.c_str());
+  }
   if (!CorsAllowsResponse(response, origin, includeCredentials)) {
     verdict.reason = "the preflight response does not allow this origin";
     return verdict;

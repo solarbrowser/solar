@@ -247,6 +247,15 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     }
   }
 
+  // A frame's realm asks the network as the frame's own document does (its address is its origin, the one CORS compares): not as the page it is in. (A frame with no address of its own, about:blank, is the page's.)
+  void SetRealmUrl(qe::Realm* realm, const std::string& address) override {
+    if (address.rfind("http://", 0) != 0 && address.rfind("https://", 0) != 0) return;
+    const std::optional<solar::url::Url> parsed = solar::url::Parse(address);
+    if (!parsed) return;
+    for (auto& bundle : bundles_) {
+      if (bundle->realm.get() == realm && bundle->host) bundle->host->SetPageUrl(*parsed);
+    }
+  }
   qe::Realm* CreateRealm() override {
     auto bundle = std::make_unique<RealmBundle>();
     qe::Isolate::RealmOptions options;
