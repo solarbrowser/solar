@@ -48,6 +48,8 @@ class MseSource {
   bool Peek(int kind, double after, MsePacket& out, bool& gap);
   bool FindStart(int kind, double target, double& dts);
   bool HasTrack(int kind);
+  // Whether a buffer was added for a type of the kind (video/..., audio/...): the page said it will give such a track, which is not here until its init segment has been parsed.
+  bool Expects(int kind);
   std::shared_ptr<MseCodec> CodecOf(int kind);
   // A number that changes whenever packets were added or removed.
   uint64_t version() const;

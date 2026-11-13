@@ -521,6 +521,15 @@ std::vector<TimeRange> MseSource::Buffered() {
   return out;
 }
 
+bool MseSource::Expects(int kind) {
+  std::lock_guard lock(impl_->m);
+  const char* prefix = kind == 0 ? "video/" : "audio/";
+  for (const auto& b : impl_->buffers) {
+    if (b->impl_->mime.compare(0, 6, prefix) == 0) return true;
+  }
+  return false;
+}
+
 bool MseSource::HasTrack(int kind) {
   std::vector<std::shared_ptr<MseBuffer>> buffers;
   {

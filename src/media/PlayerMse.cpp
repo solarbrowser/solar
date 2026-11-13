@@ -108,13 +108,20 @@ void Player::Impl::RunMse() {
     Fail(4, "FFmpeg is not available");
     return;
   }
-  // The tracks are known when the page has appended an init segment.
+  // The tracks are known when the page has appended an init segment -- of each of its buffers: a page that makes an audio buffer and a video buffer appends to them one after the
+  // other (youtube: the audio's init first), and a player that went on with the first track to be there took the other for one that does not exist, and never played it (the sound
+  // came and the picture never did). The one that is not there yet is waited for, for a few seconds at most (a buffer whose init never comes plays as what it has).
+  Clock::time_point firstTrackAt{};
   for (;;) {
     {
       std::unique_lock lock(m);
       if (stop) return;
     }
-    if (mse->HasTrack(0) || mse->HasTrack(1)) break;
+    if (mse->HasTrack(0) || mse->HasTrack(1)) {
+      if (firstTrackAt == Clock::time_point{}) firstTrackAt = Clock::now();
+      const bool complete = (!mse->Expects(0) || mse->HasTrack(0)) && (!mse->Expects(1) || mse->HasTrack(1));
+      if (complete || Clock::now() - firstTrackAt > std::chrono::seconds(3)) break;
+    }
     std::unique_lock lock(m);
     cv.wait_for(lock, std::chrono::milliseconds(30));
   }
