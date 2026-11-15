@@ -818,7 +818,10 @@ bool ResolveNamespacesImpl(SelectorList& list, const CssStyleSheet* sheet) {
   bool hasDefault = false;
   std::string defaultUri;
   if (sheet) {
+    // (@namespace rules come before every style rule of a sheet: the walk stops at the first, which a sheet of thousands of rules would otherwise be looked through
+    // for each one of them.)
     for (const CssRule* rule : sheet->rules) {
+      if (rule->kind == RuleKind::Style) break;
       if (rule->kind == RuleKind::Namespace && rule->prefix.empty()) {
         hasDefault = true;
         defaultUri = rule->namespaceUri;
@@ -828,6 +831,7 @@ bool ResolveNamespacesImpl(SelectorList& list, const CssStyleSheet* sheet) {
   const auto uriOf = [&](const std::string& prefix) {
     if (sheet) {
       for (const CssRule* rule : sheet->rules) {
+        if (rule->kind == RuleKind::Style) break;
         if (rule->kind == RuleKind::Namespace && rule->prefix == prefix) return rule->namespaceUri;
       }
     }
@@ -836,6 +840,7 @@ bool ResolveNamespacesImpl(SelectorList& list, const CssStyleSheet* sheet) {
   const auto declared = [&](const std::string& prefix) {
     if (!sheet) return false;
     for (const CssRule* rule : sheet->rules) {
+      if (rule->kind == RuleKind::Style) break;
       if (rule->kind == RuleKind::Namespace && rule->prefix == prefix) return true;
     }
     return false;
