@@ -1026,7 +1026,9 @@ void RecordAttrChange(Element* element, const Attr& attribute, const std::string
 }  // namespace
 
 void NotifyParsedAttribute(Element* element, const std::string& name) {
-  if (const Attr* attribute = element->FindAttribute("", name)) RecordAttrChange(element, *attribute, "", attribute->value);
+  // (An element that is in no tree yet, which is how the parser has it while it gives it its attributes, has had no style made: nothing is going to ask what these did.)
+  if (!element->parentNode) {
+  } else if (const Attr* attribute = element->FindAttribute("", name)) RecordAttrChange(element, *attribute, "", attribute->value);
   else if (element->rare) element->rare->attrLog.clear();  // (not known which: the numbers that follow have no record, and are taken as any attribute)
   NoteDamage(element, kDamageAttributes);
   if (g_hooks.attributeChanged) g_hooks.attributeChanged(element, name);

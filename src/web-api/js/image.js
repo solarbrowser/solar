@@ -287,7 +287,9 @@
       if (holding) { if (s.complete) resumeLoad(); else s.release = resumeLoad; }
     };
     const scan = (root) => { if (root.nodeType === 1) for (const el of root.localName === "img" ? [root] : root.querySelectorAll("img")) start(el); };
-    new MutationObserver((records) => { for (const r of records) for (const n of r.addedNodes) scan(n); }).observe(document, { childList: true, subtree: true });
+    const watcher = new MutationObserver((records) => { for (const r of records) for (const n of r.addedNodes) scan(n); });
+    watcher.observe(document, { childList: true, subtree: true });
+    __solarObserveTags(watcher, ["img"]);  // (a record only for what adds an img: not one for each node the parser inserts)
     document.addEventListener("DOMContentLoaded", () => scan(document.documentElement), { once: true });
   }
 })();

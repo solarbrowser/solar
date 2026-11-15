@@ -390,12 +390,14 @@
       info.media = null;
     };
     if (typeof MutationObserver === "function") {
-      new MutationObserver((records) => {
+      const watcher = new MutationObserver((records) => {
         for (const r of records) {
           for (const n of r.addedNodes) if (n.nodeType === 1) for (const el of n.localName === "track" ? [n] : n.querySelectorAll("track")) attach(el);
           for (const n of r.removedNodes) if (n.nodeType === 1) for (const el of n.localName === "track" ? [n] : n.querySelectorAll("track")) detach(el);
         }
-      }).observe(document, { childList: true, subtree: true });
+      });
+      watcher.observe(document, { childList: true, subtree: true });
+      __solarObserveTags(watcher, ["track"]);
     }
     document.addEventListener("DOMContentLoaded", () => { for (const el of document.querySelectorAll("track")) attach(el); }, { once: true });
     // A track put in a media element that is not in the document has its track too: the insertions are looked at.

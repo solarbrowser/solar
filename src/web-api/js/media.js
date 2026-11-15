@@ -498,6 +498,7 @@
       }
     });
     observer.observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ["src", "controls"] });
+    __solarObserveTags(observer, ["video", "audio", "source"]);
     const begin = () => { if (document.documentElement) scan(document.documentElement); };
     begin();
     document.addEventListener("DOMContentLoaded", begin, { once: true });

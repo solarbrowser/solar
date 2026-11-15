@@ -45,7 +45,8 @@
   };
   const isShowing = (el) => { const s = states.get(el); return !!(s && s.showing); };
   const setLayers = () => { topLayer.forEach((el, i) => el.setAttribute(LAYER, String(Math.min(i + 1, 60)))); };
-  const addToTopLayer = (el) => { if (!topLayer.includes(el)) topLayer.push(el); setLayers(); };
+  let watchTopLayer = () => {};
+  const addToTopLayer = (el) => { if (!topLayer.includes(el)) topLayer.push(el); watchTopLayer(); setLayers(); };
   const removeFromTopLayer = (el) => { const i = topLayer.indexOf(el); if (i >= 0) topLayer.splice(i, 1); try { el.removeAttribute(LAYER); } catch (e) {} setLayers(); };
   Object.defineProperty(globalThis, Symbol.for("solar.toplayer"), { value: { add: addToTopLayer, remove: removeFromTopLayer, has: (el) => topLayer.includes(el) }, configurable: true });
 
@@ -259,7 +260,9 @@
   }
   // What leaves the document is hidden without a word.
   const sweep = () => { for (const el of [...topLayer]) if (isShowing(el) && !connected(el)) hidePopover(el, false, false, false, null, true); };
-  if (typeof MutationObserver === "function") new MutationObserver(sweep).observe(document, { childList: true, subtree: true });
+  // (Watched while something is in the top layer: an observer of the whole document makes a record for every node the page adds.)
+  let swept = false;
+  watchTopLayer = () => { if (!swept && typeof MutationObserver === "function") { swept = true; new MutationObserver(sweep).observe(document, { childList: true, subtree: true }); } };
   // The tree changes the page makes are looked at before and after, so that what was taken out is hidden before it can be put back.
   const wrapMutators = (proto, names) => {
     for (const name of names) {

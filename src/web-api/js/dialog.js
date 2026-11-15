@@ -69,6 +69,7 @@
     i.previousFocus = focusedElement();
     if (modal) {
       d[MODAL_KEY] = true;
+      watchModal();
       d.setAttribute(MODAL, "");
       if (layer()) layer().add(d);
     }
@@ -102,13 +103,17 @@
   }, 0);
 
   // `open` taken away or the dialog taken out of the document: it is not modal any more.
-  if (typeof MutationObserver === "function") {
+  // (Watched from the first showModal on: until then there is nothing that could stop being modal, and an observer of the whole document makes a record for every node the page adds.)
+  let watching = false;
+  const watchModal = () => {
+    if (watching || typeof MutationObserver !== "function") return;
+    watching = true;
     new MutationObserver(() => {
       for (const d of document.querySelectorAll("dialog[" + MODAL + "]")) if (!d.hasAttribute("open")) cleanup(d);
       const l = layer();
       if (l) for (const d of [...(globalThis.__solarModalDialogs || [])]) if (!connected(d)) cleanup(d);
     }).observe(document, { attributes: true, subtree: true, attributeFilter: ["open"], childList: true });
-  }
+  };
 
   // Escape asks the topmost modal dialog to close, unless a popover is above it or the page took the key.
   document.addEventListener("keydown", (e) => {

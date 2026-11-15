@@ -47,6 +47,9 @@ struct JsMutationObserver : DOMObject {
   std::vector<PendingRecord> queue;
   std::vector<Node*> nodes;  // those it is registered on, which it removes itself from
   bool pending = false;      // in the list of observers with records to give out
+  // Only for the observers the host's own scripts make (see __solarObserveTags): the names of the elements it cares about, and then a childList record is only made for a change
+  // that adds or removes one of them (or a tree that has one). Without it, a page that is parsed makes a record of every node it inserts for each of these observers.
+  std::vector<std::string> tags;
 
   void Visit(Quanta::Visitor& visitor) {
     visitor.Mark(callback);
@@ -118,6 +121,25 @@ void Schedule(JsMutationObserver* observer) {
 
 bool Contains(const std::vector<std::string>& list, const std::string& name) { return std::find(list.begin(), list.end(), name) != list.end(); }
 
+// Whether a node a childList record adds or removes is an element with one of the names, or has one under it.
+bool TouchesTags(const PendingRecord& record, const std::vector<std::string>& tags) {
+  const auto wanted = [&](Node* node) {
+    if (!node->IsElement()) return false;
+    const std::string& name = static_cast<Element*>(node)->localName;
+    return std::find(tags.begin(), tags.end(), name) != tags.end();
+  };
+  for (const std::vector<Node*>* list : {&record.added, &record.removed}) {
+    for (Node* root : *list) {
+      if (wanted(root)) return true;
+      if (!root->firstChild) continue;
+      for (Node* node = root->NextInTree(root); node; node = node->NextInTree(root)) {
+        if (wanted(node)) return true;
+      }
+    }
+  }
+  return false;
+}
+
 void Queue(PendingRecord base) {
   struct Interest {
     JsMutationObserver* observer;
@@ -138,6 +160,7 @@ void Queue(PendingRecord base) {
         continue;
       }
       auto* observer = static_cast<JsMutationObserver*>(registration.observer);
+      if (base.type == "childList" && !observer->tags.empty() && !TouchesTags(base, observer->tags)) continue;
       auto found = std::find_if(interested.begin(), interested.end(), [&](const Interest& i) { return i.observer == observer; });
       if (found == interested.end()) {
         interested.push_back({observer, std::nullopt});
@@ -153,6 +176,17 @@ void Queue(PendingRecord base) {
     interest.observer->NoteWrite();
     Schedule(interest.observer);
   }
+}
+
+// __solarObserveTags(observer, ["img", ...]): the observer is told of the childList changes that touch elements of these names only.
+Value ObserveTags(Context& ctx, Value, qe::Args args, Value) {
+  JsMutationObserver* observer = args.size() > 1 ? DOMObject::Cast<JsMutationObserver>(args[0]) : nullptr;
+  if (!observer) return qe::Undefined();
+  observer->tags.clear();
+  const Value list = args[1];
+  const uint32_t length = qe::ToUint32(ctx, qe::Get(ctx, list, "length"));
+  for (uint32_t i = 0; i < length; ++i) observer->tags.push_back(qe::ToWtf8(ctx, qe::Get(ctx, list, qe::FromWtf8(ctx, std::to_string(i)))));
+  return qe::Undefined();
 }
 
 JsMutationObserver* ThisObserver(Context& ctx, const Value& t) {
@@ -505,6 +539,7 @@ void DefineMutationClasses(Context& ctx) {
 
   // What notifying needs, kept on the realm's holder: queueMicrotask and the function it is given.
   qe::DefineGlobalFunction(ctx, "__solarNotifyObservers", Notify, 0);
+  qe::DefineGlobalFunction(ctx, "__solarObserveTags", ObserveTags, 2);
   Object* holder = RealmHolder(ctx);
   MutationState* state = Heap::Allocate<MutationState>();
   state->initialize_prototype(nullptr);
