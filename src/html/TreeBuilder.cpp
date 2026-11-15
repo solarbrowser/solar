@@ -349,7 +349,10 @@ Element* TreeBuilder::CreateElementForToken(const Token& token, std::string_view
   std::optional<std::string> is;
   if (const std::string* value = token.Attribute("is")) is = *value;
   // A custom element is made by running its constructor, in the middle of parsing, unless the parser is for a fragment.
-  dom::CustomDefinition* definition = ns == dom::kHtmlNamespace ? dom::LookupDefinition(ctx_, document, ns, token.name, is) : nullptr;
+  // (The content of a template belongs to a document of its own, which has no browsing context: template.innerHTML makes elements nothing is constructed for; they are when the content is
+  // cloned into a document. The fragment of any other context belongs to the document of that, which has.)
+  const bool intoTemplateContent = fragmentContext_ && fragmentContext_->IsHtml("template");
+  dom::CustomDefinition* definition = ns == dom::kHtmlNamespace && !intoTemplateContent ? dom::LookupDefinition(ctx_, document, ns, token.name, is) : nullptr;
   const bool willExecuteScript = definition && !fragmentContext_;
   // While the element is made and the reactions it queues are run, document.open and its kind throw.
   struct MarkupGuard {
@@ -359,7 +362,7 @@ Element* TreeBuilder::CreateElementForToken(const Token& token, std::string_view
   if (willExecuteScript) ++document->throwOnDynamicMarkup;
   std::optional<dom::ReactionsScope> reactions;
   if (willExecuteScript) reactions.emplace(ctx_);
-  Element* element = dom::CreateElement(ctx_, document, token.name, ns, "", is, willExecuteScript);
+  Element* element = intoTemplateContent ? dom::CreateElementInFragment(ctx_, document, token.name, ns, is) : dom::CreateElement(ctx_, document, token.name, ns, "", is, willExecuteScript);
   if (scriptHandler_) retained_.Append(qe::FromObject(element));
   if (element->IsHtml("script")) {
     element->scriptParserInserted = true;

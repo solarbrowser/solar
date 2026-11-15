@@ -322,6 +322,14 @@ Element* CreateElement(Context& ctx, Document* document, std::string_view localN
   return result;
 }
 
+Element* CreateElementInFragment(Context& ctx, Document* document, std::string_view localName, std::string_view ns, const std::optional<std::string>& is) {
+  Element* result = NewElement(ctx, document, localName, ns, "");
+  if (ns == kHtmlNamespace && (IsValidCustomElementName(localName) || is)) result->customState = CustomState::Undefined;
+  if (is) result->MakeRare().isValue = is;
+  result->NoteWrite();
+  return result;
+}
+
 void CustomAfterInsert(Node* node) {
   if (!g_anyDefinition) return;
   Context* ctx = ContextOf(node);

@@ -42,6 +42,9 @@ bool HasCustomDefinitions();
 // "look up a custom element definition". Null in a document that has no window, which is no browsing context.
 CustomDefinition* LookupDefinition(Quanta::Context& ctx, const Document* document, std::string_view ns, std::string_view localName, const std::optional<std::string>& is);
 
+// An element the parser makes for the content of a template (template.innerHTML): the document the content belongs to has no browsing context, so there is no
+// definition to look up and nothing is constructed; a name that could be a custom element's is one that is not defined yet, and is upgraded when the element is put in a document.
+Element* CreateElementInFragment(Quanta::Context& ctx, Document* document, std::string_view localName, std::string_view ns, const std::optional<std::string>& is);
 // "create an element": the element for this name, which is a custom element if there is a definition for it. With
 // `synchronous` the constructor of a definition is run now (and a failure is reported and gives an HTMLUnknownElement);
 // without, an upgrade is queued.
