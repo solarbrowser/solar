@@ -752,15 +752,15 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
   int hit = -1;
   if (!box.memoStrict && box.node && box.node->IsElement() && static_cast<dom::Element*>(box.node)->layoutMemoStrict) box.memoStrict = true;  // (it was left unsettled before, as another box of the element)
   if (eligible && (floatsEmpty || establishes)) {
-    if (box.memoDesc >= 0 && MemoMatches(box.memos[box.memoDesc], lc, cbWidth, cbHeight, shrinkToFit)) hit = box.memoDesc;
+    if (box.memoDesc >= 0 && MemoMatches(box.Memo(box.memoDesc), lc, cbWidth, cbHeight, shrinkToFit)) hit = box.memoDesc;
     else if (!lc.tree.strictMemo && !box.memoStrict && !oneSlot) {
       for (int j = 0; j < Box::kMemoSlots && hit < 0; ++j) {
-        if (j != box.memoDesc && MemoMatches(box.memos[j], lc, cbWidth, cbHeight, shrinkToFit)) hit = j;
+        if (j != box.memoDesc && box.memoStore && MemoMatches(box.memoStore->slot[j], lc, cbWidth, cbHeight, shrinkToFit)) hit = j;
       }
     }
   }
   if (hit >= 0) {
-    RestoreFromMemo(box, box.memos[hit]);
+    RestoreFromMemo(box, box.Memo(hit));
     if (hit != box.memoDesc) {
       if (!box.memoInconsistent) lc.tree.memoInconsistent.push_back(&box);
       box.memoInconsistent = true;
@@ -787,14 +787,14 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
       // The way it was laid out before this one stays, in the other slot; the one the contents were left in is the one that is not written over.
       int slot = 0;
       if (box.memoDesc >= 0) slot = (box.memoDesc + 1) % Box::kMemoSlots;
-      else if (box.memos[0].valid) slot = 1;
+      else if (box.MemoValid(0)) slot = 1;
       if (oneSlot) slot = 0;
-      for (int j = 0; j < Box::kMemoSlots; ++j) if (j != slot && oneSlot) box.memos[j].valid = false;
-      StoreInMemo(box.memos[slot], key, box);
+      for (int j = 0; j < Box::kMemoSlots; ++j) if (j != slot && oneSlot) box.Memo(j).valid = false;
+      StoreInMemo(box.Memo(slot), key, box);
       box.memoDesc = static_cast<int8_t>(slot);
       box.memoDescSerial = lc.tree.serial;
     } else {
-      for (LayoutMemo& m : box.memos) m.valid = false;
+      if (box.memoStore) for (LayoutMemo& m : box.memoStore->slot) m.valid = false;
       box.memoDesc = -1;
     }
   }

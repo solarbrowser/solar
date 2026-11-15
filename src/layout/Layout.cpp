@@ -352,7 +352,7 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
           for (auto& child : b->children) {
             Box* c = child.get();
             if (c->kind != Box::Kind::Block) continue;
-            if (!c->memoStrict && c->memos[0].valid && c->memos[1].valid) {
+            if (!c->memoStrict && c->MemoValid(0) && c->MemoValid(1)) {
               c->memoStrict = true;
               if (c->node && c->node->IsElement()) static_cast<dom::Element*>(c->node)->layoutMemoStrict = true;
             }
@@ -694,9 +694,9 @@ bool UsedValue(Tree& tree, dom::Element* element, const std::string& property, s
     const int axis = property == "grid-template-columns" ? 1 : 0;
     const GridLines& g = *box->gridLines;
     // A subgrid has the lines of the grid above: its used value is subgrid, and the names of each line it spans.
-    if (box->subgrid[axis].active) {
+    if (box->SubgridRead(axis).active) {
       std::string text = "subgrid";
-      const size_t lines = box->subgrid[axis].sizes.size() + 1;
+      const size_t lines = box->SubgridRead(axis).sizes.size() + 1;
       for (size_t line = 0; line < lines; ++line) {
         text += " [";
         if (line < g.names[axis].size()) {

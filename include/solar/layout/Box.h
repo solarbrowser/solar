@@ -153,7 +153,22 @@ struct Box {
   std::shared_ptr<const BoxStyle> anchoredStyle;   // a positioned box with anchors: its style with their lengths worked out, as it was placed
   std::vector<FirstLineEdit> firstLineEdits;
   bool hasInlineContent = false;  // the children are all inline-level
-  SubgridTracks subgrid[2];  // set by the grid this box is an item of, for the axes it is a subgrid in: [0] rows, [1] columns
+  // (Made when a grid sets them: nearly no box is a subgrid, and a pair of them is 130 bytes.)
+  struct SubgridStore {
+    SubgridTracks axis[2];
+  };
+  std::unique_ptr<SubgridStore> subgridStore;
+  SubgridTracks& Subgrid(int axis) {
+    if (!subgridStore) subgridStore = std::make_unique<SubgridStore>();
+    return subgridStore->axis[axis];
+  }
+  const SubgridTracks& SubgridRead(int axis) const {
+    static const SubgridTracks none;
+    return subgridStore ? subgridStore->axis[axis] : none;
+  }
+  void ClearSubgridActive() {
+    if (subgridStore) subgridStore->axis[0].active = subgridStore->axis[1].active = false;
+  }
   std::shared_ptr<GridLines> gridLines;  // a grid container's, once laid out
   // Margin collapsing: the margins that go out through the top and bottom of the box as sums of the largest positive and most negative.
   double topPositive = 0, topNegative = 0, bottomPositive = 0, bottomNegative = 0;
@@ -178,7 +193,16 @@ struct Box {
   // The last two ways it was laid out, and which of them the boxes under it are as laid out in now (a box that is asked in two ways in turn by its parent, a flex item that is
   // stretched after it was measured, has both): see LayoutBlockLevel.
   static constexpr int kMemoSlots = 2;
-  LayoutMemo memos[kMemoSlots];
+  // (Only the boxes that are laid out as block-level boxes have them, which is a part of the boxes; one is ~400 bytes, so it is made when the first is stored.)
+  struct MemoStore {
+    LayoutMemo slot[kMemoSlots];
+  };
+  std::unique_ptr<MemoStore> memoStore;
+  LayoutMemo& Memo(int i) {
+    if (!memoStore) memoStore = std::make_unique<MemoStore>();
+    return memoStore->slot[i];
+  }
+  bool MemoValid(int i) const { return memoStore && memoStore->slot[i].valid; }
   int8_t memoDesc = -1;
   uint64_t memoDescSerial = 0;  // the tree whose layout left what is under it as it is
   bool memoStrict = false;        // it was left unsettled once: it is left as it was only when asked the way its contents are laid out as

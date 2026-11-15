@@ -484,17 +484,17 @@ struct Grid {
     const double S = startExtra + edge(starts[axis]), E = endExtra + edge(ends[axis]);
     // Its own grid, only for where its items are in the lines it spans.
     Grid inner(lc, box, kNaN, kNaN);
-    box.subgrid[axis] = SubgridTracks();
-    box.subgrid[axis].active = true;
-    box.subgrid[axis].sizes.assign(static_cast<size_t>(count), 0.0);
-    for (int i = from; i <= from + count; ++i) box.subgrid[axis].names.push_back(static_cast<size_t>(i) < lineNames[axis].size() ? lineNames[axis][i] : std::vector<std::string>());
-    box.subgrid[1 - axis] = SubgridTracks();
+    box.Subgrid(axis) = SubgridTracks();
+    box.Subgrid(axis).active = true;
+    box.Subgrid(axis).sizes.assign(static_cast<size_t>(count), 0.0);
+    for (int i = from; i <= from + count; ++i) box.Subgrid(axis).names.push_back(static_cast<size_t>(i) < lineNames[axis].size() ? lineNames[axis][i] : std::vector<std::string>());
+    box.Subgrid(1 - axis) = SubgridTracks();
     // The other axis too, when it is shared as well: the items inside are placed in its lines.
     const int other = 1 - axis;
     if (root.subgridAxis[other] && root.box == &box && IsSubgridIn(box, other)) {
-      box.subgrid[other].active = true;
-      box.subgrid[other].sizes.assign(static_cast<size_t>(root.span[other]), 0.0);
-      for (int i = root.pos[other]; i <= root.pos[other] + root.span[other]; ++i) box.subgrid[other].names.push_back(static_cast<size_t>(i) < lineNames[other].size() ? lineNames[other][i] : std::vector<std::string>());
+      box.Subgrid(other).active = true;
+      box.Subgrid(other).sizes.assign(static_cast<size_t>(root.span[other]), 0.0);
+      for (int i = root.pos[other]; i <= root.pos[other] + root.span[other]; ++i) box.Subgrid(other).names.push_back(static_cast<size_t>(i) < lineNames[other].size() ? lineNames[other][i] : std::vector<std::string>());
     }
     std::vector<Box*> boxes;
     for (auto& c : box.children) if (!c->style->IsOutOfFlow()) boxes.push_back(c.get());
@@ -535,7 +535,7 @@ struct Grid {
   void ApplySubgrid() {
     const std::string* texts[2] = {&style.gridTemplateRows, &style.gridTemplateColumns};
     for (int axis = 0; axis < 2; ++axis) {
-      const SubgridTracks& from = container.subgrid[axis];
+      const SubgridTracks& from = container.SubgridRead(axis);
       if (!from.active || from.sizes.empty() || Lower(*texts[axis]).rfind("subgrid", 0) != 0) continue;
       subgridded[axis] = true;
       // Its own margin, border and padding at the start and the end of the axis belong to the first and the last track.
@@ -1507,7 +1507,7 @@ void LayoutGridLanes(LayoutContext& lc, Box& container, double contentWidth, dou
   grid.items.resize(boxes.size());
   for (size_t i = 0; i < boxes.size(); ++i) {
     grid.items[i].box = boxes[i];
-    boxes[i]->subgrid[0].active = boxes[i]->subgrid[1].active = false;
+    boxes[i]->ClearSubgridActive();
   }
   grid.ParseTemplates(contentWidth, heightBasis);
   // The axis the items flow along has no tracks.
@@ -1727,7 +1727,7 @@ void LayoutGridLanes(LayoutContext& lc, Box& container, double contentWidth, dou
     }
     // A grid container that is a subgrid in the axis of the lanes takes the lanes it spans.
     if (IsGridDisplay(st.display) && grid.IsSubgridIn(b, L)) {
-      SubgridTracks& sub = b.subgrid[L];
+      SubgridTracks& sub = b.Subgrid(L);
       sub = SubgridTracks();
       sub.active = true;
       for (int i = lane; i < lane + span; ++i) sub.sizes.push_back(grid.tracks[L][i].base);
@@ -1936,7 +1936,7 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
   for (size_t i = 0; i < boxes.size(); ++i) {
     grid.items[i].box = boxes[i];
     // (The tracks of a subgrid are known when its grid has sized them: until then it has none.)
-    boxes[i]->subgrid[0].active = boxes[i]->subgrid[1].active = false;
+    boxes[i]->ClearSubgridActive();
   }
   grid.ParseTemplates(contentWidth, heightBasis);
   grid.ApplySubgrid();
@@ -2066,7 +2066,7 @@ void LayoutGrid(LayoutContext& lc, Box& container, double contentWidth, double h
       const std::string* texts[2] = {&st.gridTemplateRows, &st.gridTemplateColumns};
       for (int a = 0; a < 2; ++a) {
         if (Lower(*texts[a]).rfind("subgrid", 0) != 0) continue;
-        SubgridTracks& sub = b.subgrid[a];
+        SubgridTracks& sub = b.Subgrid(a);
         sub = SubgridTracks();
         sub.active = true;
         for (int i = it.pos[a]; i < it.pos[a] + it.span[a]; ++i) sub.sizes.push_back(grid.tracks[a][i].base);
