@@ -237,6 +237,8 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
   void ReleaseRealm(qe::Realm* realm) {
     // (What the realm's own data holds is not let go with the realm: the document it points at is let go first.)
     solar::html::RunInRealm(*realm, [&] { solar::dom::SetAssociatedDocument(realm->GetContext(), nullptr); });
+    // Nothing runs in it again: what the page made hangs from its global, and a pointer to any function of the realm (a word on a stack, a held callback) reaches that global.
+    realm->DropGlobalState();
     if (pageRealm_ == realm) pageRealm_ = nullptr;
     solar::webapi::ReleaseOwnedWorkers(realm);
     for (auto it = bundles_.begin(); it != bundles_.end(); ++it) {
@@ -1579,6 +1581,20 @@ int PageMain(Shared& shared, int argc, char** argv) {
         browser.Prefetch(markup, address);
       }
     }
+    if (left) {
+      // The page that was left goes now, not when the new one has loaded: that can take half a minute, and everything the old page made (a video site's
+      // scripts and data are hundreds of megabytes) stayed until then, with its timers running. Its timers stop, what hangs from its document is let go of,
+      // its realm goes, and what is no more used is collected.
+      timers.DropRealm(left);
+      if (leftDocument) solar::dom::DisposeDocument(leftDocument);
+      if (leftDocument) solar::css::ForgetDocument(leftDocument);
+      browser.ReleaseRealm(left);
+      solar::layout::ForgetImages();
+      shared.Post({UiCommand::Kind::Forget});
+      browser.DropWorkerResources();
+      browser.TrimResources(48u << 20);
+      isolate->CollectGarbage();
+    }
     realm = browser.CreateRealm();
     solar::html::RunInRealm(*realm, [&] {
       document = solar::dom::NewDocument(realm->GetContext(), true);
@@ -1622,24 +1638,6 @@ int PageMain(Shared& shared, int argc, char** argv) {
     lap("settle");
     browser.TakeArrived();
     browser.TakeSizesArrived();
-    if (left) {
-      // The page that was left: its timers stop, what hangs from its document is let go of, its realm goes, and what is no more used is collected.
-      timers.DropRealm(left);
-      lap("timers dropped");
-      if (leftDocument) solar::dom::DisposeDocument(leftDocument);
-      lap("document disposed");
-      if (leftDocument) solar::css::ForgetDocument(leftDocument);
-      lap("style forgotten");
-      browser.ReleaseRealm(left);
-      lap("realm released");
-      solar::layout::ForgetImages();
-      shared.Post({UiCommand::Kind::Forget});
-      browser.DropWorkerResources();
-      browser.TrimResources(48u << 20);
-      lap("resources trimmed");
-      isolate->CollectGarbage();
-      lap("garbage collected");
-    }
     std::fprintf(stderr, "loaded in %.0f ms\n", std::chrono::duration<double, std::milli>(Clock::now() - started).count());
     loadingPage = false;
     {
