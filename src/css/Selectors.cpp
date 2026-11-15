@@ -152,6 +152,7 @@ class Parser {
         ++pos_;
         continue;
       }
+      list.shrink_to_fit();
       return list;
     }
   }
@@ -214,6 +215,10 @@ class Parser {
         selector.combinators.push_back(Combinator::Descendant);
         selector.compounds.push_back(ParseCompound());
       } else {
+        // (Grown by doubling while it was read: a vector of two held room for four, and a page has a hundred thousand of them.)
+        for (CompoundSelector& compound : selector.compounds) compound.simples.shrink_to_fit();
+        selector.compounds.shrink_to_fit();
+        selector.combinators.shrink_to_fit();
         return selector;
       }
     }

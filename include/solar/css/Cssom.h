@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "quanta/Embed.h"
+#include "solar/css/RareString.h"
 #include "solar/css/Registry.h"
 #include "solar/css/Selectors.h"
 #include "solar/css/Syntax.h"
@@ -49,46 +50,6 @@ enum class RuleKind {
   NestedDeclarations,
   FontPaletteValues,
   PositionTry,
-};
-
-// A string that is empty nearly always: 8 bytes when it is, and a string made when it is not (a declaration has three of them it hardly ever uses, and a page has a hundred and forty
-// thousand declarations).
-class RareString {
- public:
-  RareString() = default;
-  RareString(const std::string& text) { if (!text.empty()) text_ = std::make_unique<std::string>(text); }
-  RareString(std::string&& text) { if (!text.empty()) text_ = std::make_unique<std::string>(std::move(text)); }
-  RareString(const char* text) { if (text && *text) text_ = std::make_unique<std::string>(text); }
-  RareString(const RareString& other) { if (other.text_) text_ = std::make_unique<std::string>(*other.text_); }
-  RareString(RareString&&) noexcept = default;
-  RareString& operator=(const RareString& other) {
-    if (this != &other) text_ = other.text_ ? std::make_unique<std::string>(*other.text_) : nullptr;
-    return *this;
-  }
-  RareString& operator=(RareString&&) noexcept = default;
-  const std::string& str() const {
-    static const std::string none;
-    return text_ ? *text_ : none;
-  }
-  operator const std::string&() const { return str(); }
-  operator std::string_view() const { return str(); }
-  bool empty() const { return !text_ || text_->empty(); }
-  size_t size() const { return str().size(); }
-  const char* c_str() const { return str().c_str(); }
-  friend std::string operator+(const std::string& a, const RareString& b) { return a + b.str(); }
-  friend std::string operator+(const RareString& a, const std::string& b) { return a.str() + b; }
-  friend std::string operator+(const char* a, const RareString& b) { return a + b.str(); }
-  friend std::string operator+(const RareString& a, const char* b) { return a.str() + b; }
-  friend std::string operator+(const RareString& a, const RareString& b) { return a.str() + b.str(); }
-  friend bool operator!=(const RareString& a, const char* b) { return a.str() != b; }
-  friend bool operator!=(const RareString& a, const std::string& b) { return a.str() != b; }
-  template <class... A> size_t find(A&&... a) const { return str().find(std::forward<A>(a)...); }
-  friend bool operator==(const RareString& a, const RareString& b) { return a.str() == b.str(); }
-  friend bool operator==(const RareString& a, const std::string& b) { return a.str() == b; }
-  friend bool operator==(const RareString& a, const char* b) { return a.str() == b; }
-
- private:
-  std::unique_ptr<std::string> text_;
 };
 
 // One declaration of a block: its name (lowercased for a known property, as written for a custom one), its
@@ -211,7 +172,7 @@ struct CssRule : Quanta::DOMObject {
   // Style rule, page rule, font-face, keyframe, counter-style, property, nested declarations: a block of declarations.
   CssDeclarations* style = nullptr;
   // Style rule: its selector list as written (serialized), and parsed. Page rule: the selector text.
-  std::string selectorText;
+  RareString selectorText;  // (a page rule's; a style rule's is made from `selectors` when it is asked for: SelectorTextOf)
   std::shared_ptr<SelectorList> selectors;
   // What a style rule needs of an element at the least, one key (an id, a class or a type) for each of its selectors: worked out when it is first looked at.
   std::vector<uint64_t> quickKeys;
@@ -243,6 +204,8 @@ struct CssRule : Quanta::DOMObject {
   std::unique_ptr<RegisteredProperty> registered;  // (made for the rule that registers one: of a rule in a hundred it is a hundred and fifty bytes)
 
   std::string CssText() const;
+  // What selectorText answers: the serialization of the selectors of a style rule, made when it is asked for (a page has tens of thousands of rules, which almost none is asked of).
+  std::string SelectorTextOf() const;
   // A keyframes rule is indexable by its keyframes.
   static bool IndexedGetter(Quanta::Context& ctx, CssRule& self, uint32_t index, Quanta::Value& out);
   static uint32_t IndexedLength(Quanta::Context&, CssRule& self) { return self.kind == RuleKind::Keyframes ? static_cast<uint32_t>(self.rules.size()) : 0; }

@@ -776,8 +776,8 @@ std::string CssRule::CssText() const {
     case RuleKind::Style: {
       const std::string body = style ? style->Serialize() : "";
       const std::string children = Children(*this);
-      if (children.empty()) return selectorText + (body.empty() ? " { }" : " { " + body + " }");
-      return selectorText + " {\n" + (body.empty() ? "" : "  " + body + "\n") + children + "}";
+      if (children.empty()) return SelectorTextOf() + (body.empty() ? " { }" : " { " + body + " }");
+      return SelectorTextOf() + " {\n" + (body.empty() ? "" : "  " + body + "\n") + children + "}";
     }
     case RuleKind::NestedDeclarations: return style ? style->Serialize() : "";
     case RuleKind::Import: {
@@ -1160,7 +1160,7 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
     if (!selectors || !ResolveNamespaces(*selectors, sheet)) return nullptr;
     rule = NewRule(ctx, RuleKind::Style);
     rule->selectors = std::make_shared<SelectorList>(std::move(*selectors));
-    rule->selectorText = SerializeSelectorList(*rule->selectors);
+    rule->selectorText = RareString();
     rule->parentRule = parent;
     rule->parentSheet = sheet;
     rule->isNested = parent != nullptr;
@@ -1534,6 +1534,11 @@ void ForgetSheet(CssRule* rule) {
   if (rule->importedSheet) rule->importedSheet->parentSheet = nullptr;
 }
 }  // namespace
+
+std::string CssRule::SelectorTextOf() const {
+  if (kind == RuleKind::Style && selectors) return SerializeSelectorList(*selectors);
+  return selectorText.str();
+}
 
 void DetachRule(CssRule* rule) {
   rule->parentRule = nullptr;

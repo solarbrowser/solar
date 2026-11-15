@@ -13,6 +13,7 @@
 #include <string_view>
 #include <vector>
 
+#include "solar/css/RareString.h"
 #include "solar/dom/Node.h"
 
 // Selectors (https://drafts.csswg.org/selectors-4/): parsing a selector, matching an element against it, and
@@ -22,13 +23,13 @@ namespace solar::css {
 struct ComplexSelector;
 
 // "a b", "a > b", "a + b", "a ~ b": how a compound selector is related to the one before it.
-enum class Combinator { Descendant, Child, NextSibling, SubsequentSibling };
+enum class Combinator : uint8_t { Descendant, Child, NextSibling, SubsequentSibling };
 
-enum class AttributeOperator { Exists, Equals, Includes, DashMatch, Prefix, Suffix, Substring };
-enum class CaseMode { Default, Insensitive, Sensitive };
+enum class AttributeOperator : uint8_t { Exists, Equals, Includes, DashMatch, Prefix, Suffix, Substring };
+enum class CaseMode : uint8_t { Default, Insensitive, Sensitive };
 
 // The pseudo-classes that need no arguments.
-enum class PseudoClass {
+enum class PseudoClass : uint8_t {
   Root, Empty, FirstChild, LastChild, OnlyChild, FirstOfType, LastOfType, OnlyOfType,
   Scope, Link, AnyLink, Visited, Hover, Active, Focus, FocusVisible, FocusWithin, Target, TargetWithin,
   Checked, Disabled, Enabled, Required, Optional, ReadOnly, ReadWrite, PlaceholderShown, Default,
@@ -37,7 +38,7 @@ enum class PseudoClass {
 };
 
 struct SimpleSelector {
-  enum class Kind {
+  enum class Kind : uint8_t {
     Type,
     Universal,
     Class,
@@ -58,6 +59,14 @@ struct SimpleSelector {
     Unknown,       // a pseudo-class this engine does not know: it matches nothing
   };
   Kind kind = Kind::Type;
+  AttributeOperator op = AttributeOperator::Exists;  // an attribute selector
+  CaseMode caseMode = CaseMode::Default;
+  PseudoClass pseudo = PseudoClass::Root;
+  bool fromEnd = false;
+  bool ofType = false;
+  // :nth-*: matches positions a*n + b (n >= 0).
+  int a = 0;
+  int b = 0;
   // The name of a type, class, id or attribute (case as written), or of a pseudo-element.
   // (Kept once for the whole process, as the names of elements and attributes are: a selector was 224 bytes, and a page has a hundred thousand of them.)
   dom::Name name;
@@ -65,17 +74,8 @@ struct SimpleSelector {
   std::optional<dom::Name> namespaceName;
   // The namespace the prefix (or the default namespace) stands for, once a style sheet has said which: what is matched against.
   std::optional<dom::Name> namespaceUri;
-  // An attribute selector.
-  AttributeOperator op = AttributeOperator::Exists;
-  std::string value;
-  CaseMode caseMode = CaseMode::Default;
-  PseudoClass pseudo = PseudoClass::Root;
-  // :nth-*: matches positions a*n + b (n >= 0).
-  int a = 0;
-  int b = 0;
-  bool fromEnd = false;
-  bool ofType = false;
-  std::vector<std::string> languages;
+  RareString value;  // an attribute selector's
+  RareStrings languages;
   std::shared_ptr<std::vector<ComplexSelector>> list;  // the arguments of :not(), :is(), :where(), :has(), :nth-child(... of S)
 };
 

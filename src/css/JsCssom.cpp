@@ -539,7 +539,7 @@ Value GroupDeleteRule(Context& ctx, Value t, qe::Args args, Value) {
 // CSSStyleRule
 Value StyleRuleSelectorText(Context& ctx, Value t, qe::Args, Value) {
   CssRule* self = ThisRuleOf(ctx, t, RuleKind::Style);
-  return self ? qe::FromWtf8(ctx, self->selectorText) : qe::Undefined();
+  return self ? qe::FromWtf8(ctx, self->SelectorTextOf()) : qe::Undefined();
 }
 
 Value StyleRuleSetSelectorText(Context& ctx, Value t, qe::Args args, Value) {
@@ -567,7 +567,7 @@ Value StyleRuleSetSelectorText(Context& ctx, Value t, qe::Args args, Value) {
   self->quickState = 0;
   if (self->selectors) *self->selectors = std::move(*list);
   else self->selectors = std::make_shared<SelectorList>(std::move(*list));
-  self->selectorText = SerializeSelectorList(*self->selectors);
+  self->selectorText = RareString();
   NoteStyleChange();
   return qe::Undefined();
 }
@@ -681,7 +681,7 @@ Value RuleSetName(Context& ctx, Value t, qe::Args args, Value) {
 
 Value RuleSelectorTextPage(Context& ctx, Value t, qe::Args, Value) {
   CssRule* self = ThisRuleOf(ctx, t, RuleKind::Page);
-  return self ? qe::FromWtf8(ctx, self->selectorText) : qe::Undefined();
+  return self ? qe::FromWtf8(ctx, self->SelectorTextOf()) : qe::Undefined();
 }
 
 Value RuleKeyText(Context& ctx, Value t, qe::Args, Value) {
