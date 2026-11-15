@@ -361,6 +361,8 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     }
     void Finish() {
       done = true;
+      // (The body grew by the piece, and a string that did that holds room for a good part more than it has: a script of 9.8 MB held 16.)
+      body.shrink_to_fit();
       if (counted) {
         counted = false;
         --owner->imagesInFlight_;
@@ -812,11 +814,31 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
   }
 
   std::shared_ptr<qe::Script> CompileScript(const std::string& address, const std::string& code) override {
+    // What was compiled for the address is taken again if the text is the same: told by its size and two hashes, not by a copy of it (the compiled script keeps the text it was made from, and a
+    // page's scripts are megabytes: a third copy of each was held only to be compared).
+    const uint64_t size = code.size();
+    uint64_t a = 1469598103934665603ull, b = 0x9E3779B97F4A7C15ull;
+    {
+      const char* at = code.data();
+      size_t left = code.size();
+      for (; left >= 8; left -= 8, at += 8) {
+        uint64_t word;
+        std::memcpy(&word, at, 8);
+        a = (a ^ word) * 0x100000001B3ull;
+        a ^= a >> 32;
+        b = (b + word) * 0xFF51AFD7ED558CCDull;
+        b ^= b >> 29;
+      }
+      for (; left > 0; --left, ++at) {
+        a = (a ^ static_cast<unsigned char>(*at)) * 0x100000001B3ull;
+        b = (b + static_cast<unsigned char>(*at)) * 0xFF51AFD7ED558CCDull;
+      }
+    }
     auto found = scripts_.find(address);
-    if (found != scripts_.end() && found->second.first == code) return found->second.second;
+    if (found != scripts_.end() && found->second.size == size && found->second.hashA == a && found->second.hashB == b) return found->second.script;
     qe::CompileResult result = isolate_.CompileScript(code, address);
     if (!result.script) return nullptr;
-    scripts_[address] = {code, result.script};
+    scripts_[address] = {size, a, b, result.script};
     return result.script;
   }
 
@@ -838,7 +860,11 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
   solar::web::JsEventLoop& events_;
   std::string pageUrl_;
   std::map<std::string, std::string> types_;
-  std::map<std::string, std::pair<std::string, std::shared_ptr<qe::Script>>> scripts_;
+  struct CompiledScript {
+    uint64_t size = 0, hashA = 0, hashB = 0;
+    std::shared_ptr<qe::Script> script;
+  };
+  std::map<std::string, CompiledScript> scripts_;
   std::vector<std::unique_ptr<RealmBundle>> bundles_;
   std::map<std::string, std::unique_ptr<Resource>> resources_;
   std::deque<Resource*> queuedImages_;
