@@ -1263,6 +1263,14 @@ pid_t SpawnRenderer(int windowFd, int networkFd, int gpuFd, int glFd, const std:
   return status == 0 ? child : -1;
 }
 
+#if defined(__linux__) && defined(PR_SET_THP_DISABLE)
+// Where transparent huge pages are on for every program (the default of several distributions), each 2 MB region of memory a process touches in one place is
+// backed by a whole 2 MB page, and an allocator or a heap that keeps a little in many regions is resident in all of them: with them off the page's process is
+// 67 MB instead of 95 on an empty page and the whole browser 222 MB instead of 264, a script engine benchmark's footprint is 20-27% smaller, with the speed the
+// same. The setting is kept by every process this one starts (the pages' and the GPU's). A constructor, so that it is set before anything else runs.
+__attribute__((constructor(101))) void DisableTransparentHugePages() { ::prctl(PR_SET_THP_DISABLE, 1, 0, 0, 0); }
+#endif
+
 int main(int argc, char** argv) {
   std::setbuf(stdout, nullptr);
   if (argc >= 2 && std::strcmp(argv[1], "--renderer") == 0) {
