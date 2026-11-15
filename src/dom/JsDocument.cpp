@@ -286,7 +286,7 @@ Value ImportNode(Context& ctx, Value t, qe::Args args, Value) {
     Throw(ctx, {"NotSupportedError", "The node provided is a document, which may not be imported"});
     return qe::Undefined();
   }
-  Node* clone = CloneNode(ctx, node, args.size() > 1 && args[1].to_boolean());
+  Node* clone = CloneNode(ctx, node, args.size() > 1 && args[1].to_boolean(), self);
   Adopt(clone, self);
   return qe::FromObject(clone);
 }

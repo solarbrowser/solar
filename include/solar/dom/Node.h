@@ -727,7 +727,8 @@ void AppendAttr(Element* element, Attr* attribute);
 // textContent set on a node that can have children: replaces them with one Text node, or none for "".
 void SetTextContent(Quanta::Context& ctx, Node* node, std::string text);
 // cloneNode.
-Node* CloneNode(Quanta::Context& ctx, Node* node, bool deep);
+// `into`: the document the copy is made in (importNode: the one it is called on, where an element is made as that document makes it, which is a custom element if there is a definition); the node's own by default.
+Node* CloneNode(Quanta::Context& ctx, Node* node, bool deep, Document* into = nullptr);
 // isEqualNode.
 bool IsEqualNode(const Node* a, const Node* b);
 // compareDocumentPosition's bit set.

@@ -1277,9 +1277,9 @@ void AppendAttr(Element* element, Attr* attribute) {
 
 // ---- Clone, equality, position ----
 
-Node* CloneNode(Context& ctx, Node* node, bool deep) {
+Node* CloneNode(Context& ctx, Node* node, bool deep, Document* into) {
   Node* copy = nullptr;
-  Document* document = DocumentOf(node);
+  Document* document = into ? into : DocumentOf(node);
   switch (node->nodeType) {
     case NodeType::Document: {
       Document* original = static_cast<Document*>(node);
@@ -1349,7 +1349,7 @@ Node* CloneNode(Context& ctx, Node* node, bool deep) {
   }
   if (deep) {
     for (Node* child = node->firstChild; child; child = child->nextSibling) {
-      InsertUnchecked(CloneNode(ctx, child, true), copy, nullptr);
+      InsertUnchecked(CloneNode(ctx, child, true, into), copy, nullptr);
     }
   }
   return copy;
