@@ -4437,20 +4437,34 @@ bool MayDeclareAnimation(dom::Element* element, const std::string& pseudo) {
   struct Kept {
     dom::Document* document = nullptr;
     uint64_t author = 0;
+    uint64_t version = 0;
     std::vector<CssStyleSheet*> sheets;
     std::vector<const CssRule*> rules;
     bool usable = false;
+    // The rules by the key an element must have for them to be possible (its tag, a class, an id), with the pseudo-element marker each is for, so that an element looks at
+    // the rules of its own keys and not at every rule there is; `anyKey` are those that ask no key of it.
+    struct Entry { const CssRule* rule; uint64_t marker; };
+    std::unordered_map<uint64_t, std::vector<Entry>> byKey;
+    std::vector<Entry> anyKey;
+    bool indexed = false;
   };
   static Kept kept;
-  const std::vector<CssStyleSheet*> sheets = SheetsOfTree(document, document->context);
-  if (kept.document != document || kept.author != g_authorVersion || kept.sheets != sheets) {
-    kept = Kept();
-    kept.document = document;
-    kept.author = g_authorVersion;
-    kept.sheets = sheets;
-    kept.usable = true;
-    for (const CssStyleSheet* sheet : sheets) {
-      if (!sheet->disabled) CollectAnimationRules(sheet->rules, kept.rules, kept.usable, false, 0);
+  // What the sheets of the tree are is told by the version the style flush is told by (the structure of the tree and everything that changes an author style): the
+  // list of them is not made, and compared, for every element that asks.
+  const uint64_t version = AuthorStyleVersion();
+  if (kept.document != document || kept.author != g_authorVersion || kept.version != version) {
+    const std::vector<CssStyleSheet*> sheets = SheetsOfTree(document, document->context);
+    kept.version = version;
+    if (kept.document != document || kept.author != g_authorVersion || kept.sheets != sheets) {
+      kept = Kept();
+      kept.document = document;
+      kept.author = g_authorVersion;
+      kept.version = version;
+      kept.sheets = sheets;
+      kept.usable = true;
+      for (const CssStyleSheet* sheet : sheets) {
+        if (!sheet->disabled) CollectAnimationRules(sheet->rules, kept.rules, kept.usable, false, 0);
+      }
     }
   }
   if (!kept.usable) return true;
@@ -4463,6 +4477,37 @@ bool MayDeclareAnimation(dom::Element* element, const std::string& pseudo) {
   // (A rule is looked at only when the element has what its selector asks of the subject: its tag, a class, an id.)
   const ElementKeys keys{element};
   const uint64_t marker = PseudoMarker(context.pseudoElement);
+  if (!kept.indexed) {
+    kept.indexed = true;
+    for (const CssRule* rule : kept.rules) {
+      if (!rule->selectors) continue;
+      if (rule->quickState == 0) WorkOutQuickKeys(*const_cast<CssRule*>(rule));
+      if (rule->quickState != 1) {
+        kept.anyKey.push_back({rule, ~uint64_t(0)});     // (a marker that no element asks for says "every marker")
+        continue;
+      }
+      for (size_t j = 0; j < rule->quickKeys.size(); ++j) {
+        const uint64_t base = rule->quickKeys[j] ^ rule->quickMarkers[j];
+        if (base == 0) kept.anyKey.push_back({rule, rule->quickMarkers[j]});
+        else kept.byKey[base].push_back({rule, rule->quickMarkers[j]});
+      }
+    }
+  }
+  if (keys.usable) {
+    for (const Kept::Entry& entry : kept.anyKey) {
+      if (entry.marker != ~uint64_t(0) && entry.marker != marker) continue;
+      if (MatchesAny(*entry.rule->selectors, element, context)) return true;
+    }
+    for (uint64_t key : keys.keys) {
+      const auto at = kept.byKey.find(key);
+      if (at == kept.byKey.end()) continue;
+      for (const Kept::Entry& entry : at->second) {
+        if (entry.marker != marker) continue;
+        if (MatchesAny(*entry.rule->selectors, element, context)) return true;
+      }
+    }
+    return false;
+  }
   for (const CssRule* rule : kept.rules) {
     if (!rule->selectors) continue;
     if (rule->quickState == 0) WorkOutQuickKeys(*const_cast<CssRule*>(rule));
