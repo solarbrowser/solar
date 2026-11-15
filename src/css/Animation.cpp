@@ -295,9 +295,10 @@ void SetAnimatedValues(dom::Element* element, const std::string& pseudo, Animate
   // What only changes how an element is drawn is nothing for a container query to see.
   static const std::set<std::string> drawOnly = {"opacity", "transform", "translate", "rotate", "scale", "color", "background-color", "border-color", "outline-color", "fill", "stroke",
                                                  "stroke-dashoffset", "stroke-dasharray", "filter", "backdrop-filter", "box-shadow", "text-shadow", "clip-path", "mask-position",
+                                                 "-webkit-transform", "-webkit-filter", "-webkit-backdrop-filter", "-webkit-box-shadow",
                                                  "background-position", "stop-color", "fill-opacity", "stroke-opacity"};
   static const std::set<std::string> notInherited = {"opacity", "transform", "translate", "rotate", "scale", "filter", "backdrop-filter", "box-shadow", "clip-path", "background-color",
-                                                     "border-color", "outline-color", "background-position", "mask-position"};
+                                                     "border-color", "outline-color", "background-position", "mask-position", "-webkit-transform", "-webkit-filter", "-webkit-backdrop-filter", "-webkit-box-shadow"};
   static std::set<const dom::Element*> sizingElements;
   bool sizing = false, itself = true;
   const auto now = element->animatedValues.find(pseudo);
@@ -311,7 +312,7 @@ void SetAnimatedValues(dom::Element* element, const std::string& pseudo, Animate
   }
   // What changes only how the element is drawn (and is not inherited): layout is not made again for it, the boxes of the element are given what they draw with (RefreshDrawn).
   static const std::set<std::string> boxDrawn = {"opacity", "transform", "translate", "rotate", "scale", "filter", "backdrop-filter", "box-shadow", "clip-path", "background-color",
-                                                  "outline-color", "background-position", "mask-position"};
+                                                  "outline-color", "background-position", "mask-position", "-webkit-transform", "-webkit-filter", "-webkit-backdrop-filter", "-webkit-box-shadow"};
   static const bool noFast = std::getenv("SOLAR_NO_DRAW_FAST") != nullptr;
   bool drawFast = !noFast && pseudo.empty() && !sizing && itself && now != element->animatedValues.end() && element->nodeDocument && !sizingElements.count(element);
   if (drawFast) {
