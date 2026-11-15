@@ -132,6 +132,7 @@ void Write(Writer& out, const StorageRequest& r) {
   out.String(r.origin);
   out.String(r.file);
   out.U32(r.maxBytes);
+  out.U64(r.offset);
   out.String(r.data);
 }
 
@@ -142,6 +143,7 @@ bool Read(Reader& in, StorageRequest& r) {
   r.origin = in.String(1 << 12);
   r.file = in.String(64);
   r.maxBytes = in.U32();
+  r.offset = in.U64();
   r.data = in.String(kMaxStorageFile);
   return in.ok() && r.area <= 2;
 }

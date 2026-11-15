@@ -33,12 +33,17 @@ namespace {
 
 struct Entry {
   std::string meta;  // JSON, made and read by the script
+  // The body is in memory (an entry put since the file was written) or is in the file of the cache, from `offset` for `length` bytes, and is read when asked for: a service worker's cache
+  // holds megabytes of scripts (YouTube's: 55 MB, and a script is kept in it more than once), which were all in memory as soon as the page touched caches.
   std::string body;
+  bool onDisk = false;
+  uint64_t offset = 0, length = 0;
 };
 
 struct Cache {
   std::vector<Entry> entries;
   bool dirty = false;
+  std::string fileId;  // of the file the entries that are onDisk are in
 };
 
 struct Origin {
@@ -62,43 +67,85 @@ bool Persistent(const std::string& origin) { return origin != "null" && !origin.
 void PutU32(std::string& out, uint32_t v) { out.append(reinterpret_cast<const char*>(&v), 4); }
 void PutU64(std::string& out, uint64_t v) { out.append(reinterpret_cast<const char*>(&v), 8); }
 
-// One file of a cache: "SCH1", the name, the number of entries, and each entry's meta and body.
+// Reads a file in pieces, so that the bodies in it, which are what it is made of, are not read when only the places of them are wanted.
+class FileReader {
+ public:
+  FileReader(const std::string& origin, const std::string& id) : origin_(origin), id_(id) {}
+  // `n` bytes at `at`; false if the file ends before.
+  bool Bytes(uint64_t at, size_t n, std::string& out) {
+    if (at >= start_ && at + n <= start_ + window_.size()) {
+      out.assign(window_, static_cast<size_t>(at - start_), n);
+      return true;
+    }
+    constexpr size_t kPiece = 64 * 1024;
+    std::optional<std::string> got = CurrentStorage().ReadAt(kCache, origin_, id_, at, std::max(n, kPiece));
+    if (!got || got->size() < n) return false;
+    start_ = at;
+    window_ = std::move(*got);
+    out.assign(window_, 0, n);
+    return true;
+  }
+  bool U32(uint64_t& at, uint32_t& v) {
+    std::string b;
+    if (!Bytes(at, 4, b)) return false;
+    std::memcpy(&v, b.data(), 4);
+    at += 4;
+    return true;
+  }
+  bool U64(uint64_t& at, uint64_t& v) {
+    std::string b;
+    if (!Bytes(at, 8, b)) return false;
+    std::memcpy(&v, b.data(), 8);
+    at += 8;
+    return true;
+  }
+
+ private:
+  std::string origin_, id_;
+  std::string window_;
+  uint64_t start_ = 0;
+};
+
+// One file of a cache: "SCH1", the name, the number of entries, and each entry's meta and body. Only the metas are read here; a body is read when it is asked for.
 void Load(const std::string& origin, Origin& o) {
   if (o.loaded) return;
   o.loaded = true;
   if (!Persistent(origin)) return;
   std::vector<std::pair<uint64_t, std::pair<std::string, Cache>>> found;
   for (const std::string& id : CurrentStorage().List(kCache, origin)) {
-    const std::optional<std::string> file = CurrentStorage().Read(kCache, origin, id);
-    if (!file) continue;
-    const std::string& data = *file;
-    size_t at = 0;
-    auto u32 = [&](uint32_t& v) { if (at + 4 > data.size()) return false; std::memcpy(&v, data.data() + at, 4); at += 4; return true; };
-    auto u64 = [&](uint64_t& v) { if (at + 8 > data.size()) return false; std::memcpy(&v, data.data() + at, 8); at += 8; return true; };
-    if (data.compare(0, 4, "SCH1") != 0) continue;
-    at = 4;
+    FileReader file(origin, id);
+    std::string magic;
+    if (!file.Bytes(0, 4, magic) || magic != "SCH1") continue;
+    uint64_t at = 4;
     uint64_t made = 0;
     uint32_t nameLen = 0, count = 0;
-    if (!u64(made) || !u32(nameLen) || at + nameLen > data.size()) continue;
-    std::string name = data.substr(at, nameLen);
+    std::string name;
+    if (!file.U64(at, made) || !file.U32(at, nameLen) || (nameLen > 0 && !file.Bytes(at, nameLen, name))) continue;
     at += nameLen;
-    if (!u32(count)) continue;
+    if (!file.U32(at, count)) continue;
     Cache cache;
+    cache.fileId = id;
     bool good = true;
     for (uint32_t i = 0; i < count && good; ++i) {
       uint32_t metaLen = 0;
       uint64_t bodyLen = 0;
-      good = u32(metaLen) && at + metaLen <= data.size();
+      good = file.U32(at, metaLen);
       if (!good) break;
       Entry e;
-      e.meta = data.substr(at, metaLen);
-      at += metaLen;
-      good = u64(bodyLen) && at + bodyLen <= data.size();
+      good = metaLen == 0 || file.Bytes(at, metaLen, e.meta);
       if (!good) break;
-      e.body = data.substr(at, bodyLen);
+      at += metaLen;
+      good = file.U64(at, bodyLen);
+      if (!good) break;
+      e.onDisk = true;
+      e.offset = at;
+      e.length = bodyLen;
       at += bodyLen;
       cache.entries.push_back(std::move(e));
     }
+    // (The file ends where the last body does, or it is cut short and is not taken.)
+    std::string last;
+    if (good && at > 0 && count > 0 && !file.Bytes(at - 1, 1, last)) good = false;
     if (good) found.push_back({made, {name, std::move(cache)}});
   }
   std::sort(found.begin(), found.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
@@ -188,7 +235,10 @@ Value Body(Context& ctx, Value, qe::Args args, Value) {
   const auto found = o.caches.find(qe::ToWtf8(ctx, args[1]));
   const size_t index = static_cast<size_t>(qe::ToNumber(ctx, args[2]));
   if (found == o.caches.end() || index >= found->second.entries.size()) return qe::Undefined();
-  const std::string& body = found->second.entries[index].body;
+  const Entry& entry = found->second.entries[index];
+  std::optional<std::string> read;
+  if (entry.onDisk) read = CurrentStorage().ReadAt(kCache, qe::ToWtf8(ctx, args[0]), found->second.fileId, entry.offset, static_cast<size_t>(entry.length));
+  const std::string& body = entry.onDisk ? (read ? *read : std::string()) : entry.body;
   Value buffer = qe::NewArrayBuffer(ctx, body.size());
   if (!body.empty()) {
     if (auto out = qe::MutableBytesOf(buffer)) std::memcpy(out->data(), body.data(), body.size());
@@ -244,14 +294,36 @@ Value Flush(Context&, Value, qe::Args, Value) {
       PutU32(data, static_cast<uint32_t>(name.size()));
       data += name;
       PutU32(data, static_cast<uint32_t>(cache.entries.size()));
+      std::vector<std::pair<uint64_t, uint64_t>> places;  // where each body is in the file that is made
+      bool readable = true;
       for (const Entry& e : cache.entries) {
         PutU32(data, static_cast<uint32_t>(e.meta.size()));
         data += e.meta;
-        PutU64(data, e.body.size());
-        data += e.body;
+        std::optional<std::string> kept;
+        if (e.onDisk) {
+          kept = CurrentStorage().ReadAt(kCache, origin, cache.fileId, e.offset, static_cast<size_t>(e.length));
+          if (!kept || kept->size() != e.length) readable = false;
+        }
+        const std::string& body = e.onDisk ? (kept ? *kept : std::string()) : e.body;
+        PutU64(data, body.size());
+        places.push_back({data.size(), body.size()});
+        data += body;
       }
-      // (A cache that could not be written is written again with the next flush.)
-      if (!CurrentStorage().Write(kCache, origin, StorageId(kCache, name), data)) cache.dirty = true;
+      // (A cache that could not be written, or whose bodies could not be read to write it, is tried again with the next flush.)
+      const std::string id = StorageId(kCache, name);
+      if (!readable || !CurrentStorage().Write(kCache, origin, id, data)) {
+        cache.dirty = true;
+        continue;
+      }
+      // What was written is where the bodies are now, and need not be in memory.
+      cache.fileId = id;
+      for (size_t i = 0; i < cache.entries.size(); ++i) {
+        Entry& e = cache.entries[i];
+        e.onDisk = true;
+        e.offset = places[i].first;
+        e.length = places[i].second;
+        std::string().swap(e.body);
+      }
     }
   }
   return qe::Undefined();

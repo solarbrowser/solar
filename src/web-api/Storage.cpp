@@ -110,6 +110,18 @@ std::optional<std::string> DiskStorage::Read(StorageArea area, const std::string
   return head;
 }
 
+std::optional<std::string> DiskStorage::ReadAt(StorageArea area, const std::string& origin, const std::string& id, uint64_t offset, size_t length) {
+  const std::string directory = Directory(area, origin);
+  if (directory.empty() || !ValidStorageId(area, id)) return std::nullopt;
+  std::ifstream in(fs::path(directory) / id, std::ios::binary);
+  if (!in) return std::nullopt;
+  in.seekg(static_cast<std::streamoff>(offset));
+  std::string bytes(length, '\0');
+  in.read(bytes.data(), static_cast<std::streamsize>(length));
+  bytes.resize(static_cast<size_t>(std::max<std::streamsize>(in.gcount(), 0)));
+  return bytes;
+}
+
 bool DiskStorage::Write(StorageArea area, const std::string& origin, const std::string& id, std::string_view bytes) {
   const std::string directory = Directory(area, origin);
   if (directory.empty() || !ValidStorageId(area, id) || bytes.size() > kLargestFile) return false;

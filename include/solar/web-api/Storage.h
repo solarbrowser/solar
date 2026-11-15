@@ -24,6 +24,13 @@ class StorageBackend {
   virtual ~StorageBackend() = default;
   // The file `id` of the origin in the area, its first `maxBytes` bytes (all of it for 0). Nothing where there is none.
   virtual std::optional<std::string> Read(StorageArea area, const std::string& origin, const std::string& id, size_t maxBytes = 0) = 0;
+  // `length` bytes of the file from `offset` (fewer at its end), so that a file of megabytes is not read whole for a part of it. A backend that cannot do it reads the file and cuts.
+  virtual std::optional<std::string> ReadAt(StorageArea area, const std::string& origin, const std::string& id, uint64_t offset, size_t length) {
+    std::optional<std::string> all = Read(area, origin, id);
+    if (!all) return std::nullopt;
+    if (offset >= all->size()) return std::string();
+    return all->substr(static_cast<size_t>(offset), length);
+  }
   // Writes the file whole (what was there is replaced all at once, or stays). False where it could not be.
   virtual bool Write(StorageArea area, const std::string& origin, const std::string& id, std::string_view bytes) = 0;
   virtual bool Remove(StorageArea area, const std::string& origin, const std::string& id) = 0;
@@ -44,6 +51,7 @@ class DiskStorage final : public StorageBackend {
  public:
   explicit DiskStorage(std::string base, uint64_t quota = kMostBytesPerOrigin) : base_(std::move(base)), quota_(quota) {}
   std::optional<std::string> Read(StorageArea area, const std::string& origin, const std::string& id, size_t maxBytes = 0) override;
+  std::optional<std::string> ReadAt(StorageArea area, const std::string& origin, const std::string& id, uint64_t offset, size_t length) override;
   bool Write(StorageArea area, const std::string& origin, const std::string& id, std::string_view bytes) override;
   bool Remove(StorageArea area, const std::string& origin, const std::string& id) override;
   std::vector<std::string> List(StorageArea area, const std::string& origin) override;

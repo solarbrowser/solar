@@ -85,6 +85,7 @@ struct StorageRequest {
   uint8_t area = 0;  // StorageArea
   std::string origin, file;
   uint32_t maxBytes = 0;  // for a read: the first so many bytes (0: all)
+  uint64_t offset = 0;    // for a read of maxBytes: from where (0: the start)
   std::string data;       // for a write
 };
 void Write(net::ipc::Writer& out, const StorageRequest& request);

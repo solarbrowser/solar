@@ -257,7 +257,7 @@ void BrowserServices::Tab::Storage(wire::StorageRequest request) {
       webapi::DiskStorage& disk = keep->services.disk;
       switch (request.op) {
         case wire::StorageRequest::Op::Read:
-          if (auto bytes = disk.Read(area, request.origin, request.file, request.maxBytes)) {
+          if (auto bytes = request.offset > 0 && request.maxBytes > 0 ? disk.ReadAt(area, request.origin, request.file, request.offset, request.maxBytes) : disk.Read(area, request.origin, request.file, request.maxBytes)) {
             ok = true;
             data = std::move(*bytes);
           }

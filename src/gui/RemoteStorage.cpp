@@ -36,6 +36,20 @@ class RemoteStorage final : public webapi::StorageBackend {
     if (!Ask(request, reply) || !reply.ok) return std::nullopt;
     return std::move(reply.data);
   }
+  std::optional<std::string> ReadAt(StorageArea area, const std::string& origin, const std::string& id, uint64_t offset, size_t length) override {
+    if (length == 0) return std::string();
+    if (offset == 0) return Read(area, origin, id, length);
+    wire::StorageRequest request;
+    request.op = wire::StorageRequest::Op::Read;
+    request.area = static_cast<uint8_t>(area);
+    request.origin = origin;
+    request.file = id;
+    request.maxBytes = static_cast<uint32_t>(std::min<size_t>(length, wire::kMaxStorageFile));
+    request.offset = offset;
+    Reply reply;
+    if (!Ask(request, reply) || !reply.ok) return std::nullopt;
+    return std::move(reply.data);
+  }
   bool Write(StorageArea area, const std::string& origin, const std::string& id, std::string_view bytes) override {
     if (bytes.size() > wire::kMaxStorageFile) return false;
     wire::StorageRequest request;
