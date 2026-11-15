@@ -399,7 +399,7 @@ bool KeysOf(const SelectorList& list, std::vector<uint64_t>& keys, std::vector<u
       const CompoundSelector& last = selector.compounds.back();
       int pseudoElements = 0;
       for (const SimpleSelector& simple : last.simples) {
-        if (simple.kind == SimpleSelector::Kind::PseudoElement) { ++pseudoElements; marker = PseudoMarker(&simple.name); }
+        if (simple.kind == SimpleSelector::Kind::PseudoElement) { ++pseudoElements; marker = PseudoMarker(&simple.name.str()); }
         if (simple.kind == SimpleSelector::Kind::Host || simple.kind == SimpleSelector::Kind::Unknown) awkward = true;
       }
       if (pseudoElements > 1) awkward = true;
@@ -469,7 +469,7 @@ bool KeysOfComplex(const ComplexSelector& selector, std::vector<uint64_t>& out, 
   uint64_t marker = 0;
   int pseudoElements = 0;
   for (const SimpleSelector& simple : last.simples) {
-    if (simple.kind == SimpleSelector::Kind::PseudoElement) { ++pseudoElements; marker = PseudoMarker(&simple.name); }
+    if (simple.kind == SimpleSelector::Kind::PseudoElement) { ++pseudoElements; marker = PseudoMarker(&simple.name.str()); }
     if (simple.kind == SimpleSelector::Kind::Host || simple.kind == SimpleSelector::Kind::Unknown) return false;
   }
   if (pseudoElements > 1) return false;
@@ -2084,7 +2084,7 @@ bool SafeToShare(const DeclarationEntry* entry) {
   const auto found = EntrySafety().find(entry);
   if (found != EntrySafety().end()) return found->second;
   bool safe = true;
-  for (const std::string* text : {&entry->value, &entry->pendingText}) {
+  for (const std::string* text : {&entry->value, &entry->pendingText.str()}) {
     for (const char* word : {"attr(", "cq", "sibling-", "anchor", "random(", "element(", "if(", "inherit(", "container"}) {
       if (text->find(word) != std::string::npos) safe = false;
     }
@@ -2536,7 +2536,7 @@ void BuildUntimed(dom::Element* element, ElementStyle& style, const std::string&
   }
   // What the content blocker hides (the lists' cosmetic rules): important, and of the user agent, so no rule of the page wins over it.
   if (pseudo.empty() && HiddenByBlocker(element, gatherer.matchContext)) {
-    static const DeclarationEntry hidden{"display", "none", true, "", "", ""};
+    static const DeclarationEntry hidden{"display", "none", true, "", "", dom::Name()};
     ++gatherer.ruleSerial;
     gatherer.Offer(hidden, false, false, kUnlayered, Specificity{});
   }
@@ -3570,7 +3570,7 @@ std::string Resolver::Finish(dom::Element* element, const std::string& property,
   {
     // A relative url() is taken against where the declaration came from.
     const auto source = StyleOf(element, pseudo).cascade.find(property);
-    SetValueBaseUrl(source != StyleOf(element, pseudo).cascade.end() ? source->second.entry->base : "");
+    SetValueBaseUrl(source != StyleOf(element, pseudo).cascade.end() ? source->second.entry->base.str() : "");
   }
   struct ResetBase {
     ~ResetBase() { SetValueBaseUrl(""); }
@@ -4272,7 +4272,7 @@ void NotePseudoKeys(const SelectorList& list, std::unordered_map<std::string, Ps
     std::vector<const std::string*> names;
     bool awkward = false;
     for (const SimpleSelector& simple : subject.simples) {
-      if (simple.kind == SimpleSelector::Kind::PseudoElement) names.push_back(&simple.name);
+      if (simple.kind == SimpleSelector::Kind::PseudoElement) names.push_back(&simple.name.str());
       if (simple.kind == SimpleSelector::Kind::Host || simple.kind == SimpleSelector::Kind::Unknown || simple.kind == SimpleSelector::Kind::Nesting) awkward = true;
     }
     // (A pseudo-element in a compound that is not the last of a selector, or in an argument, is for no element by itself: the names are noted by the first function.)

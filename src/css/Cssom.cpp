@@ -19,6 +19,8 @@
 #include <cctype>
 #include <set>
 
+extern "C" void mi_collect(bool force);  // the allocator's (see third_party/quanta/src/core/runtime/MiMalloc.cpp)
+
 namespace solar::css {
 
 namespace qe = Quanta::Embed;
@@ -117,7 +119,7 @@ bool ApplyDeclaration(std::vector<DeclarationEntry>& items, const std::string& n
   }
   std::vector<Longhand> longhands;
   if (!ExpandDeclaration(name, css::Serialize(values), longhands)) return false;
-  for (Longhand& longhand : longhands) AddOrReplace(items, {longhand.name, longhand.value, important, longhand.pendingShorthand, longhand.pendingText, ValueBaseUrl()});
+  for (Longhand& longhand : longhands) AddOrReplace(items, {longhand.name, longhand.value, important, longhand.pendingShorthand, longhand.pendingText, dom::Name(ValueBaseUrl())});
   return true;
 }
 
@@ -881,6 +883,8 @@ CssDeclarations* DeclarationsFrom(Context& ctx, const std::vector<BlockItem>& it
     const std::string source = name.starts_with("--") ? item.declaration.originalText : Serialize(Trimmed(item.declaration.value));
     declarations->Apply(name, source, item.declaration.important);
   }
+  // (Grown by doubling as the declarations were added: a rule of 17 of them held room for 32, a hundred and sixty-eight bytes each, and a page has tens of thousands of rules.)
+  declarations->items.shrink_to_fit();
   return declarations;
 }
 
@@ -1335,18 +1339,21 @@ void ParseSheetInto(Context& ctx, CssStyleSheet* sheet, std::string_view text) {
   for (CssRule* old : sheet->rules) DetachRule(old);
   sheet->rules.clear();
   bool importsAllowed = !sheet->disallowImport, namespacesAllowed = true;
-  for (const Rule& syntax : ParseStylesheetContents(text)) {
+  ParseStylesheetContentsEach(text, [&](const Rule& syntax) {
     const std::string name = syntax.isAtRule ? Lower(syntax.name) : "";
     // @import comes before every other rule but @layer statements, and @namespace after those and before the rest.
-    if (name == "import" && !importsAllowed) continue;
-    if (name == "namespace" && !namespacesAllowed) continue;
+    if (name == "import" && !importsAllowed) return;
+    if (name == "namespace" && !namespacesAllowed) return;
     CssRule* rule = BuildRule(ctx, syntax, sheet, nullptr);
-    if (!rule) continue;
+    if (!rule) return;
     if (rule->kind != RuleKind::Import && rule->kind != RuleKind::LayerStatement) importsAllowed = false;
     if (rule->kind != RuleKind::Import && rule->kind != RuleKind::LayerStatement && rule->kind != RuleKind::Namespace) namespacesAllowed = false;
     sheet->rules.push_back(rule);
-  }
+  });
   sheet->NoteWrite();
+  // A sheet of hundreds of kilobytes had its text, tokens and syntax made and let go in the few seconds this took: what the allocator keeps of that for the next one (hundreds of megabytes
+  // for YouTube's 4.5 MB, which it would not give back until it was asked to) is given back now.
+  if (text.size() >= 256 * 1024) mi_collect(true);
 }
 
 CssRule* ParseRuleText(Context& ctx, std::string_view text, CssStyleSheet* sheet, CssRule* parent, size_t index, std::string& error) {

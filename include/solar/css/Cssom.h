@@ -51,6 +51,36 @@ enum class RuleKind {
   PositionTry,
 };
 
+// A string that is empty nearly always: 8 bytes when it is, and a string made when it is not (a declaration has three of them it hardly ever uses, and a page has a hundred and forty
+// thousand declarations).
+class RareString {
+ public:
+  RareString() = default;
+  RareString(const std::string& text) { if (!text.empty()) text_ = std::make_unique<std::string>(text); }
+  RareString(std::string&& text) { if (!text.empty()) text_ = std::make_unique<std::string>(std::move(text)); }
+  RareString(const char* text) { if (text && *text) text_ = std::make_unique<std::string>(text); }
+  RareString(const RareString& other) { if (other.text_) text_ = std::make_unique<std::string>(*other.text_); }
+  RareString(RareString&&) noexcept = default;
+  RareString& operator=(const RareString& other) {
+    if (this != &other) text_ = other.text_ ? std::make_unique<std::string>(*other.text_) : nullptr;
+    return *this;
+  }
+  RareString& operator=(RareString&&) noexcept = default;
+  const std::string& str() const {
+    static const std::string none;
+    return text_ ? *text_ : none;
+  }
+  operator const std::string&() const { return str(); }
+  bool empty() const { return !text_ || text_->empty(); }
+  template <class... A> size_t find(A&&... a) const { return str().find(std::forward<A>(a)...); }
+  friend bool operator==(const RareString& a, const RareString& b) { return a.str() == b.str(); }
+  friend bool operator==(const RareString& a, const std::string& b) { return a.str() == b; }
+  friend bool operator==(const RareString& a, const char* b) { return a.str() == b; }
+
+ private:
+  std::unique_ptr<std::string> text_;
+};
+
 // One declaration of a block: its name (lowercased for a known property, as written for a custom one), its
 // value as the text it serializes to, and its priority.
 struct DeclarationEntry {
@@ -59,9 +89,9 @@ struct DeclarationEntry {
   bool important = false;
   // A longhand set by a shorthand with a var() in it has no value of its own until the variable is known: it reads as
   // empty, and the shorthand's text is kept here.
-  std::string pendingShorthand;
-  std::string pendingText;
-  std::string base;  // what a relative url() in the value is taken against, when it is computed
+  RareString pendingShorthand;
+  RareString pendingText;
+  dom::Name base;  // what a relative url() in the value is taken against, when it is computed (the few addresses of a page's sheets: one copy of each)
 };
 
 // A CSSStyleDeclaration: the declarations of a style rule, a style attribute, or the computed style of an element.

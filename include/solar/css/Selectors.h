@@ -59,11 +59,12 @@ struct SimpleSelector {
   };
   Kind kind = Kind::Type;
   // The name of a type, class, id or attribute (case as written), or of a pseudo-element.
-  std::string name;
+  // (Kept once for the whole process, as the names of elements and attributes are: a selector was 224 bytes, and a page has a hundred thousand of them.)
+  dom::Name name;
   // A type's or an attribute's namespace: "*" any, "" none, or absent for "any, as no default is declared".
-  std::optional<std::string> namespaceName;
+  std::optional<dom::Name> namespaceName;
   // The namespace the prefix (or the default namespace) stands for, once a style sheet has said which: what is matched against.
-  std::optional<std::string> namespaceUri;
+  std::optional<dom::Name> namespaceUri;
   // An attribute selector.
   AttributeOperator op = AttributeOperator::Exists;
   std::string value;

@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -62,6 +63,9 @@ struct BlockItem {
 
 // "parse a stylesheet's contents": the top-level rules of a style sheet. CDO and CDC are skipped.
 std::vector<Rule> ParseStylesheetContents(std::string_view text);
+// The same, but each rule is given to `each` as it is parsed and is gone when that returns: a sheet of megabytes (YouTube's is 4.5) is not held as the whole of its syntax tree at once,
+// which is a hundred and sixty bytes for each of a million tokens on top of the tokens.
+void ParseStylesheetContentsEach(std::string_view text, const std::function<void(const Rule&)>& each);
 // "parse a list of rules" (a rule list inside a block, where CDO and CDC are ordinary): the rules in `text`.
 std::vector<Rule> ParseRuleList(std::string_view text);
 std::vector<Rule> ParseRuleList(const ComponentValues& values);

@@ -300,6 +300,25 @@ std::vector<Rule> ParseStylesheetContents(std::string_view text) {
   return rules;
 }
 
+void ParseStylesheetContentsEach(std::string_view text, const std::function<void(const Rule&)>& each) {
+  const std::vector<Token> tokens = Tokenize(text);
+  Stream in(tokens);
+  for (;;) {
+    const T type = in.Peek().type;
+    if (type == T::EndOfFile) break;
+    if (type == T::Whitespace || type == T::Cdo || type == T::Cdc) {
+      in.Next();
+      continue;
+    }
+    Rule rule;
+    if (type == T::AtKeyword) {
+      if (ConsumeAtRule(in, false, rule)) each(rule);
+    } else if (ConsumeQualifiedRule(in, false, T::EndOfFile, rule)) {
+      each(rule);
+    }
+  }
+}
+
 namespace {
 
 std::vector<Rule> ConsumeRuleList(Stream& in) {

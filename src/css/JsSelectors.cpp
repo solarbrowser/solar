@@ -53,7 +53,7 @@ const std::string* OnlyId(const SelectorList& list) {
   if (selector.compounds.size() != 1 || !selector.combinators.empty() || selector.relative || selector.implicitNesting || selector.hideNesting) return nullptr;
   const CompoundSelector& compound = selector.compounds.front();
   if (compound.simples.size() != 1 || compound.simples.front().kind != SimpleSelector::Kind::Id) return nullptr;
-  return &compound.simples.front().name;
+  return &compound.simples.front().name.str();
 }
 
 // The elements of the tree of `self` that have the id, below it, in the order of the tree, found by the index of the ids of the document: for a node whose tree is the document's, and
