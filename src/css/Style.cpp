@@ -1133,8 +1133,90 @@ struct StringKeyHash {
   size_t operator()(std::string_view text) const { return std::hash<std::string_view>()(text); }
 };
 
+// What was worked out for a style, by property: the values one after the other in the order they were made, and a small open-addressing table of their places by the number of the
+// property (its place in the list of properties). A page has a thousand styles and each answers a hundred and fifty properties; a node of a hash table per answer was 13 MB of the
+// 77 of Wikipedia, and its allocation and release a tenth of the time of making a style again.
+class ComputedMap {
+ public:
+  bool empty() const { return values_.empty(); }
+  const std::string* Find(std::string_view name) const {
+    if (values_.empty()) return nullptr;
+    const uint32_t key = Number(name);
+    if (key == kNone) return nullptr;
+    const size_t mask = slots_.size() - 1;
+    for (size_t at = Mix(key) & mask; slots_[at].place; at = (at + 1) & mask) {
+      if (slots_[at].key == key) return &values_[slots_[at].place - 1];
+    }
+    return nullptr;
+  }
+  std::string* Find(std::string_view name) { return const_cast<std::string*>(static_cast<const ComputedMap*>(this)->Find(name)); }
+  std::string& operator[](std::string_view name) {
+    const uint32_t key = Number(name);
+    if (key == kNone) {
+      static thread_local std::string discarded;
+      return discarded;
+    }
+    if (slots_.empty() || (values_.size() + 1) * 2 > slots_.size()) Grow();
+    const size_t mask = slots_.size() - 1;
+    size_t at = Mix(key) & mask;
+    for (; slots_[at].place; at = (at + 1) & mask) {
+      if (slots_[at].key == key) return values_[slots_[at].place - 1];
+    }
+    slots_[at] = Slot{static_cast<uint16_t>(key), static_cast<uint16_t>(values_.size() + 1)};
+    keys_.push_back(static_cast<uint16_t>(key));
+    return values_.emplace_back();
+  }
+
+ private:
+  struct Slot {
+    uint16_t key = 0;
+    uint16_t place = 0;  // 1 + the place in values_; 0: free
+  };
+  static constexpr uint32_t kNone = 0xFFFFFFFFu;
+  static size_t Mix(uint32_t key) { return (key * 2654435761u) >> 7; }
+  void Grow() {
+    std::vector<Slot> bigger(slots_.empty() ? 32 : slots_.size() * 2);
+    const size_t mask = bigger.size() - 1;
+    for (size_t i = 0; i < keys_.size(); ++i) {
+      size_t at = Mix(keys_[i]) & mask;
+      while (bigger[at].place) at = (at + 1) & mask;
+      bigger[at] = Slot{keys_[i], static_cast<uint16_t>(i + 1)};
+    }
+    slots_ = std::move(bigger);
+  }
+  // The number of a property. A name that is not a property's (an alias, a custom property) has none, and is not kept here. The names are the list's, not copies.
+  struct Named {
+    std::string_view name;
+    uint16_t number = 0;  // 1 + the number; 0: free
+  };
+  static size_t Hash(std::string_view text) {
+    if (text.empty()) return 0;
+    return (text.size() * 131 + static_cast<unsigned char>(text[0]) * 31 + static_cast<unsigned char>(text[text.size() - 1]) * 17 + static_cast<unsigned char>(text[text.size() / 2]) * 7 +
+            static_cast<unsigned char>(text[text.size() > 3 ? 3 : 1])) * 2654435761u >> 9;
+  }
+  static uint32_t Number(std::string_view name) {
+    static const std::vector<Named> table = [] {
+      std::vector<Named> t(8192);
+      for (size_t i = 0; i < kPropertyDefinitionCount; ++i) {
+        const std::string_view text = kPropertyDefinitions[i].name;
+        size_t at = Hash(text) & 8191;
+        while (t[at].number) at = (at + 1) & 8191;
+        t[at] = Named{text, static_cast<uint16_t>(i + 1)};
+      }
+      return t;
+    }();
+    for (size_t at = Hash(name) & 8191; table[at].number; at = (at + 1) & 8191) {
+      if (table[at].name == name) return table[at].number - 1u;
+    }
+    return kNone;
+  }
+  std::vector<std::string> values_;
+  std::vector<uint16_t> keys_;  // the number of the property of each value
+  std::vector<Slot> slots_;
+};
+
 struct Memo {
-  std::unordered_map<std::string, std::string, StringKeyHash, std::equal_to<>> computed;
+  ComputedMap computed;
   std::unordered_map<std::string, std::optional<std::string>> custom;
 };
 
@@ -3276,10 +3358,9 @@ std::string Resolver::ComputeInner(dom::Element* element, const std::string& pro
   if (!initialOnly) {
     ElementStyle& made = StyleOf(element, pseudo);
     if (made.built) {
-      const auto cached = made.memo->computed.find(property);
-      if (cached != made.memo->computed.end()) {
+      if (const std::string* cached = made.memo->computed.Find(property)) {
         lastKind_ = "memo hit";
-        return cached->second;
+        return *cached;
       }
     }
   }
@@ -3290,10 +3371,9 @@ std::string Resolver::ComputeInner(dom::Element* element, const std::string& pro
   ElementStyle& style = StyleOf(element, pseudo);
   const StyleHold hold;  // (what is computed from here on holds `style`: the cache is not emptied under it)
   if (!initialOnly) {
-    const auto cached = style.memo->computed.find(name);
-    if (cached != style.memo->computed.end()) {
+    if (const std::string* cached = style.memo->computed.Find(name)) {
       lastKind_ = "memo hit";
-      return cached->second;
+      return *cached;
     }
   }
   if (name.starts_with("--")) {
@@ -4682,8 +4762,7 @@ std::string StyleReader::Get(const char* property) {
   if (memo_ && version_ == now && !AnimatedValuesSuppressed() && !StartingStyleFor(element_, pseudo_) &&
       (!element_->nodeDocument->animationStyleSeen || element_->nodeDocument->styleFlushedVersion == FlushVersion())) {
     const Memo& memo = *static_cast<const Memo*>(memo_.get());
-    const auto found = memo.computed.find(std::string_view(property));
-    if (found != memo.computed.end()) return found->second;
+    if (const std::string* found = memo.computed.Find(std::string_view(property))) return *found;
   }
   std::string value = ComputedValue(ctx_, element_, property, pseudo_);
   // After a first answer the style of the element is made, and what is asked next is found in it (unless the document asks for more: containers, animations).
@@ -4708,12 +4787,12 @@ std::string ResolvedValue(Quanta::Context& ctx, dom::Element* element, const std
       bool rendered = true;
       if (property != "display") {
         const ElementStyle& made = StyleOf(element, pseudo);
-        const auto display = made.memo->computed.find("display");
-        rendered = display == made.memo->computed.end() || display->second != "none";
+        const std::string* display = made.memo->computed.Find("display");
+        rendered = !display || *display != "none";
         if (rendered && !pseudo.empty()) {
           const ElementStyle& owner = StyleOf(element, "");
-          const auto ownerDisplay = owner.memo->computed.find("display");
-          rendered = ownerDisplay == owner.memo->computed.end() || ownerDisplay->second != "none";
+          const std::string* ownerDisplay = owner.memo->computed.Find("display");
+          rendered = !ownerDisplay || *ownerDisplay != "none";
         }
       }
       if (rendered) element->MakeRare().lastRead[pseudo][property] = computed;
