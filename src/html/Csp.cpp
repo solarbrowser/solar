@@ -166,10 +166,16 @@ bool AllowsScriptUrl(const dom::Document* document, const std::string& address, 
   return true;
 }
 
+namespace {
+thread_local bool g_trustedCompile = false;
+}  // namespace
+
+void SetTrustedCompile(bool on) { g_trustedCompile = on; }
+
 Quanta::Embed::CodeGenerationHooks MakeCodeGenerationHooks() {
   Quanta::Embed::CodeGenerationHooks hooks;
   hooks.ensureCanCompile = [](Quanta::Embed::Realm* realm, Quanta::Embed::CompileKind, const std::vector<std::string>&) -> std::optional<std::string> {
-    if (AllowsEval(DocumentOfRealm(realm))) return std::nullopt;
+    if (g_trustedCompile || AllowsEval(DocumentOfRealm(realm))) return std::nullopt;
     return "Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script";
   };
   return hooks;

@@ -182,11 +182,14 @@ $(GEN_DIR)/XhrScript.cpp: $(XHR_JS) $(BUILD_DIR)/EmbedScripts
 	@echo "[EMBED] $@"
 	@$(BUILD_DIR)/EmbedScripts Xhr $(XHR_JS) > $@
 
-TYPED_OM_JS = $(sort $(wildcard src/css/js/typedom-*.js))
-$(GEN_DIR)/TypedOmScript.cpp: $(TYPED_OM_JS) $(BUILD_DIR)/EmbedScripts
+# (The geometry, DOMRect and the like, is a program of its own: a window makes it at once, and the rest of the Typed OM when a page touches it.)
+TYPED_OM_GEOMETRY_JS = src/css/js/typedom-0-geometry.js
+TYPED_OM_JS = $(filter-out $(TYPED_OM_GEOMETRY_JS),$(sort $(wildcard src/css/js/typedom-*.js)))
+$(GEN_DIR)/TypedOmScript.cpp: $(TYPED_OM_JS) $(TYPED_OM_GEOMETRY_JS) $(BUILD_DIR)/EmbedScripts
 	@mkdir -p $(GEN_DIR)
 	@echo "[EMBED] $@"
 	@$(BUILD_DIR)/EmbedScripts TypedOm $(TYPED_OM_JS) > $@
+	@$(BUILD_DIR)/EmbedScripts TypedOmGeometry $(TYPED_OM_GEOMETRY_JS) >> $@
 
 FONT_LOADING_JS = $(sort $(wildcard src/css/js/fontloading-*.js))
 $(GEN_DIR)/FontLoadingScript.cpp: $(FONT_LOADING_JS) $(BUILD_DIR)/EmbedScripts

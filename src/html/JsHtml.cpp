@@ -11,6 +11,7 @@
 #include "solar/dom/CustomElements.h"
 #include "solar/net/UserAgent.h"
 #include "solar/dom/NodeBindingsInternal.h"
+#include "solar/html/Csp.h"
 #include "solar/html/HtmlBindings.h"
 #include "solar/dom/MediaHook.h"
 #include "solar/dom/Damage.h"
@@ -1608,6 +1609,68 @@ qe::CrossOriginHooks WindowCrossOriginHooks() {
   return hooks;
 }
 
+// Scripts that most pages never use are not run until something asks for what they make: the members they would define are accessors until then, and the first one touched
+// takes them all away, runs the script (which defines the real ones) and answers with the real member. It makes a window cheaper in memory and in start-up (see InstallWindowOn).
+std::map<std::string, std::string>& LazySources() {
+  static std::map<std::string, std::string> sources;
+  return sources;
+}
+
+// __solarLazySource(id): the text of the script, and the next string the realm compiles is allowed (it is the host's own, whatever the policy of the page says about eval).
+Value LazySource(Context& ctx, Value, qe::Args args, Value) {
+  if (args.empty()) return qe::Undefined();
+  const auto source = LazySources().find(qe::ToWtf8(ctx, args[0]));
+  if (source == LazySources().end()) return qe::Undefined();
+  html::csp::SetTrustedCompile(true);
+  return qe::FromWtf8(ctx, source->second);
+}
+Value LazyDone(Context&, Value, qe::Args, Value) {
+  html::csp::SetTrustedCompile(false);
+  return qe::Undefined();
+}
+
+// __solarLazy(id, [[target, [names], enumerable]...]): see LazySources.
+const char* const kLazyScript = R"JS(
+(() => {
+  const sourceOf = globalThis.__solarLazySource, done = globalThis.__solarLazyDone, indirectEval = globalThis.eval;
+  delete globalThis.__solarLazySource;
+  delete globalThis.__solarLazyDone;
+  Object.defineProperty(globalThis, "__solarLazy", { configurable: true, value: (id, specs) => {
+    const stubs = [];
+    let loaded = false;
+    const ensure = () => {
+      if (loaded) return;
+      loaded = true;
+      for (const [target, name] of stubs) delete target[name];
+      // (Run as the global code it is, which a nested Evaluate of the host would not be: it would disturb the script that is running.)
+      const source = sourceOf(id);
+      try { (0, indirectEval)(source); } finally { done(); }
+    };
+    for (const [target, names, enumerable] of specs) {
+      for (const name of names) {
+        Object.defineProperty(target, name, {
+          get() { ensure(); return Reflect.get(target, name, this); },
+          set(value) { ensure(); Reflect.set(target, name, value, this); },
+          enumerable, configurable: true,
+        });
+        stubs.push([target, name]);
+      }
+    }
+  } });
+})();
+)JS";
+
+// The Typed OM (the style values: CSSUnitValue, CSS.px, attributeStyleMap...): nothing in a page uses it unless it is written for it.
+const char* const kTypedOmLazySpec = R"JS(
+__solarLazy("typedom", [
+  [globalThis, "CSSStyleValue CSSKeywordValue CSSNumericArray CSSNumericValue CSSUnitValue CSSMathValue CSSMathSum CSSMathProduct CSSMathMin CSSMathMax CSSMathNegate CSSMathInvert CSSMathClamp CSSTransformComponent CSSTranslate CSSRotate CSSScale CSSSkew CSSSkewX CSSSkewY CSSPerspective CSSMatrixComponent CSSTransformValue CSSColorValue CSSRGB CSSHSL CSSHWB CSSLab CSSLCH CSSOKLab CSSOKLCH CSSColor CSSVariableReferenceValue CSSUnparsedValue CSSImageValue StylePropertyMapReadOnly StylePropertyMap".split(" "), false],
+  [Element.prototype, ["attributeStyleMap", "computedStyleMap"], true],
+  [CSS, "number percent fr em ex cap ch ic lh rem rex rcap rch ric rlh vw vh vi vb vmin vmax svw svh svi svb svmin svmax lvw lvh lvi lvb lvmin lvmax dvw dvh dvi dvb dvmin dvmax cqw cqh cqi cqb cqmin cqmax cm mm Q in pt pc px deg grad rad turn s ms Hz kHz dpi dpcm dppx x".split(" "), true],
+  ...["CSSStyleRule", "CSSKeyframeRule", "CSSPageRule", "CSSNestedDeclarations"].filter((n) => typeof globalThis[n] === "function").map((n) => [globalThis[n].prototype, ["styleMap"], true]),
+]);
+delete globalThis.__solarLazy;
+)JS";
+
 template <typename Host>
 void InstallWindowOn(Host& host, dom::Document* document, Quanta::Embed::Realm* realm, Object* reuseProxy) {
   Context& ctx = host.GetContext();
@@ -1666,12 +1729,28 @@ void InstallWindowOn(Host& host, dom::Document* document, Quanta::Embed::Realm* 
   for (const char* const* piece = web::kScriptXhr; *piece; ++piece) xhr += *piece;
   const auto xhrResult = host.Evaluate(xhr, "xhr.js");
   if (!xhrResult.ok) std::fprintf(stderr, "xhr.js: %s\n", xhrResult.error.c_str());
-  // The Typed OM is written in script, over the CSS interfaces.
-  std::string typedOm;
-  for (const char* const* piece = web::kScriptTypedOm; *piece; ++piece) typedOm += *piece;
-  typedOm += "\n__solarTypedOm.install(); delete globalThis.__solarTypedOm;\n";
-  const auto typedOmResult = host.Evaluate(typedOm, "typedom.js");
-  if (!typedOmResult.ok) std::fprintf(stderr, "typedom.js: %s\n", typedOmResult.error.c_str());
+  // The Typed OM is written in script, over the CSS interfaces. The first piece is the geometry (DOMRect, DOMMatrix...), which getBoundingClientRect gives and so is made at once; the rest is
+  // made when the page first touches it (a realm of a Runtime has no way to do that, and has it at once).
+  {
+    std::string geometry;
+    for (const char* const* piece = web::kScriptTypedOmGeometry; *piece; ++piece) geometry += *piece;
+    const auto geometryResult = host.Evaluate(geometry, "typedom-geometry.js");
+    if (!geometryResult.ok) std::fprintf(stderr, "typedom-geometry.js: %s\n", geometryResult.error.c_str());
+    std::string typedOm;
+    for (const char* const* piece = web::kScriptTypedOm; *piece; ++piece) typedOm += *piece;
+    typedOm += "\n__solarTypedOm.install(); delete globalThis.__solarTypedOm;\n";
+    if constexpr (std::is_same_v<Host, qe::Realm>) {
+      LazySources()["typedom"] = std::move(typedOm);
+      qe::DefineGlobalFunction(ctx, "__solarLazySource", LazySource, 1);
+      qe::DefineGlobalFunction(ctx, "__solarLazyDone", LazyDone, 0);
+      host.Evaluate(kLazyScript, "lazy.js");
+      const auto lazyResult = host.Evaluate(kTypedOmLazySpec, "typedom-lazy.js");
+      if (!lazyResult.ok) std::fprintf(stderr, "typedom-lazy.js: %s\n", lazyResult.error.c_str());
+    } else {
+      const auto typedOmResult = host.Evaluate(typedOm, "typedom.js");
+      if (!typedOmResult.ok) std::fprintf(stderr, "typedom.js: %s\n", typedOmResult.error.c_str());
+    }
+  }
   // The geometry of elements.
   layout::InstallLayoutNatives(ctx);
   std::string geometry;

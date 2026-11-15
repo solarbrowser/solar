@@ -188,7 +188,8 @@
 
   // A time given as a number or as a CSSNumericValue of a time (CSSNumberish), in milliseconds.
   S.toNumberish = (value) => {
-    if (typeof CSSNumericValue === 'function' && value instanceof CSSNumericValue) {
+    // (An object first: asking for CSSNumericValue makes the Typed OM, which a number does not need.)
+    if (value !== null && typeof value === 'object' && typeof CSSNumericValue === 'function' && value instanceof CSSNumericValue) {
       if (value instanceof CSSUnitValue && value.unit === 'number') return value.value;
       return value.to('ms').value;
     }

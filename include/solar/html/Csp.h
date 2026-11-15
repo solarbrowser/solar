@@ -30,5 +30,7 @@ bool AllowsScriptUrl(const dom::Document* document, const std::string& address, 
 
 // The hooks to give the Isolate: eval and Function refuse with an EvalError where the document's policy forbids them.
 Quanta::Embed::CodeGenerationHooks MakeCodeGenerationHooks();
+// While on, the strings the realm compiles are the host's own (a script it runs lazily) and are not refused for the page's policy on eval.
+void SetTrustedCompile(bool on);
 
 }  // namespace solar::html::csp

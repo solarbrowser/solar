@@ -13,6 +13,7 @@ extern const char* const kScriptStreams[];
 extern const char* const kScriptUiEvents[];
 extern const char* const kScriptXhr[];
 extern const char* const kScriptTypedOm[];
+extern const char* const kScriptTypedOmGeometry[];
 extern const char* const kScriptFontLoading[];
 extern const char* const kScriptLayout[];
 extern const char* const kScriptAnimations[];
