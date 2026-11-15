@@ -867,7 +867,7 @@ struct Gatherer {
           const std::string savedPath = layerPath;
           int id = layer;
           if (!rule->layerName.empty()) {
-            layerPath = Child(rule->layerName == "\x01" ? "\x01" + std::to_string(++anonymousLayers) : rule->layerName);
+            layerPath = Child(rule->layerName == "\x01" ? "\x01" + std::to_string(++anonymousLayers) : rule->layerName.str());
             if (collecting) RegisterLayer(layerPath);
             id = RankOf(layerPath);
           }
@@ -877,7 +877,7 @@ struct Gatherer {
         }
         case RuleKind::LayerBlock: {
           const std::string savedPath = layerPath;
-          layerPath = Child(rule->name.empty() ? "\x01" + std::to_string(++anonymousLayers) : rule->name);
+          layerPath = Child(rule->name.empty() ? "\x01" + std::to_string(++anonymousLayers) : rule->name.str());
           if (collecting) RegisterLayer(layerPath);
           Rules(rule->rules, RankOf(layerPath), outer);
           layerPath = savedPath;
@@ -919,7 +919,7 @@ struct Gatherer {
           const std::string savedPath = layerPath;
           int id = layer;
           if (!rule->layerName.empty()) {
-            layerPath = Child(rule->layerName == "\x01" ? "\x01" + std::to_string(++anonymousLayers) : rule->layerName);
+            layerPath = Child(rule->layerName == "\x01" ? "\x01" + std::to_string(++anonymousLayers) : rule->layerName.str());
             id = RankOf(layerPath);
           }
           if (imported) Flatten(imported->rules, id, out, unsafe, onlyTails);
@@ -928,7 +928,7 @@ struct Gatherer {
         }
         case RuleKind::LayerBlock: {
           const std::string savedPath = layerPath;
-          layerPath = Child(rule->name.empty() ? "\x01" + std::to_string(++anonymousLayers) : rule->name);
+          layerPath = Child(rule->name.empty() ? "\x01" + std::to_string(++anonymousLayers) : rule->name.str());
           Flatten(rule->rules, RankOf(layerPath), out, unsafe, onlyTails);
           layerPath = savedPath;
           break;
@@ -3729,7 +3729,7 @@ bool DirtyKeysOfRules(const std::vector<CssRule*>& rules, std::unordered_set<uin
 bool MentionsAny(const std::vector<CssRule*>& rules, const std::vector<std::string>& names, int depth) {
   if (depth > 8) return true;
   for (const CssRule* rule : rules) {
-    if (rule->style) {
+    if (rule->style && !rule->style->items.Lazy()) {
       for (const DeclarationEntry& entry : rule->style->items) {
         for (const std::string& name : names) {
           if (entry.name == name || entry.value.find(name) != std::string::npos) return true;
@@ -4326,7 +4326,7 @@ void NotePseudoKeysOfRules(const std::vector<CssRule*>& rules, std::unordered_ma
   for (const CssRule* rule : rules) {
     if (rule->selectors) {
       bool declares = !rule->rules.empty() || !rule->style;  // (what is nested may give one)
-      if (rule->style) for (const DeclarationEntry& entry : rule->style->items) if (entry.name == "content" || entry.name == "all" || !entry.pendingShorthand.empty()) { declares = true; break; }
+      if (rule->style && !rule->style->items.Lazy()) for (const DeclarationEntry& entry : rule->style->items) if (entry.name == "content" || entry.name == "all" || !entry.pendingShorthand.empty()) { declares = true; break; }
       NotePseudoKeys(*rule->selectors, out, declares);
     }
     NotePseudoKeysOfRules(rule->rules, out, depth + 1);
@@ -4440,6 +4440,7 @@ void ViewportScrollbars(Quanta::Context& ctx, dom::Document* document, double& v
 namespace {
 
 bool DeclaresAnimationProperty(const CssDeclarations& declarations) {
+  if (declarations.items.Lazy()) return false;  // (a rule that was left as text has nothing about animations in it: see PlainDeclaration)
   for (const DeclarationEntry& entry : declarations.items) {
     // (Only what can start something counts: a name of an animation, a time that is not nothing. A rule that says `none` or 0s starts nothing, and what it
     // overrides is another rule that is looked at.)

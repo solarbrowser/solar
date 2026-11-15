@@ -71,7 +71,17 @@ class RareString {
     return text_ ? *text_ : none;
   }
   operator const std::string&() const { return str(); }
+  operator std::string_view() const { return str(); }
   bool empty() const { return !text_ || text_->empty(); }
+  size_t size() const { return str().size(); }
+  const char* c_str() const { return str().c_str(); }
+  friend std::string operator+(const std::string& a, const RareString& b) { return a + b.str(); }
+  friend std::string operator+(const RareString& a, const std::string& b) { return a.str() + b; }
+  friend std::string operator+(const char* a, const RareString& b) { return a + b.str(); }
+  friend std::string operator+(const RareString& a, const char* b) { return a.str() + b; }
+  friend std::string operator+(const RareString& a, const RareString& b) { return a.str() + b.str(); }
+  friend bool operator!=(const RareString& a, const char* b) { return a.str() != b; }
+  friend bool operator!=(const RareString& a, const std::string& b) { return a.str() != b; }
   template <class... A> size_t find(A&&... a) const { return str().find(std::forward<A>(a)...); }
   friend bool operator==(const RareString& a, const RareString& b) { return a.str() == b.str(); }
   friend bool operator==(const RareString& a, const std::string& b) { return a.str() == b; }
@@ -94,9 +104,49 @@ struct DeclarationEntry {
   dom::Name base;  // what a relative url() in the value is taken against, when it is computed (the few addresses of a page's sheets: one copy of each)
 };
 
+// The declarations of a block, made when they are first asked for. A plain declaration of a style rule (no custom property, no var(), nothing about animations, no keyword that takes its value
+// from elsewhere) is kept as the text `Apply` is given (name, value, priority) until the rule is one an element matches or script reads: a page has tens of thousands of rules, most of
+// which no element ever matches, and a declaration made (a shorthand into its longhands) is a hundred bytes and more where the text of it is thirty. Where the whole of the rules is
+// looked at for what they declare (animations, pseudo-elements, custom properties), a rule that has not been made has declared none of it by what it was let to be.
+struct CssDeclarations;
+class DeclarationItems {
+ public:
+  using Vec = std::vector<DeclarationEntry>;
+  explicit DeclarationItems(CssDeclarations* owner) : owner_(owner) {}
+  // Whether the declarations are still the text they were given as, which looking at them would make.
+  bool Lazy() const { return pending_ != nullptr; }
+  void SetPending(std::string text) { pending_ = std::make_unique<std::string>(std::move(text)); }
+  Vec& vec() { Force(); return items_; }
+  const Vec& vec() const { Force(); return items_; }
+  operator Vec&() { return vec(); }
+  operator const Vec&() const { return vec(); }
+  size_t size() const { return vec().size(); }
+  bool empty() const { return !Lazy() && items_.empty(); }
+  DeclarationEntry& operator[](size_t i) { return vec()[i]; }
+  const DeclarationEntry& operator[](size_t i) const { return vec()[i]; }
+  Vec::iterator begin() { return vec().begin(); }
+  Vec::iterator end() { return vec().end(); }
+  Vec::const_iterator begin() const { return vec().begin(); }
+  Vec::const_iterator end() const { return vec().end(); }
+  DeclarationEntry& back() { return vec().back(); }
+  void push_back(DeclarationEntry entry) { vec().push_back(std::move(entry)); }
+  Vec::iterator erase(Vec::iterator at) { return vec().erase(at); }
+  Vec::iterator erase(Vec::iterator from, Vec::iterator to) { return vec().erase(from, to); }
+  template <class... A> Vec::iterator insert(A&&... a) { return vec().insert(std::forward<A>(a)...); }
+  void clear() { pending_.reset(); items_.clear(); }
+  void shrink_to_fit() { items_.shrink_to_fit(); }
+  DeclarationItems& operator=(Vec other) { pending_.reset(); items_ = std::move(other); return *this; }
+
+ private:
+  void Force() const;
+  CssDeclarations* owner_;
+  mutable std::unique_ptr<std::string> pending_;
+  mutable Vec items_;
+};
+
 // A CSSStyleDeclaration: the declarations of a style rule, a style attribute, or the computed style of an element.
 struct CssDeclarations : Quanta::DOMObject {
-  std::vector<DeclarationEntry> items;
+  DeclarationItems items{this};
   CssRule* parentRule = nullptr;
   dom::Element* ownerElement = nullptr;  // for the style attribute
   bool readonly = false;                  // computed style
@@ -174,23 +224,23 @@ struct CssRule : Quanta::DOMObject {
   CssRuleList* ruleList = nullptr;
   // Media rule, import rule: the media; import rule: the address and the sheet it brought in.
   MediaList* media = nullptr;
-  std::string href;
+  RareString href;
   CssStyleSheet* importedSheet = nullptr;
-  std::string layerName;       // import and layer rules: the layer, a layer statement: the names, comma-separated
-  std::string supportsText;    // import rule's supports(), supports rule's condition, container rule's condition
+  RareString layerName;       // import and layer rules: the layer, a layer statement: the names, comma-separated
+  RareString supportsText;    // import rule's supports(), supports rule's condition, container rule's condition
   // Namespace rule.
-  std::string prefix;
-  std::string namespaceUri;
+  RareString prefix;
+  RareString namespaceUri;
   // Keyframes rule, property rule, counter-style, layer block: the name. Keyframe rule: the key text.
-  std::string name;
+  RareString name;
   // The prelude of a rule this module keeps as written (container, scope, page): its serialization.
-  std::string prelude;
-  std::string containerName, containerQuery;  // a container rule: the name, and the condition, when there is one query
+  RareString prelude;
+  RareString containerName, containerQuery;  // a container rule: the name, and the condition, when there is one query
   // Scope rule: <scope-start> and <scope-end> (none: absent).
   std::shared_ptr<SelectorList> scopeStart, scopeEnd;
   bool isNested = false;  // a style rule inside another
   // A property rule: what it registers, if it is a valid one.
-  std::optional<RegisteredProperty> registered;
+  std::unique_ptr<RegisteredProperty> registered;  // (made for the rule that registers one: of a rule in a hundred it is a hundred and fifty bytes)
 
   std::string CssText() const;
   // A keyframes rule is indexable by its keyframes.

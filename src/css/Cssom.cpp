@@ -200,6 +200,20 @@ bool CssDeclarations::Apply(const std::string& name, const std::string& text, bo
   return ApplyDeclaration(items, name, text, important);
 }
 
+// The declarations a block was given as text (see DeclarationItems): records of a letter for the priority, the name, \x1f, the value, apart by \x1e.
+void DeclarationItems::Force() const {
+  if (!pending_) return;
+  const std::unique_ptr<std::string> text = std::move(pending_);
+  for (size_t at = 0; at < text->size();) {
+    const size_t end = text->find('\x1e', at);
+    const size_t stop = end == std::string::npos ? text->size() : end;
+    const bool important = (*text)[at] == 'i';
+    const size_t split = text->find('\x1f', at + 1);
+    if (split != std::string::npos && split < stop) owner_->Apply(text->substr(at + 1, split - at - 1), text->substr(split + 1, stop - split - 1), important);
+    at = stop + 1;
+  }
+}
+
 namespace {
 
 // The value a block gives a shorthand, from its longhands: nothing when it has not all of them, or they differ in
@@ -834,7 +848,7 @@ bool ResolveNamespacesImpl(SelectorList& list, const CssStyleSheet* sheet) {
     if (sheet) {
       for (const CssRule* rule : sheet->rules) {
         if (rule->kind == RuleKind::Style) break;
-        if (rule->kind == RuleKind::Namespace && rule->prefix == prefix) return rule->namespaceUri;
+        if (rule->kind == RuleKind::Namespace && rule->prefix == prefix) return rule->namespaceUri.str();
       }
     }
     return std::string();
@@ -868,9 +882,29 @@ bool ResolveNamespacesImpl(SelectorList& list, const CssStyleSheet* sheet) {
 // Builds the rule `syntax` is, in the context of `sheet` and `parent`; null when it is no valid rule there.
 CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRule* parent);
 
+// Whether a declaration of a style rule says nothing the whole of the rules is looked at for: it is no custom property, takes no var(), is not about animations or transitions, is not
+// content, all, content-visibility or contain-intrinsic-*, and its value is not a keyword that takes the value from elsewhere (those mark the property as one that is inherited).
+bool PlainDeclaration(const std::string& name, const std::string& value) {
+  if (name.empty() || name.starts_with("--") || name == "content" || name == "all" || name == "content-visibility" || name.starts_with("contain-intrinsic")) return false;
+  if (name.starts_with("animation") || name.starts_with("transition") || name.starts_with("-webkit-animation") || name.starts_with("-webkit-transition")) return false;
+  if (name.find('\x1e') != std::string::npos || name.find('\x1f') != std::string::npos || value.find('\x1e') != std::string::npos || value.find('\x1f') != std::string::npos) return false;
+  if (value.find("--") != std::string::npos || value.find('(') != std::string::npos && (value.find("var(") != std::string::npos || value.find("env(") != std::string::npos || value.find("attr(") != std::string::npos)) return false;
+  std::string lower;
+  for (const char c : value) if (c != ' ' && c != '\t' && c != '\n') lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  if (lower == "inherit" || lower == "unset" || lower == "revert" || lower == "revert-layer" || lower.rfind("inherit!", 0) == 0) return false;
+  return true;
+}
+
 CssDeclarations* DeclarationsFrom(Context& ctx, const std::vector<BlockItem>& items, CssRule* owner) {
   CssDeclarations* declarations = owner && owner->kind == RuleKind::PositionTry ? NewPositionTryDeclarations(ctx) : NewDeclarations(ctx);
   declarations->parentRule = owner;
+  // A style rule of plain declarations (and nothing nested in it) is kept as text until something asks for what it declares (see DeclarationItems).
+  static const bool eager = std::getenv("SOLAR_EAGER_DECLARATIONS") != nullptr;
+  bool lazy = !eager && owner && owner->kind == RuleKind::Style && !declarations->IsDescriptorBlock();
+  std::string pending;
+  for (const BlockItem& item : items) {
+    if (!item.isDeclaration) { lazy = false; break; }
+  }
   for (const BlockItem& item : items) {
     if (!item.isDeclaration) continue;
     std::string name = item.declaration.name;
@@ -881,7 +915,35 @@ CssDeclarations* DeclarationsFrom(Context& ctx, const std::vector<BlockItem>& it
     if (!NormalizePropertyName(name)) continue;
     if (!name.starts_with("--") && HasBadTokens(item.declaration.value)) continue;
     const std::string source = name.starts_with("--") ? item.declaration.originalText : Serialize(Trimmed(item.declaration.value));
+    if (lazy && !PlainDeclaration(name, source)) {
+      // One that is not plain: the ones before it are made, and so is this and the rest.
+      lazy = false;
+      DeclarationItems& made = declarations->items;
+      const std::string held = std::move(pending);
+      pending.clear();
+      for (size_t at = 0; at < held.size();) {
+        const size_t end = held.find('\x1e', at);
+        const size_t stop = end == std::string::npos ? held.size() : end;
+        const size_t split = held.find('\x1f', at + 1);
+        declarations->Apply(held.substr(at + 1, split - at - 1), held.substr(split + 1, stop - split - 1), held[at] == 'i');
+        at = stop + 1;
+      }
+      (void)made;
+    }
+    if (lazy) {
+      pending += item.declaration.important ? 'i' : 'n';
+      pending += name;
+      pending += '\x1f';
+      pending += source;
+      pending += '\x1e';
+      continue;
+    }
     declarations->Apply(name, source, item.declaration.important);
+  }
+  if (lazy && !pending.empty()) {
+    pending.shrink_to_fit();
+    declarations->items.SetPending(std::move(pending));
+    return declarations;
   }
   // (Grown by doubling as the declarations were added: a rule of 17 of them held room for 32, a hundred and sixty-eight bytes each, and a page has tens of thousands of rules.)
   declarations->items.shrink_to_fit();
@@ -1014,7 +1076,11 @@ CssRule* BuildImport(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, Css
   if (parent || syntax.hasBlock) return nullptr;
   CssRule* rule = NewRule(ctx, RuleKind::Import);
   size_t i = 0;
-  if (!TakeUrl(syntax.prelude, i, rule->href)) return nullptr;
+  {
+    std::string address;
+    if (!TakeUrl(syntax.prelude, i, address)) return nullptr;
+    rule->href = address;
+  }
   rule->media = NewMediaList(ctx);
   rule->media->ownerRule = rule;
   ComponentValues rest;
@@ -1133,7 +1199,11 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
       rule->prefix = syntax.prelude[i].token.value;
       ++i;
     }
-    if (!TakeUrl(syntax.prelude, i, rule->namespaceUri)) return nullptr;
+    {
+      std::string address;
+      if (!TakeUrl(syntax.prelude, i, address)) return nullptr;
+      rule->namespaceUri = address;
+    }
     while (i < syntax.prelude.size() && syntax.prelude[i].IsWhitespace()) ++i;
     if (i != syntax.prelude.size()) return nullptr;
   } else if (name == "font-face") {
@@ -1217,7 +1287,7 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
     if (!registration) return nullptr;
     rule = NewRule(ctx, RuleKind::Property);
     rule->name = prelude[0].token.value;
-    rule->registered = registration;
+    rule->registered = std::make_unique<RegisteredProperty>(*registration);
     CssDeclarations* declarations = NewDeclarations(ctx);
     declarations->parentRule = rule;
     AddOrReplace(declarations->items, {"syntax", SerializeString(*syntaxText), false, "", ""});

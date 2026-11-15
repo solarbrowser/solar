@@ -207,7 +207,7 @@ CounterStyles::CounterStyles(dom::Document* document) {
           break;
         }
         case css::RuleKind::LayerBlock: {
-          const std::string path = rule->name.empty() ? layer + "(anonymous" + std::to_string(order) + ")" : (layer.empty() ? rule->name : layer + "." + rule->name);
+          const std::string path = rule->name.empty() ? layer + "(anonymous" + std::to_string(order) + ")" : (layer.empty() ? rule->name.str() : layer + "." + rule->name);
           rank(path);
           walk(rule->rules, path);
           break;
@@ -217,7 +217,7 @@ CounterStyles::CounterStyles(dom::Document* document) {
           break;
         case css::RuleKind::Import:
           if (rule->importedSheet) {
-            const std::string path = rule->layerName.empty() ? layer : (layer.empty() ? rule->layerName : layer + "." + rule->layerName);
+            const std::string path = rule->layerName.empty() ? layer : (layer.empty() ? rule->layerName.str() : layer + "." + rule->layerName);
             if (!rule->layerName.empty()) rank(path);
             walk(rule->importedSheet->rules, path);
           }
