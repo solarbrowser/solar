@@ -12,6 +12,7 @@
 #include <signal.h>
 #include <spawn.h>
 #if defined(__linux__)
+#include <mimalloc.h>
 #include <sys/prctl.h>
 #endif
 #include <sys/wait.h>
@@ -1273,6 +1274,13 @@ __attribute__((constructor(101))) void DisableTransparentHugePages() { ::prctl(P
 
 int main(int argc, char** argv) {
   std::setbuf(stdout, nullptr);
+#if defined(__linux__)
+  // The interface's process and the GPU's never run a collection that gives the allocator's free memory back, and the allocator only purges what it holds
+  // when it is called again after its delay (one second), so what a burst of network traffic or of frames had used stayed resident for good: the interface 179 MB
+  // against 14 MB of live blocks, the GPU's process 220 MB; with the delay at nothing, 77 and 137. A page's process has its collector (which gives memory back
+  // at the end of each major), and allocates in loops where purging at every free would cost: it keeps the default.
+  if (!(argc >= 2 && std::strcmp(argv[1], "--renderer") == 0)) mi_option_set(mi_option_purge_delay, 0);
+#endif
   if (argc >= 2 && std::strcmp(argv[1], "--renderer") == 0) {
     // The renderer process: it ends if the browser does, and a connection that is shut is not a signal.
 #if defined(__linux__)
