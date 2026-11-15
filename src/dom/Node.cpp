@@ -15,10 +15,29 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <mutex>
 #include <unordered_map>
 #include <unordered_set>
 
 namespace solar::dom {
+
+namespace {
+struct StringHash {
+  using is_transparent = void;
+  size_t operator()(std::string_view text) const { return std::hash<std::string_view>()(text); }
+};
+}  // namespace
+
+const std::string& Name::Interned(std::string_view text) {
+  // Nodes are made by the one thread that owns the page, but workers and the network service share the process: a lock costs nothing against the lookup it guards.
+  static std::mutex lock;
+  static std::unordered_set<std::string, StringHash, std::equal_to<>>* table = new std::unordered_set<std::string, StringHash, std::equal_to<>>();
+  std::lock_guard<std::mutex> guard(lock);
+  auto it = table->find(text);
+  if (it == table->end()) it = table->emplace(text).first;
+  return *it;
+}
+
 
 namespace qe = Quanta::Embed;
 using Quanta::Context;
@@ -94,7 +113,6 @@ void Element::Visit(Quanta::Visitor& visitor) {
   for (Attr* attribute : attributes) visitor.Mark(attribute);
   for (Attr* attribute : committedAttributes) visitor.Mark(attribute);
   visitor.Mark(committedShadowRoot);
-  for (Node* node : committedAssignedNodes) visitor.Mark(node);
   visitor.Mark(attributeMap);
   visitor.Mark(tokenList);
   visitor.Mark(styleSheet);
@@ -102,13 +120,16 @@ void Element::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(dataset);
   visitor.Mark(templateContents);
   visitor.Mark(shadowRoot);
-  for (Node* node : assignedNodes) visitor.Mark(node);
-  for (Node* node : manuallyAssignedNodes) visitor.Mark(node);
-  visitor.Mark(customDefinition);
-  for (const CustomReaction& reaction : reactions) {
-    visitor.Mark(reaction.definition);
-    visitor.Mark(reaction.callback);
-    for (const Quanta::Value& arg : reaction.args) visitor.Mark(arg);
+  if (rare) {
+    for (Node* node : rare->committedAssignedNodes) visitor.Mark(node);
+    for (Node* node : rare->assignedNodes) visitor.Mark(node);
+    for (Node* node : rare->manuallyAssignedNodes) visitor.Mark(node);
+    visitor.Mark(rare->customDefinition);
+    for (const CustomReaction& reaction : rare->reactions) {
+      visitor.Mark(reaction.definition);
+      visitor.Mark(reaction.callback);
+      for (const Quanta::Value& arg : reaction.args) visitor.Mark(arg);
+    }
   }
 }
 
@@ -345,7 +366,7 @@ void CommitPending() {
       if (node->IsElement()) {
         Element* element = static_cast<Element*>(node);
         element->committedShadowRoot = element->shadowRoot;
-        element->committedAssignedNodes = element->assignedNodes;
+        if (element->rare) element->rare->committedAssignedNodes = element->rare->assignedNodes;
       }
     }
     if ((mask & kPendingVersions) && node->IsElement()) {
@@ -354,11 +375,11 @@ void CommitPending() {
     }
     if ((mask & kPendingAnimated) && node->IsElement()) {
       Element* element = static_cast<Element*>(node);
-      element->committedAnimatedValues = element->animatedValues;
+      if (element->rare) element->rare->committedAnimatedValues = element->rare->animatedValues;
     }
     if ((mask & kPendingControl) && node->IsElement()) {
       Element* element = static_cast<Element*>(node);
-      element->committedControl = element->control;
+      if (element->rare) element->rare->committedControl = element->rare->control;
     }
     if ((mask & kPendingDocumentState) && node->IsDocument()) {
       Document* document = static_cast<Document*>(node);
@@ -445,8 +466,7 @@ void DisposeDocument(Document* document) {
     n->assignedSlot = n->manualSlot = nullptr;
     MarkPending(n, kPendingShadow);
     n->registrations.reset();
-    n->listeners.clear();
-    n->eventHandlers.clear();
+    n->ClearEvents();
     if (n != document) n->nodeDocument = nullptr;
     if (n->IsElement()) {
       Element* e = static_cast<Element*>(n);
@@ -454,10 +474,7 @@ void DisposeDocument(Document* document) {
       e->attributeMap = e->tokenList = e->styleSheet = e->inlineStyle = e->dataset = nullptr;
       e->templateContents = nullptr;
       e->shadowRoot = nullptr;
-      e->assignedNodes.clear();
-      e->manuallyAssignedNodes.clear();
-      e->customDefinition = nullptr;
-      e->reactions.clear();
+      e->rare.reset();
       e->contentDocument = nullptr;
       e->contentWindow = nullptr;
       e->layoutStyle.reset();
@@ -1002,14 +1019,15 @@ namespace {
 // the element the next number.
 void RecordAttrChange(Element* element, const Attr& attribute, const std::string& oldValue, const std::string& newValue) {
   constexpr size_t kKept = 12;
-  if (element->attrLog.size() >= kKept) element->attrLog.erase(element->attrLog.begin());
-  element->attrLog.push_back({element->attrVersion + 1, attribute.namespaceUri.empty() ? attribute.localName : "\x01" + attribute.localName, oldValue, newValue});
+  std::vector<Element::AttrChange>& log = element->MakeRare().attrLog;
+  if (log.size() >= kKept) log.erase(log.begin());
+  log.push_back({element->attrVersion + 1, attribute.namespaceUri.empty() ? attribute.localName : "\x01" + attribute.localName, oldValue, newValue});
 }
 }  // namespace
 
 void NotifyParsedAttribute(Element* element, const std::string& name) {
   if (const Attr* attribute = element->FindAttribute("", name)) RecordAttrChange(element, *attribute, "", attribute->value);
-  else element->attrLog.clear();  // (not known which: the numbers that follow have no record, and are taken as any attribute)
+  else if (element->rare) element->rare->attrLog.clear();  // (not known which: the numbers that follow have no record, and are taken as any attribute)
   NoteDamage(element, kDamageAttributes);
   if (g_hooks.attributeChanged) g_hooks.attributeChanged(element, name);
 }
@@ -1274,7 +1292,7 @@ Node* CloneNode(Context& ctx, Node* node, bool deep) {
     }
     case NodeType::Element: {
       Element* original = static_cast<Element*>(node);
-      Element* clone = CreateElement(ctx, document, original->localName, original->namespaceUri, original->prefix, original->isValue, false);
+      Element* clone = CreateElement(ctx, document, original->localName, original->namespaceUri, original->prefix, original->IsValue(), false);
       for (Attr* attribute : original->attributes) {
         Attr* attributeCopy = NewAttr(ctx, document, attribute->namespaceUri, attribute->prefix, attribute->localName, attribute->value);
         attributeCopy->ownerElement = clone;

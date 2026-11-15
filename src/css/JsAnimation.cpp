@@ -89,7 +89,9 @@ Value Compute(Context& ctx, Value, qe::Args args, Value) {
   const PropertyDefinition* definition = FindProperty(property);
   if (!definition || IsShorthand(*definition)) return qe::Null();
   NoStyleFlush noFlush;
-  const auto saved = element->animatedValues.find(pseudo) == element->animatedValues.end() ? AnimatedValues() : element->animatedValues[pseudo];
+  const auto& held = element->RareOrEmpty().animatedValues;
+  const auto heldAt = held.find(pseudo);
+  const AnimatedValues saved = heldAt == held.end() ? AnimatedValues() : heldAt->second;
   SetAnimatedValues(element, pseudo, {{property, StringArg(ctx, args, 3)}});
   const std::string value = ComputedValue(ctx, element, property, pseudo);
   SetAnimatedValues(element, pseudo, saved);
@@ -137,7 +139,7 @@ Value Starting(Context& ctx, Value, qe::Args args, Value) {
 // __solarAnimForget(element): what script read of the element is not what it changes from any more (it has left the document).
 Value Forget(Context&, Value, qe::Args args, Value) {
   dom::Element* element = args.size() > 0 ? DOMObject::Cast<dom::Element>(args[0]) : nullptr;
-  if (element) element->lastRead.clear();
+  if (element && element->rare) element->rare->lastRead.clear();
   return qe::Undefined();
 }
 
@@ -145,8 +147,9 @@ Value Forget(Context&, Value, qe::Args args, Value) {
 Value LastRead(Context& ctx, Value, qe::Args args, Value) {
   dom::Element* element = args.size() > 0 ? DOMObject::Cast<dom::Element>(args[0]) : nullptr;
   if (!element || args.size() < 3) return qe::Null();
-  const auto byPseudo = element->lastRead.find(StringArg(ctx, args, 1));
-  if (byPseudo == element->lastRead.end()) return qe::Null();
+  const auto& read = element->RareOrEmpty().lastRead;
+  const auto byPseudo = read.find(StringArg(ctx, args, 1));
+  if (byPseudo == read.end()) return qe::Null();
   const auto value = byPseudo->second.find(StringArg(ctx, args, 2));
   return value == byPseudo->second.end() ? qe::Null() : qe::FromWtf8(ctx, value->second);
 }

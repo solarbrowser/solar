@@ -33,11 +33,12 @@ void JsEvent::Visit(Quanta::Visitor& visitor) {
 }
 
 void JsEventTarget::Visit(Quanta::Visitor& visitor) {
-  for (const std::shared_ptr<Listener>& listener : listeners) {
+  if (!events) return;
+  for (const std::shared_ptr<Listener>& listener : events->listeners) {
     visitor.Mark(listener->callback);
     visitor.Mark(listener->owner);
   }
-  for (auto& [type, handler] : eventHandlers) visitor.Mark(handler);
+  for (auto& [type, handler] : events->handlers) visitor.Mark(handler);
 }
 
 namespace {
@@ -436,7 +437,7 @@ Value AddEventListener(Context& ctx, Value thisValue, qe::Args args, Value) {
 
   if (options.signal && options.signal->aborted) return qe::Undefined();
   if (isNull) return qe::Undefined();
-  for (const std::shared_ptr<Listener>& existing : self->listeners) {
+  for (const std::shared_ptr<Listener>& existing : self->Listeners()) {
     if (!existing->isEventHandler && existing->type == type && existing->capture == options.capture && existing->callback.strict_equals(callback)) {
       return qe::Undefined();  // the same listener again does nothing
     }
@@ -447,7 +448,7 @@ Value AddEventListener(Context& ctx, Value thisValue, qe::Args args, Value) {
   listener->capture = options.capture;
   listener->passive = options.passive;
   listener->once = options.once;
-  self->listeners.push_back(listener);
+  self->MakeEvents().listeners.push_back(listener);
   self->NoteWrite(callback);
   if (options.signal) {
     options.signal->removals.push_back({self, listener});
@@ -476,11 +477,14 @@ Value RemoveEventListener(Context& ctx, Value thisValue, qe::Args args, Value) {
     }
   }
   if (isNull) return qe::Undefined();
-  for (auto it = self->listeners.begin(); it != self->listeners.end(); ++it) {
-    if (!(*it)->isEventHandler && (*it)->type == type && (*it)->capture == capture && (*it)->callback.strict_equals(callback)) {
-      (*it)->removed = true;
-      self->listeners.erase(it);
-      break;
+  if (self->events) {
+    auto& list = self->events->listeners;
+    for (auto it = list.begin(); it != list.end(); ++it) {
+      if (!(*it)->isEventHandler && (*it)->type == type && (*it)->capture == capture && (*it)->callback.strict_equals(callback)) {
+        (*it)->removed = true;
+        list.erase(it);
+        break;
+      }
     }
   }
   return qe::Undefined();
@@ -491,7 +495,7 @@ void Invoke(Context& ctx, JsEventTarget* target, JsEvent* event, const std::shar
   if (listener->removed) return;
   if (listener->once) {
     listener->removed = true;
-    std::erase(target->listeners, listener);
+    if (target->events) std::erase(target->events->listeners, listener);
   }
   event->inPassiveListener = listener->passive;
 
@@ -500,8 +504,9 @@ void Invoke(Context& ctx, JsEventTarget* target, JsEvent* event, const std::shar
   } else {
     Value callback = listener->callback;
     if (listener->isEventHandler) {
-      auto it = target->eventHandlers.find(listener->type);
-      callback = it == target->eventHandlers.end() ? qe::Null() : it->second;
+      const auto* handlers = target->events ? &target->events->handlers : nullptr;
+      const auto it = handlers ? handlers->find(listener->type) : decltype(handlers->end())();
+      callback = !handlers || it == handlers->end() ? qe::Null() : it->second;
     }
     Value eventValue = qe::FromObject(event);
     if (qe::IsCallable(callback)) {
@@ -571,7 +576,7 @@ void InvokeAt(Context& ctx, JsEvent* event, size_t index, uint16_t phase, bool c
   JsEventTarget* current = item.invocationTarget;
   event->currentTarget = current;
   event->NoteWrite(qe::FromObject(current));
-  const std::vector<std::shared_ptr<Listener>> snapshot = current->listeners;
+  const std::vector<std::shared_ptr<Listener>> snapshot = current->Listeners();
   for (const std::shared_ptr<Listener>& listener : snapshot) {
     if (event->stopImmediatePropagation) break;
     if (listener->type != event->type || listener->capture != capturing) continue;
@@ -663,21 +668,23 @@ JsEvent* NewEvent(Context& ctx, const std::string& type, bool bubbles, bool canc
 }
 
 void SetEventHandler(JsEventTarget* target, const std::string& type, const Value& handler) {
-  const bool first = target->eventHandlers.find(type) == target->eventHandlers.end();
-  target->eventHandlers[type] = handler;
+  auto& state = target->MakeEvents();
+  const bool first = state.handlers.find(type) == state.handlers.end();
+  state.handlers[type] = handler;
   target->NoteWrite(handler);
   if (first) {
     // The handler stands in the listener list where it was first set, as the standard has it.
     auto listener = std::make_shared<Listener>();
     listener->type = type;
     listener->isEventHandler = true;
-    target->listeners.push_back(listener);
+    state.listeners.push_back(listener);
   }
 }
 
 Value GetEventHandler(JsEventTarget* target, const std::string& type) {
-  auto it = target->eventHandlers.find(type);
-  return it == target->eventHandlers.end() ? qe::Null() : it->second;
+  if (!target->events) return qe::Null();
+  auto it = target->events->handlers.find(type);
+  return it == target->events->handlers.end() ? qe::Null() : it->second;
 }
 
 Object* EventTargetPrototype(Context& ctx) { return TargetPrototype(ctx); }

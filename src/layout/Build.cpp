@@ -860,7 +860,7 @@ class Builder {
         if (want.attr > have.attr && want.attr - have.attr <= 12) {
           uint32_t found = 0;
           bool lang = false;
-          for (const dom::Element::AttrChange& change : element->attrLog) {
+          for (const dom::Element::AttrChange& change : element->AttrLog()) {
             if (change.version <= have.attr || change.version > want.attr) continue;
             ++found;
             if (change.name == "lang" || change.name == "\x01lang" || change.name == "xml:lang") lang = true;

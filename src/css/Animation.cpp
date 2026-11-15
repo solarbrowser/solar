@@ -264,20 +264,24 @@ bool DrawOnlyColor(const std::string& name) { return name.size() > 6 && name.com
 void SetAnimatedValues(dom::Element* element, const std::string& pseudo, AnimatedValues values) {
   if (!element) return;
   {
-    const auto before = element->animatedValues.find(pseudo);
-    const bool wasAlone = before == element->animatedValues.end() || OnlyItself(before->second);
+    const auto& held = element->RareOrEmpty().animatedValues;
+    const auto before = held.find(pseudo);
+    const bool wasAlone = before == held.end() || OnlyItself(before->second);
     if (!wasAlone || !OnlyItself(values)) ++element->animInheritVersion;
     dom::MarkPending(element, dom::kPendingVersions | dom::kPendingAnimated);
   }
   if (values.empty()) {
-    const auto at = element->animatedValues.find(pseudo);
-    if (at == element->animatedValues.end()) return;
-    element->animatedValues.erase(at);
+    if (!element->rare) return;
+    auto& held = element->rare->animatedValues;
+    const auto at = held.find(pseudo);
+    if (at == held.end()) return;
+    held.erase(at);
     --g_animatedSlots;
   } else {
-    auto at = element->animatedValues.find(pseudo);
-    if (at == element->animatedValues.end()) {
-      element->animatedValues.emplace(pseudo, std::move(values));
+    auto& held = element->MakeRare().animatedValues;
+    auto at = held.find(pseudo);
+    if (at == held.end()) {
+      held.emplace(pseudo, std::move(values));
       ++g_animatedSlots;
     } else {
       if (at->second == values) return;
@@ -301,8 +305,9 @@ void SetAnimatedValues(dom::Element* element, const std::string& pseudo, Animate
                                                      "border-color", "outline-color", "background-position", "mask-position", "-webkit-transform", "-webkit-filter", "-webkit-backdrop-filter", "-webkit-box-shadow"};
   static std::set<const dom::Element*> sizingElements;
   bool sizing = false, itself = true;
-  const auto now = element->animatedValues.find(pseudo);
-  if (now != element->animatedValues.end()) {
+  const auto& heldNow = element->RareOrEmpty().animatedValues;
+  const auto now = heldNow.find(pseudo);
+  if (now != heldNow.end()) {
     for (const auto& entry : now->second) {
       sizing = sizing || !(drawOnly.count(entry.first) || DrawOnlyColor(entry.first));
       itself = itself && (notInherited.count(entry.first) || (DrawOnlyColor(entry.first) && entry.first != "caret-color" && entry.first != "accent-color"));
@@ -314,7 +319,7 @@ void SetAnimatedValues(dom::Element* element, const std::string& pseudo, Animate
   static const std::set<std::string> boxDrawn = {"opacity", "transform", "translate", "rotate", "scale", "filter", "backdrop-filter", "box-shadow", "clip-path", "background-color",
                                                   "outline-color", "background-position", "mask-position", "-webkit-transform", "-webkit-filter", "-webkit-backdrop-filter", "-webkit-box-shadow"};
   static const bool noFast = std::getenv("SOLAR_NO_DRAW_FAST") != nullptr;
-  bool drawFast = !noFast && pseudo.empty() && !sizing && itself && now != element->animatedValues.end() && element->nodeDocument && !sizingElements.count(element);
+  bool drawFast = !noFast && pseudo.empty() && !sizing && itself && now != heldNow.end() && element->nodeDocument && !sizingElements.count(element);
   if (drawFast) {
     for (const auto& entry : now->second) {
       if (!boxDrawn.count(entry.first) && !(DrawOnlyColor(entry.first) && entry.first != "color" && entry.first != "caret-color" && entry.first != "accent-color")) { drawFast = false; break; }

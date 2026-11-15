@@ -1049,18 +1049,15 @@ void OpenDocument(dom::Document* document) {
   document->scriptParser.reset();
   // The listeners and handlers of the document, of what is in it and of its window are erased.
   for (dom::Node* node = document; node; node = node->NextInTree(document)) {
-    node->listeners.clear();
-    node->eventHandlers.clear();
+    node->ClearEvents();
     if (dom::Element* element = dom::AsElement(node); element && element->shadowRoot) {
       for (dom::Node* inner = element->shadowRoot; inner; inner = inner->NextInTree(element->shadowRoot)) {
-        inner->listeners.clear();
-        inner->eventHandlers.clear();
+        inner->ClearEvents();
       }
     }
   }
   if (document->window) {
-    document->window->listeners.clear();
-    document->window->eventHandlers.clear();
+    document->window->ClearEvents();
   }
   if (document->context) {
     Context& ctx = *document->context;

@@ -1487,7 +1487,7 @@ AttrEffect AttrChangesEffect(dom::Element* element, uint32_t from, uint32_t to, 
     reaches = true;
     return true;
   };
-  for (const dom::Element::AttrChange& change : element->attrLog) {
+  for (const dom::Element::AttrChange& change : element->AttrLog()) {
     if (change.version <= from || change.version > to) continue;
     ++found;
     const std::string& name = change.name;
@@ -1736,7 +1736,7 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   ++g_vs[0];
   if (soft) { ++g_vs[1]; if (good && animSame && dirty) ++g_vs[9]; else if (goodButStructure && animSame) ++g_vs[10]; else ++g_vs[11]; } else ++g_vs[2];
   if (!soft) { if (!basicButParent) ++g_vs[3]; else if (!parentSame) ++g_vs[4]; else if (!attrSame) ++g_vs[5]; else if (!structureOk) ++g_vs[6]; else if (!animSame) ++g_vs[7]; else ++g_vs[8]; }
-  if (KeyDebug() && !attrSame) { std::string names; for (const auto& c : element->attrLog) if (c.version > entry.attr && c.version <= ev.attr) names += c.name + " "; std::fprintf(stderr, "attr change <%s>: effect %d subjects %zu soft %d built %d names: %s\n", element->localName.c_str(), (int)attrEffect, reachedSubjects.size(), (int)soft, (int)entry.plain.built, names.c_str()); }
+  if (KeyDebug() && !attrSame) { std::string names; for (const auto& c : element->AttrLog()) if (c.version > entry.attr && c.version <= ev.attr) names += c.name + " "; std::fprintf(stderr, "attr change <%s>: effect %d subjects %zu soft %d built %d names: %s\n", element->localName.c_str(), (int)attrEffect, reachedSubjects.size(), (int)soft, (int)entry.plain.built, names.c_str()); }
   if (soft && attrReaches) MarkSubjectsDirty(element, reachedSubjects);
   const uint64_t oldEpoch = entry.epoch, oldCascadeEpoch = entry.cascadeEpoch;
   const bool ruleSetOnly = dirty && good && animSame && stateSame;  // (rules came: what the elements under it are told by is the same)
@@ -3525,7 +3525,7 @@ void SnapshotComputedValues(Quanta::Context& ctx, dom::Element* element) {
     const std::string name = definition.name;
     if (name.rfind("transition", 0) == 0 || name.rfind("animation", 0) == 0 || name.rfind("-webkit-", 0) == 0) continue;
     const std::string value = ComputedValue(ctx, element, name);
-    if (!value.empty()) element->lastRead[""][name] = value;
+    if (!value.empty()) element->MakeRare().lastRead[""][name] = value;
   }
 }
 namespace {
@@ -4716,8 +4716,8 @@ std::string ResolvedValue(Quanta::Context& ctx, dom::Element* element, const std
           rendered = ownerDisplay == owner.memo->computed.end() || ownerDisplay->second != "none";
         }
       }
-      if (rendered) element->lastRead[pseudo][property] = computed;
-      else element->lastRead.erase(pseudo);
+      if (rendered) element->MakeRare().lastRead[pseudo][property] = computed;
+      else if (element->rare) element->rare->lastRead.erase(pseudo);
     }
   }
   if (g_resolvedHook && pseudo.empty() && element && element->nodeDocument && g_resolvedHook(ctx, element, property, pseudo, used)) return used;

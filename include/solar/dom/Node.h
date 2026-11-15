@@ -7,6 +7,7 @@
 #pragma once
 
 #include <map>
+#include <ostream>
 
 #include <cstdint>
 #include <functional>
@@ -97,6 +98,51 @@ inline constexpr std::string_view kHtmlNamespace = "http://www.w3.org/1999/xhtml
 inline constexpr std::string_view kSvgNamespace = "http://www.w3.org/2000/svg";
 inline constexpr std::string_view kMathMlNamespace = "http://www.w3.org/1998/Math/MathML";
 inline constexpr std::string_view kXmlNamespace = "http://www.w3.org/XML/1998/namespace";
+// A name the tree keeps (a tag, an attribute's name, a namespace, a prefix): one copy of each text for the whole process, and 8 bytes in the node that has it, where a string is 32
+// (and an element has three of them, an attribute three too). Two of them are equal when their pointers are, which is also what makes comparing them quick.
+class Name {
+ public:
+  Name() : text_(&Interned(std::string_view())) {}
+  explicit Name(std::string_view text) : text_(&Interned(text)) {}
+  explicit Name(const std::string& text) : text_(&Interned(text)) {}
+  explicit Name(const char* text) : text_(&Interned(text)) {}
+  Name& operator=(std::string_view text) {
+    text_ = &Interned(text);
+    return *this;
+  }
+  Name& operator=(const std::string& text) { return *this = std::string_view(text); }
+  Name& operator=(const char* text) { return *this = std::string_view(text); }
+  operator const std::string&() const { return *text_; }
+  operator std::string_view() const { return *text_; }
+  const std::string& str() const { return *text_; }
+  const char* c_str() const { return text_->c_str(); }
+  bool empty() const { return text_->empty(); }
+  size_t size() const { return text_->size(); }
+  const std::string* operator->() const { return text_; }
+  char operator[](size_t i) const { return (*text_)[i]; }
+  template <class... A> size_t find(A&&... a) const { return text_->find(std::forward<A>(a)...); }
+  template <class... A> size_t rfind(A&&... a) const { return text_->rfind(std::forward<A>(a)...); }
+  template <class... A> std::string substr(A&&... a) const { return text_->substr(std::forward<A>(a)...); }
+  template <class... A> int compare(A&&... a) const { return text_->compare(std::forward<A>(a)...); }
+  auto begin() const { return text_->begin(); }
+  auto end() const { return text_->end(); }
+  friend std::ostream& operator<<(std::ostream& out, const Name& n) { return out << *n.text_; }
+  const std::string& operator*() const { return *text_; }
+  friend bool operator==(const Name& a, const Name& b) { return a.text_ == b.text_; }
+  friend bool operator==(const Name& a, std::string_view b) { return *a.text_ == b; }
+  friend bool operator==(const Name& a, const std::string& b) { return *a.text_ == b; }
+  friend bool operator==(const Name& a, const char* b) { return *a.text_ == b; }
+  friend std::string operator+(const std::string& a, const Name& b) { return a + *b.text_; }
+  friend std::string operator+(const Name& a, const std::string& b) { return *a.text_ + b; }
+  friend std::string operator+(const char* a, const Name& b) { return a + *b.text_; }
+  friend std::string operator+(const Name& a, const char* b) { return *a.text_ + b; }
+  friend bool operator<(const Name& a, const Name& b) { return *a.text_ < *b.text_; }
+
+ private:
+  static const std::string& Interned(std::string_view text);
+  const std::string* text_;
+};
+
 inline constexpr std::string_view kXmlnsNamespace = "http://www.w3.org/2000/xmlns/";
 
 struct Node : web::JsEventTarget {
@@ -257,9 +303,9 @@ struct ShadowRoot : DocumentFragment {
 // An attribute: a node of its own, so that script can hold one and see it change.
 struct Attr : Node {
   using Parent = Node;
-  std::string namespaceUri;  // empty: none
-  std::string prefix;        // empty: none
-  std::string localName;
+  Name namespaceUri;  // empty: none
+  Name prefix;        // empty: none
+  Name localName;
   std::string value;
   std::string committedValue;  // what style and layout read (see CommitPending)
   Element* ownerElement = nullptr;
@@ -280,9 +326,9 @@ inline uint64_t NextElementSerial() {
 struct Element : Node {
   using Parent = Node;
   uint64_t serial = NextElementSerial();
-  std::string namespaceUri;  // empty: none
-  std::string prefix;        // empty: none
-  std::string localName;
+  Name namespaceUri;  // empty: none
+  Name prefix;        // empty: none
+  Name localName;
   std::vector<Attr*> attributes;
   std::vector<Attr*> committedAttributes;  // the attributes as style and layout see them (see CommitPending)
   const std::vector<Attr*>& AttributesInView() const { return g_committedViewDepth ? committedAttributes : attributes; }
@@ -298,18 +344,10 @@ struct Element : Node {
   DocumentFragment* templateContents = nullptr;
   ShadowRoot* shadowRoot = nullptr;
   ShadowRoot* committedShadowRoot = nullptr;  // what style and layout read of the two above and below (see CommitPending)
-  std::vector<Node*> committedAssignedNodes;
   ShadowRoot* ShadowRootInView() const { return g_committedViewDepth ? committedShadowRoot : shadowRoot; }
-  const std::vector<Node*>& AssignedNodesInView() const { return g_committedViewDepth ? committedAssignedNodes : assignedNodes; }
-  // A slot's: the slottables it has been given, and those a script asked it to take in (slot assignment "manual").
-  std::vector<Node*> assignedNodes;
-  std::vector<Node*> manuallyAssignedNodes;
   // What makes it a custom element, if it is: its definition, the value of is that went with it, and the callbacks
   // that are waiting to be called.
   CustomState customState = CustomState::Uncustomized;
-  CustomDefinition* customDefinition = nullptr;
-  std::optional<std::string> isValue;
-  std::vector<CustomReaction> reactions;
   // An iframe's nested browsing context: the document in it, and the window (global object) of that document.
   Document* contentDocument = nullptr;
   Quanta::Object* contentWindow = nullptr;
@@ -319,8 +357,6 @@ struct Element : Node {
   bool scriptParserInserted = false;
   bool scriptForceAsync = true;  // a script a page makes is async until its async is set (the parser's is not)
 
-  // What animations give to properties of the element (pseudo-element name → property → value), which the cascade takes over the declared ones.
-  std::map<std::string, std::map<std::string, std::string>> animatedValues;
   // The content box of an element that is a size container, as layout found it (negative: not known), for container queries.
   double containerWidth = -1, containerHeight = -1;
   signed char contentVisibilityReported = -1;  // the state a contentvisibilityautostatechange event last told: 0 not skipped, 1 skipped, -1 none yet
@@ -335,7 +371,41 @@ struct Element : Node {
     uint32_t version;
     std::string name, oldValue, newValue;
   };
-  std::vector<AttrChange> attrLog;
+
+  // What almost no element has, kept apart so that the elements that do not have it do not pay for it (an element is ~1 KB with all of it inline; most pages have tens of thousands).
+  // Nothing in it is made until something needs it: read through the accessors below (they give the empty one when there is none), write through MakeRare().
+  struct Rare {
+    // A slot's: the slottables it has been given (and as committed), and those a script asked it to take in (slot assignment "manual").
+    std::vector<Node*> assignedNodes, committedAssignedNodes, manuallyAssignedNodes;
+    // The custom element it is: its definition, the value of is that went with it, and the callbacks that are waiting to be called.
+    CustomDefinition* customDefinition = nullptr;
+    std::optional<std::string> isValue;
+    std::vector<CustomReaction> reactions;
+    // What animations give to properties of the element (pseudo-element name → property → value), which the cascade takes over the declared ones; and as committed.
+    std::map<std::string, std::map<std::string, std::string>> animatedValues, committedAnimatedValues;
+    // The computed values script last read (pseudo-element name → property → value): the style from before a change, for transitions.
+    std::map<std::string, std::map<std::string, std::string>> lastRead;
+    std::vector<AttrChange> attrLog;
+    // A form control's state: what script's side made of it last (pending), and as committed.
+    std::shared_ptr<const ControlState> control, committedControl;
+  };
+  std::unique_ptr<Rare> rare;
+  Rare& MakeRare() {
+    if (!rare) rare = std::make_unique<Rare>();
+    return *rare;
+  }
+  static const Rare& NoRare() {
+    static const Rare empty;
+    return empty;
+  }
+  const Rare& RareOrEmpty() const { return rare ? *rare : NoRare(); }
+  const std::vector<Node*>& AssignedNodes() const { return RareOrEmpty().assignedNodes; }
+  const std::vector<Node*>& AssignedNodesInView() const { return g_committedViewDepth ? RareOrEmpty().committedAssignedNodes : RareOrEmpty().assignedNodes; }
+  const std::vector<Node*>& ManuallyAssignedNodes() const { return RareOrEmpty().manuallyAssignedNodes; }
+  CustomDefinition* CustomDefinitionOf() const { return rare ? rare->customDefinition : nullptr; }
+  const std::optional<std::string>& IsValue() const { return RareOrEmpty().isValue; }
+  const std::vector<AttrChange>& AttrLog() const { return RareOrEmpty().attrLog; }
+  const std::map<std::string, std::map<std::string, std::string>>& AnimatedValuesInView() const { return g_committedViewDepth ? RareOrEmpty().committedAnimatedValues : RareOrEmpty().animatedValues; }
   uint32_t stateVersion = 0;      // a state of it (hover, focus, pressed), or of an element under it, changed
   uint32_t childrenVersion = 0;   // its children changed, or the text in them
   uint32_t childAttrVersion = 0;  // an attribute of a child of it changed
@@ -352,24 +422,21 @@ struct Element : Node {
   Versions VersionsInView() const {
     return g_committedViewDepth ? committedVersions : Versions{attrVersion, stateVersion, childrenVersion, childAttrVersion, animVersion, animInheritVersion, subtreeVersion, subtreeSelectorVersion};
   }
-  std::map<std::string, std::map<std::string, std::string>> committedAnimatedValues;
-  // A form control's state: what script's side made of it last (pending), and as committed.
-  std::shared_ptr<const ControlState> control, committedControl;
-  const ControlState* ControlInView() const { return (g_committedViewDepth ? committedControl : control).get(); }
-  const std::map<std::string, std::map<std::string, std::string>>& AnimatedValuesInView() const { return g_committedViewDepth ? committedAnimatedValues : animatedValues; }
+  const ControlState* ControlInView() const {
+    if (!rare) return nullptr;
+    return (g_committedViewDepth ? rare->committedControl : rare->control).get();
+  }
   // Layout's style of the element (a BoxStyle) and what it was made from.
   std::shared_ptr<const void> layoutStyle;
   // What the style it is made from was (the token of the styles that share what was worked out, and the language): a style made from the same is the same one, not another that is equal.
   std::shared_ptr<void> layoutToken;
-  std::string layoutLang;
+  Name layoutLang;
   struct LayoutStamp {
     uint64_t author = 0, environment = 0;
     const Node* parent = nullptr;
     uint32_t attr = 0, anim = 0, children = 0, parentChildren = 0, parentChildAttr = 0;
     uint64_t epoch = 0;  // of the style it was made from (see css::StyleEpochOf)
   } layoutStamp;
-  // The computed values script last read (pseudo-element name → property → value): the style from before a change, for transitions.
-  std::map<std::string, std::map<std::string, std::string>> lastRead;
 
   std::string QualifiedName() const { return prefix.empty() ? localName : prefix + ":" + localName; }
   // `name` is compared as the standard does for a name on an HTML element in an HTML document: after

@@ -98,9 +98,23 @@ struct EventTargetOps {
 struct JsEventTarget : Quanta::DOMObject {
   // Set by a type that sits in a tree; an event target without it is a path of one.
   const EventTargetOps* ops = nullptr;
-  std::vector<std::shared_ptr<Listener>> listeners;
-  // The on<type> attributes' values, which are callables or null.
-  std::map<std::string, Quanta::Value> eventHandlers;
+  // What almost no node has: kept apart so that one without listeners is 100 bytes smaller (a page has tens of thousands of nodes).
+  struct EventState {
+    std::vector<std::shared_ptr<Listener>> listeners;
+    // The on<type> attributes' values, which are callables or null.
+    std::map<std::string, Quanta::Value> handlers;
+  };
+  std::unique_ptr<EventState> events;
+  EventState& MakeEvents() {
+    if (!events) events = std::make_unique<EventState>();
+    return *events;
+  }
+  const std::vector<std::shared_ptr<Listener>>& Listeners() const {
+    static const std::vector<std::shared_ptr<Listener>> none;
+    return events ? events->listeners : none;
+  }
+  // Forgets every listener and handler.
+  void ClearEvents() { events.reset(); }
 
   void Visit(Quanta::Visitor& visitor);
 };

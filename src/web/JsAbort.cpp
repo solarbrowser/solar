@@ -204,7 +204,7 @@ void RunAbortSteps(Context& ctx, JsAbortSignal* signal) {
   signal->removals.clear();
   for (JsAbortSignal::Removal& removal : removals) {
     removal.listener->removed = true;
-    std::erase(removal.target->listeners, removal.listener);
+    if (removal.target->events) std::erase(removal.target->events->listeners, removal.listener);
   }
   std::vector<std::shared_ptr<Listener>> algorithms = std::move(signal->abortAlgorithms);
   signal->abortAlgorithms.clear();

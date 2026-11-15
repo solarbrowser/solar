@@ -130,7 +130,7 @@ void RefreshControls(dom::Document* document) {
     Value arguments[] = {qe::FromObject(element)};
     const Value meta = CallHelper(document, "formMeta", arguments, 1);
     if (!qe::IsObject(meta)) {
-      element->control.reset();
+      if (element->rare) element->rare->control.reset();
       dom::MarkPending(element, dom::kPendingControl);
       continue;
     }
@@ -172,7 +172,7 @@ void RefreshControls(dom::Document* document) {
         at = end + 1;
       }
     }
-    element->control = std::move(state);
+    element->MakeRare().control = std::move(state);
     dom::MarkPending(element, dom::kPendingControl);
   }
 }

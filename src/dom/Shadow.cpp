@@ -40,7 +40,7 @@ std::vector<Node*> FindSlottables(Element* slot) {
   if (!root) return result;
   Element* host = root->host;
   if (root->slotAssignment == SlotAssignment::Manual) {
-    for (Node* slottable : slot->manuallyAssignedNodes) {
+    for (Node* slottable : slot->ManuallyAssignedNodes()) {
       if (slottable->parentNode == host) result.push_back(slottable);
     }
   } else {
@@ -166,7 +166,7 @@ Element* FindSlot(Node* slottable, bool open) {
   if (open && shadow->mode != ShadowMode::Open) return nullptr;
   if (shadow->slotAssignment == SlotAssignment::Manual) {
     for (Element* slot : SlotsIn(shadow)) {
-      if (Contains(slot->manuallyAssignedNodes, slottable)) return slot;
+      if (Contains(slot->ManuallyAssignedNodes(), slottable)) return slot;
     }
     return nullptr;
   }
@@ -201,15 +201,15 @@ std::vector<Node*> FindFlattenedSlottables(Element* slot) {
 
 void AssignSlottablesForSlot(Element* slot) {
   std::vector<Node*> slottables = FindSlottables(slot);
-  if (slottables != slot->assignedNodes) QueueSlotChange(slot);
-  for (Node* old : slot->assignedNodes) {
+  if (slottables != slot->AssignedNodes()) QueueSlotChange(slot);
+  for (Node* old : slot->AssignedNodes()) {
     if (old->assignedSlot == slot && !Contains(slottables, old)) {
       old->assignedSlot = nullptr;
       MarkPending(old, kPendingShadow);
       old->NoteWrite();
     }
   }
-  slot->assignedNodes = slottables;
+  if (!slottables.empty() || slot->rare) slot->MakeRare().assignedNodes = slottables;
   MarkPending(slot, kPendingShadow);
   for (Node* slottable : slottables) {
     slottable->assignedSlot = slot;
@@ -233,13 +233,13 @@ bool HasShadowTrees() { return g_shadowRoots > 0; }
 void ShadowAfterInsert(Node* node, Node* parent) {
   Element* host = AsElement(parent);
   if (host && host->shadowRoot && IsSlottable(node)) AssignSlot(node);
-  if (AsShadowRoot(parent->Root()) && IsSlot(parent) && static_cast<Element*>(parent)->assignedNodes.empty()) QueueSlotChange(static_cast<Element*>(parent));
+  if (AsShadowRoot(parent->Root()) && IsSlot(parent) && static_cast<Element*>(parent)->AssignedNodes().empty()) QueueSlotChange(static_cast<Element*>(parent));
   AssignSlottablesForTree(node->Root());
 }
 
 void ShadowAfterRemove(Node* node, Node* parent, Element* wasAssignedTo) {
   if (wasAssignedTo) AssignSlottablesForSlot(wasAssignedTo);
-  if (AsShadowRoot(parent->Root()) && IsSlot(parent) && static_cast<Element*>(parent)->assignedNodes.empty()) QueueSlotChange(static_cast<Element*>(parent));
+  if (AsShadowRoot(parent->Root()) && IsSlot(parent) && static_cast<Element*>(parent)->AssignedNodes().empty()) QueueSlotChange(static_cast<Element*>(parent));
   bool hasSlot = IsSlot(node);
   for (Node* n = node->NextInTree(node); n && !hasSlot; n = n->NextInTree(node)) hasSlot = IsSlot(n);
   if (hasSlot) {

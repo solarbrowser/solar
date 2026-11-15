@@ -70,9 +70,9 @@ void SerializeOne(const Node* node, const Options& options, std::string& out) {
       const std::string tagName = known ? element->localName : element->QualifiedName();
       out += "<" + tagName;
       // The is value of a customized built-in element, if it is not an attribute it already has.
-      if (element->isValue && !element->FindAttribute("", "is")) {
+      if (element->IsValue() && !element->FindAttribute("", "is")) {
         out += " is=\"";
-        Escape(*element->isValue, true, out);
+        Escape(*element->IsValue(), true, out);
         out += "\"";
       }
       for (const dom::Attr* attribute : element->attributes) {

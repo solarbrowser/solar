@@ -131,15 +131,15 @@ void EnqueueUpgrade(Context& ctx, Element* element, CustomDefinition* definition
   CustomReaction reaction;
   reaction.upgrade = true;
   reaction.definition = definition;
-  element->reactions.push_back(std::move(reaction));
+  element->MakeRare().reactions.push_back(std::move(reaction));
   element->NoteWrite();
   EnqueueElement(ctx, element);
 }
 
 void RunReactions(Context& ctx, Element* element) {
-  while (!element->reactions.empty()) {
-    CustomReaction reaction = std::move(element->reactions.front());
-    element->reactions.erase(element->reactions.begin());
+  while (element->rare && !element->rare->reactions.empty()) {
+    CustomReaction reaction = std::move(element->rare->reactions.front());
+    element->rare->reactions.erase(element->rare->reactions.begin());
     if (reaction.upgrade) {
       Upgrade(ctx, element, reaction.definition);
       continue;
@@ -197,7 +197,7 @@ CustomDefinition* LookupDefinition(Context& ctx, const Document* document, std::
 }
 
 void EnqueueCallback(Context& ctx, Element* element, Callback callback, std::vector<Value> args) {
-  CustomDefinition* definition = element->customDefinition;
+  CustomDefinition* definition = element->CustomDefinitionOf();
   if (!definition || !DefinitionHas(definition, callback)) return;
   if (callback == Callback::AttributeChanged) {
     const std::string name = args.empty() ? "" : args[0].to_string();
@@ -206,19 +206,19 @@ void EnqueueCallback(Context& ctx, Element* element, Callback callback, std::vec
   CustomReaction reaction;
   reaction.callback = definition->callbacks[static_cast<int>(callback)];
   reaction.args = std::move(args);
-  element->reactions.push_back(std::move(reaction));
+  element->MakeRare().reactions.push_back(std::move(reaction));
   element->NoteWrite();
   EnqueueElement(ctx, element);
 }
 
 void TryUpgrade(Context& ctx, Element* element) {
-  CustomDefinition* definition = LookupDefinition(ctx, element->nodeDocument, element->namespaceUri, element->localName, element->isValue);
+  CustomDefinition* definition = LookupDefinition(ctx, element->nodeDocument, element->namespaceUri, element->localName, element->IsValue());
   if (definition) EnqueueUpgrade(ctx, element, definition);
 }
 
 void Upgrade(Context& ctx, Element* element, CustomDefinition* definition) {
   if (element->customState != CustomState::Undefined && element->customState != CustomState::Uncustomized) return;
-  element->customDefinition = definition;
+  element->MakeRare().customDefinition = definition;
   element->customState = CustomState::Failed;
   NoteStateChange(element);  // (:defined is a state: the style of the element is made anew)
   element->NoteWrite();
@@ -246,10 +246,10 @@ void Upgrade(Context& ctx, Element* element, CustomDefinition* definition) {
   }
   if (!definition->constructionStack.empty()) definition->constructionStack.pop_back();
   if (!succeeded) {
-    element->customDefinition = nullptr;
+    element->MakeRare().customDefinition = nullptr;
     element->customState = CustomState::Failed;
   NoteStateChange(element);  // (:defined is a state: the style of the element is made anew)
-    element->reactions.clear();
+    element->MakeRare().reactions.clear();
     element->NoteWrite();
     ReportException(ctx);
     return;
@@ -265,7 +265,7 @@ Element* CreateElement(Context& ctx, Document* document, std::string_view localN
     // A customized built-in element: the element of the built-in interface, made a custom one by the upgrade.
     Element* result = NewElement(ctx, document, localName, ns, prefix);
     result->customState = CustomState::Undefined;
-    result->isValue = is;
+    if (is) result->MakeRare().isValue = is;
     result->NoteWrite();
     if (synchronous) Upgrade(ctx, result, definition);
     else EnqueueUpgrade(ctx, result, definition);
@@ -309,15 +309,15 @@ Element* CreateElement(Context& ctx, Document* document, std::string_view localN
       return result;
     }
     result->prefix = prefix;
-    result->isValue = std::nullopt;
+    result->MakeRare().isValue = std::nullopt;
     result->customState = CustomState::Custom;
-    result->customDefinition = definition;
+    result->MakeRare().customDefinition = definition;
     result->NoteWrite();
     return result;
   }
   Element* result = NewElement(ctx, document, localName, ns, prefix);
   if (ns == kHtmlNamespace && (IsValidCustomElementName(localName) || is)) result->customState = CustomState::Undefined;
-  result->isValue = is;
+  if (is) result->MakeRare().isValue = is;
   result->NoteWrite();
   return result;
 }
@@ -362,7 +362,7 @@ void CustomAfterMove(Node* node) {
   for (Node* descendant : ShadowIncludingInclusiveDescendants(node)) {
     Element* element = AsElement(descendant);
     if (!element || element->customState != CustomState::Custom || !connected) continue;
-    if (element->customDefinition && DefinitionHas(element->customDefinition, Callback::ConnectedMove)) {
+    if (element->CustomDefinitionOf() && DefinitionHas(element->CustomDefinitionOf(), Callback::ConnectedMove)) {
       EnqueueCallback(*ctx, element, Callback::ConnectedMove);
     } else {
       EnqueueCallback(*ctx, element, Callback::Disconnected);
@@ -433,7 +433,7 @@ Value ConstructHtmlElement(Context& ctx, const Value& newTarget, Object* active,
   if (definition->constructionStack.empty()) {
     Document* document = AssociatedDocument(ctx);
     Element* element = NewUndefinedElement(ctx, document, definition->localName, "", prototype);
-    if (definition->name != definition->localName) element->isValue = definition->name;
+    if (definition->name != definition->localName) element->MakeRare().isValue = definition->name;
     return qe::FromObject(element);
   }
   Element* element = definition->constructionStack.back();
@@ -656,7 +656,7 @@ Value Define(Context& ctx, Value t, qe::Args args, Value) {
     for (Node* node : ShadowIncludingInclusiveDescendants(document)) {
       Element* element = AsElement(node);
       if (!element || !element->IsHtml() || element->localName != definition->localName) continue;
-      if (definition->name != definition->localName && element->isValue != std::optional<std::string>(definition->name)) continue;
+      if (definition->name != definition->localName && element->IsValue() != std::optional<std::string>(definition->name)) continue;
       EnqueueUpgrade(ctx, element, definition);
     }
   }

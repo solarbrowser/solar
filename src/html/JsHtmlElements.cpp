@@ -337,7 +337,7 @@ Value AssignedNodes(Context& ctx, Value t, qe::Args args, Value) {
   if (!self) return qe::Undefined();
   const bool flatten = Flatten(ctx, args);
   if (qe::HasException(ctx)) return qe::Undefined();
-  const std::vector<dom::Node*> nodes = flatten ? dom::FindFlattenedSlottables(self) : self->assignedNodes;
+  const std::vector<dom::Node*> nodes = flatten ? dom::FindFlattenedSlottables(self) : self->AssignedNodes();
   Value array = qe::NewArray(ctx);
   for (dom::Node* node : nodes) qe::ArrayPush(ctx, array, qe::FromObject(node));
   return array;
@@ -348,7 +348,7 @@ Value AssignedElements(Context& ctx, Value t, qe::Args args, Value) {
   if (!self) return qe::Undefined();
   const bool flatten = Flatten(ctx, args);
   if (qe::HasException(ctx)) return qe::Undefined();
-  const std::vector<dom::Node*> nodes = flatten ? dom::FindFlattenedSlottables(self) : self->assignedNodes;
+  const std::vector<dom::Node*> nodes = flatten ? dom::FindFlattenedSlottables(self) : self->AssignedNodes();
   Value array = qe::NewArray(ctx);
   for (dom::Node* node : nodes) {
     if (node->IsElement()) qe::ArrayPush(ctx, array, qe::FromObject(node));
@@ -368,15 +368,18 @@ Value AssignMethod(Context& ctx, Value t, qe::Args args, Value) {
     }
     if (std::find(nodes.begin(), nodes.end(), node) == nodes.end()) nodes.push_back(node);
   }
-  for (dom::Node* node : self->manuallyAssignedNodes) node->manualSlot = nullptr;
+  for (dom::Node* node : self->ManuallyAssignedNodes()) node->manualSlot = nullptr;
   std::vector<dom::Element*> previousSlots;
   for (dom::Node* node : nodes) {
     if (dom::Element* previous = node->manualSlot) {
       if (previous != self && std::find(previousSlots.begin(), previousSlots.end(), previous) == previousSlots.end()) previousSlots.push_back(previous);
-      previous->manuallyAssignedNodes.erase(std::remove(previous->manuallyAssignedNodes.begin(), previous->manuallyAssignedNodes.end(), node), previous->manuallyAssignedNodes.end());
+      {
+        auto& manual = previous->MakeRare().manuallyAssignedNodes;
+        manual.erase(std::remove(manual.begin(), manual.end(), node), manual.end());
+      }
     }
   }
-  self->manuallyAssignedNodes = nodes;
+  self->MakeRare().manuallyAssignedNodes = nodes;
   for (dom::Node* node : nodes) node->manualSlot = self;
   self->NoteWrite();
   dom::AssignSlottablesForTree(self->Root());
