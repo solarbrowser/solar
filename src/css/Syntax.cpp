@@ -6,6 +6,7 @@
 
 #include <unordered_map>
 #include "solar/css/Syntax.h"
+#include "solar/css/WatchedAttributes.h"
 
 #include <cmath>
 #include <cstdio>
@@ -97,19 +98,33 @@ ComponentValue ConsumeSimpleBlock(Stream& in) {
   }
 }
 
+// An attr() reads the attribute that its first argument names (any attribute, when that is not a plain name): see WatchedAttributes.
+void NoteAttrFunction(const ComponentValue& function) {
+  if (function.name.size() != 4 || (function.name[0] | 32) != 'a' || (function.name[1] | 32) != 't' || (function.name[2] | 32) != 't' || (function.name[3] | 32) != 'r') return;
+  for (const ComponentValue& child : function.children) {
+    if (child.IsWhitespace()) continue;
+    if (child.IsIdent()) WatchedAttributes::Watch(child.token.value);
+    else WatchedAttributes::WatchAll();
+    return;
+  }
+  WatchedAttributes::WatchAll();
+}
+
 ComponentValue ConsumeFunction(Stream& in) {
   ComponentValue function;
   function.kind = ComponentValue::Kind::Function;
   function.name = in.Next().value;
   for (;;) {
     const Token& next = in.Peek();
-    if (next.type == T::EndOfFile) return function;
+    if (next.type == T::EndOfFile) break;
     if (next.type == T::RightParen) {
       in.Next();
-      return function;
+      break;
     }
     function.children.push_back(ConsumeComponentValue(in));
   }
+  NoteAttrFunction(function);
+  return function;
 }
 
 ComponentValue ConsumeComponentValue(Stream& in) {

@@ -6,6 +6,7 @@
 
 #include "solar/css/Selectors.h"
 #include "solar/css/Syntax.h"
+#include "solar/css/WatchedAttributes.h"
 
 #include <algorithm>
 
@@ -327,6 +328,7 @@ class Parser {
     SimpleSelector simple;
     simple.kind = SimpleSelector::Kind::Attribute;
     simple.name = name->name;
+    WatchedAttributes::Watch(simple.name);
     simple.namespaceName = name->namespaceName;
     SkipWhitespace();
     // The end of the input closes what is open, as it does everywhere in CSS.

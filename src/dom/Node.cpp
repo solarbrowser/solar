@@ -5,6 +5,7 @@
  */
 
 #include "solar/dom/Node.h"
+#include "solar/css/WatchedAttributes.h"
 #include "solar/dom/MediaHook.h"
 #include "solar/dom/Damage.h"
 #include "solar/dom/CustomElements.h"
@@ -1269,6 +1270,12 @@ void AppendCharacterData(CharacterData* node, std::string_view data) {
   NoteTextChange(wasEmpty, node->data.empty());
 }
 
+// An attribute that nothing of style reads (a data-* or aria-* that no selector and no attr() looks at): changing it tells style and layout nothing, which would otherwise
+// make again the style of every element above it and build again their boxes. What they keep of its element is still brought up to date at the commit.
+static bool AttributeIsInert(const Attr& attribute) {
+  return attribute.namespaceUri.empty() && css::WatchedAttributes::IsUnwatchedCustom(attribute.localName);
+}
+
 void SetAttrValue(Attr* attribute, std::string value) {
   NoteAttributeName(attribute, attribute->ownerElement);
   Element* owner = attribute->ownerElement;
@@ -1277,11 +1284,14 @@ void SetAttrValue(Attr* attribute, std::string value) {
   attribute->KeepCommitted();
   attribute->value = std::move(value);
   const bool same = old == attribute->value;  // (what is written again as it was is no change for style and layout)
-  if (!same) NoteTreeChangeAt(owner);
+  const bool inert = owner && AttributeIsInert(*attribute);
+  if (!same && !inert) NoteTreeChangeAt(owner);
   if (owner && HasShadowTrees()) ShadowAttributeChanged(owner, attribute->localName, attribute->namespaceUri, old, attribute->value);
   if (owner) {
     CustomAttributeChanged(owner, attribute->localName, attribute->namespaceUri, old, attribute->value);
-    if (!same) {
+    if (!same && inert) {
+      MarkPending(owner, kPendingAttributes);
+    } else if (!same) {
       RecordAttrChange(owner, *attribute, old, attribute->value);
       NoteDamage(owner, kDamageAttributes);
     }
@@ -1297,12 +1307,17 @@ void AppendAttr(Element* element, Attr* attribute) {
   element->attributes.push_back(attribute);
   element->NoteWrite();
   attribute->NoteWrite();
-  NoteTreeChangeAt(element);
+  const bool inert = AttributeIsInert(*attribute);
+  if (!inert) NoteTreeChangeAt(element);
   if (HasMutationObservers()) QueueAttributeRecord(element, attribute->localName, attribute->namespaceUri, std::nullopt);
   if (HasShadowTrees()) ShadowAttributeChanged(element, attribute->localName, attribute->namespaceUri, std::nullopt, attribute->value);
   CustomAttributeChanged(element, attribute->localName, attribute->namespaceUri, std::nullopt, attribute->value);
-  RecordAttrChange(element, *attribute, "", attribute->value);
-  NoteDamage(element, kDamageAttributes);
+  if (inert) {
+    MarkPending(element, kPendingAttributes);
+  } else {
+    RecordAttrChange(element, *attribute, "", attribute->value);
+    NoteDamage(element, kDamageAttributes);
+  }
   if (g_hooks.attributeChanged) g_hooks.attributeChanged(element, attribute->localName);
 }
 
@@ -1667,11 +1682,16 @@ void RemoveAttributeNode(Element* element, Attr* attribute) {
   element->attributes.erase(std::find(element->attributes.begin(), element->attributes.end(), attribute));
   attribute->ownerElement = nullptr;
   attribute->NoteWrite();
-  NoteTreeChangeAt(element);
+  const bool inert = AttributeIsInert(*attribute);
+  if (!inert) NoteTreeChangeAt(element);
   if (HasShadowTrees()) ShadowAttributeChanged(element, attribute->localName, attribute->namespaceUri, attribute->value, std::nullopt);
   CustomAttributeChanged(element, attribute->localName, attribute->namespaceUri, attribute->value, std::nullopt);
-  RecordAttrChange(element, *attribute, attribute->value, "");
-  NoteDamage(element, kDamageAttributes);
+  if (inert) {
+    MarkPending(element, kPendingAttributes);
+  } else {
+    RecordAttrChange(element, *attribute, attribute->value, "");
+    NoteDamage(element, kDamageAttributes);
+  }
   if (g_hooks.attributeChanged) g_hooks.attributeChanged(element, attribute->localName);
 }
 
