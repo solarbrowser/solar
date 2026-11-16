@@ -1444,7 +1444,7 @@ static void MiHistogramPrintOnce(int at) {
   std::fprintf(stderr, "[mihist] pid %d at %d s live %.1f MB\n", static_cast<int>(::getpid()), at, static_cast<double>(total) / 1048576.0);
   std::vector<std::pair<size_t, std::pair<size_t, size_t>>> rows(hist.begin(), hist.end());
   std::sort(rows.begin(), rows.end(), [](const auto& x, const auto& y) { return x.second.second > y.second.second; });
-  for (size_t i = 0; i < rows.size() && i < 6; ++i) std::fprintf(stderr, "[mihist]   blocks of %9zu B: %9zu = %7.1f MB\n", rows[i].first, rows[i].second.first, static_cast<double>(rows[i].second.second) / 1048576.0);
+  for (size_t i = 0; i < rows.size() && i < 40; ++i) std::fprintf(stderr, "[mihist]   blocks of %9zu B: %9zu = %7.1f MB\n", rows[i].first, rows[i].second.first, static_cast<double>(rows[i].second.second) / 1048576.0);
 }
 // (A thread of its own only keeps the time: the allocator's blocks are walked by the page's thread, between two steps of its loop, since walking them while it allocates is not safe.)
 static void MiHistogramLater() {

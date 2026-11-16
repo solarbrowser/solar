@@ -1138,53 +1138,59 @@ struct StringKeyHash {
 // What was worked out for a style, by property: the values one after the other in the order they were made, and a small open-addressing table of their places by the number of the
 // property (its place in the list of properties). A page has a thousand styles and each answers a hundred and fifty properties; a node of a hash table per answer was 13 MB of the
 // 77 of Wikipedia, and its allocation and release a tenth of the time of making a style again.
+// The computed values of one element that have been worked out, by property. A full style has two hundred of them and a page has thousands of elements: each was a std::string in a vector
+// that grew by doubling (so room for 256 at the hundred and twenty-ninth: eight kilobytes), and a table to find them by; now the texts are in one string and what finds one is a short
+// record of where, sorted by the property's number: about a third of what it was (YouTube's page had five thousand of the eight-kilobyte blocks alone).
 class ComputedMap {
  public:
-  bool empty() const { return values_.empty(); }
-  const std::string* Find(std::string_view name) const {
-    if (values_.empty()) return nullptr;
+  bool empty() const { return entries_.empty(); }
+  // The value kept for the property: a view into the map, good until the map is written again.
+  std::optional<std::string_view> Find(std::string_view name) const {
+    if (entries_.empty()) return std::nullopt;
     const uint32_t key = Number(name);
-    if (key == kNone) return nullptr;
-    const size_t mask = slots_.size() - 1;
-    for (size_t at = Mix(key) & mask; slots_[at].place; at = (at + 1) & mask) {
-      if (slots_[at].key == key) return &values_[slots_[at].place - 1];
-    }
-    return nullptr;
+    if (key == kNone) return std::nullopt;
+    const auto at = Lower(static_cast<uint16_t>(key));
+    if (at == entries_.end() || at->key != key) return std::nullopt;
+    return std::string_view(arena_).substr(at->offset, at->length);
   }
-  std::string* Find(std::string_view name) { return const_cast<std::string*>(static_cast<const ComputedMap*>(this)->Find(name)); }
-  std::string& operator[](std::string_view name) {
-    const uint32_t key = Number(name);
-    if (key == kNone) {
-      static thread_local std::string discarded;
-      return discarded;
+  void Set(std::string_view name, std::string_view value) {
+    const uint32_t number = Number(name);
+    if (number == kNone) return;
+    const uint16_t key = static_cast<uint16_t>(number);
+    const auto at = Lower(key);
+    if (at != entries_.end() && at->key == key) {
+      Entry& entry = entries_[static_cast<size_t>(at - entries_.begin())];
+      if (value.size() <= entry.length) {  // (written again with the same or less: where it is)
+        arena_.replace(entry.offset, value.size(), value);
+        entry.length = static_cast<uint32_t>(value.size());
+        return;
+      }
+      entry.offset = static_cast<uint32_t>(arena_.size());
+      entry.length = static_cast<uint32_t>(value.size());
+      Room(value.size());
+      arena_.append(value);
+      return;
     }
-    if (slots_.empty() || (values_.size() + 1) * 2 > slots_.size()) Grow();
-    const size_t mask = slots_.size() - 1;
-    size_t at = Mix(key) & mask;
-    for (; slots_[at].place; at = (at + 1) & mask) {
-      if (slots_[at].key == key) return values_[slots_[at].place - 1];
-    }
-    slots_[at] = Slot{static_cast<uint16_t>(key), static_cast<uint16_t>(values_.size() + 1)};
-    keys_.push_back(static_cast<uint16_t>(key));
-    return values_.emplace_back();
+    const size_t place = static_cast<size_t>(at - entries_.begin());
+    // (Room is made a little at a time: a doubling vector holds as much again as it uses, for each of thousands of these.)
+    if (entries_.size() == entries_.capacity()) entries_.reserve(entries_.capacity() + 32);
+    Room(value.size());
+    const Entry entry{static_cast<uint32_t>(arena_.size()), static_cast<uint32_t>(value.size()), key};
+    arena_.append(value);
+    entries_.insert(entries_.begin() + static_cast<std::ptrdiff_t>(place), entry);
   }
 
  private:
-  struct Slot {
-    uint16_t key = 0;
-    uint16_t place = 0;  // 1 + the place in values_; 0: free
+  struct Entry {
+    uint32_t offset = 0, length = 0;
+    uint16_t key = 0;  // the number of the property
   };
   static constexpr uint32_t kNone = 0xFFFFFFFFu;
-  static size_t Mix(uint32_t key) { return (key * 2654435761u) >> 7; }
-  void Grow() {
-    std::vector<Slot> bigger(slots_.empty() ? 32 : slots_.size() * 2);
-    const size_t mask = bigger.size() - 1;
-    for (size_t i = 0; i < keys_.size(); ++i) {
-      size_t at = Mix(keys_[i]) & mask;
-      while (bigger[at].place) at = (at + 1) & mask;
-      bigger[at] = Slot{keys_[i], static_cast<uint16_t>(i + 1)};
-    }
-    slots_ = std::move(bigger);
+  std::vector<Entry>::const_iterator Lower(uint16_t key) const {
+    return std::lower_bound(entries_.begin(), entries_.end(), key, [](const Entry& e, uint16_t k) { return e.key < k; });
+  }
+  void Room(size_t more) {
+    if (arena_.size() + more > arena_.capacity()) arena_.reserve(arena_.size() + more + std::max<size_t>(128, arena_.capacity() / 4));
   }
   // The number of a property. A name that is not a property's (an alias, a custom property) has none, and is not kept here. The names are the list's, not copies.
   struct Named {
@@ -1212,9 +1218,8 @@ class ComputedMap {
     }
     return kNone;
   }
-  std::vector<std::string> values_;
-  std::vector<uint16_t> keys_;  // the number of the property of each value
-  std::vector<Slot> slots_;
+  std::vector<Entry> entries_;  // by the number of the property
+  std::string arena_;           // the values, one after the other
 };
 
 struct Memo {
@@ -3366,9 +3371,9 @@ std::string Resolver::ComputeInner(dom::Element* element, const std::string& pro
   if (!initialOnly) {
     ElementStyle& made = StyleOf(element, pseudo);
     if (made.built) {
-      if (const std::string* cached = made.memo->computed.Find(property)) {
+      if (const auto cached = made.memo->computed.Find(property)) {
         lastKind_ = "memo hit";
-        return *cached;
+        return std::string(*cached);
       }
     }
   }
@@ -3379,9 +3384,9 @@ std::string Resolver::ComputeInner(dom::Element* element, const std::string& pro
   ElementStyle& style = StyleOf(element, pseudo);
   const StyleHold hold;  // (what is computed from here on holds `style`: the cache is not emptied under it)
   if (!initialOnly) {
-    if (const std::string* cached = style.memo->computed.Find(name)) {
+    if (const auto cached = style.memo->computed.Find(name)) {
       lastKind_ = "memo hit";
-      return *cached;
+      return std::string(*cached);
     }
   }
   if (name.starts_with("--")) {
@@ -3412,7 +3417,7 @@ std::string Resolver::ComputeInner(dom::Element* element, const std::string& pro
   if (!initialOnly && plainInherit_ && valid) {
     plainInherit_ = false;
     style.resolving.erase("\x02" + name);
-    StyleOf(element, pseudo).memo->computed[name] = specified;
+    StyleOf(element, pseudo).memo->computed.Set(name, specified);
     lastKind_ = "inherited as it is";
     return specified;
   }
@@ -3420,7 +3425,7 @@ std::string Resolver::ComputeInner(dom::Element* element, const std::string& pro
   if (specified == "initial") {
     if (const std::string* fast = FastInitial(*definition)) {
       style.resolving.erase("\x02" + name);
-      if (!initialOnly) StyleOf(element, pseudo).memo->computed[name] = *fast;
+      if (!initialOnly) StyleOf(element, pseudo).memo->computed.Set(name, *fast);
       lastKind_ = "fast initial";
       return *fast;
     }
@@ -3430,7 +3435,7 @@ std::string Resolver::ComputeInner(dom::Element* element, const std::string& pro
   lastKind_ = specified == "initial" ? "initial, finished" : "declared, finished";
   if (specified == "initial") NoteInitial(*definition, result);
   style.resolving.erase("\x02" + name);
-  if (!initialOnly) StyleOf(element, pseudo).memo->computed[name] = result;
+  if (!initialOnly) StyleOf(element, pseudo).memo->computed.Set(name, result);
   return result;
 }
 
@@ -4773,7 +4778,7 @@ std::string StyleReader::Get(const char* property) {
   if (memo_ && version_ == now && !AnimatedValuesSuppressed() && !StartingStyleFor(element_, pseudo_) &&
       (!element_->nodeDocument->animationStyleSeen || element_->nodeDocument->styleFlushedVersion == FlushVersion())) {
     const Memo& memo = *static_cast<const Memo*>(memo_.get());
-    if (const std::string* found = memo.computed.Find(std::string_view(property))) return *found;
+    if (const auto found = memo.computed.Find(std::string_view(property))) return std::string(*found);
   }
   std::string value = ComputedValue(ctx_, element_, property, pseudo_);
   // After a first answer the style of the element is made, and what is asked next is found in it (unless the document asks for more: containers, animations).
@@ -4798,11 +4803,11 @@ std::string ResolvedValue(Quanta::Context& ctx, dom::Element* element, const std
       bool rendered = true;
       if (property != "display") {
         const ElementStyle& made = StyleOf(element, pseudo);
-        const std::string* display = made.memo->computed.Find("display");
+        const auto display = made.memo->computed.Find("display");
         rendered = !display || *display != "none";
         if (rendered && !pseudo.empty()) {
           const ElementStyle& owner = StyleOf(element, "");
-          const std::string* ownerDisplay = owner.memo->computed.Find("display");
+          const auto ownerDisplay = owner.memo->computed.Find("display");
           rendered = !ownerDisplay || *ownerDisplay != "none";
         }
       }
