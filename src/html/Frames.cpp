@@ -113,6 +113,22 @@ std::optional<std::string> LoadNoCorsResource(const std::string& url, bool style
   return g_environment->LoadNoCors(url, styleSheet);
 }
 
+std::shared_ptr<const std::string> LoadNoCorsSharedResource(const std::string& url) {
+  if (url.starts_with("blob:") || url.starts_with("data:") || !g_environment) {
+    std::optional<std::string> text = LoadResource(url);
+    return text ? std::make_shared<const std::string>(std::move(*text)) : nullptr;
+  }
+  return g_environment->LoadNoCorsShared(url, false);
+}
+
+std::shared_ptr<const std::string> LoadModuleSharedResource(const std::string& url) {
+  if (url.starts_with("blob:") || url.starts_with("data:") || !g_environment) {
+    std::optional<std::string> text = LoadResource(url);
+    return text ? std::make_shared<const std::string>(std::move(*text)) : nullptr;
+  }
+  return g_environment->LoadModuleShared(url);
+}
+
 // A module script: asked for with CORS.
 std::optional<std::string> LoadModuleResource(const std::string& url) {
   if (url.starts_with("blob:") || url.starts_with("data:") || !g_environment) return LoadResource(url);
@@ -277,18 +293,24 @@ bool RunScript(Quanta::Embed::Realm& realm, dom::Document* document, dom::Elemen
   // Anything else that has a type is data, which the page reads itself.
   if (kind != "text/javascript") return true;
   std::string code, filename = document->url;
+  std::shared_ptr<const std::string> shared;  // a script with an address: the text as it is kept (by the environment, for the next page), not a copy of it
   if (const dom::Attr* source = script->FindAttribute("", "src")) {
     const std::string address = Resolve(source->value, BaseOf(document));
     if (g_environment && g_environment->SkipScript(address)) return true;
     if (!ScriptAllowed(realm.GetContext(), document, script, &address)) return true;
-    std::optional<std::string> loaded = LoadNoCorsResource(address);  // (a data: or blob: address is read here, not asked of the environment)
+    std::shared_ptr<const std::string> loaded = LoadNoCorsSharedResource(address);  // (a data: or blob: address is read here, not asked of the environment)
     if (!loaded) {
       if (g_environment) g_environment->ScriptFailed("cannot load script " + source->value);
       FireEvent(realm.GetContext(), script, "error");
       return false;
     }
-    code = std::move(*loaded);
+    shared = std::move(loaded);
     filename = address;
+    // (What changes or looks at the text is for the one who tries it: it works on a copy.)
+    if (std::getenv("SOLAR_PATCH_RE") || std::getenv("SOLAR_DUMP_SCRIPTS") || std::getenv("SOLAR_REPLACE")) {
+      code = *shared;
+      shared.reset();
+    }
     // (SOLAR_PATCH_RE and SOLAR_PATCH_TO: a regular expression and its replacement are applied to the scripts of the pages, for finding what a script does that is made to be unreadable.)
     // (SOLAR_PATCH_RE2 and SOLAR_PATCH_TO2, and so on up to 4: more of them, applied in order.)
     for (const char* suffix : {"", "2", "3", "4"}) {
@@ -333,9 +355,9 @@ bool RunScript(Quanta::Embed::Realm& realm, dom::Document* document, dom::Elemen
   dom::Element* previous = document->currentScript;
   document->currentScript = inDocument ? script : nullptr;
   // A script that is loaded from an address can be compiled once and run in every realm that has it.
-  std::shared_ptr<qe::Script> compiled = script->FindAttribute("", "src") && g_environment ? g_environment->CompileScript(filename, code) : nullptr;
+  std::shared_ptr<qe::Script> compiled = script->FindAttribute("", "src") && g_environment ? (shared ? g_environment->CompileScript(filename, shared) : g_environment->CompileScript(filename, code)) : nullptr;
   const auto scriptStart = std::chrono::steady_clock::now();
-  const qe::EvaluateResult result = compiled ? realm.EvaluateScript(*compiled) : realm.Evaluate(code, filename);
+  const qe::EvaluateResult result = compiled ? realm.EvaluateScript(*compiled) : realm.Evaluate(shared ? *shared : code, filename);
   g_scriptMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - scriptStart).count();
   document->currentScript = previous;
   if (g_environment) g_environment->RunJobs();

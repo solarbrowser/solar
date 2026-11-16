@@ -334,7 +334,9 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     int status = 0;
     bool done = false, failed = false;
     bool viaWorker = false;  // asked of the page's service worker (what it made is that page's, not to be kept for the next)
-    std::string body, contentType;
+    // The body is held as a shared text once it is here: a script is compiled from the very text (the compiled script holds it too), and the page after this one that asks for the address has it.
+    std::shared_ptr<std::string> body = std::make_shared<std::string>();
+    std::string contentType;
     solar::net::FetchHandle handle;
     Clock::time_point started = Clock::now();
     std::vector<std::function<void()>> whenDone;  // asked to be called when it is here
@@ -349,10 +351,10 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
         if (lower == "content-type") contentType = value;
       }
     }
-    void OnBody(std::span<const uint8_t> data) override { body.append(reinterpret_cast<const char*>(data.data()), data.size()); }
+    void OnBody(std::span<const uint8_t> data) override { body->append(reinterpret_cast<const char*>(data.data()), data.size()); }
     void OnEnd() override { Finish(); }
     void OnRestart() override {
-      body.clear();
+      body = std::make_shared<std::string>();
       status = 0;
       contentType.clear();
     }
@@ -365,7 +367,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     void Finish() {
       done = true;
       // (The body grew by the piece, and a string that did that holds room for a good part more than it has: a script of 9.8 MB held 16.)
-      body.shrink_to_fit();
+      body->shrink_to_fit();
       if (counted) {
         counted = false;
         --owner->imagesInFlight_;
@@ -374,7 +376,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
       auto callbacks = std::move(whenDone);
       whenDone.clear();
       struct Run { std::vector<std::function<void()>>& list; ~Run() { for (auto& call : list) call(); } } run{callbacks};
-      if (owner->timing_) std::fprintf(stderr, "  fetch %5.0f ms  %7zu bytes  %s\n", std::chrono::duration<double, std::milli>(Clock::now() - started).count(), body.size(), url.substr(0, 100).c_str());
+      if (owner->timing_) std::fprintf(stderr, "  fetch %5.0f ms  %7zu bytes  %s\n", std::chrono::duration<double, std::milli>(Clock::now() - started).count(), body->size(), url.substr(0, 100).c_str());
       if (owner->waiting_ == this) owner->loop_.Stop();
       if (owner->layoutImages_.erase(url)) {
         owner->sizesArrived_ = true;
@@ -560,7 +562,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     } else {
       resource->status = status;
       resource->contentType = contentType;
-      resource->body = std::move(body);
+      resource->body = std::make_shared<std::string>(std::move(body));
     }
     resource->Finish();
   }
@@ -624,6 +626,8 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
   std::optional<std::string> Load(const std::string& url) override { return LoadAs(url, Kind::Generic); }
   // A script or a style sheet, with no CORS (a response from another origin that Opaque Response Blocking blocks comes back with no text); a module and a font, with it.
   std::optional<std::string> LoadNoCors(const std::string& url, bool styleSheet) override { return LoadAs(url, styleSheet ? Kind::Style : Kind::Script); }
+  std::shared_ptr<const std::string> LoadNoCorsShared(const std::string& url, bool styleSheet) override { return LoadSharedAs(url, styleSheet ? Kind::Style : Kind::Script); }
+  std::shared_ptr<const std::string> LoadModuleShared(const std::string& url) override { return LoadSharedAs(url, Kind::Module); }
   std::optional<std::string> LoadModule(const std::string& url) override { return LoadAs(url, Kind::Module); }
   // The document of a frame that is navigated.
   std::optional<std::string> LoadNavigation(const std::string& url) override { return LoadAs(url, Kind::Document); }
@@ -641,6 +645,22 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     if (resource->failed || resource->status < 200 || resource->status >= 300) {
       std::fprintf(stderr, "  [%d%s] %s%s%s\n", resource->status, resource->failed ? " failed" : "", url.c_str(), resource->error.empty() ? "" : "  : ", resource->error.c_str());
       return std::nullopt;
+    }
+    return *resource->body;
+  }
+  // The same without a copy: the text as the resource holds it.
+  std::shared_ptr<const std::string> LoadSharedAs(const std::string& url, Kind kind) {
+    if (url.starts_with("file://")) {
+      std::string contents;
+      if (!ReadFile(solar::gui::FileOfAddress(url), contents)) return nullptr;
+      return std::make_shared<const std::string>(std::move(contents));
+    }
+    Resource* resource = Start(url, kind);
+    if (!resource) return nullptr;
+    WaitFor(resource);
+    if (resource->failed || resource->status < 200 || resource->status >= 300) {
+      std::fprintf(stderr, "  [%d%s] %s%s%s\n", resource->status, resource->failed ? " failed" : "", url.c_str(), resource->error.empty() ? "" : "  : ", resource->error.c_str());
+      return nullptr;
     }
     return resource->body;
   }
@@ -667,7 +687,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
   }
   size_t CachedBytes() const {
     size_t total = 0;
-    for (const auto& entry : resources_) total += entry.second->body.size();
+    for (const auto& entry : resources_) total += entry.second->body->size();
     return total;
   }
   // What was fetched is kept for the next page to use; past `limit` bytes it is let go (what is being fetched stays).
@@ -816,7 +836,10 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     return solar::html::FrameEnvironment::ContentType(url);
   }
 
-  std::shared_ptr<qe::Script> CompileScript(const std::string& address, const std::string& code) override {
+  std::shared_ptr<qe::Script> CompileScript(const std::string& address, const std::string& code) override { return CompileText(address, std::make_shared<const std::string>(code)); }
+  std::shared_ptr<qe::Script> CompileScript(const std::string& address, std::shared_ptr<const std::string> text) override { return CompileText(address, std::move(text)); }
+  std::shared_ptr<qe::Script> CompileText(const std::string& address, std::shared_ptr<const std::string> shared) {
+    const std::string& code = *shared;
     // What was compiled for the address is taken again if the text is the same: told by its size and two hashes, not by a copy of it (the compiled script keeps the text it was made from, and a
     // page's scripts are megabytes: a third copy of each was held only to be compared).
     const uint64_t size = code.size();
@@ -839,7 +862,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     }
     auto found = scripts_.find(address);
     if (found != scripts_.end() && found->second.size == size && found->second.hashA == a && found->second.hashB == b) return found->second.script;
-    qe::CompileResult result = isolate_.CompileScript(code, address);
+    qe::CompileResult result = isolate_.CompileScript(std::move(shared), address);
     if (!result.script) return nullptr;
     scripts_[address] = {size, a, b, result.script};
     return result.script;
@@ -1390,7 +1413,31 @@ int main(int argc, char** argv) {
 
 namespace {
 
+// SOLAR_MIHIST=<seconds>: after that long the live memory of the process's allocator is written to the error output (the total, and the blocks that hold the most, by their size), for
+// seeing what a change to what a page keeps in memory did without the noise of what the collector had given back by then.
+static bool MiVisit(const mi_heap_t*, const mi_heap_area_t* area, void* block, size_t, void* arg) {
+  if (!block) return true;
+  auto* hist = static_cast<std::map<size_t, std::pair<size_t, size_t>>*>(arg);
+  auto& entry = (*hist)[area->block_size];
+  entry.first += 1;
+  entry.second += area->block_size;
+  return true;
+}
+static void MiHistogramLater() {
+  const char* seconds = std::getenv("SOLAR_MIHIST");
+  if (!seconds) return;
+  std::thread([after = std::atoi(seconds)] {
+    std::this_thread::sleep_for(std::chrono::seconds(after));
+    std::map<size_t, std::pair<size_t, size_t>> hist;
+    mi_heap_visit_blocks(mi_heap_main(), true, MiVisit, &hist);
+    size_t total = 0;
+    for (const auto& [size, count] : hist) total += count.second;
+    std::fprintf(stderr, "[mihist] pid %d live %.1f MB\n", static_cast<int>(::getpid()), static_cast<double>(total) / 1048576.0);
+  }).detach();
+}
+
 int PageMain(Shared& shared, int argc, char** argv) {
+  MiHistogramLater();
   const auto programStart = Clock::now();
   const std::string given = argc > 1 ? argv[1] : "https://example.com/";
   std::string address = AddressOf(given);

@@ -48,6 +48,15 @@ class FrameEnvironment {
   virtual std::optional<std::string> LoadNoCors(const std::string& url, bool /*styleSheet*/) { return Load(url); }
   // The same for a module script and for a font, which are asked for with CORS (the server has to allow the page's origin).
   virtual std::optional<std::string> LoadModule(const std::string& url) { return Load(url); }
+  // The same for a script and a module, as the text the environment keeps (what was fetched stays for the next page): the compiled script holds it too, and neither is a copy.
+  virtual std::shared_ptr<const std::string> LoadNoCorsShared(const std::string& url, bool styleSheet) {
+    std::optional<std::string> text = LoadNoCors(url, styleSheet);
+    return text ? std::make_shared<const std::string>(std::move(*text)) : nullptr;
+  }
+  virtual std::shared_ptr<const std::string> LoadModuleShared(const std::string& url) {
+    std::optional<std::string> text = LoadModule(url);
+    return text ? std::make_shared<const std::string>(std::move(*text)) : nullptr;
+  }
   virtual std::optional<std::string> LoadFont(const std::string& url) { return Load(url); }
 
   // What the resource at the URL is, as the Content-Type header would say: text/html, or an XML type.
@@ -72,6 +81,7 @@ class FrameEnvironment {
   // The script at `address` compiled, if the environment keeps compiled scripts (one parse for every realm that runs it).
   // Null: the page compiles it itself.
   virtual std::shared_ptr<Quanta::Embed::Script> CompileScript(const std::string&, const std::string&) { return nullptr; }
+  virtual std::shared_ptr<Quanta::Embed::Script> CompileScript(const std::string& address, std::shared_ptr<const std::string> code) { return CompileScript(address, *code); }
 
   // Runs the jobs script has queued: the microtask checkpoint, after a script has run.
   virtual void RunJobs() = 0;
@@ -171,6 +181,7 @@ std::string DocumentBaseUrl(const dom::Document* document);
 std::optional<std::string> LoadResource(const std::string& url);
 // The same for a module script (asked for with CORS).
 std::optional<std::string> LoadModuleResource(const std::string& url);
+std::shared_ptr<const std::string> LoadModuleSharedResource(const std::string& url);
 // Starts getting a resource that is wanted later, without waiting for it.
 void PrefetchResource(const std::string& url);
 // Whether what is being loaded is a style sheet (the page is not to be drawn while it is waited for).

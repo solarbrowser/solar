@@ -239,11 +239,11 @@ std::vector<std::string> ImportedNames(const std::string& text) {
 }
 
 void Fetch(qe::Realm* realm, const std::string& address, const std::string& type, std::function<void(qe::ModuleSource)> done) {
-  std::optional<std::string> text;
+  std::shared_ptr<const std::string> text;
   if (address.starts_with("data:")) {
-    if (auto data = DecodeDataUrl(address)) text = std::move(data->first);
+    if (auto data = DecodeDataUrl(address)) text = std::make_shared<const std::string>(std::move(data->first));
   } else {
-    text = LoadModuleResource(address);
+    text = LoadModuleSharedResource(address);
   }
   // The modules this one imports are on their way before anything waits for them, one after another otherwise.
   if (text && !address.starts_with("data:")) {
@@ -264,8 +264,8 @@ void Fetch(qe::Realm* realm, const std::string& address, const std::string& type
     done(qe::ModuleSource::Failure("Failed to fetch module " + VisibleModuleUrl(address)));
     return;
   }
-  if (type.empty()) done(qe::ModuleSource::Script(std::move(*text)));
-  else if (type == "json") done(qe::ModuleSource::Json(std::move(*text)));
+  if (type.empty()) done(qe::ModuleSource::ScriptShared(std::move(text)));
+  else if (type == "json") done(qe::ModuleSource::Json(*text));
   else done(qe::ModuleSource::Failure("Unsupported module type \"" + type + "\""));
 }
 
