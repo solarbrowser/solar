@@ -82,7 +82,9 @@ Value Metrics(Context& ctx, Value, qe::Args args, Value) {
     clientHeight = tree->viewportHeight;
   }
   double scrollWidth = clientWidth, scrollHeight = clientHeight;
-  if (!inlineBox) {
+  // (The second argument says whether the scrolled size is wanted: it is worked out by walking what the box holds, and offsetWidth and clientWidth ask for none of it.)
+  const bool wantScroll = args.size() < 2 || qe::ToBoolean(args[1]);
+  if (!inlineBox && wantScroll) {
     const bool viewportBox = isRoot;
     const Box& scroller = viewportBox ? *tree->root : *box;
     const Rect overflow = ScrollableOverflow(*tree, scroller, viewportBox ? element : nullptr);

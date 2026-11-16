@@ -142,7 +142,11 @@ std::vector<Node*>& DirtyLinks() {
 
 void MarkPending(Node* node, uint8_t kinds) {
   if (!node) return;
-  if (!node->pendingMask) DirtyLinks().push_back(node);
+  if (!node->pendingMask) {
+    std::vector<Node*>& list = DirtyLinks();
+    node->dirtyIndex = static_cast<uint32_t>(list.size());
+    list.push_back(node);
+  }
   node->pendingMask |= kinds;
 }
 
@@ -345,6 +349,7 @@ void CommitPending() {
   g_committedStateVersion = g_stateVersion;
   std::vector<Node*>& list = DirtyLinks();
   for (Node* node : list) {
+    if (!node) continue;  // (it died before this: see ~Node)
     const uint8_t mask = node->pendingMask;
     node->pendingMask = 0;
     if (mask & kPendingLinks) {
@@ -512,8 +517,10 @@ Node::~Node() {
     controls.erase(std::remove_if(controls.begin(), controls.end(), [this](Element* e) { return static_cast<Node*>(e) == this; }), controls.end());
   }
   if (pendingMask) {
+    // (Not erased from the list: that was a search of all of it for each of the nodes that die dirty, which a script that makes and drops tens of thousands
+    // of them between two frames made quadratic. Its place is emptied, and CommitPending skips what is empty.)
     std::vector<Node*>& list = DirtyLinks();
-    list.erase(std::remove(list.begin(), list.end(), this), list.end());
+    if (dirtyIndex < list.size() && list[dirtyIndex] == this) list[dirtyIndex] = nullptr;
   }
 }
 size_t LiveNodes() { return g_liveNodes; }

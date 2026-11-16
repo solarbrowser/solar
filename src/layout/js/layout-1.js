@@ -79,7 +79,8 @@
   const getter = (proto, name, index, transform) => {
     define(proto, name, {
       get() {
-        return transform(metrics(element(this))[index]);
+        // (How far the content scrolls is only worked out for the two that ask: it walks what the box holds.)
+        return transform(metrics(element(this), index === 4 || index === 5)[index]);
       },
     });
   };
@@ -181,12 +182,12 @@
     define(html, name, {
       get() {
         const el = element(this);
-        const m = metrics(el);
+        const m = metrics(el, false);
         if (!m[10]) return 0;
         const parent = offsetParentOf(el);
         let value = m[index];
         if (parent && !(parent instanceof HTMLBodyElement)) {
-          const pm = metrics(parent);
+          const pm = metrics(parent, false);
           // relative to the padding edge of the parent: its border box position plus its border
           value -= pm[index] + pm[axis === 'top' ? 0 : 1];
         }

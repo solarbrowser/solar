@@ -169,6 +169,7 @@ struct Node : web::JsEventTarget {
   } committed;
   bool controlDirty = false;  // a form control: what it shows may have changed, and the script of the window is asked for it again before the next frame
   uint8_t pendingMask = 0;  // what of it changed since it was committed (kPending...: it is in the list of CommitPending)
+  uint32_t dirtyIndex = 0;  // where it is in that list (while pendingMask is set), so that a node that dies before it is committed leaves it at once
   // The document the node belongs to; null only for a Document itself.
   Document* nodeDocument = nullptr;
   // What script gets from childNodes and children, which is the same object each time.

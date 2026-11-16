@@ -4186,7 +4186,7 @@ StyleReuse StyleReuseFor(dom::Document* document) {
   struct Entry {
     dom::Document* document = nullptr;
     uint64_t author = 0;
-    std::vector<CssStyleSheet*> sheets;
+    std::shared_ptr<const std::vector<CssStyleSheet*>> sheets;
     StyleReuse reuse;
   };
   static Entry entry;
@@ -4194,8 +4194,10 @@ StyleReuse StyleReuseFor(dom::Document* document) {
   // (Adopted style sheets are in the sheets: the array tells of every change of it. A container query is of a size that layout finds, not of the elements.)
   // (A container query is of a size that layout finds: when sizes are being animated, the styles are made anew.)
   if (!document || (document->containerQueriesSeen && AnyAnimationAffectsSizes())) return none;
-  const std::vector<CssStyleSheet*> sheets = SheetsOfTree(document, document->context);
-  if (entry.document == document && entry.author == g_authorVersion && entry.sheets == sheets && entry.reuse.shadows == dom::HasShadowTrees()) return entry.reuse;
+  // (The list that is kept for the tree, not a copy of it for each element that asks: with a hundred style sheets that was most of what this did when nothing had changed.)
+  const std::shared_ptr<const std::vector<CssStyleSheet*>> sheetsShared = SheetsOfTreeShared(document, document->context);
+  const std::vector<CssStyleSheet*>& sheets = *sheetsShared;
+  if (entry.document == document && entry.author == g_authorVersion && (entry.sheets == sheetsShared || (entry.sheets && *entry.sheets == sheets)) && entry.reuse.shadows == dom::HasShadowTrees()) return entry.reuse;
   SelectorFeatures f;
   for (const CssStyleSheet* sheet : sheets) ScanRules(sheet->rules, f, 0);
   {
@@ -4214,7 +4216,7 @@ StyleReuse StyleReuseFor(dom::Document* document) {
   }
   entry.document = document;
   entry.author = g_authorVersion;
-  entry.sheets = sheets;
+  entry.sheets = sheetsShared;
   entry.reuse = {!f.dynamic, f.structural, f.sibling, dom::HasShadowTrees(), f.has, f.stateAncestor};
   StateCompounds().clear();
   StateUnknown() = f.stateUnknown;
