@@ -53,13 +53,13 @@ void Node::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(lastChild);
   visitor.Mark(previousSibling);
   visitor.Mark(nextSibling);
-  // (A node that left the tree stays reachable from the committed tree until the next commit.)
-  visitor.Mark(committed.parent);
-  visitor.Mark(committed.first);
-  visitor.Mark(committed.last);
-  visitor.Mark(committed.previous);
-  visitor.Mark(committed.next);
-  visitor.Mark(committed.assignedSlot);
+  // (A node that left the tree stays reachable from the committed tree until the next commit. What is the same as the field above is marked by it already.)
+  if (committed.parent != parentNode) visitor.Mark(committed.parent);
+  if (committed.first != firstChild) visitor.Mark(committed.first);
+  if (committed.last != lastChild) visitor.Mark(committed.last);
+  if (committed.previous != previousSibling) visitor.Mark(committed.previous);
+  if (committed.next != nextSibling) visitor.Mark(committed.next);
+  if (committed.assignedSlot != assignedSlot) visitor.Mark(committed.assignedSlot);
   visitor.Mark(nodeDocument);
   visitor.Mark(childNodesList);
   visitor.Mark(childrenList);
@@ -111,8 +111,10 @@ void Element::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(contentDocument);
   visitor.Mark(contentWindow);
   for (Attr* attribute : attributes) visitor.Mark(attribute);
-  for (Attr* attribute : committedAttributes) visitor.Mark(attribute);
-  visitor.Mark(committedShadowRoot);
+  if (committedAttributes != attributes) {
+    for (Attr* attribute : committedAttributes) visitor.Mark(attribute);
+  }
+  if (committedShadowRoot != shadowRoot) visitor.Mark(committedShadowRoot);
   visitor.Mark(attributeMap);
   visitor.Mark(tokenList);
   visitor.Mark(styleSheet);
