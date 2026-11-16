@@ -302,21 +302,21 @@ std::string CssDeclarations::ValueOf(const std::string& given) const {
   }
   const PropertyDefinition* named = FindProperty(given);
   const std::string name = named ? named->name : given;  // a legacy name is its property
-  if (name == "all" && !computedElement) {
+  if (name == "all" && !computedElement()) {
     const auto keyword = AllKeyword(items);
     return keyword ? keyword->first : "";
   }
   const PropertyDefinition* definition = FindProperty(name);
-  if (computedElement) {
-    if (name.starts_with("--")) return ComputedValue(*computedContext, computedElement, name, computedPseudo);
+  if (computedElement()) {
+    if (name.starts_with("--")) return ComputedValue(*computedContext(), computedElement(), name, computedPseudo());
     if (!definition) return "";
     if (IsShorthandProperty(*definition)) {
       std::vector<DeclarationEntry> leaves;
-      for (const std::string& leaf : LeavesOf(*definition)) leaves.push_back({leaf, ResolvedValue(*computedContext, computedElement, leaf, computedPseudo), false, "", ""});
+      for (const std::string& leaf : LeavesOf(*definition)) leaves.push_back({leaf, ResolvedValue(*computedContext(), computedElement(), leaf, computedPseudo()), false, "", ""});
       std::optional<bool> important;
       return ShorthandValue(leaves, *definition, important).value_or("");
     }
-    return ResolvedValue(*computedContext, computedElement, name, computedPseudo);
+    return ResolvedValue(*computedContext(), computedElement(), name, computedPseudo());
   }
   if (definition && IsShorthandProperty(*definition)) {
     std::optional<bool> important;
@@ -458,7 +458,7 @@ void CssDeclarations::Changed(Context& ctx) {
 void CssDeclarations::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(parentRule);
   visitor.Mark(ownerElement);
-  visitor.Mark(computedElement);
+  visitor.Mark(computedElement());
 }
 
 // ---- Media ----

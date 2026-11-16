@@ -135,14 +135,14 @@ bool InDocument(dom::Element* element) {
 }  // namespace
 
 uint32_t CssDeclarations::IndexedLength(Context&, CssDeclarations& self) {
-  if (self.computedElement) return InDocument(self.computedElement) ? static_cast<uint32_t>(ComputedPropertyNames().size()) : 0;
+  if (self.computedElement()) return InDocument(self.computedElement()) ? static_cast<uint32_t>(ComputedPropertyNames().size()) : 0;
   return static_cast<uint32_t>(self.items.size());
 }
 
 bool CssDeclarations::IndexedGetter(Context& ctx, CssDeclarations& self, uint32_t index, Value& out) {
-  if (self.computedElement) {
+  if (self.computedElement()) {
     const std::vector<std::string>& names = ComputedPropertyNames();
-    if (index >= names.size() || !InDocument(self.computedElement)) return false;
+    if (index >= names.size() || !InDocument(self.computedElement())) return false;
     out = qe::FromWtf8(ctx, names[index]);
     return true;
   }
@@ -1202,9 +1202,9 @@ Value GetComputedStyle(Context& ctx, Value, qe::Args args, Value) {
     }
   }
   if (known) {
-    declarations->computedElement = element;
-    declarations->computedContext = element->nodeDocument && element->nodeDocument->context ? element->nodeDocument->context : &ctx;
-    declarations->computedPseudo = pseudo;
+    declarations->ComputedMut().element = element;
+    declarations->ComputedMut().context = element->nodeDocument && element->nodeDocument->context ? element->nodeDocument->context : &ctx;
+    declarations->ComputedMut().pseudo = pseudo;
   }
   return qe::FromObject(declarations);
 }

@@ -113,9 +113,17 @@ struct CssDeclarations : Quanta::DOMObject {
   bool readonly = false;                  // computed style
   bool updatingAttribute = false;
   // getComputedStyle's: the element the values are the computed ones of, read when they are asked for.
-  dom::Element* computedElement = nullptr;
-  Quanta::Context* computedContext = nullptr;
-  std::string computedPseudo;   // "before", "after"...: the style of the pseudo-element
+  // Only those objects have it, so it is made for them and the others keep one pointer.
+  struct Computed {
+    dom::Element* element = nullptr;
+    Quanta::Context* context = nullptr;
+    std::string pseudo;   // "before", "after"...: the style of the pseudo-element
+  };
+  dom::Element* computedElement() const { return computed_ ? computed_->element : nullptr; }
+  Quanta::Context* computedContext() const { return computed_->context; }
+  const std::string& computedPseudo() const { return computed_->pseudo; }
+  Computed& ComputedMut() { if (!computed_) computed_ = std::make_unique<Computed>(); return *computed_; }
+  std::unique_ptr<Computed> computed_;
 
   // The CSSOM serialization of the block: "a: b; c: d !important;".
   std::string Serialize() const;
