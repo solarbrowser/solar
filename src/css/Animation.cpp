@@ -289,6 +289,21 @@ void SetAnimatedValues(dom::Element* element, const std::string& pseudo, Animate
     }
   }
   ++element->animVersion;
+  // Properties nothing is drawn from (the dashes of the stroke of an SVG shape: this engine draws none): the values are kept, for what asks for them, and nothing above is told, nothing is
+  // laid out or drawn again. (A page can have a loading mark that turns for ever, in a corner nobody sees.)
+  {
+    static const std::set<std::string> unpainted = {"stroke-dasharray", "stroke-dashoffset"};
+    const auto& heldNow = element->RareOrEmpty().animatedValues;
+    const auto now = heldNow.find(pseudo);
+    if (now != heldNow.end() && !now->second.empty()) {
+      bool all = true;
+      for (const auto& entry : now->second) all = all && unpainted.count(entry.first);
+      if (all) {
+        dom::MarkPending(element, dom::kPendingVersions);
+        return;
+      }
+    }
+  }
   // (This is script's doing, as the flush of animations is script: the pending tree is what it walks.)
   for (dom::Node* n = element; n; n = n->parentNode) {
     if (n->IsElement()) {
@@ -303,6 +318,9 @@ void SetAnimatedValues(dom::Element* element, const std::string& pseudo, Animate
                                                  "background-position", "stop-color", "fill-opacity", "stroke-opacity"};
   static const std::set<std::string> notInherited = {"opacity", "transform", "translate", "rotate", "scale", "filter", "backdrop-filter", "box-shadow", "clip-path", "background-color",
                                                      "border-color", "outline-color", "background-position", "mask-position", "-webkit-transform", "-webkit-filter", "-webkit-backdrop-filter", "-webkit-box-shadow"};
+  // The paint properties of SVG shapes that are inherited: for an element with nothing in it there is nothing to inherit them, and changing one is as much a change of drawing as an opacity.
+  static const std::set<std::string> inheritedPaint = {"stroke-dashoffset", "stroke-dasharray", "stroke-opacity", "fill-opacity", "stroke", "fill"};
+  const bool leaf = element->firstChild == nullptr;
   static std::set<const dom::Element*> sizingElements;
   bool sizing = false, itself = true;
   const auto& heldNow = element->RareOrEmpty().animatedValues;
@@ -310,7 +328,7 @@ void SetAnimatedValues(dom::Element* element, const std::string& pseudo, Animate
   if (now != heldNow.end()) {
     for (const auto& entry : now->second) {
       sizing = sizing || !(drawOnly.count(entry.first) || DrawOnlyColor(entry.first));
-      itself = itself && (notInherited.count(entry.first) || (DrawOnlyColor(entry.first) && entry.first != "caret-color" && entry.first != "accent-color"));
+      itself = itself && (notInherited.count(entry.first) || (leaf && inheritedPaint.count(entry.first)) || (DrawOnlyColor(entry.first) && entry.first != "caret-color" && entry.first != "accent-color"));
     }
   } else {
     itself = false;  // (it ended: what was there before is what changes)
@@ -322,7 +340,7 @@ void SetAnimatedValues(dom::Element* element, const std::string& pseudo, Animate
   bool drawFast = !noFast && pseudo.empty() && !sizing && itself && now != heldNow.end() && element->nodeDocument && !sizingElements.count(element);
   if (drawFast) {
     for (const auto& entry : now->second) {
-      if (!boxDrawn.count(entry.first) && !(DrawOnlyColor(entry.first) && entry.first != "color" && entry.first != "caret-color" && entry.first != "accent-color")) { drawFast = false; break; }
+      if (!boxDrawn.count(entry.first) && !inheritedPaint.count(entry.first) && !(DrawOnlyColor(entry.first) && entry.first != "color" && entry.first != "caret-color" && entry.first != "accent-color")) { drawFast = false; break; }
     }
   }
   if (drawFast) {
