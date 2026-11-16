@@ -590,7 +590,9 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
       // (In the middle of working out a style nothing of the page runs: its script would change what the computation holds.)
       static const bool tasksInStyle = std::getenv("SOLAR_TASKS_IN_STYLE") != nullptr;
       if (!tasksInStyle && solar::css::StyleComputationActive()) {
+        const auto tNet = Clock::now();
         events_.StepNetworkOnly(std::chrono::milliseconds(8));
+        if (!resource->done && since(tNet) < 1.0) std::this_thread::sleep_for(std::chrono::milliseconds(2));  // (it returns at once when nothing is on the network: see below)
         const auto t = Clock::now();
         if (pump_) pump_();
         inPump += since(t);
@@ -748,7 +750,9 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     solar::dom::CommittedViewSuspend suspend;
     const auto waitStart = Clock::now();
     while (collector.body.size() <= have && !collector.done) {
+      const auto tStep = Clock::now();
       events_.Step(std::chrono::milliseconds(std::getenv("SOLAR_SLICE") ? std::atoi(std::getenv("SOLAR_SLICE")) : 8));
+      if (std::chrono::duration<double, std::milli>(Clock::now() - tStep).count() < 1.0 && collector.body.size() <= have && !collector.done) std::this_thread::sleep_for(std::chrono::milliseconds(1));
       if (pump_) pump_();
       if (idle_ && collector.body.size() <= have && !collector.done && !solar::html::LoadingStyleSheet()) idle_();
     }
@@ -1739,7 +1743,11 @@ int PageMain(Shared& shared, int argc, char** argv) {
     isolate->PerformMicrotaskCheckpoint();
     lap("microtasks");
     const auto settle = Clock::now() + std::chrono::milliseconds(30);
-    while (Clock::now() < settle) events.Step(std::chrono::milliseconds(8));
+    while (Clock::now() < settle) {
+      const auto tStep = Clock::now();
+      events.Step(std::chrono::milliseconds(8));
+      if (std::chrono::duration<double, std::milli>(Clock::now() - tStep).count() < 1.0) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     lap("settle");
     browser.TakeArrived();
     browser.TakeSizesArrived();
@@ -1983,8 +1991,11 @@ int PageMain(Shared& shared, int argc, char** argv) {
   if (!navigate(address)) return 1;
   // (The first page is waited for, as a program that starts with one.)
   while (current && !current->collector.done && !streamable(current->collector)) {
+    const auto tStep = Clock::now();
     events.Step(std::chrono::milliseconds(8));
     browser.pump_();
+    // (The loop returns at once when nothing is waiting in it, and the first page's bytes come from the network service: the wait went round a million times a second.)
+    if (std::chrono::duration<double, std::milli>(Clock::now() - tStep).count() < 1.0) std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   settleNavigation();
   if (!document) return 1;
