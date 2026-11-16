@@ -207,7 +207,7 @@ CounterStyles::CounterStyles(dom::Document* document) {
           break;
         }
         case css::RuleKind::LayerBlock: {
-          const std::string path = rule->name.empty() ? layer + "(anonymous" + std::to_string(order) + ")" : (layer.empty() ? rule->name.str() : layer + "." + rule->name);
+          const std::string path = rule->name().empty() ? layer + "(anonymous" + std::to_string(order) + ")" : (layer.empty() ? rule->name().str() : layer + "." + rule->name());
           rank(path);
           walk(rule->rules, path);
           break;
@@ -224,7 +224,7 @@ CounterStyles::CounterStyles(dom::Document* document) {
           break;
         case css::RuleKind::CounterStyle: {
           if (!rule->style) break;
-          const std::string name = Lower(rule->name);
+          const std::string name = Lower(rule->name());
           if (name == "none" || name == "inherit" || name == "initial" || name == "unset" || name == "default") break;
           CounterStyleDef d;
           d.hasSystem = false;

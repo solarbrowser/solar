@@ -564,7 +564,7 @@ struct FlatList {
 };
 
 bool HoldsAnonymousLayer(const CssRule* rule) {
-  if ((rule->kind == RuleKind::LayerBlock && rule->name.empty()) || (rule->kind == RuleKind::Import && rule->layerName() == "\x01")) return true;
+  if ((rule->kind == RuleKind::LayerBlock && rule->name().empty()) || (rule->kind == RuleKind::Import && rule->layerName() == "\x01")) return true;
   for (const CssRule* inner : rule->rules) if (HoldsAnonymousLayer(inner)) return true;
   return false;
 }
@@ -858,8 +858,8 @@ struct Gatherer {
           }
           if (element->nodeDocument) element->nodeDocument->containerQueriesSeen = true;
           g_anyContainerQueries = true;
-          if (!g_styleContainerQueries && rule->prelude.find("tyle(") != std::string::npos) g_styleContainerQueries = true;
-          if (g_activeContext && ContainerRuleMatches(*g_activeContext, const_cast<dom::Element*>(element), matchContext.pseudoElement != nullptr, rule->prelude)) Rules(rule->rules, layer, outer);
+          if (!g_styleContainerQueries && rule->prelude().find("tyle(") != std::string::npos) g_styleContainerQueries = true;
+          if (g_activeContext && ContainerRuleMatches(*g_activeContext, const_cast<dom::Element*>(element), matchContext.pseudoElement != nullptr, rule->prelude())) Rules(rule->rules, layer, outer);
           break;
         case RuleKind::Import: {
           CssStyleSheet* imported = rule->importedSheet();
@@ -879,7 +879,7 @@ struct Gatherer {
         }
         case RuleKind::LayerBlock: {
           const std::string savedPath = layerPath;
-          layerPath = Child(rule->name.empty() ? "\x01" + std::to_string(++anonymousLayers) : rule->name.str());
+          layerPath = Child(rule->name().empty() ? "\x01" + std::to_string(++anonymousLayers) : rule->name().str());
           if (collecting) RegisterLayer(layerPath);
           Rules(rule->rules, RankOf(layerPath), outer);
           layerPath = savedPath;
@@ -930,7 +930,7 @@ struct Gatherer {
         }
         case RuleKind::LayerBlock: {
           const std::string savedPath = layerPath;
-          layerPath = Child(rule->name.empty() ? "\x01" + std::to_string(++anonymousLayers) : rule->name.str());
+          layerPath = Child(rule->name().empty() ? "\x01" + std::to_string(++anonymousLayers) : rule->name().str());
           Flatten(rule->rules, RankOf(layerPath), out, unsafe, onlyTails);
           layerPath = savedPath;
           break;
@@ -3709,14 +3709,14 @@ bool DirtyKeysOfRules(const std::vector<CssRule*>& rules, std::unordered_set<uin
       case RuleKind::LayerBlock:
         // (Whether what the layers do to the ranks of the ones there are is nothing is looked at by the caller.)
         usesLayers = true;
-        if (rule->name.empty()) usesLayers = true;
+        if (rule->name().empty()) usesLayers = true;
         if (!DirtyKeysOfRules(rule->rules, keys, everything, usesLayers, registered, depth + 1, true)) return false;
         break;
       case RuleKind::LayerStatement:
         usesLayers = true;
         break;
       case RuleKind::Property:
-        registered.push_back(rule->name);  // (what the elements that have the property are made again for: see NoteSheetAdded)
+        registered.push_back(rule->name());  // (what the elements that have the property are made again for: see NoteSheetAdded)
         break;
       case RuleKind::Keyframes: case RuleKind::Keyframe: case RuleKind::FontFace: case RuleKind::Page: case RuleKind::FontPaletteValues: case RuleKind::NestedDeclarations: case RuleKind::PositionTry:
         break;

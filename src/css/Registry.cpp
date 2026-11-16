@@ -150,7 +150,7 @@ namespace {
 // The registrations @property rules make: the last valid one for a name in the sheets of the document.
 void CollectRules(const std::vector<CssRule*>& rules, std::map<std::string, RegisteredProperty>& out) {
   for (const CssRule* rule : rules) {
-    if (rule->kind == RuleKind::Property && rule->registered) out[rule->name] = *rule->registered;
+    if (rule->kind == RuleKind::Property && rule->registered) out[rule->name()] = *rule->registered;
     else if (rule->kind == RuleKind::Media || rule->kind == RuleKind::Supports || rule->kind == RuleKind::LayerBlock || rule->kind == RuleKind::StartingStyle) CollectRules(rule->rules, out);
   }
 }

@@ -609,14 +609,14 @@ Value RuleConditionText(Context& ctx, Value t, qe::Args, Value) {
   switch (self->kind) {
     case RuleKind::Media: return qe::FromWtf8(ctx, self->media ? self->media->Text() : "");
     case RuleKind::Supports: return qe::FromWtf8(ctx, self->supportsText());
-    case RuleKind::Container: return qe::FromWtf8(ctx, self->prelude);
+    case RuleKind::Container: return qe::FromWtf8(ctx, self->prelude());
     default: return qe::Undefined();
   }
 }
 
 Value RuleHref(Context& ctx, Value t, qe::Args, Value) {
   CssRule* self = ThisRuleOf(ctx, t, RuleKind::Import);
-  return self ? qe::FromWtf8(ctx, self->href) : qe::Undefined();
+  return self ? qe::FromWtf8(ctx, self->href()) : qe::Undefined();
 }
 
 Value RuleImportedSheet(Context& ctx, Value t, qe::Args, Value) {
@@ -656,18 +656,18 @@ Value PropertyInitialValue(Context& ctx, Value t, qe::Args, Value) {
 
 Value RuleNamespaceUri(Context& ctx, Value t, qe::Args, Value) {
   CssRule* self = ThisRuleOf(ctx, t, RuleKind::Namespace);
-  return self ? qe::FromWtf8(ctx, self->namespaceUri) : qe::Undefined();
+  return self ? qe::FromWtf8(ctx, self->namespaceUri()) : qe::Undefined();
 }
 
 Value RulePrefix(Context& ctx, Value t, qe::Args, Value) {
   CssRule* self = ThisRuleOf(ctx, t, RuleKind::Namespace);
-  return self ? qe::FromWtf8(ctx, self->prefix) : qe::Undefined();
+  return self ? qe::FromWtf8(ctx, self->prefix()) : qe::Undefined();
 }
 
 Value RuleName(Context& ctx, Value t, qe::Args, Value) {
   CssRule* self = This<CssRule>(ctx, t);
-  if (self && self->kind == RuleKind::PositionTry) return qe::FromWtf8(ctx, SerializeIdentifier(self->name));  // the name as an identifier is written
-  return self ? qe::FromWtf8(ctx, self->name) : qe::Undefined();
+  if (self && self->kind == RuleKind::PositionTry) return qe::FromWtf8(ctx, SerializeIdentifier(self->name()));  // the name as an identifier is written
+  return self ? qe::FromWtf8(ctx, self->name()) : qe::Undefined();
 }
 
 Value RuleSetName(Context& ctx, Value t, qe::Args args, Value) {
@@ -675,7 +675,7 @@ Value RuleSetName(Context& ctx, Value t, qe::Args args, Value) {
   if (!self || !NeedArgs(ctx, args, 1, "set name")) return qe::Undefined();
   const std::string text = qe::ToWtf8(ctx, args[0]);
   if (qe::HasException(ctx)) return qe::Undefined();
-  self->name = text;
+  self->ExtrasMut().name = text;
   return qe::Undefined();
 }
 
@@ -686,7 +686,7 @@ Value RuleSelectorTextPage(Context& ctx, Value t, qe::Args, Value) {
 
 Value RuleKeyText(Context& ctx, Value t, qe::Args, Value) {
   CssRule* self = ThisRuleOf(ctx, t, RuleKind::Keyframe);
-  return self ? qe::FromWtf8(ctx, self->name) : qe::Undefined();
+  return self ? qe::FromWtf8(ctx, self->name()) : qe::Undefined();
 }
 
 Value RuleSetKeyText(Context& ctx, Value t, qe::Args args, Value) {
@@ -699,7 +699,7 @@ Value RuleSetKeyText(Context& ctx, Value t, qe::Args args, Value) {
     web::ThrowDomException(ctx, "Failed to set 'keyText' on 'CSSKeyframeRule': the keyframe selector is invalid.", "SyntaxError");
     return qe::Undefined();
   }
-  self->name = *key;
+  self->ExtrasMut().name = *key;
   NoteStyleChange();
   return qe::Undefined();
 }
@@ -727,7 +727,7 @@ Value KeyframesAppend(Context& ctx, Value t, qe::Args args, Value) {
 int FindKeyframe(CssRule* self, const std::string& key) {
   const std::string wanted = Lowercase(key);
   for (int i = static_cast<int>(self->rules.size()) - 1; i >= 0; --i) {
-    if (Lowercase(self->rules[i]->name) == wanted) return i;
+    if (Lowercase(self->rules[i]->name()) == wanted) return i;
   }
   return -1;
 }
@@ -795,7 +795,7 @@ Value ContainerQuery(Context& ctx, Value t, qe::Args, Value) {
 Value ScopePart(Context& ctx, Value t, bool end) {
   CssRule* self = ThisRuleOf(ctx, t, RuleKind::Scope);
   if (!self) return qe::Undefined();
-  const ComponentValues values = Trimmed(ParseComponentValues(self->prelude));
+  const ComponentValues values = Trimmed(ParseComponentValues(self->prelude()));
   bool afterTo = false;
   for (const ComponentValue& v : values) {
     if (v.IsIdent() && Lowercase(v.token.value) == "to") {

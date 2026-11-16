@@ -202,7 +202,6 @@ struct CssRule : Quanta::DOMObject {
   CssRuleList* ruleList = nullptr;
   // Media rule, import rule: the media; import rule: the address and the sheet it brought in.
   MediaList* media = nullptr;
-  RareString href;
   // What a few kinds of rule have and a style rule does not (the layer of an import or a layer rule, the conditions of an import, a supports rule and a container rule, the
   // bounds of a scope rule, the sheet an import brought in): made for the rule that has one.
   struct Extras {
@@ -211,6 +210,10 @@ struct CssRule : Quanta::DOMObject {
     RareString containerName, containerQuery;  // a container rule: the name, and the condition, when there is one query
     std::shared_ptr<SelectorList> scopeStart, scopeEnd;  // scope rule: <scope-start> and <scope-end> (none: absent)
     CssStyleSheet* importedSheet = nullptr;  // an import rule: the sheet it brought in
+    RareString href;            // import rule: the address
+    RareString prefix, namespaceUri;  // namespace rule
+    RareString name;            // keyframes rule, property rule, counter-style, layer block: the name. Keyframe rule: the key text
+    RareString prelude;         // the prelude of a rule this module keeps as written (container, scope, page): its serialization
   };
   std::unique_ptr<Extras> extras_;
   Extras& ExtrasMut() { if (!extras_) extras_ = std::make_unique<Extras>(); return *extras_; }
@@ -220,14 +223,12 @@ struct CssRule : Quanta::DOMObject {
   const RareString& containerQuery() const { static const RareString none; return extras_ ? extras_->containerQuery : none; }
   const std::shared_ptr<SelectorList>& scopeStart() const { static const std::shared_ptr<SelectorList> none; return extras_ ? extras_->scopeStart : none; }
   const std::shared_ptr<SelectorList>& scopeEnd() const { static const std::shared_ptr<SelectorList> none; return extras_ ? extras_->scopeEnd : none; }
+  const RareString& href() const { static const RareString none; return extras_ ? extras_->href : none; }
+  const RareString& prefix() const { static const RareString none; return extras_ ? extras_->prefix : none; }
+  const RareString& namespaceUri() const { static const RareString none; return extras_ ? extras_->namespaceUri : none; }
+  const RareString& name() const { static const RareString none; return extras_ ? extras_->name : none; }
+  const RareString& prelude() const { static const RareString none; return extras_ ? extras_->prelude : none; }
   CssStyleSheet* importedSheet() const { return extras_ ? extras_->importedSheet : nullptr; }
-  // Namespace rule.
-  RareString prefix;
-  RareString namespaceUri;
-  // Keyframes rule, property rule, counter-style, layer block: the name. Keyframe rule: the key text.
-  RareString name;
-  // The prelude of a rule this module keeps as written (container, scope, page): its serialization.
-  RareString prelude;
   // Scope rule: <scope-start> and <scope-end> (none: absent).
   bool isNested = false;  // a style rule inside another
   // A property rule: what it registers, if it is a valid one.

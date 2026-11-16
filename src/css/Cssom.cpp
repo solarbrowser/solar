@@ -781,7 +781,7 @@ std::string CssRule::CssText() const {
     }
     case RuleKind::NestedDeclarations: return style ? style->Serialize() : "";
     case RuleKind::Import: {
-      std::string out = "@import " + SerializeUrl(href);
+      std::string out = "@import " + SerializeUrl(href());
       if (!layerName().empty()) out += layerName() == "\x01" ? " layer" : " layer(" + layerName() + ")";
       if (!supportsText().empty()) out += " supports(" + supportsText() + ")";
       if (media && !media->queries.empty()) out += " " + media->Text();
@@ -789,15 +789,15 @@ std::string CssRule::CssText() const {
     }
     case RuleKind::Media: return "@media " + (media ? media->Text() : std::string()) + GroupBody(*this).replace(0, 0, "");
     case RuleKind::Supports: return "@supports " + supportsText() + GroupBody(*this);
-    case RuleKind::Namespace: return "@namespace " + (prefix.empty() ? "" : SerializeIdentifier(prefix) + " ") + SerializeUrl(namespaceUri) + ";";
+    case RuleKind::Namespace: return "@namespace " + (prefix().empty() ? "" : SerializeIdentifier(prefix()) + " ") + SerializeUrl(namespaceUri()) + ";";
     case RuleKind::FontFace: return "@font-face { " + (style ? style->Serialize() : "") + " }";
     case RuleKind::FontPaletteValues: {
       const std::string body = style ? style->Serialize() : "";
-      return "@font-palette-values " + SerializeIdentifier(name) + " {" + (body.empty() ? " }" : " " + body + " }");
+      return "@font-palette-values " + SerializeIdentifier(name()) + " {" + (body.empty() ? " }" : " " + body + " }");
     }
     case RuleKind::PositionTry: {
       const std::string body = style ? style->Serialize() : "";
-      return "@position-try " + SerializeIdentifier(name) + " {" + (body.empty() ? " }" : " " + body + " }");
+      return "@position-try " + SerializeIdentifier(name()) + " {" + (body.empty() ? " }" : " " + body + " }");
     }
     case RuleKind::Page: {
       std::string body = style ? style->Serialize() : "";
@@ -805,20 +805,20 @@ std::string CssRule::CssText() const {
     }
     case RuleKind::Keyframes: {
       // A name that is not an identifier, or is one that the syntax reserves, is written as a string.
-      const std::string lower = Lower(name);
+      const std::string lower = Lower(name());
       const bool reserved = lower == "none" || lower == "default" || lower == "initial" || lower == "inherit" || lower == "unset" || lower == "revert" || lower == "revert-layer" || lower == "revert-rule";
-      return "@keyframes " + (reserved ? SerializeString(name) : SerializeIdentifier(name)) + GroupBody(*this);
+      return "@keyframes " + (reserved ? SerializeString(name()) : SerializeIdentifier(name())) + GroupBody(*this);
     }
     case RuleKind::Keyframe: {
       std::string body = style ? style->Serialize() : "";
-      return name + " {" + (body.empty() ? " }" : " " + body + " }");
+      return name() + " {" + (body.empty() ? " }" : " " + body + " }");
     }
-    case RuleKind::CounterStyle: return "@counter-style " + SerializeIdentifier(name) + " { " + (style ? style->Serialize() : "") + " }";
-    case RuleKind::Property: return "@property " + name + " { " + (style ? style->Serialize() : "") + " }";
-    case RuleKind::LayerBlock: return "@layer " + (name.empty() ? "" : name + " ") + "{\n" + Children(*this) + "}";
+    case RuleKind::CounterStyle: return "@counter-style " + SerializeIdentifier(name()) + " { " + (style ? style->Serialize() : "") + " }";
+    case RuleKind::Property: return "@property " + name() + " { " + (style ? style->Serialize() : "") + " }";
+    case RuleKind::LayerBlock: return "@layer " + (name().empty() ? "" : name() + " ") + "{\n" + Children(*this) + "}";
     case RuleKind::LayerStatement: return "@layer " + layerName() + ";";
-    case RuleKind::Container: return "@container " + prelude + GroupBody(*this);
-    case RuleKind::Scope: return "@scope" + (prelude.empty() ? "" : " " + prelude) + GroupBody(*this);
+    case RuleKind::Container: return "@container " + prelude() + GroupBody(*this);
+    case RuleKind::Scope: return "@scope" + (prelude().empty() ? "" : " " + prelude()) + GroupBody(*this);
     case RuleKind::StartingStyle: return "@starting-style" + GroupBody(*this);
   }
   return "";
@@ -838,9 +838,9 @@ bool ResolveNamespacesImpl(SelectorList& list, const CssStyleSheet* sheet) {
     // for each one of them.)
     for (const CssRule* rule : sheet->rules) {
       if (rule->kind == RuleKind::Style) break;
-      if (rule->kind == RuleKind::Namespace && rule->prefix.empty()) {
+      if (rule->kind == RuleKind::Namespace && rule->prefix().empty()) {
         hasDefault = true;
-        defaultUri = rule->namespaceUri;
+        defaultUri = rule->namespaceUri();
       }
     }
   }
@@ -848,7 +848,7 @@ bool ResolveNamespacesImpl(SelectorList& list, const CssStyleSheet* sheet) {
     if (sheet) {
       for (const CssRule* rule : sheet->rules) {
         if (rule->kind == RuleKind::Style) break;
-        if (rule->kind == RuleKind::Namespace && rule->prefix == prefix) return rule->namespaceUri.str();
+        if (rule->kind == RuleKind::Namespace && rule->prefix() == prefix) return rule->namespaceUri().str();
       }
     }
     return std::string();
@@ -857,7 +857,7 @@ bool ResolveNamespacesImpl(SelectorList& list, const CssStyleSheet* sheet) {
     if (!sheet) return false;
     for (const CssRule* rule : sheet->rules) {
       if (rule->kind == RuleKind::Style) break;
-      if (rule->kind == RuleKind::Namespace && rule->prefix == prefix) return true;
+      if (rule->kind == RuleKind::Namespace && rule->prefix() == prefix) return true;
     }
     return false;
   };
@@ -1079,7 +1079,7 @@ CssRule* BuildImport(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, Css
   {
     std::string address;
     if (!TakeUrl(syntax.prelude, i, address)) return nullptr;
-    rule->href = address;
+    rule->ExtrasMut().href = address;
   }
   rule->media = NewMediaList(ctx);
   rule->media->ownerRule = rule;
@@ -1140,7 +1140,7 @@ CssRule* BuildKeyframe(Context& ctx, const Rule& frame, CssStyleSheet* sheet, Cs
   const std::optional<std::string> key = NormalizeKeyText(Serialize(Trimmed(frame.prelude)));
   if (!key) return nullptr;
   CssRule* keyframe = NewRule(ctx, RuleKind::Keyframe);
-  keyframe->name = *key;
+  keyframe->ExtrasMut().name = *key;
   keyframe->parentRule = parent;
   keyframe->parentSheet = sheet;
   keyframe->style = DeclarationsFrom(ctx, ParseBlockContents(frame.block), keyframe);
@@ -1196,13 +1196,13 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
     size_t i = 0;
     while (i < syntax.prelude.size() && syntax.prelude[i].IsWhitespace()) ++i;
     if (i < syntax.prelude.size() && syntax.prelude[i].IsIdent()) {
-      rule->prefix = syntax.prelude[i].token.value;
+      rule->ExtrasMut().prefix = syntax.prelude[i].token.value;
       ++i;
     }
     {
       std::string address;
       if (!TakeUrl(syntax.prelude, i, address)) return nullptr;
-      rule->namespaceUri = address;
+      rule->ExtrasMut().namespaceUri = address;
     }
     while (i < syntax.prelude.size() && syntax.prelude[i].IsWhitespace()) ++i;
     if (i != syntax.prelude.size()) return nullptr;
@@ -1223,7 +1223,7 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
     if (prelude.size() != 1 || !(prelude[0].IsIdent() || prelude[0].IsToken(T::String))) return nullptr;
     if (prelude[0].IsToken(T::String) ? prelude[0].token.value.empty() : (Lower(prelude[0].token.value) == "none" || IsCssWideKeyword(prelude) || Lower(prelude[0].token.value) == "default")) return nullptr;
     rule = NewRule(ctx, RuleKind::Keyframes);
-    rule->name = prelude[0].token.value;
+    rule->ExtrasMut().name = prelude[0].token.value;
     rule->parentRule = parent;
     rule->parentSheet = sheet;
     for (const Rule& frame : ParseRuleList(Serialize(syntax.block))) {
@@ -1252,7 +1252,7 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
     if (syntax.hasBlock) {
       if (names.find(',') != std::string::npos) return nullptr;
       rule = NewRule(ctx, RuleKind::LayerBlock);
-      rule->name = names;
+      rule->ExtrasMut().name = names;
       rule->parentRule = parent;
       rule->parentSheet = sheet;
       FillGroup(ctx, rule, syntax, sheet, InNesting(parent) ? 2 : 0);
@@ -1286,7 +1286,7 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
     std::optional<RegisteredProperty> registration = MakeRegistration(prelude[0].token.value, *syntaxText, *inherits, initialText, error);
     if (!registration) return nullptr;
     rule = NewRule(ctx, RuleKind::Property);
-    rule->name = prelude[0].token.value;
+    rule->ExtrasMut().name = prelude[0].token.value;
     rule->registered = std::make_unique<RegisteredProperty>(*registration);
     CssDeclarations* declarations = NewDeclarations(ctx);
     declarations->parentRule = rule;
@@ -1298,14 +1298,14 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
     const ComponentValues prelude = Trimmed(syntax.prelude);
     if (!syntax.hasBlock || prelude.size() != 1 || !prelude[0].IsIdent() || !prelude[0].token.value.starts_with("--")) return nullptr;
     rule = NewRule(ctx, RuleKind::FontPaletteValues);
-    rule->name = prelude[0].token.value;
+    rule->ExtrasMut().name = prelude[0].token.value;
     rule->style = DeclarationsFrom(ctx, ParseBlockContents(syntax.block), rule);
   } else if (name == "position-try") {
     // @position-try <dashed-ident> { the declarations that place a box }: the others are dropped.
     const ComponentValues prelude = Trimmed(syntax.prelude);
     if (!syntax.hasBlock || prelude.size() != 1 || !prelude[0].IsIdent() || !prelude[0].token.value.starts_with("--") || prelude[0].token.value.size() < 3) return nullptr;
     rule = NewRule(ctx, RuleKind::PositionTry);
-    rule->name = prelude[0].token.value;
+    rule->ExtrasMut().name = prelude[0].token.value;
     rule->style = DeclarationsFrom(ctx, ParseBlockContents(syntax.block), rule);
   } else if (name == "counter-style") {
     const ComponentValues prelude = Trimmed(syntax.prelude);
@@ -1313,14 +1313,14 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
     static const std::set<std::string> reserved = {"none", "initial", "inherit", "unset", "default", "revert", "revert-layer", "decimal", "disc", "square", "circle", "disclosure-open", "disclosure-closed"};
     if (reserved.count(Lower(prelude[0].token.value))) return nullptr;
     rule = NewRule(ctx, RuleKind::CounterStyle);
-    rule->name = prelude[0].token.value;
+    rule->ExtrasMut().name = prelude[0].token.value;
     rule->style = DeclarationsFrom(ctx, ParseBlockContents(syntax.block), rule);
   } else if (name == "container") {
     if (!syntax.hasBlock) return nullptr;
     const std::optional<ContainerPrelude> container = ParseContainerPrelude(syntax.prelude);
     if (!container) return nullptr;
     rule = NewRule(ctx, RuleKind::Container);
-    rule->prelude = container->text;
+    rule->ExtrasMut().prelude = container->text;
     rule->ExtrasMut().containerName = container->name;
     rule->ExtrasMut().containerQuery = container->condition;
     rule->parentRule = parent;
@@ -1362,7 +1362,7 @@ CssRule* BuildRule(Context& ctx, const Rule& syntax, CssStyleSheet* sheet, CssRu
       if (i < prelude.size()) return nullptr;
     }
     rule = NewRule(ctx, RuleKind::Scope);
-    rule->prelude = text.substr(6 + (text.size() > 6 ? 1 : 0));
+    rule->ExtrasMut().prelude = text.substr(6 + (text.size() > 6 ? 1 : 0));
     rule->ExtrasMut().scopeStart = start;
     rule->ExtrasMut().scopeEnd = end;
     rule->parentRule = parent;
@@ -1648,7 +1648,7 @@ void ProcessImports(Context& ctx, CssStyleSheet* sheet, const SheetLoader& load,
   for (CssRule* rule : sheet->rules) {
     if (rule->kind != RuleKind::Import || rule->importedSheet()) continue;
     std::optional<url::Url> base = url::Parse(sheet->baseUrl);
-    std::optional<url::Url> parsed = url::Parse(rule->href, base ? &*base : nullptr);
+    std::optional<url::Url> parsed = url::Parse(rule->href(), base ? &*base : nullptr);
     if (!parsed) continue;
     const std::string address = url::Serialize(*parsed);
     // A sheet reaching itself again through its imports.

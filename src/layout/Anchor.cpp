@@ -495,7 +495,7 @@ const css::CssRule* FindTryRule(const Env& env, const std::string& name) {
     for (const css::CssRule* rule : rules) {
       switch (rule->kind) {
         case css::RuleKind::PositionTry:
-          if (rule->name == name) found = rule;
+          if (rule->name() == name) found = rule;
           break;
         case css::RuleKind::Media: case css::RuleKind::Supports: case css::RuleKind::LayerBlock:
           walk(rule->rules);
