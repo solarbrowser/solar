@@ -4,72 +4,94 @@
 <meta charset="utf-8">
 <title>Task manager</title>
 <style>
-  :root { --bg: #f4f5f8; --card: #ffffff; --edge: #dfe2ea; --text: #1b1f27; --dim: #697181; --accent: #3b6cf6; --pick: rgba(30, 40, 70, 0.07); --track: #e6e9f0; }
+  :root { --bg: #f4f5f8; --text: #1b1f27; --dim: #697181; --edge: #dfe2ea; --head: #eceef3; --pick: rgba(30, 40, 70, 0.07); --accent: #3b6cf6; }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #15171c; --card: #1e2129; --edge: #2c303a; --text: #e8eaf0; --dim: #949bab; --accent: #7a9bff; --pick: rgba(255, 255, 255, 0.07); --track: #2f333d; }
+    :root { --bg: #1c1b22; --text: #fbfbfe; --dim: #a8a8b3; --edge: #3a3944; --head: #23222b; --pick: rgba(255, 255, 255, 0.08); --accent: #7a9bff; }
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, "Noto Sans", "DejaVu Sans", Arial, sans-serif; }
-  main { max-width: 860px; margin: 0 auto; padding: 44px 32px 80px; }
-  .top { display: flex; align-items: baseline; margin-bottom: 24px; }
-  h1 { flex: 1; margin: 0; font-size: 26px; font-weight: 600; }
-  .total { color: var(--dim); font-size: 14px; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.3 system-ui, "Noto Sans", "DejaVu Sans", Arial, sans-serif; }
   button { all: unset; box-sizing: border-box; display: flex; align-items: center; justify-content: center; cursor: default; }
-  .list { background: var(--card); border: 1px solid var(--edge); border-radius: 12px; overflow: hidden; margin-bottom: 20px; }
-  .head, .row { display: flex; align-items: center; gap: 14px; padding: 11px 18px; }
-  .head { color: var(--dim); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; background: var(--pick); }
-  .row + .row { border-top: 1px solid var(--edge); }
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) 130px 110px 64px; align-items: center; }
+  .head { position: sticky; top: 0; z-index: 1; background: var(--head); border-bottom: 1px solid var(--edge); color: var(--text); }
+  .head > div { padding: 7px 12px; border-left: 1px solid var(--edge); }
+  .head > div:first-child { border-left: none; }
+  .row { min-height: 30px; border-bottom: 1px solid var(--edge); }
   .row:hover { background: var(--pick); }
-  .name { flex: 1; min-width: 0; }
-  .name b { display: block; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .name small { display: block; color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .mem { flex: none; width: 90px; text-align: right; font-variant-numeric: tabular-nums; }
-  .pid { flex: none; width: 70px; text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; }
-  .bar { flex: none; width: 90px; height: 6px; border-radius: 3px; background: var(--track); }
-  .bar i { display: block; height: 6px; border-radius: 3px; background: var(--accent); }
-  .snd { flex: none; width: 18px; height: 18px; color: var(--accent); }
-  .snd svg { width: 18px; height: 18px; }
-  .end { flex: none; width: 70px; height: 28px; border-radius: 8px; color: var(--accent); font-size: 13px; }
+  .row.first { border-top: 1px solid var(--dim); }
+  .cell { padding: 5px 12px; min-width: 0; }
+  .name { display: flex; align-items: center; gap: 8px; }
+  .name b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .name small { color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .snd { flex: none; width: 15px; height: 15px; }
+  .snd svg { width: 15px; height: 15px; color: var(--text); }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .end { height: 22px; margin-right: 8px; padding: 0 8px; border-radius: 6px; color: var(--accent); opacity: 0; }
+  .row:hover .end { opacity: 1; }
   .end:hover { background: var(--pick); }
-  .none { flex: none; width: 70px; }
-  h2 { margin: 28px 0 10px; font-size: 14px; font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: 0.04em; }
+  .total { font-weight: 600; }
+  .total .cell { padding-top: 8px; padding-bottom: 8px; }
 </style>
 </head>
 <body>
-<main>
-  <div class="top"><h1>Task manager</h1><span class="total" id="total"></span></div>
-  <h2>Tabs</h2>
-  <div class="list" id="tabs"></div>
-  <h2>Browser</h2>
-  <div class="list" id="browser"></div>
-</main>
+<div class="grid head"><div>Name</div><div style="text-align:right">Memory</div><div style="text-align:right">CPU</div><div></div></div>
+<div id="rows"></div>
 <script>
 (() => {
   "use strict";
   const send = (text) => { if (typeof __solarUiSend === "function") __solarUiSend(text); };
   const speaker = '{{icon:volume-high}}';
-  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-  const mb = (kb) => (kb < 0 ? "n/a" : kb >= 1048576 ? (kb / 1048576).toFixed(2) + " GB" : (kb / 1024).toFixed(1) + " MB");
-  const rowHtml = (t, most) => {
-    const width = t.kb > 0 ? Math.max(2, Math.round((t.kb / most) * 100)) : 0;
-    return '<div class="row"><div class="name"><b>' + esc(t.title || t.url || t.name || "") + (t.active ? " •" : "") + "</b><small>" + esc(t.url || "") + "</small></div>" +
-      (t.audible ? '<span class="snd" title="Playing sound">' + speaker + "</span>" : '<span class="snd"></span>') +
-      '<div class="bar"><i style="width:' + width + '%"></i></div><div class="mem">' + mb(t.kb) + '</div><div class="pid">' + (t.pid > 0 ? t.pid : "") + "</div>" +
-      (t.id ? '<button class="end" data-id="' + t.id + '">End tab</button>' : '<span class="none"></span>') + "</div>";
+  const mb = (kb) => (kb < 0 ? "" : kb >= 1048576 ? Math.round(kb / 10485.76) / 100 + "GB" : Math.round(kb / 1024) + "MB");
+  const cpuText = (cpu) => (cpu < 0 ? "" : cpu < 0.05 ? "idle" : (cpu < 10 ? cpu.toFixed(2) : cpu.toFixed(1)) + "%");
+  const host = document.getElementById("rows");
+  // The rows are kept and their words changed in place: a table made again each second would be a thousand nodes of garbage in a minute.
+  const rows = new Map();
+  const set = (node, text) => { if (node.textContent !== text) node.textContent = text; };
+  const make = (key) => {
+    const el = document.createElement("div");
+    el.className = "grid row";
+    el.innerHTML = '<div class="cell name"><span class="snd"></span><b></b><small></small></div><div class="cell num"></div><div class="cell num"></div><div><button class="end">End tab</button></div>';
+    const name = el.children[0];
+    const entry = { el, snd: name.children[0], title: name.children[1], url: name.children[2], mem: el.children[1], cpu: el.children[2], end: el.children[3].firstChild, id: 0, shownSound: false, lastCpu: -1 };
+    entry.end.addEventListener("click", () => { if (entry.id) send("tm-close\t" + entry.id); });
+    rows.set(key, entry);
+    return entry;
   };
   const render = (tasks) => {
-    const tabs = tasks.filter((t) => t.kind === "tab"), other = tasks.filter((t) => t.kind !== "tab");
-    const most = Math.max(1, ...tasks.map((t) => t.kb));
-    const head = '<div class="head"><span class="name">Name</span><span class="snd"></span><span class="bar" style="background:none"></span><span class="mem">Memory</span><span class="pid">Process</span><span class="none"></span></div>';
-    document.getElementById("tabs").innerHTML = head + tabs.map((t) => rowHtml(t, most)).join("");
-    document.getElementById("browser").innerHTML = other.map((t) => rowHtml(t, most)).join("");
-    const total = tasks.reduce((sum, t) => sum + Math.max(0, t.kb), 0);
-    document.getElementById("total").textContent = "Total " + mb(total);
+    const seen = new Set();
+    let total = 0, previous = null, firstOther = true;
+    const ordered = tasks.filter((t) => t.kind === "tab").concat(tasks.filter((t) => t.kind !== "tab"));
+    ordered.forEach((t, index) => {
+      const key = t.kind + ":" + t.id;
+      seen.add(key);
+      const entry = rows.get(key) || make(key);
+      entry.id = t.kind === "tab" ? t.id : 0;
+      set(entry.title, (t.title || t.url || "") + (t.pid > 0 ? " (" + t.pid + ")" : ""));
+      set(entry.url, t.kind === "tab" ? t.url || "" : "");
+      set(entry.mem, mb(t.kb));
+      if (t.cpu !== -2) { entry.lastCpu = t.cpu; }
+      set(entry.cpu, cpuText(entry.lastCpu));
+      if (entry.shownSound !== !!t.audible) { entry.shownSound = !!t.audible; entry.snd.innerHTML = t.audible ? speaker : ""; }
+      entry.end.style.display = t.kind === "tab" ? "" : "none";
+      const startsOthers = t.kind !== "tab" && firstOther;
+      if (t.kind !== "tab") firstOther = false;
+      entry.el.classList.toggle("first", startsOthers && index > 0);
+      // (A row is put in its place only where it is not: moving each one every second would not be nothing.)
+      const wanted = previous ? previous.nextSibling : host.firstChild;
+      if (wanted !== entry.el) host.insertBefore(entry.el, wanted);
+      previous = entry.el;
+      total += Math.max(0, t.kb);
+    });
+    for (const [key, entry] of rows) { if (!seen.has(key)) { entry.el.remove(); rows.delete(key); } }
+    let foot = document.getElementById("total");
+    if (!foot) {
+      foot = document.createElement("div");
+      foot.id = "total";
+      foot.className = "grid row total";
+      foot.innerHTML = '<div class="cell">Total</div><div class="cell num"></div><div class="cell"></div><div></div>';
+      document.body.appendChild(foot);
+    }
+    set(foot.children[1], mb(total));
   };
-  document.addEventListener("click", (event) => {
-    const button = event.target.closest && event.target.closest("button.end");
-    if (button) send("tm-close\t" + button.dataset.id);
-  });
   globalThis.__solarUiState = (next) => { if (next.tasks) render(next.tasks); };
   send("ready");
   send("tasks");

@@ -261,6 +261,8 @@ struct Session::Impl : std::enable_shared_from_this<Session::Impl> {
   uint32_t nextTab = 1;
   std::atomic<uint32_t> shownHost{0};  // the renderer of the active tab's page: what the window shows
   std::set<uint32_t> soundingHosts;     // the renderers that have sound playing (under the lock)
+  // What a process used of the processor when the task manager last asked (its clock ticks, and when), for how much it uses now.
+  mutable std::map<long, std::pair<unsigned long long, std::chrono::steady_clock::time_point>> cpuSamples;
   bool windowControls = false, maximized = false;  // the interface draws the buttons of the window (the system's bar is not there)
   std::optional<std::string> resize;  // the last size the window said (the ones that come are told it)
   int exitCode = 0;
@@ -1700,6 +1702,34 @@ long ResidentKilobytes(long pid) {
 }
 }  // namespace
 
+namespace {
+// The processor time a process has used, in clock ticks (user and system): false where it is not known.
+bool CpuTicks(long pid, unsigned long long& ticks) {
+#if defined(__linux__)
+  if (pid <= 0) return false;
+  std::ifstream in("/proc/" + std::to_string(pid) + "/stat");
+  std::string line;
+  if (!std::getline(in, line)) return false;
+  // (The name of the program is in parentheses and may have spaces: the numbers are after the last one.)
+  const size_t close = line.rfind(')');
+  if (close == std::string::npos) return false;
+  std::istringstream rest(line.substr(close + 1));
+  std::string field;
+  unsigned long long user = 0, system = 0;
+  for (int i = 3; i <= 15 && (rest >> field); ++i) {
+    if (i == 14) user = std::strtoull(field.c_str(), nullptr, 10);
+    if (i == 15) system = std::strtoull(field.c_str(), nullptr, 10);
+  }
+  ticks = user + system;
+  return true;
+#else
+  (void)pid;
+  (void)ticks;
+  return false;
+#endif
+}
+}  // namespace
+
 std::string Session::TasksJson() const {
   struct Row {
     std::string kind, title, url;
@@ -1743,8 +1773,29 @@ std::string Session::TasksJson() const {
   for (size_t i = 0; i < rows.size(); ++i) {
     const Row& r = rows[i];
     if (i) json += ",";
+    // (How much of the processor it used since the last time: what it used, over the time between, as a part of one processor's.)
+    double cpu = -1;
+    unsigned long long ticks = 0;
+    if (CpuTicks(r.pid, ticks)) {
+      const auto now = std::chrono::steady_clock::now();
+      std::lock_guard<std::mutex> lock(impl_->mutex);
+      const auto before = impl_->cpuSamples.find(r.pid);
+      if (before != impl_->cpuSamples.end()) {
+        const double seconds = std::chrono::duration<double>(now - before->second.second).count();
+        if (seconds > 0.2) {
+          cpu = 100.0 * static_cast<double>(ticks - before->second.first) / (static_cast<double>(sysconf(_SC_CLK_TCK)) * seconds);
+          impl_->cpuSamples[r.pid] = {ticks, now};
+        } else {
+          cpu = -2;  // (asked again too soon: the page keeps what it showed)
+        }
+      } else {
+        impl_->cpuSamples[r.pid] = {ticks, now};
+      }
+    }
+    char cpuText[32];
+    std::snprintf(cpuText, sizeof cpuText, "%.1f", cpu);
     json += "{\"kind\":" + JsonString(r.kind) + ",\"id\":" + std::to_string(r.id) + ",\"title\":" + JsonString(r.title) + ",\"url\":" + JsonString(r.url) + ",\"pid\":" + std::to_string(r.pid) +
-            ",\"kb\":" + std::to_string(ResidentKilobytes(r.pid)) + ",\"active\":" + (r.active ? "true" : "false") + ",\"audible\":" + (r.audible ? "true" : "false") + "}";
+            ",\"kb\":" + std::to_string(ResidentKilobytes(r.pid)) + ",\"cpu\":" + cpuText + ",\"active\":" + (r.active ? "true" : "false") + ",\"audible\":" + (r.audible ? "true" : "false") + "}";
   }
   return json + "]}";
 }

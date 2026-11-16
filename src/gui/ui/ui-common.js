@@ -35,7 +35,7 @@
     for (const t of state.tabs) {
       const blank = /^solar:\/\/newtab/.test(t.url) || !t.url;
       const name = nameOf(t);
-      html += '<div class="tab' + (t.id === state.active ? " active" : "") + (t.loading ? " loading" : "") + (blank ? " blank" : "") + (t.pinned ? " pinned" : "") + '" data-id="' + t.id + '" title="' + esc(name).replace(/"/g, "&quot;") + '">' + (icons[t.id] && !blank ? '<img class="icon" src="' + icons[t.id] + '">' : '<span class="icon">' + tabGlobe + "</span>") + '<span class="label">' + esc(name) + '</span>' + (t.audible ? '<span class="sound" title="Playing sound">' + speaker + "</span>" : "") + '<button class="close" data-id="' + t.id + '">' + cross + "</button></div>";
+      html += '<div class="tab' + (t.id === state.active ? " active" : "") + (t.loading ? " loading" : "") + (blank ? " blank" : "") + (t.pinned ? " pinned" : "") + '" data-id="' + t.id + '" title="' + esc(name).replace(/"/g, "&quot;") + '">' + (icons[t.id] && !blank ? '<img class="icon" src="' + icons[t.id] + '">' : '<span class="icon">' + tabGlobe + "</span>") + (t.audible ? '<span class="sound" title="Playing sound">' + speaker + "</span>" : "") + '<span class="label">' + esc(name) + '</span><button class="close" data-id="' + t.id + '">' + cross + "</button></div>";
     }
     tabsBox.innerHTML = html;
   };
