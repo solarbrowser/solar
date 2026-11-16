@@ -75,6 +75,9 @@ class Session {
   void ChooseDownloadPath(uint32_t id, const std::string& path);
   // Whether the renderer is the one of the page of the downloads (solar://downloads/).
   bool IsDownloadsPage(uint32_t host) const;
+  // The task manager (solar://taskmanager/): whether the renderer is its, and what it is told: the processes of the tabs and of the browser, how much memory each uses, as the json it shows.
+  bool IsTaskManagerPage(uint32_t host) const;
+  std::string TasksJson() const;
   void CancelDownload(uint32_t id);
   void ClearDownloads();
   double ActiveZoom() const;
@@ -96,6 +99,8 @@ class Session {
   void SetTitle(uint32_t host, const std::string& title);
   // The interface asks to be told the state again (it has just started).
   void PushState();
+  // The page of a renderer has sound playing, or has not any now (told by the window: the interface marks the tab).
+  void SetSounding(uint32_t host, bool sounding);
 
   // The renderer the window shows (0: none yet).
   uint32_t current() const;

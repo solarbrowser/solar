@@ -1,0 +1,80 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Task manager</title>
+<style>
+  :root { --bg: #f4f5f8; --card: #ffffff; --edge: #dfe2ea; --text: #1b1f27; --dim: #697181; --accent: #3b6cf6; --pick: rgba(30, 40, 70, 0.07); --track: #e6e9f0; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #15171c; --card: #1e2129; --edge: #2c303a; --text: #e8eaf0; --dim: #949bab; --accent: #7a9bff; --pick: rgba(255, 255, 255, 0.07); --track: #2f333d; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, "Noto Sans", "DejaVu Sans", Arial, sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 44px 32px 80px; }
+  .top { display: flex; align-items: baseline; margin-bottom: 24px; }
+  h1 { flex: 1; margin: 0; font-size: 26px; font-weight: 600; }
+  .total { color: var(--dim); font-size: 14px; }
+  button { all: unset; box-sizing: border-box; display: flex; align-items: center; justify-content: center; cursor: default; }
+  .list { background: var(--card); border: 1px solid var(--edge); border-radius: 12px; overflow: hidden; margin-bottom: 20px; }
+  .head, .row { display: flex; align-items: center; gap: 14px; padding: 11px 18px; }
+  .head { color: var(--dim); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; background: var(--pick); }
+  .row + .row { border-top: 1px solid var(--edge); }
+  .row:hover { background: var(--pick); }
+  .name { flex: 1; min-width: 0; }
+  .name b { display: block; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .name small { display: block; color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mem { flex: none; width: 90px; text-align: right; font-variant-numeric: tabular-nums; }
+  .pid { flex: none; width: 70px; text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .bar { flex: none; width: 90px; height: 6px; border-radius: 3px; background: var(--track); }
+  .bar i { display: block; height: 6px; border-radius: 3px; background: var(--accent); }
+  .snd { flex: none; width: 18px; height: 18px; color: var(--accent); }
+  .snd svg { width: 18px; height: 18px; }
+  .end { flex: none; width: 70px; height: 28px; border-radius: 8px; color: var(--accent); font-size: 13px; }
+  .end:hover { background: var(--pick); }
+  .none { flex: none; width: 70px; }
+  h2 { margin: 28px 0 10px; font-size: 14px; font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: 0.04em; }
+</style>
+</head>
+<body>
+<main>
+  <div class="top"><h1>Task manager</h1><span class="total" id="total"></span></div>
+  <h2>Tabs</h2>
+  <div class="list" id="tabs"></div>
+  <h2>Browser</h2>
+  <div class="list" id="browser"></div>
+</main>
+<script>
+(() => {
+  "use strict";
+  const send = (text) => { if (typeof __solarUiSend === "function") __solarUiSend(text); };
+  const speaker = '{{icon:volume-high}}';
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const mb = (kb) => (kb < 0 ? "n/a" : kb >= 1048576 ? (kb / 1048576).toFixed(2) + " GB" : (kb / 1024).toFixed(1) + " MB");
+  const rowHtml = (t, most) => {
+    const width = t.kb > 0 ? Math.max(2, Math.round((t.kb / most) * 100)) : 0;
+    return '<div class="row"><div class="name"><b>' + esc(t.title || t.url || t.name || "") + (t.active ? " •" : "") + "</b><small>" + esc(t.url || "") + "</small></div>" +
+      (t.audible ? '<span class="snd" title="Playing sound">' + speaker + "</span>" : '<span class="snd"></span>') +
+      '<div class="bar"><i style="width:' + width + '%"></i></div><div class="mem">' + mb(t.kb) + '</div><div class="pid">' + (t.pid > 0 ? t.pid : "") + "</div>" +
+      (t.id ? '<button class="end" data-id="' + t.id + '">End tab</button>' : '<span class="none"></span>') + "</div>";
+  };
+  const render = (tasks) => {
+    const tabs = tasks.filter((t) => t.kind === "tab"), other = tasks.filter((t) => t.kind !== "tab");
+    const most = Math.max(1, ...tasks.map((t) => t.kb));
+    const head = '<div class="head"><span class="name">Name</span><span class="snd"></span><span class="bar" style="background:none"></span><span class="mem">Memory</span><span class="pid">Process</span><span class="none"></span></div>';
+    document.getElementById("tabs").innerHTML = head + tabs.map((t) => rowHtml(t, most)).join("");
+    document.getElementById("browser").innerHTML = other.map((t) => rowHtml(t, most)).join("");
+    const total = tasks.reduce((sum, t) => sum + Math.max(0, t.kb), 0);
+    document.getElementById("total").textContent = "Total " + mb(total);
+  };
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest && event.target.closest("button.end");
+    if (button) send("tm-close\t" + button.dataset.id);
+  });
+  globalThis.__solarUiState = (next) => { if (next.tasks) render(next.tasks); };
+  send("ready");
+  send("tasks");
+  setInterval(() => send("tasks"), 1000);
+})();
+</script>
+</body>
+</html>

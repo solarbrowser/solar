@@ -112,6 +112,11 @@
   .tab img.icon { background: transparent; border-radius: 3px; object-fit: contain; }
   .tab.loading .icon { opacity: 0.45; }
   .tab .label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+  .tab .sound { flex: none; width: 14px; height: 14px; margin-left: 4px; }
+  .tab .sound svg { width: 14px; height: 14px; color: var(--accent); }
+  .tab.pinned { position: relative; }
+  .tab.pinned .sound { position: absolute; right: 4px; bottom: 3px; width: 11px; height: 11px; margin: 0; }
+  .tab.pinned .sound svg { width: 11px; height: 11px; }
   .tab .close { flex: none; width: 20px; height: 20px; margin-left: 4px; border-radius: 10px; opacity: 0; }
   .tab:hover .close, .tab.active .close { opacity: 1; }
   .tab .close svg { width: 16px; height: 16px; color: var(--dim); }

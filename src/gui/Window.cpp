@@ -104,11 +104,14 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
 
   std::map<uint32_t, View> views;
   // The sound of the pages: a stream of the sound device for each a page opened (a few at most), played as the page sends it; how much is not yet played is told to the page now and then.
-  // (Only the page that is shown has sound.)
+  // (A page that is not shown goes on with its sound: a tab in the background is one that plays music. Which tabs sound is told to the interface.)
   struct Stream {
     std::unique_ptr<media::AudioOutput> output;
     int rate = 48000, channels = 2;
+    bool paused = false;
   };
+  std::map<uint32_t, Uint64> heardAt;  // the page, and when a stream of it last had something to play (SDL_GetTicks)
+  std::map<uint32_t, bool> soundTold;  // what the interface was last told of the page
   std::map<uint64_t, Stream> audio;
   SDL_TimerID audioTimer = 0;
   constexpr size_t kMostStreams = 16;
@@ -206,6 +209,8 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
   };
   const auto stopAudioOf = [&](uint32_t host) {
     for (auto it = audio.begin(); it != audio.end();) it = (it->first >> 32) == host ? audio.erase(it) : std::next(it);
+    heardAt.erase(host);
+    if (soundTold.erase(host)) session.SetSounding(host, false);
     if (audio.empty() && audioTimer) {
       SDL_RemoveTimer(audioTimer);
       audioTimer = 0;
@@ -243,12 +248,6 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
       return;
     }
     if (message.type == kShown) {
-      // (The sound of the page that was shown stops with it.)
-      for (auto it = audio.begin(); it != audio.end();) it = (it->first >> 32) != message.host ? audio.erase(it) : std::next(it);
-      if (audio.empty() && audioTimer) {
-        SDL_RemoveTimer(audioTimer);
-        audioTimer = 0;
-      }
       // The tab that is shown has its page's last picture put up at once (a tab that has no page yet shows nothing), and its title.
       const auto view = views.find(message.host);
       if (message.host == 0 || view == views.end() || view->second.lastFrame < 0) {
@@ -375,7 +374,7 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
       case wire::ToBrowser::AudioOpen: {
         const uint32_t id = in.U32();
         const int rate = in.I32(), channels = in.I32();
-        if (!shown || !in.ok() || audio.size() >= kMostStreams || audio.count(streamKey(message.host, id)) || rate < 8000 || rate > 192000 || channels < 1 || channels > 8) break;
+        if (!in.ok() || audio.size() >= kMostStreams || audio.count(streamKey(message.host, id)) || rate < 8000 || rate > 192000 || channels < 1 || channels > 8) break;
         Stream stream;
         stream.output = MakeSdlAudioOutput();
         if (!stream.output->Start(rate, channels)) break;
@@ -412,7 +411,10 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
         const uint32_t id = in.U32();
         const bool paused = in.Bool();
         const auto stream = audio.find(streamKey(message.host, id));
-        if (in.ok() && stream != audio.end()) stream->second.output->Pause(paused);
+        if (in.ok() && stream != audio.end()) {
+          stream->second.output->Pause(paused);
+          stream->second.paused = paused;
+        }
         break;
       }
       case wire::ToBrowser::AudioClear: {
@@ -433,11 +435,17 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
       }
       case wire::ToBrowser::UiCommand: {
         // What the interface asks (only its own process is heard).
-        const bool fromBar = message.host == session.chrome(), fromSettings = !fromBar && session.IsSettings(message.host), fromDownloads = !fromBar && !fromSettings && session.IsDownloadsPage(message.host);
-        if (!fromBar && !fromSettings && !fromDownloads) break;
+        const bool fromBar = message.host == session.chrome(), fromSettings = !fromBar && session.IsSettings(message.host), fromDownloads = !fromBar && !fromSettings && session.IsDownloadsPage(message.host), fromTasks = !fromBar && !fromSettings && !fromDownloads && session.IsTaskManagerPage(message.host);
+        if (!fromBar && !fromSettings && !fromDownloads && !fromTasks) break;
         const std::string& text = message.bytes;
         const size_t tab = text.find('\t');
         const std::string verb = text.substr(0, tab), rest = tab == std::string::npos ? "" : text.substr(tab + 1);
+        if (fromTasks) {
+          // (The task manager asks what the processes use, and for a tab to be ended: nothing else.)
+          if (verb == "tasks" || verb == "ready") session.Send(message.host, wire::ToRenderer::UiState, session.TasksJson());
+          else if (verb == "tm-close") session.CloseTab(static_cast<uint32_t>(std::max(0, std::atoi(rest.c_str()))));
+          break;
+        }
         if (fromDownloads && verb != "ready" && verb.rfind("dl-", 0) != 0) break;  // (the page of the downloads asks of the downloads and of nothing else)
         if (fromDownloads && verb == "ready") {
           session.PushState();
@@ -487,6 +495,7 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
         else if (verb == "focus") barFocused = rest == "1";
         else if (verb == "zoom") session.Zoom(std::atoi(rest.c_str()));
         else if (verb == "downloads-page") session.ShowPage(kDownloadsAddress);
+        else if (verb == "taskmanager-page") session.ShowPage(kTaskManagerAddress);
         else if (verb == "dl-open" || verb == "dl-folder") {
           // A file that was downloaded is opened by the system's program for it, or the folder it is in is shown.
           const int number = std::atoi(rest.c_str());
@@ -797,11 +806,23 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
           }
           if (event.user.code == 1) {
             // (The timer of the sound: the page is told how much each stream has not played.)
+            const Uint64 now = SDL_GetTicks();
             for (const auto& [key, stream] : audio) {
+              const size_t queued = stream.output->QueuedFrames();
               Writer out;
               out.U32(static_cast<uint32_t>(key & 0xFFFFFFFFu));
-              out.U64(stream.output->QueuedFrames());
+              out.U64(queued);
               session.Send(static_cast<uint32_t>(key >> 32), wire::ToRenderer::AudioQueued, out.bytes());
+              if (queued > 0 && !stream.paused) heardAt[static_cast<uint32_t>(key >> 32)] = now;
+            }
+            // (A page sounds while a stream of it has something to play, and for a moment after: the gaps between two pieces are not silence.)
+            for (const auto& [host, at] : heardAt) {
+              const bool sounding = now - at < 1000;
+              const auto told = soundTold.find(host);
+              if (told == soundTold.end() ? sounding : told->second != sounding) {
+                soundTold[host] = sounding;
+                session.SetSounding(host, sounding);
+              }
             }
             forward = false;
             break;

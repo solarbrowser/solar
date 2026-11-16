@@ -18,6 +18,7 @@
     return m ? m[1].replace(/^www\./, "") : t.url;
   };
   const cross = '{{icon:close}}';
+  const speaker = '{{icon:volume-high}}';
   // The pictures the browser fetched for the tabs: kept for the site the tab is on, dropped when the tab goes to another.
   const icons = {}, iconSite = {};
   const siteOf = (url) => { const m = /^[a-z]+:\/\/([^\/?#]*)/.exec(url || ""); return m ? m[1] : ""; };
@@ -34,7 +35,7 @@
     for (const t of state.tabs) {
       const blank = /^solar:\/\/newtab/.test(t.url) || !t.url;
       const name = nameOf(t);
-      html += '<div class="tab' + (t.id === state.active ? " active" : "") + (t.loading ? " loading" : "") + (blank ? " blank" : "") + (t.pinned ? " pinned" : "") + '" data-id="' + t.id + '" title="' + esc(name).replace(/"/g, "&quot;") + '">' + (icons[t.id] && !blank ? '<img class="icon" src="' + icons[t.id] + '">' : '<span class="icon">' + tabGlobe + "</span>") + '<span class="label">' + esc(name) + '</span><button class="close" data-id="' + t.id + '">' + cross + "</button></div>";
+      html += '<div class="tab' + (t.id === state.active ? " active" : "") + (t.loading ? " loading" : "") + (blank ? " blank" : "") + (t.pinned ? " pinned" : "") + '" data-id="' + t.id + '" title="' + esc(name).replace(/"/g, "&quot;") + '">' + (icons[t.id] && !blank ? '<img class="icon" src="' + icons[t.id] + '">' : '<span class="icon">' + tabGlobe + "</span>") + '<span class="label">' + esc(name) + '</span>' + (t.audible ? '<span class="sound" title="Playing sound">' + speaker + "</span>" : "") + '<button class="close" data-id="' + t.id + '">' + cross + "</button></div>";
     }
     tabsBox.innerHTML = html;
   };
@@ -323,6 +324,7 @@
     if (!item || !item.dataset.do) return;
     setMenu(false);
     if (item.dataset.do === "downloads") send("downloads-page");
+    else if (item.dataset.do === "taskmanager") send("taskmanager-page");
     else if (item.dataset.do === "find") globalThis.__solarFindUi.open();
     else send(item.dataset.do);
   });

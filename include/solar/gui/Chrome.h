@@ -33,6 +33,8 @@ constexpr const char* kNewTabAddress = "solar://newtab/";
 constexpr const char* kSettingsAddress = "solar://settings/";
 // The page of the downloads: the browser's too, a renderer of its own that may ask for a file to be opened, its folder shown, a download stopped or the list cleared.
 constexpr const char* kDownloadsAddress = "solar://downloads/";
+// The task manager: the browser's too, a renderer of its own that is told what each tab's process uses, and may end a tab (and nothing else).
+constexpr const char* kTaskManagerAddress = "solar://taskmanager/";
 
 // The icons that were embedded when the program was built (assets/icons): the name, and the svg, drawn in the colour of the text. The table ends with a null name.
 struct Icon {
@@ -50,6 +52,7 @@ bool IsInterfaceAddress(const std::string& address);
 std::string NewTabDocument();
 std::string SettingsDocument();
 std::string DownloadsDocument();
+std::string TaskManagerDocument();
 
 // What the user typed in the address bar, as an address: one with a scheme as it is, a host as an https address, anything else a search (`searchAddress` is where the words are put after).
 std::string AddressFromInput(const std::string& text, const std::string& searchAddress = "https://html.duckduckgo.com/html/?q=");

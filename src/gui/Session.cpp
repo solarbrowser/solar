@@ -260,6 +260,7 @@ struct Session::Impl : std::enable_shared_from_this<Session::Impl> {
   uint32_t active = 0;
   uint32_t nextTab = 1;
   std::atomic<uint32_t> shownHost{0};  // the renderer of the active tab's page: what the window shows
+  std::set<uint32_t> soundingHosts;     // the renderers that have sound playing (under the lock)
   bool windowControls = false, maximized = false;  // the interface draws the buttons of the window (the system's bar is not there)
   std::optional<std::string> resize;  // the last size the window said (the ones that come are told it)
   int exitCode = 0;
@@ -336,6 +337,7 @@ struct Session::Impl : std::enable_shared_from_this<Session::Impl> {
   std::string DownloadsJsonLocked(size_t most);
   void DownloadProgress(uint32_t id, uint64_t received);
   void PushState();
+  bool TabSoundsLocked(uint32_t tab) const;
   uint32_t NewTab(const std::string& address, bool activate);
   // The icons of the pages: asked for by the renderer of a tab, fetched here, kept, and given to the interface for the tab.
   void OnFavicon(const std::shared_ptr<Host>& host, const std::string& address);
@@ -892,7 +894,7 @@ void Session::Impl::OnNavigate(const std::shared_ptr<Host>& host, wire::Navigate
   if (parsed->scheme == "solar") {
     // The browser's own pages are served from its memory, to the renderer that was made for them and to no other.
     const std::string where = url::Serialize(*parsed);
-    if ((where != kNewTabAddress && where != kSettingsAddress && where != kDownloadsAddress) || SiteFor(*parsed) != host->site) return NavError(*host, request.id, "unsupported scheme");
+    if ((where != kNewTabAddress && where != kSettingsAddress && where != kDownloadsAddress && where != kTaskManagerAddress) || SiteFor(*parsed) != host->site) return NavError(*host, request.id, "unsupported scheme");
     host->infos[request.id] = {kind, entry};
     request.kind = kind;
     request.entry = entry;
@@ -1324,6 +1326,7 @@ void Session::Impl::OnInternalNavigate(const std::shared_ptr<Host>& host, const 
   const std::string where = parsed ? url::Serialize(*parsed) : "";
   if (where == kSettingsAddress) Serve(*host, request.id, kSettingsAddress, SettingsDocument());
   else if (where == kDownloadsAddress) Serve(*host, request.id, kDownloadsAddress, DownloadsDocument());
+  else if (where == kTaskManagerAddress) Serve(*host, request.id, kTaskManagerAddress, TaskManagerDocument());
   else Serve(*host, request.id, kNewTabAddress, NewTabDocument());
   host->active.erase(request.id);
 }
@@ -1365,6 +1368,15 @@ std::string Session::Impl::DownloadsJsonLocked(size_t most) {
   return json + "]";
 }
 
+// Whether a renderer of the tab has sound playing (under the lock).
+bool Session::Impl::TabSoundsLocked(uint32_t tab) const {
+  for (uint32_t host : soundingHosts) {
+    const auto found = hosts.find(host);
+    if (found != hosts.end() && !found->second->gone && found->second->tab == tab) return true;
+  }
+  return false;
+}
+
 void Session::Impl::PushState() {
   // The page of the downloads is told them all, whether there is an interface or not.
   std::vector<std::shared_ptr<Host>> pages;
@@ -1389,7 +1401,7 @@ void Session::Impl::PushState() {
       const TabState& t = tabs.at(id);
       if (!first) json += ",";
       first = false;
-      json += "{\"id\":" + std::to_string(id) + ",\"title\":" + JsonString(t.title) + ",\"url\":" + JsonString(addressOf(t)) + ",\"loading\":" + (t.loading ? "true" : "false") + ",\"pinned\":" + (t.pinned ? "true" : "false") + "}";
+      json += "{\"id\":" + std::to_string(id) + ",\"title\":" + JsonString(t.title) + ",\"url\":" + JsonString(addressOf(t)) + ",\"loading\":" + (t.loading ? "true" : "false") + ",\"pinned\":" + (t.pinned ? "true" : "false") + ",\"audible\":" + (TabSoundsLocked(id) ? "true" : "false") + "}";
     }
     json += "],\"active\":" + std::to_string(active);
     if (const TabState* t = ActiveTab()) {
@@ -1614,6 +1626,16 @@ void Session::SetWindowFlags(bool controls, bool maximized) {
   });
 }
 
+void Session::SetSounding(uint32_t host, bool sounding) {
+  impl_->services.Post([impl = impl_, host, sounding] {
+    {
+      std::lock_guard<std::mutex> lock(impl->mutex);
+      if (sounding ? !impl->soundingHosts.insert(host).second : impl->soundingHosts.erase(host) == 0) return;
+    }
+    impl->PushState();
+  });
+}
+
 void Session::PushState() { impl_->services.Post([impl = impl_] { impl->PushState(); }); }
 
 void Session::ChooseDownloadPath(uint32_t id, const std::string& path) {
@@ -1655,6 +1677,76 @@ void Session::ChooseDownloadPath(uint32_t id, const std::string& path) {
 bool Session::IsDownloadsPage(uint32_t host) const {
   std::shared_ptr<Host> found = impl_->Find(host);
   return found && !found->gone && found->site == std::string("solar:") + kDownloadsAddress;
+}
+
+bool Session::IsTaskManagerPage(uint32_t host) const {
+  std::shared_ptr<Host> found = impl_->Find(host);
+  return found && !found->gone && found->site == std::string("solar:") + kTaskManagerAddress;
+}
+
+namespace {
+// How much memory a process has in its resident pages, in kilobytes (-1: not known on this system).
+long ResidentKilobytes(long pid) {
+#if defined(__linux__)
+  if (pid <= 0) return -1;
+  std::ifstream in("/proc/" + std::to_string(pid) + "/statm");
+  long size = 0, resident = 0;
+  if (!(in >> size >> resident)) return -1;
+  return resident * (sysconf(_SC_PAGESIZE) / 1024);
+#else
+  (void)pid;
+  return -1;
+#endif
+}
+}  // namespace
+
+std::string Session::TasksJson() const {
+  struct Row {
+    std::string kind, title, url;
+    uint32_t id = 0;
+    long pid = -1;
+    bool active = false, audible = false;
+  };
+  std::vector<Row> rows;
+  {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    for (uint32_t id : impl_->order) {
+      const Impl::TabState& t = impl_->tabs.at(id);
+      Row row;
+      row.kind = "tab";
+      row.id = id;
+      row.title = t.title;
+      row.url = t.index >= 0 && t.index < static_cast<int>(t.entries.size()) ? t.entries[static_cast<size_t>(t.index)] : std::string();
+      row.active = id == impl_->active;
+      row.audible = impl_->TabSoundsLocked(id);
+      const auto host = impl_->hosts.find(t.current);
+      if (host != impl_->hosts.end() && !host->second->gone) row.pid = host->second->child;
+      rows.push_back(std::move(row));
+    }
+    const auto bar = impl_->hosts.find(impl_->chromeId.load());
+    if (bar != impl_->hosts.end() && !bar->second->gone) {
+      Row row;
+      row.kind = "interface";
+      row.title = "Interface";
+      row.pid = bar->second->child;
+      rows.push_back(std::move(row));
+    }
+  }
+  Row self;
+  self.kind = "browser";
+  self.title = "Browser";
+#if defined(__linux__)
+  self.pid = static_cast<long>(getpid());
+#endif
+  rows.push_back(std::move(self));
+  std::string json = "{\"tasks\":[";
+  for (size_t i = 0; i < rows.size(); ++i) {
+    const Row& r = rows[i];
+    if (i) json += ",";
+    json += "{\"kind\":" + JsonString(r.kind) + ",\"id\":" + std::to_string(r.id) + ",\"title\":" + JsonString(r.title) + ",\"url\":" + JsonString(r.url) + ",\"pid\":" + std::to_string(r.pid) +
+            ",\"kb\":" + std::to_string(ResidentKilobytes(r.pid)) + ",\"active\":" + (r.active ? "true" : "false") + ",\"audible\":" + (r.audible ? "true" : "false") + "}";
+  }
+  return json + "]}";
 }
 
 std::string Session::DownloadPath(uint32_t id) const {
