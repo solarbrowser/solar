@@ -245,7 +245,8 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
       ++depth;
       Tree* outer = UpdateLayout(ctx, frame->nodeDocument);
       --depth;
-      for (const Box* b : BoxesOf(*outer, frame)) {
+      // (None when the document around is being laid out now, and asked again from a script of this one: its size is what it was, and the boxes are not there to read.)
+      if (outer) for (const Box* b : BoxesOf(*outer, frame)) {
         if (b->kind != Box::Kind::Block) continue;
         environment.width = std::max(0.0, b->width - b->border.Horizontal() - b->padding.Horizontal());
         environment.height = std::max(0.0, b->height - b->border.Vertical() - b->padding.Vertical());
