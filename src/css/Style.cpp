@@ -1921,6 +1921,12 @@ ElementStyle& StyleOf(dom::Element* element, const std::string& pseudo = "") {
   static Last last;
   const bool plainAsk = pseudo.empty() && !AnimatedValuesSuppressed() && !StartingStyleFor(element, pseudo);
   if (plainAsk && last.element == element && last.serial == element->serial && last.generation == g_cacheGeneration && last.cacheVersion == g_cacheVersion && last.treeVersion == treeVersion) return *last.style;
+  if (g_styleHolds == 0) {
+    // (What was kept for elements that are gone: the entry of one is not small (the cascade, the memo), and it would stay until the cache is emptied, at sixty thousand of them.)
+    std::vector<dom::Element*>& dead = dom::DeadElements();
+    for (dom::Element* gone : dead) Cache().erase(gone);
+    dead.clear();
+  }
   if ((cachedStyleVersion != g_cacheVersion || Cache().size() > 60000 || g_clearDeferred) && g_styleHolds == 0) {
     ClearShared();
     Cache().clear();

@@ -526,9 +526,15 @@ namespace {
 size_t g_liveNodes = 0;
 }
 Node::Node() { ++g_liveNodes; }
+std::vector<Element*>& DeadElements() {
+  static thread_local std::vector<Element*> dead;
+  return dead;
+}
+
 Node::~Node() {
   delete committedLinks;
   --g_liveNodes;
+  if (nodeType == NodeType::Element) DeadElements().push_back(static_cast<Element*>(this));
   if (!InNameIndex().empty()) ForgetDestroyedNode(this);
   if (g_mediaAttached.load(std::memory_order_relaxed) > 0 && g_mediaDetach) g_mediaDetach(this);
   if (g_canvasAttached.load(std::memory_order_relaxed) > 0 && g_canvasDetach) g_canvasDetach(this);

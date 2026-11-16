@@ -230,6 +230,9 @@ struct ControlState {
 };
 // Notes that the node changed in the way, to be committed. Called BEFORE the change of links or of the slot it is assigned to: it keeps what the node has as the committed ones.
 void MarkPending(Node* node, uint8_t kinds);
+// The elements that have been destroyed since style last looked: it keeps what it worked out by the address of an element, and drops it for these (an element dies when the collector finds it
+// unreachable, which is not when it left the tree). Taken by style at a point where nothing holds a reference into what it keeps.
+std::vector<Element*>& DeadElements();
 extern thread_local int g_committedViewDepth;
 inline bool InCommittedView() { return g_committedViewDepth > 0; }
 inline Node* ParentOf(const Node* n) { return g_committedViewDepth && n->committedLinks ? n->committedLinks->parent : n->parentNode; }

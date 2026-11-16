@@ -232,6 +232,13 @@ Value Notify(Context& ctx, Value, qe::Args, Value) {
     observer->queue.clear();
     // The transient registrations were for the records that have been taken.
     for (Node* node : observer->nodes) RemoveRegistrations(node, [&](const Registration& r) { return r.transient && r.observer == observer; });
+    // (And the nodes it was only transiently registered on are not kept: it marks every one of this list, so each node that was taken out of an observed tree stayed as long as the observer, with all that was
+    // under it: a page that makes its list again by innerHTML every second kept every list it had made.)
+    std::erase_if(observer->nodes, [&](Node* node) {
+      if (!node->registrations) return true;
+      for (const Registration& r : *node->registrations) if (r.observer == observer) return false;
+      return true;
+    });
     if (records.empty()) continue;
     Value array = RecordsArray(ctx, records);
     if (qe::HasException(ctx)) {
@@ -512,6 +519,7 @@ void RegisterTransientObservers(Node* node, Node* oldParent) {
       auto* observer = static_cast<JsMutationObserver*>(registration.observer);
       observer->nodes.push_back(node);
       observer->NoteWrite();
+      Schedule(observer);  // (its transient registrations end with the next delivery, which is made even when it has no record: see Notify)
     }
   }
 }
