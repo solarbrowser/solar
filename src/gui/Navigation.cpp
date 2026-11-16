@@ -25,7 +25,7 @@ namespace {
 const net::CosmeticFilter& Cosmetics() {
   static const net::CosmeticFilter* filter = [] {
     auto* f = new net::CosmeticFilter;
-    for (const char* const* piece = web::kScriptFilterLists; *piece; ++piece) f->AddList(*piece);
+    for (const char* const* piece = web::kScriptFilterLists; *piece; ++piece) f->AddStaticList(*piece);
     f->Finish();
     return f;
   }();

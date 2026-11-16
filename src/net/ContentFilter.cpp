@@ -333,33 +333,42 @@ bool EndsWithClassOrId(std::string_view s) {
 
 }  // namespace
 
-void CosmeticFilter::AddList(std::string_view text) {
+void CosmeticFilter::ParseText(std::string_view text, bool keepSpecific) {
   size_t at = 0;
   while (at < text.size()) {
     size_t eol = text.find('\n', at);
     if (eol == std::string_view::npos) eol = text.size();
-    ParseLine(Trim(text.substr(at, eol - at)));
+    ParseLine(Trim(text.substr(at, eol - at)), keepSpecific);
     at = eol + 1;
   }
 }
 
-void CosmeticFilter::ParseLine(std::string_view line) {
-  if (line.empty() || line[0] == '!' || line[0] == '[') return;
+void CosmeticFilter::AddList(std::string_view text) { ParseText(text, true); }
+
+void CosmeticFilter::AddStaticList(std::string_view text) {
+  staticLists_.push_back(text);
+  ParseText(text, false);
+}
+
+bool CosmeticFilter::ParseRule(std::string_view line, Parsed& out) {
+  if (line.empty() || line[0] == '!' || line[0] == '[') return false;
   // The mark that ends the domains: ## (hide) or #@# (an exception). The others (#?# #$# #%# #@?# #@$#) are for rules of more than a selector.
   size_t mark = std::string_view::npos;
   bool exception = false;
   for (size_t i = line.find('#'); i != std::string_view::npos; i = line.find('#', i + 1)) {
     if (line.compare(i, 2, "##") == 0) { mark = i; break; }
     if (line.compare(i, 3, "#@#") == 0) { mark = i; exception = true; break; }
-    if (line.compare(i, 3, "#?#") == 0 || line.compare(i, 3, "#$#") == 0 || line.compare(i, 3, "#%#") == 0 || line.compare(i, 4, "#@$#") == 0 || line.compare(i, 4, "#@?#") == 0) return;
+    if (line.compare(i, 3, "#?#") == 0 || line.compare(i, 3, "#$#") == 0 || line.compare(i, 3, "#%#") == 0 || line.compare(i, 4, "#@$#") == 0 || line.compare(i, 4, "#@?#") == 0) return false;
   }
-  if (mark == std::string_view::npos) return;
+  if (mark == std::string_view::npos) return false;
   std::string_view domainText = line.substr(0, mark);
   std::string_view selector = Trim(line.substr(mark + (exception ? 3 : 2)));
-  if (selector.empty() || Procedural(selector)) return;
-  if (domainText.find_first_of(" \t/") != std::string_view::npos) return;  // (a network rule that has a ## in its address)
-
-  std::vector<std::string> include, exclude;
+  if (selector.empty() || Procedural(selector)) return false;
+  if (domainText.find_first_of(" \t/") != std::string_view::npos) return false;  // (a network rule that has a ## in its address)
+  out.exception = exception;
+  out.selector = selector;
+  out.include.clear();
+  out.exclude.clear();
   size_t from = 0;
   while (from <= domainText.size() && !domainText.empty()) {
     size_t comma = domainText.find(',', from);
@@ -367,23 +376,69 @@ void CosmeticFilter::ParseLine(std::string_view line) {
     std::string_view domain = domainText.substr(from, comma - from);
     from = comma + 1;
     if (domain.empty()) continue;
-    if (domain[0] == '~') exclude.push_back(Lower(domain.substr(1)));
-    else include.push_back(Lower(domain));
+    if (domain[0] == '~') out.exclude.push_back(Lower(domain.substr(1)));
+    else out.include.push_back(Lower(domain));
   }
-  const std::string text(selector);
-  if (exception) {
-    exceptions_.push_back({text, std::move(include)});
+  return true;
+}
+
+void CosmeticFilter::ParseLine(std::string_view line, bool keepSpecific) {
+  Parsed rule;
+  if (!ParseRule(line, rule)) return;
+  const std::string text(rule.selector);
+  if (rule.exception) {
+    exceptions_.push_back({text, std::move(rule.include)});
     return;
   }
-  if (include.empty()) {
-    if (!exclude.empty()) return;
-    if (selector[0] == '#' && IsSimpleName(selector.substr(1))) ids_.insert(text.substr(1));
-    else if (selector[0] == '.' && IsSimpleName(selector.substr(1))) classes_.insert(text.substr(1));
-    else if (EndsWithClassOrId(selector)) genericSelectors_.push_back(text);
+  if (rule.include.empty()) {
+    if (!rule.exclude.empty()) return;
+    if (rule.selector[0] == '#' && IsSimpleName(rule.selector.substr(1))) ids_.insert(text.substr(1));
+    else if (rule.selector[0] == '.' && IsSimpleName(rule.selector.substr(1))) classes_.insert(text.substr(1));
+    else if (EndsWithClassOrId(rule.selector)) genericSelectors_.push_back(text);
     return;
   }
-  for (const std::string& domain : include) byDomain_[domain].push_back({text, exclude});
   ++specificCount_;
+  if (!keepSpecific) return;
+  for (const std::string& domain : rule.include) byDomain_[domain].push_back({text, rule.exclude});
+}
+
+void CosmeticFilter::SpecificFor(const std::string& host, std::vector<std::string>& out) const {
+  // The domains a rule of the host can be written for: the host and what it is under, down to the last two parts (a rule for "com" is for no one).
+  std::vector<std::string> suffixes;
+  for (size_t at = 0; at < host.size();) {
+    suffixes.push_back(host.substr(at));
+    const size_t dot = host.find('.', at);
+    if (dot == std::string::npos) break;
+    at = dot + 1;
+  }
+  if (suffixes.size() > 1) suffixes.pop_back();  // (the top-level name alone)
+  if (suffixes.empty()) return;
+  Parsed rule;
+  for (std::string_view text : staticLists_) {
+    size_t at = 0;
+    while (at < text.size()) {
+      size_t eol = text.find('\n', at);
+      if (eol == std::string_view::npos) eol = text.size();
+      const std::string_view line = text.substr(at, eol - at);
+      at = eol + 1;
+      // (Only a line with the mark and with the name of the host or of a domain above it before the mark is worked out: the rest of the list is nothing for this host.)
+      const size_t mark = line.find("##");
+      if (mark == std::string_view::npos || mark == 0) continue;
+      const std::string_view domains = line.substr(0, mark);
+      bool maybe = false;
+      for (const std::string& suffix : suffixes) {
+        if (domains.find(suffix) != std::string_view::npos) { maybe = true; break; }
+      }
+      if (!maybe) continue;
+      if (!ParseRule(Trim(line), rule) || rule.exception || rule.include.empty()) continue;
+      bool forHost = false;
+      for (const std::string& domain : rule.include) forHost = forHost || HostIsOrUnder(host, domain);
+      if (!forHost) continue;
+      bool skip = false;
+      for (const std::string& d : rule.exclude) skip = skip || HostIsOrUnder(host, d);
+      if (!skip) out.push_back(std::string(rule.selector));
+    }
+  }
 }
 
 void CosmeticFilter::Finish() {
@@ -414,6 +469,7 @@ std::shared_ptr<const css::HideRules> CosmeticFilter::ForHost(const std::string&
       if (HostIsOrUnder(host, d)) { excepted.push_back(e.selector); break; }
     }
   }
+  SpecificFor(host, rules->selectors);
   for (size_t at = 0; at < host.size();) {
     const auto found = byDomain_.find(host.substr(at));
     if (found != byDomain_.end()) {

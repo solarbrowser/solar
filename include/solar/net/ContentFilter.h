@@ -84,6 +84,9 @@ class ContentFilter {
 class CosmeticFilter {
  public:
   void AddList(std::string_view text);
+  // The same for a list that lives as long as the filter (an embedded one): the rules for every host and the exceptions are kept, and those for a host are not: they are found in the list
+  // when a host asks (ForHost), so that thousands of sites' rules are not in the memory of the page of one.
+  void AddStaticList(std::string_view text);
   void Finish();
 
   // What a page of the host has hidden. Kept for the next page of the host; safe to call from several threads once Finish has been called.
@@ -101,7 +104,18 @@ class CosmeticFilter {
     std::string selector;
     std::vector<std::string> domains;  // empty: every host
   };
-  void ParseLine(std::string_view line);
+  struct Parsed {
+    bool exception = false;
+    std::string_view selector;
+    std::vector<std::string> include, exclude;
+  };
+  // A line of a list as a rule (false: it is not one this filter has).
+  static bool ParseRule(std::string_view line, Parsed& out);
+  void ParseLine(std::string_view line, bool keepSpecific);
+  void ParseText(std::string_view text, bool keepSpecific);
+  // The selectors the static lists have for the host (and not only for the hosts above it that have no rule of their own in them).
+  void SpecificFor(const std::string& host, std::vector<std::string>& out) const;
+  std::vector<std::string_view> staticLists_;
 
   std::unordered_set<std::string> ids_, classes_;
   std::vector<std::string> genericSelectors_;
