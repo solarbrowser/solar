@@ -3755,6 +3755,37 @@ bool MentionsAny(const std::vector<CssRule*>& rules, const std::vector<std::stri
   return false;
 }
 
+// The styles of the elements the keys are for are made again (and kept where the same declarations win); the others are kept as they are.
+void MarkDirtyByKeys(const std::unordered_set<uint64_t>& keys, bool everything) {
+  const auto connected = [](const dom::Element* e) { const dom::Node* top = dom::ShadowIncludingRoot(const_cast<dom::Element*>(e)); return top && top->IsDocument(); };
+  const uint64_t rootKey = KeyHash(6, "root", false);
+  for (auto& [element, entry] : Cache()) {
+    bool touched = everything || !connected(element);
+    if (!touched && element == element->nodeDocument->DocumentElement()) touched = keys.count(rootKey) > 0;
+    if (!touched) touched = keys.count(KeyHash(3, element->localName, true)) > 0;
+    if (!touched) {
+      if (const dom::Attr* id = element->FindAttribute("id")) touched = keys.count(KeyHash(1, id->Value(), false)) > 0;
+    }
+    if (!touched) {
+      for (const dom::Attr* attribute : element->AttributesInView()) {
+        if (keys.count(KeyHash(5, attribute->localName, true))) { touched = true; break; }
+        if (attribute->localName == "class") {
+          const std::string& v = attribute->Value();
+          size_t i = 0;
+          while (i < v.size() && !touched) {
+            while (i < v.size() && (v[i] == ' ' || v[i] == '\t' || v[i] == '\n' || v[i] == '\r' || v[i] == '\f')) ++i;
+            size_t j = i;
+            while (j < v.size() && !(v[j] == ' ' || v[j] == '\t' || v[j] == '\n' || v[j] == '\r' || v[j] == '\f')) ++j;
+            if (j > i) touched = keys.count(KeyHash(2, std::string_view(v).substr(i, j - i), false)) > 0;
+            i = j;
+          }
+        }
+      }
+    }
+    if (touched) entry.dirty = true;
+  }
+}
+
 // A sheet that was parsed into a document as new rules: the styles of the elements it can be for are made again, the others are kept. False (nothing done) when
 // that cannot be told.
 bool NoteSheetAdded(CssStyleSheet* sheet) {
@@ -3825,36 +3856,34 @@ bool NoteSheetAdded(CssStyleSheet* sheet) {
       }
     }
   }
-  const uint64_t rootKey = KeyHash(6, "root", false);
-  for (auto& [element, entry] : Cache()) {
-    bool touched = everything || !connected(element);
-    if (!touched && element == element->nodeDocument->DocumentElement()) touched = keys.count(rootKey) > 0;
-    if (!touched) touched = keys.count(KeyHash(3, element->localName, true)) > 0;
-    if (!touched) {
-      if (const dom::Attr* id = element->FindAttribute("id")) touched = keys.count(KeyHash(1, id->Value(), false)) > 0;
-    }
-    if (!touched) {
-      for (const dom::Attr* attribute : element->AttributesInView()) {
-        if (keys.count(KeyHash(5, attribute->localName, true))) { touched = true; break; }
-        if (attribute->localName == "class") {
-          const std::string& v = attribute->Value();
-          size_t i = 0;
-          while (i < v.size() && !touched) {
-            while (i < v.size() && (v[i] == ' ' || v[i] == '\t' || v[i] == '\n' || v[i] == '\r' || v[i] == '\f')) ++i;
-            size_t j = i;
-            while (j < v.size() && !(v[j] == ' ' || v[j] == '\t' || v[j] == '\n' || v[j] == '\r' || v[j] == '\f')) ++j;
-            if (j > i) touched = keys.count(KeyHash(2, std::string_view(v).substr(i, j - i), false)) > 0;
-            i = j;
-          }
-        }
-      }
-    }
-    if (touched) entry.dirty = true;
-  }
+  MarkDirtyByKeys(keys, everything);
+  return true;
+}
+
+// A rule that script put in a sheet of the document (insertRule): the styles of the elements it can be for are made again, the others are kept (the styled-components
+// of a page put a thousand of them in one by one, and each was the styles of every element made again). False (nothing done) when that cannot be told.
+bool NoteRuleAdded(CssStyleSheet* sheet, CssRule* rule, CssRule* parent) {
+  static const bool off = std::getenv("SOLAR_NO_ADDITIVE") != nullptr;
+  if (off || !sheet || !rule || parent || sheet->disabled || !sheet->ownerNode || sheet->constructed || sheet->parentSheet || sheet->pendingAttach) return false;
+  const dom::Element* owner = dom::AsElement(sheet->ownerNode);
+  dom::Document* document = owner ? owner->nodeDocument : nullptr;
+  const dom::Node* top = owner ? dom::ShadowIncludingRoot(const_cast<dom::Element*>(owner)) : nullptr;
+  if (!document || document->mode == dom::Document::Mode::Quirks || !top || !top->IsDocument()) return false;
+  if (StyleReuseFor(document).shadows) return false;
+  std::unordered_set<uint64_t> keys;
+  bool everything = false, usesLayers = false;
+  std::vector<std::string> registered;
+  const std::vector<CssRule*> one = {rule};
+  if (!DirtyKeysOfRules(one, keys, everything, usesLayers, registered, 0, false) || usesLayers || !registered.empty()) return false;
+  ++g_styleVersion;
+  ++g_authorVersion;
+  MarkDirtyByKeys(keys, everything);
   return true;
 }
 
 }  // namespace
+
+bool NoteRuleInserted(CssStyleSheet* sheet, CssRule* rule, CssRule* parent) { return NoteRuleAdded(sheet, rule, parent); }
 
 void NoteSheetAttached(CssStyleSheet* sheet) {
   sheet->pendingAttach = false;

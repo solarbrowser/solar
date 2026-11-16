@@ -92,6 +92,7 @@ const std::vector<std::string>& ComputedPropertyNames();
 
 // The style sheets that apply to the tree the node is the root of (a document or a shadow root), in the order of the cascade.
 struct CssStyleSheet;
+struct CssRule;
 std::vector<CssStyleSheet*> SheetsOfTreeRoot(dom::Node* root);
 
 // Something a style depends on changed (a sheet, a declaration): computed values are made again.
@@ -103,6 +104,8 @@ void BeginSheetParse(CssStyleSheet* added = nullptr);
 void EndSheetParse();
 // A sheet made for an element has been given to it: the styles of the elements it can be for are made again, and the others are kept.
 void NoteSheetAttached(CssStyleSheet* sheet);
+// A rule put in a sheet of the document by script: the styles of the elements it can be for are made again. False when that cannot be told (the caller tells of a change).
+bool NoteRuleInserted(CssStyleSheet* sheet, CssRule* rule, CssRule* parent);
 // Whether any declaration for the element (or its pseudo-element) is about animations or transitions: what has none has nothing to start.
 bool DeclaresAnimation(dom::Element* element, const std::string& pseudo);
 // Whether a rule that could apply to the element (or its pseudo-element) is about animations or transitions, worked out without making the style: false is sure.

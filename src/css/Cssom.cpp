@@ -704,10 +704,13 @@ std::string MediaList::Text() const {
   return out;
 }
 
+// (A rule that insertRule makes: what it changes is told once, when it is in the sheet.)
+int g_ruleBeingInserted = 0;
+
 void MediaList::SetText(std::string_view text) {
   // (The list of a matchMedia() or of a rule that is being made is of no sheet that style has: nothing changes for it.)
   // (A sheet that is made for an element and is not yet the element's is told of when it is: NoteSheetAttached.)
-  if ((ownerSheet && !ownerSheet->pendingAttach) || ownerRule) NoteStyleChange();
+  if (!g_ruleBeingInserted && ((ownerSheet && !ownerSheet->pendingAttach) || ownerRule)) NoteStyleChange();
   queries.clear();
   if (Trim(std::string(text)).empty()) return;
   for (const ComponentValues& part : SplitOnCommas(ParseComponentValues(text))) {
@@ -1517,10 +1520,15 @@ std::string InsertRule(Context& ctx, CssStyleSheet* sheet, CssRule* parent, std:
     explicit ParsingBase(const std::string& base) { SetParsingBase(base); }
     ~ParsingBase() { SetParsingBase(""); }
   } parsingBase(sheet ? sheet->baseUrl : "");
-  CssRule* rule = ParseRuleText(ctx, text, sheet, parent, index, error);
+  struct Inserting { Inserting() { ++g_ruleBeingInserted; } ~Inserting() { --g_ruleBeingInserted; } };
+  CssRule* rule;
+  {
+    Inserting inserting;
+    rule = ParseRuleText(ctx, text, sheet, parent, index, error);
+  }
   if (!rule) return error;
-  NoteStyleChange();
   list.insert(list.begin() + index, rule);
+  if (!NoteRuleInserted(sheet, rule, parent)) NoteStyleChange();
   (parent ? static_cast<Quanta::DOMObject*>(parent) : static_cast<Quanta::DOMObject*>(sheet))->NoteWrite();
   result = index;
   if (rule->kind == RuleKind::Import && g_sheetLoader && !sheet->constructed) ProcessImports(ctx, sheet, g_sheetLoader);
@@ -1554,7 +1562,8 @@ std::string DeleteRule(Context&, CssStyleSheet* sheet, CssRule* parent, uint32_t
       if (other->kind != RuleKind::Import && other->kind != RuleKind::Namespace && other->kind != RuleKind::LayerStatement) return "InvalidStateError";
     }
   }
-  NoteStyleChange();
+  // (The elements the rule was for are told of before it goes: what is there to say it by is the rule.)
+  if (!NoteRuleInserted(sheet, list[index], parent)) NoteStyleChange();
   DetachRule(list[index]);
   list.erase(list.begin() + index);
   return "";
