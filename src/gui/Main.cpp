@@ -1975,7 +1975,9 @@ int PageMain(Shared& shared, int argc, char** argv) {
   if (!document) return 1;
 
   Clock::time_point lastRelayout = Clock::now();
-  uint64_t lastVersion = 0;
+  uint64_t lastVersion = 0, lastStructure = 0;
+  Clock::time_point lastFrameEnd = Clock::now();
+  double lastFrameMs = 0;  // what the last frame cost, to pace the ones that animations alone ask for
   const bool timing = std::getenv("SOLAR_GUI_TIMES") != nullptr;
 
   // A link: the address it has, against the page's (the nearest one at or above `from`).
@@ -3369,6 +3371,11 @@ int PageMain(Shared& shared, int argc, char** argv) {
 
     // (An animation that changed how something is drawn, or what a layout is made of, is a new frame.)
     const uint64_t version = (((solar::dom::DocumentVersion() * 1000003 + solar::css::StyleVersion()) * 1000003 + solar::dom::StateVersion()) * 1000003 + solar::css::AnimationVersion()) * 1000003 + solar::css::DrawAnimationVersion();
+    // (A frame that only an animation asks for is not made faster than a few times its cost: a page of a thousand boxes with a dot that pulses took half a core to draw that
+    // dot sixty times a second. What the page does or the user asks is not slowed.)
+    const uint64_t structure = (solar::dom::DocumentVersion() * 1000003 + solar::css::StyleVersion()) * 1000003 + solar::dom::StateVersion();
+    if (version != lastVersion && !dirty && structure == lastStructure && Clock::now() - lastFrameEnd < std::chrono::duration<double, std::milli>(lastFrameMs * 4)) continue;
+    lastStructure = structure;
     if (version != lastVersion) {
       if (timing) std::fprintf(stderr, "version: tree %llu style %llu\n", (unsigned long long)solar::dom::TreeVersion(), (unsigned long long)solar::css::StyleVersion());
       lastVersion = version;
@@ -3394,6 +3401,8 @@ int PageMain(Shared& shared, int argc, char** argv) {
     frame.regions = scrollRegions(*tree);
     const size_t itemCount = list->items.size();
     shared.PostFrame(std::move(frame));
+    lastFrameEnd = Clock::now();
+    lastFrameMs = std::chrono::duration<double, std::milli>(lastFrameEnd - t0).count();
     // SOLAR_GUI_SHOT=file.png: the frame is written to a file by the window, and the program ends (for looking at what it paints without a screen).
     // (SOLAR_GUI_SETTLE=ms: not before the pictures had that long to come.)
     const char* settle = std::getenv("SOLAR_GUI_SETTLE");

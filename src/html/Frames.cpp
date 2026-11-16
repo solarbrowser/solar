@@ -538,6 +538,21 @@ std::vector<dom::Element*> HtmlElementsIn(dom::Node* root, std::string_view name
 
 std::vector<dom::Element*> IframesIn(dom::Node* root) { return HtmlElementsIn(root, "iframe"); }
 
+// The iframes of a document, kept while its tree is as it was (every layout asks, and a walk of all the nodes of the page for each ask was a tenth of what a page that only
+// animates a dot spent at rest).
+std::vector<dom::Element*> IframesOfDocument(dom::Document* document) {
+  static dom::Document* kept = nullptr;
+  static uint64_t keptVersion = 0;
+  static std::vector<dom::Element*> list;
+  const uint64_t version = dom::StructureVersion();
+  if (kept != document || keptVersion != version || version == 0) {
+    list = IframesIn(document);
+    kept = document;
+    keptVersion = version;
+  }
+  return list;
+}
+
 // "prepare the script element" for one that script made and put in a document: an inline script runs now, and one with
 // a source, as a task of its own once it is loaded.
 void PrepareScript(dom::Element* script) {
@@ -1610,9 +1625,11 @@ void ResumeDocumentLoad(dom::Document* document) { if (document) ResumeLoad(docu
 
 namespace solar::html {
 
+bool HasIframes(dom::Document* document) { return document && !IframesOfDocument(document).empty(); }
+
 void RefreshFrameControls(dom::Document* document) {
   if (!document) return;
-  for (dom::Element* iframe : IframesIn(document)) {
+  for (dom::Element* iframe : IframesOfDocument(document)) {
     dom::Document* inner = iframe->contentDocument;
     if (!inner || !inner->context || inner->frameElement != iframe) continue;
     if (inner->realm) RunAs(*inner->realm, [&] { RefreshControls(inner); });

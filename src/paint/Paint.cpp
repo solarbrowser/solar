@@ -32,6 +32,10 @@
 #include "solar/html/Frames.h"
 #include "solar/html/Xml.h"
 
+// (Looked at once: a getenv for each box of each frame was a twentieth of a page at rest.)
+static bool NoCull() { static const bool on = std::getenv("SOLAR_PAINT_NO_CULL") != nullptr; return on; }
+static bool PaintDebug() { static const bool on = std::getenv("SOLAR_PAINT_DEBUG") != nullptr; return on; }
+
 namespace solar::paint {
 
 static std::atomic<bool> g_transparentCanvas{false};
@@ -515,7 +519,7 @@ class Painter {
   // Whether something that takes the document rectangle is out of the viewport (with room for shadows, outlines and the like) and so need not be made: only
   // where nothing but the scroll of the viewport moves the coordinates.
   bool Culled(double x, double y, double width, double height) const {
-    if (transformDepth_ != 1 || std::getenv("SOLAR_PAINT_NO_CULL")) return false;
+    if (transformDepth_ != 1 || NoCull()) return false;
     const double room = 300;
     const double roomY = room + overscan_;
     return x > scrollX_ + tree_.viewportWidth + room || x + width < scrollX_ - room || y > scrollY_ + tree_.viewportHeight + roomY || y + height < scrollY_ - roomY;
@@ -1211,7 +1215,7 @@ class Painter {
 
   // The picture of an img (and the like): in its content box.
   void PaintImageOf(const Box& box, const RectF& borderBox, const PaintProps& props) {
-    if (std::getenv("SOLAR_PAINT_DEBUG") && box.element() && box.element()->IsHtml("img")) std::fprintf(stderr, "paint img box replaced=%d kind=%d url=[%s] size %gx%g\n", box.replaced, (int)box.kind, box.imageUrl.c_str(), box.width, box.height);
+    if (PaintDebug() && box.element() && box.element()->IsHtml("img")) std::fprintf(stderr, "paint img box replaced=%d kind=%d url=[%s] size %gx%g\n", box.replaced, (int)box.kind, box.imageUrl.c_str(), box.width, box.height);
     if (!box.replaced || box.kind != Box::Kind::Block) return;
     if (box.element() && box.element()->IsHtml("video")) return;  // (a video has its own, below)
     ImageRef image;
@@ -1228,7 +1232,7 @@ class Painter {
     } else {
       image = ImageFor(box.imageUrl);
     }
-    if (std::getenv("SOLAR_PAINT_DEBUG")) std::fprintf(stderr, "img %s -> %s\n", box.imageUrl.c_str(), image ? "bytes" : "none");
+    if (PaintDebug()) std::fprintf(stderr, "img %s -> %s\n", box.imageUrl.c_str(), image ? "bytes" : "none");
     if (!image) return;
     layout::Edges insets;
     insets.top = box.border.top + box.padding.top;
@@ -1703,6 +1707,7 @@ layout::Tree* UpdateLayoutWithFrames(Quanta::Context& ctx, dom::Document* docume
   layout::SetLayoutCause("frame");
   layout::Tree* tree = layout::UpdateLayout(ctx, document);
   if (!tree || !tree->root || depth >= 4) return tree;
+  if (!html::HasIframes(document)) return tree;
   std::vector<dom::Document*> frames;
   CollectFrames(*tree->root, frames);
   if (frames.empty()) return tree;

@@ -165,6 +165,8 @@ bool ReadControl(dom::Element* element, ControlView& out);
 void RefreshControls(dom::Document* document);
 // The same for the pages of the frames the document holds (and theirs): what their controls show is asked of their own scripts.
 void RefreshFrameControls(dom::Document* document);
+// Whether the document has an iframe (kept while its tree is as it was).
+bool HasIframes(dom::Document* document);
 // Whether the element is :valid (0), :invalid (1), :in-range (2) or :out-of-range (3).
 bool ValidityQuery(const dom::Element* element, int which);
 
