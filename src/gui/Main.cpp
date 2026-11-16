@@ -1463,6 +1463,21 @@ static void MiHistogramPrintOnce(int at) {
   std::fprintf(stderr, "[mihist] pid %d at %d s live %.1f MB\n", static_cast<int>(::getpid()), at, static_cast<double>(total) / 1048576.0);
   std::vector<std::pair<size_t, std::pair<size_t, size_t>>> rows(hist.begin(), hist.end());
   std::sort(rows.begin(), rows.end(), [](const auto& x, const auto& y) { return x.second.second > y.second.second; });
+  {
+    // (Where the bytes are by the size of the block, all of them and not the largest rows only.)
+    const size_t edges[] = {64, 128, 256, 1024, 4096, 65536, 1048576, SIZE_MAX};
+    size_t sum[8] = {0}, num[8] = {0};
+    for (const auto& [size, count] : hist) {
+      size_t k = 0;
+      while (size > edges[k]) ++k;
+      sum[k] += count.second;
+      num[k] += count.first;
+    }
+    std::fprintf(stderr, "[mihist] by size:");
+    const char* names[] = {"<=64", "<=128", "<=256", "<=1K", "<=4K", "<=64K", "<=1M", ">1M"};
+    for (int k = 0; k < 8; ++k) std::fprintf(stderr, " %s %.0fMB(%zuk)", names[k], static_cast<double>(sum[k]) / 1048576.0, num[k] / 1000);
+    std::fprintf(stderr, "\n");
+  }
   for (size_t i = 0; i < rows.size() && i < 40; ++i) std::fprintf(stderr, "[mihist]   blocks of %9zu B: %9zu = %7.1f MB\n", rows[i].first, rows[i].second.first, static_cast<double>(rows[i].second.second) / 1048576.0);
 }
 // (A thread of its own only keeps the time: the allocator's blocks are walked by the page's thread, between two steps of its loop, since walking them while it allocates is not safe.)
