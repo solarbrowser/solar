@@ -54,6 +54,12 @@ bool TimerHost::RunDue() {
   // not due yet.
   std::vector<qe::Task> due;
   for (auto it = queue_.begin(); it != queue_.end() && it->first <= now;) {
+    // (A realm that is inside a task, waiting for a resource, keeps its other tasks where they are: they were taken and put back at once, and the wait went round
+    // that a hundred thousand times a second.)
+    if (running_.count(it->second.GetRealm())) {
+      ++it;
+      continue;
+    }
     due.push_back(std::move(it->second));
     it = queue_.erase(it);
   }
@@ -71,7 +77,8 @@ bool TimerHost::RunDue() {
     task.Run();
     running_.erase(realm);
     ran = true;
-    if (std::getenv("SOLAR_TASK_DEBUG")) {
+    static const bool taskDebug = std::getenv("SOLAR_TASK_DEBUG") != nullptr;
+    if (taskDebug) {
       const double ms = std::chrono::duration<double, std::milli>(Clock::now() - began).count();
       if (ms > 100) std::fprintf(stderr, "  a task ran %.0f ms\n", ms);
     }

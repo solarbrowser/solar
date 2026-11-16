@@ -596,7 +596,22 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
         inPump += since(t);
         continue;
       }
-      events_.Step(std::chrono::milliseconds(std::getenv("SOLAR_SLICE") ? std::atoi(std::getenv("SOLAR_SLICE")) : 8));
+      static const int slice = std::getenv("SOLAR_SLICE") ? std::atoi(std::getenv("SOLAR_SLICE")) : 8;
+      const auto tStep = Clock::now();
+      events_.Step(std::chrono::milliseconds(slice));
+      // (The network's loop returns at once when nothing is on the network: what is waited for may be with a service worker, and the wait went round at full speed for as long as it
+      // took, a whole core.)
+      if (!resource->done && since(tStep) < 1.0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+      // What the page blocks on is not left to its service worker: the message that asks the worker is a task of the page's own realm, which waits behind the one that is
+      // blocked, so the worker could not answer (every script of a page that had a worker took five seconds, and the cores spun meanwhile). The network is asked.
+      if (resource->viaWorker && !resource->done) {
+        for (auto it = swPending_.begin(); it != swPending_.end();) {
+          if (it->second == resource->url) it = swPending_.erase(it);
+          else ++it;
+        }
+        resource->viaWorker = false;
+        FetchResource(*resource);
+      }
       const auto tp = Clock::now();
       if (pump_) pump_();
       inPump += since(tp);
