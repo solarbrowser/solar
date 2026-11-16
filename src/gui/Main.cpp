@@ -1424,7 +1424,19 @@ static bool MiVisit(const mi_heap_t*, const mi_heap_area_t* area, void* block, s
   return true;
 }
 static std::atomic<int> g_mihistDue{0};
+static qe::Isolate* g_mihistIsolate = nullptr;  // (SOLAR_MIHIST_GC=1: the walk is made before and after a full collection, to tell what is kept from what only waits to be collected)
+static void MiHistogramPrint(int at);
+static void MiHistogramPrintOnce(int at);
 static void MiHistogramPrint(int at) {
+  MiHistogramPrintOnce(at);
+  if (std::getenv("SOLAR_MIHIST_GC") && g_mihistIsolate) {
+    g_mihistIsolate->CollectGarbage();
+    g_mihistIsolate->CollectGarbage();
+    std::fprintf(stderr, "[mihist] ---- after a full collection ----\n");
+    MiHistogramPrintOnce(at);
+  }
+}
+static void MiHistogramPrintOnce(int at) {
   std::map<size_t, std::pair<size_t, size_t>> hist;
   mi_heap_visit_blocks(mi_heap_main(), true, MiVisit, &hist);
   size_t total = 0;
@@ -1459,6 +1471,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
 
   // The page: an isolate, the network, and a window's worth of APIs in a realm.
   auto isolate = qe::Isolate::Create();
+  g_mihistIsolate = isolate.get();
   isolate->SetModuleHooks(solar::html::MakeModuleHooks());
   isolate->SetCodeGenerationHooks(solar::html::csp::MakeCodeGenerationHooks());
   isolate->SetSerializationHooks(solar::web::MakeSerializationHooks());
