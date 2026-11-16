@@ -1413,7 +1413,7 @@ int main(int argc, char** argv) {
 
 namespace {
 
-// SOLAR_MIHIST=<seconds>: after that long the live memory of the process's allocator is written to the error output (the total, and the blocks that hold the most, by their size), for
+// SOLAR_MIHIST=<seconds>: every that many seconds the live memory of the process's allocator is written to the error output (the total, and the blocks that hold the most, by their size), for
 // seeing what a change to what a page keeps in memory did without the noise of what the collector had given back by then.
 static bool MiVisit(const mi_heap_t*, const mi_heap_area_t* area, void* block, size_t, void* arg) {
   if (!block) return true;
@@ -1423,17 +1423,31 @@ static bool MiVisit(const mi_heap_t*, const mi_heap_area_t* area, void* block, s
   entry.second += area->block_size;
   return true;
 }
+static std::atomic<int> g_mihistDue{0};
+static void MiHistogramPrint(int at) {
+  std::map<size_t, std::pair<size_t, size_t>> hist;
+  mi_heap_visit_blocks(mi_heap_main(), true, MiVisit, &hist);
+  size_t total = 0;
+  for (const auto& [size, count] : hist) total += count.second;
+  std::fprintf(stderr, "[mihist] pid %d at %d s live %.1f MB\n", static_cast<int>(::getpid()), at, static_cast<double>(total) / 1048576.0);
+  std::vector<std::pair<size_t, std::pair<size_t, size_t>>> rows(hist.begin(), hist.end());
+  std::sort(rows.begin(), rows.end(), [](const auto& x, const auto& y) { return x.second.second > y.second.second; });
+  for (size_t i = 0; i < rows.size() && i < 6; ++i) std::fprintf(stderr, "[mihist]   blocks of %9zu B: %9zu = %7.1f MB\n", rows[i].first, rows[i].second.first, static_cast<double>(rows[i].second.second) / 1048576.0);
+}
+// (A thread of its own only keeps the time: the allocator's blocks are walked by the page's thread, between two steps of its loop, since walking them while it allocates is not safe.)
 static void MiHistogramLater() {
   const char* seconds = std::getenv("SOLAR_MIHIST");
   if (!seconds) return;
-  std::thread([after = std::atoi(seconds)] {
-    std::this_thread::sleep_for(std::chrono::seconds(after));
-    std::map<size_t, std::pair<size_t, size_t>> hist;
-    mi_heap_visit_blocks(mi_heap_main(), true, MiVisit, &hist);
-    size_t total = 0;
-    for (const auto& [size, count] : hist) total += count.second;
-    std::fprintf(stderr, "[mihist] pid %d live %.1f MB\n", static_cast<int>(::getpid()), static_cast<double>(total) / 1048576.0);
+  std::thread([every = std::max(1, std::atoi(seconds))] {
+    for (int round = 1;; ++round) {
+      std::this_thread::sleep_for(std::chrono::seconds(every));
+      g_mihistDue.store(round * every);
+    }
   }).detach();
+}
+static void MiHistogramIfDue() {
+  const int at = g_mihistDue.exchange(0);
+  if (at) MiHistogramPrint(at);
 }
 
 int PageMain(Shared& shared, int argc, char** argv) {
@@ -3293,6 +3307,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
     const auto g0 = Clock::now();
     glideMs = std::chrono::duration<double, std::milli>(Clock::now() - g0).count();
     const uint64_t beforeStep = solar::dom::DocumentVersion();
+    MiHistogramIfDue();
     const auto s0 = Clock::now();
     events.Step(std::chrono::milliseconds(4));
     stepMs = std::chrono::duration<double, std::milli>(Clock::now() - s0).count();
