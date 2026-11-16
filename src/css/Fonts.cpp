@@ -96,7 +96,7 @@ void CollectFaceRules(const std::vector<CssRule*>& rules, const std::string& bas
         CollectFaceRules(rule->rules, base, out, depth + 1);
         break;
       case RuleKind::Import:
-        if (rule->importedSheet) CollectFaceRules(rule->importedSheet->rules, rule->importedSheet->baseUrl, out, depth + 1);
+        if (rule->importedSheet()) CollectFaceRules(rule->importedSheet()->rules, rule->importedSheet()->baseUrl, out, depth + 1);
         break;
       default: break;
     }

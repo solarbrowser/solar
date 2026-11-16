@@ -564,7 +564,7 @@ Value StyleRuleSetSelectorText(Context& ctx, Value t, qe::Args args, Value) {
   std::optional<SelectorList> list = nested ? ParseNestedSelectorList(selectorSource, nesting, inScope) : ParseSelectorListForRule(selectorSource);
   if (!list || !ResolveNamespaces(*list, self->parentSheet)) return qe::Undefined();
   // In place: the rules nested in this one hold the very list that & stands for.
-  self->quickState = 0;
+  if (self->quick_) self->quick_->state = 0;
   if (self->selectors) *self->selectors = std::move(*list);
   else self->selectors = std::make_shared<SelectorList>(std::move(*list));
   self->selectorText = RareString();
@@ -608,7 +608,7 @@ Value RuleConditionText(Context& ctx, Value t, qe::Args, Value) {
   if (!self) return qe::Undefined();
   switch (self->kind) {
     case RuleKind::Media: return qe::FromWtf8(ctx, self->media ? self->media->Text() : "");
-    case RuleKind::Supports: return qe::FromWtf8(ctx, self->supportsText);
+    case RuleKind::Supports: return qe::FromWtf8(ctx, self->supportsText());
     case RuleKind::Container: return qe::FromWtf8(ctx, self->prelude);
     default: return qe::Undefined();
   }
@@ -622,20 +622,20 @@ Value RuleHref(Context& ctx, Value t, qe::Args, Value) {
 Value RuleImportedSheet(Context& ctx, Value t, qe::Args, Value) {
   CssRule* self = ThisRuleOf(ctx, t, RuleKind::Import);
   if (!self) return qe::Undefined();
-  return self->importedSheet ? qe::FromObject(self->importedSheet) : qe::Null();
+  return self->importedSheet() ? qe::FromObject(self->importedSheet()) : qe::Null();
 }
 
 Value RuleLayerName(Context& ctx, Value t, qe::Args, Value) {
   CssRule* self = ThisRuleOf(ctx, t, RuleKind::Import);
   if (!self) return qe::Undefined();
-  if (self->layerName.empty()) return qe::Null();
-  return qe::FromWtf8(ctx, self->layerName == "\x01" ? "" : self->layerName);
+  if (self->layerName().empty()) return qe::Null();
+  return qe::FromWtf8(ctx, self->layerName() == "\x01" ? "" : self->layerName());
 }
 
 Value RuleSupportsText(Context& ctx, Value t, qe::Args, Value) {
   CssRule* self = ThisRuleOf(ctx, t, RuleKind::Import);
   if (!self) return qe::Undefined();
-  return self->supportsText.empty() ? qe::Null() : qe::FromWtf8(ctx, self->supportsText);
+  return self->supportsText().empty() ? qe::Null() : qe::FromWtf8(ctx, self->supportsText());
 }
 
 Value PropertySyntax(Context& ctx, Value t, qe::Args, Value) {
@@ -758,7 +758,7 @@ Value LayerNameList(Context& ctx, Value t, qe::Args, Value) {
   if (!self) return qe::Undefined();
   Value array = qe::NewArray(ctx);
   size_t start = 0;
-  const std::string& names = self->layerName;
+  const std::string& names = self->layerName();
   while (start <= names.size()) {
     size_t comma = names.find(", ", start);
     const std::string one = names.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
@@ -782,13 +782,13 @@ Value PaletteOverrideColors(Context& ctx, Value t, qe::Args, Value) { return Pal
 Value ContainerName(Context& ctx, Value t, qe::Args, Value) {
   CssRule* self = ThisRuleOf(ctx, t, RuleKind::Container);
   if (!self) return qe::Undefined();
-  return qe::FromWtf8(ctx, self->containerName);
+  return qe::FromWtf8(ctx, self->containerName());
 }
 
 Value ContainerQuery(Context& ctx, Value t, qe::Args, Value) {
   CssRule* self = ThisRuleOf(ctx, t, RuleKind::Container);
   if (!self) return qe::Undefined();
-  return qe::FromWtf8(ctx, self->containerQuery);
+  return qe::FromWtf8(ctx, self->containerQuery());
 }
 
 // The (selector) blocks of a scope rule's prelude: before `to`, and after it.

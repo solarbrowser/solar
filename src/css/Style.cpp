@@ -372,19 +372,20 @@ void WorkOutQuickKeys(CssRule& rule);
 
 // A conditional group (@media, @supports) is for the elements that any of the style rules in it is for.
 void WorkOutGroupKeys(CssRule& rule) {
-  rule.quickKeys.clear();
-  rule.quickMarkers.clear();
-  rule.quickState = 1;
+  CssRule::Quick& q = rule.QuickMut();
+  q.keys.clear();
+  q.markers.clear();
+  q.state = 1;
   for (CssRule* inner : rule.rules) {
     if (inner->kind != RuleKind::Style && inner->kind != RuleKind::Media && inner->kind != RuleKind::Supports) {
       // (Comments and the like are not rules; anything else the group holds is looked at every time.)
-      rule.quickState = 2; rule.quickKeys.clear(); rule.quickMarkers.clear(); return;
+      q.state = 2; q.keys.clear(); q.markers.clear(); return;
     }
-    if (inner->kind == RuleKind::Style && (!inner->rules.empty() || !inner->selectors || !inner->style)) { rule.quickState = 2; rule.quickKeys.clear(); rule.quickMarkers.clear(); return; }
-    if (inner->quickState == 0) WorkOutQuickKeys(*inner);
-    if (inner->quickState != 1) { rule.quickState = 2; rule.quickKeys.clear(); rule.quickMarkers.clear(); return; }
-    rule.quickKeys.insert(rule.quickKeys.end(), inner->quickKeys.begin(), inner->quickKeys.end());
-    rule.quickMarkers.insert(rule.quickMarkers.end(), inner->quickMarkers.begin(), inner->quickMarkers.end());
+    if (inner->kind == RuleKind::Style && (!inner->rules.empty() || !inner->selectors || !inner->style)) { q.state = 2; q.keys.clear(); q.markers.clear(); return; }
+    if (inner->quickState() == 0) WorkOutQuickKeys(*inner);
+    if (inner->quickState() != 1) { q.state = 2; q.keys.clear(); q.markers.clear(); return; }
+    q.keys.insert(q.keys.end(), inner->quickKeys().begin(), inner->quickKeys().end());
+    q.markers.insert(q.markers.end(), inner->quickMarkers().begin(), inner->quickMarkers().end());
   }
 }
 
@@ -426,13 +427,14 @@ bool KeysOf(const SelectorList& list, std::vector<uint64_t>& keys, std::vector<u
 
 void WorkOutQuickKeys(CssRule& rule) {
   if (rule.kind == RuleKind::Media || rule.kind == RuleKind::Supports) { WorkOutGroupKeys(rule); return; }
-  rule.quickState = rule.selectors && KeysOf(*rule.selectors, rule.quickKeys, rule.quickMarkers) ? 1 : 2;
-  if (rule.quickState == 2) { rule.quickKeys.clear(); rule.quickMarkers.clear(); }
-  rule.quickAncestors.clear();
+  CssRule::Quick& q = rule.QuickMut();
+  q.state = rule.selectors && KeysOf(*rule.selectors, q.keys, q.markers) ? 1 : 2;
+  if (q.state == 2) { q.keys.clear(); q.markers.clear(); }
+  q.ancestors.clear();
   if (rule.selectors) {
     for (const ComplexSelector& selector : *rule.selectors) {
-      rule.quickAncestors.emplace_back();
-      AncestorKeysOf(selector, rule.quickAncestors.back());
+      q.ancestors.emplace_back();
+      AncestorKeysOf(selector, q.ancestors.back());
     }
   }
 }
@@ -450,10 +452,10 @@ void BuildRuleIndex(const std::vector<CssRule*>& rules, RuleIndex& index) {
     CssRule* rule = rules[i];
     const bool group = rule->kind == RuleKind::Media || rule->kind == RuleKind::Supports;
     if (!group && (rule->kind != RuleKind::Style || !rule->selectors || !rule->style || !rule->rules.empty())) { index.always.push_back(i); continue; }
-    if (rule->quickState == 0) WorkOutQuickKeys(*rule);
-    if (rule->quickState != 1) { index.always.push_back(i); continue; }
+    if (rule->quickState() == 0) WorkOutQuickKeys(*rule);
+    if (rule->quickState() != 1) { index.always.push_back(i); continue; }
     std::vector<uint64_t> done;
-    for (uint64_t key : rule->quickKeys) {
+    for (uint64_t key : rule->quickKeys()) {
       if (std::find(done.begin(), done.end(), key) != done.end()) continue;
       done.push_back(key);
       index.buckets[key].push_back(i);
@@ -562,7 +564,7 @@ struct FlatList {
 };
 
 bool HoldsAnonymousLayer(const CssRule* rule) {
-  if ((rule->kind == RuleKind::LayerBlock && rule->name.empty()) || (rule->kind == RuleKind::Import && rule->layerName == "\x01")) return true;
+  if ((rule->kind == RuleKind::LayerBlock && rule->name.empty()) || (rule->kind == RuleKind::Import && rule->layerName() == "\x01")) return true;
   for (const CssRule* inner : rule->rules) if (HoldsAnonymousLayer(inner)) return true;
   return false;
 }
@@ -741,13 +743,13 @@ struct Gatherer {
         case RuleKind::Style: {
           if (!rule->selectors || !rule->style) break;
           if (!collecting && mode == Mode::Own && keys.usable) {
-            if (rule->quickState == 0) WorkOutQuickKeys(*rule);
-            if (rule->quickState == 1) {
+            if (rule->quickState() == 0) WorkOutQuickKeys(*rule);
+            if (rule->quickState() == 1) {
               const uint64_t marker = PseudoMarker(matchContext.pseudoElement);
               bool possible = false;
-              for (size_t j = 0; j < rule->quickKeys.size() && !possible; ++j) {
-                if (rule->quickMarkers[j] != marker) continue;
-                const uint64_t base = rule->quickKeys[j] ^ marker;
+              for (size_t j = 0; j < rule->quickKeys().size() && !possible; ++j) {
+                if (rule->quickMarkers()[j] != marker) continue;
+                const uint64_t base = rule->quickKeys()[j] ^ marker;
                 possible = base == 0 || keys.Has(base);
               }
               if (!possible) {
@@ -758,13 +760,13 @@ struct Gatherer {
           }
           Specificity best;
           bool matched = false;
-          const bool screening = !collecting && mode == Mode::Own && keys.usable && rule->quickAncestors.size() == rule->selectors->size();
+          const bool screening = !collecting && mode == Mode::Own && keys.usable && rule->quickAncestors().size() == rule->selectors->size();
           for (size_t selectorIndex = 0; selectorIndex < rule->selectors->size(); ++selectorIndex) {
             const ComplexSelector& selector = (*rule->selectors)[selectorIndex];
-            if (screening && !rule->quickAncestors[selectorIndex].empty()) {
+            if (screening && !rule->quickAncestors()[selectorIndex].empty()) {
               const Bloom* above = AncestorBloom();
               bool possible = above != nullptr;
-              if (possible) for (uint64_t key : rule->quickAncestors[selectorIndex]) if (!above->Has(key)) { possible = false; break; }
+              if (possible) for (uint64_t key : rule->quickAncestors()[selectorIndex]) if (!above->Has(key)) { possible = false; break; }
               if (!possible) continue;
             }
             Specificity extra;
@@ -790,7 +792,7 @@ struct Gatherer {
           // the sheet's owner; those with no <scope-end> element between them and the element.
           const auto parentElement = [](const dom::Element* e) -> const dom::Element* { return dom::ParentOf(e) ? dom::AsElement(dom::ParentOf(e)) : nullptr; };
           const dom::Element* implicitRoot = nullptr;
-          if (!rule->scopeStart) {
+          if (!rule->scopeStart()) {
             const CssStyleSheet* sheet = rule->parentSheet;
             while (sheet && sheet->ownerRule && sheet->ownerRule->parentSheet) sheet = sheet->ownerRule->parentSheet;
             if (sheet && sheet->ownerNode && dom::ParentOf(sheet->ownerNode)) {
@@ -806,9 +808,9 @@ struct Gatherer {
           uint32_t distance = 0;
           for (const dom::Element* up = element; up; up = parentElement(up), ++distance) {
             bool isRoot;
-            if (rule->scopeStart) {
+            if (rule->scopeStart()) {
               MatchContext c = matchContext;
-              isRoot = MatchesAny(*rule->scopeStart, up, c);
+              isRoot = MatchesAny(*rule->scopeStart(), up, c);
             } else {
               isRoot = up == implicitRoot;
             }
@@ -820,10 +822,10 @@ struct Gatherer {
               if (!within) continue;
             }
             bool limited = false;
-            if (rule->scopeEnd) {
+            if (rule->scopeEnd()) {
               MatchContext c = matchContext;
               c.scope = up;
-              for (const dom::Element* x = element; x && !limited; x = x == up ? nullptr : parentElement(x)) limited = MatchesAny(*rule->scopeEnd, x, c);
+              for (const dom::Element* x = element; x && !limited; x = x == up ? nullptr : parentElement(x)) limited = MatchesAny(*rule->scopeEnd(), x, c);
             }
             if (!limited) roots.push_back({up, distance});
           }
@@ -847,7 +849,7 @@ struct Gatherer {
           if (!rule->media || MediaListMatches(rule->media->queries, media)) Rules(rule->rules, layer, outer);
           break;
         case RuleKind::Supports:
-          if (SupportsText(rule->supportsText)) Rules(rule->rules, layer, outer);
+          if (SupportsText(rule->supportsText())) Rules(rule->rules, layer, outer);
           break;
         case RuleKind::Container:
           if (collecting) {
@@ -860,14 +862,14 @@ struct Gatherer {
           if (g_activeContext && ContainerRuleMatches(*g_activeContext, const_cast<dom::Element*>(element), matchContext.pseudoElement != nullptr, rule->prelude)) Rules(rule->rules, layer, outer);
           break;
         case RuleKind::Import: {
-          CssStyleSheet* imported = rule->importedSheet;
+          CssStyleSheet* imported = rule->importedSheet();
           if (imported && imported->disabled) break;
           if (rule->media && !MediaListMatches(rule->media->queries, media)) break;
-          if (!rule->supportsText.empty() && !SupportsText(rule->supportsText)) break;
+          if (!rule->supportsText().empty() && !SupportsText(rule->supportsText())) break;
           const std::string savedPath = layerPath;
           int id = layer;
-          if (!rule->layerName.empty()) {
-            layerPath = Child(rule->layerName == "\x01" ? "\x01" + std::to_string(++anonymousLayers) : rule->layerName.str());
+          if (!rule->layerName().empty()) {
+            layerPath = Child(rule->layerName() == "\x01" ? "\x01" + std::to_string(++anonymousLayers) : rule->layerName().str());
             if (collecting) RegisterLayer(layerPath);
             id = RankOf(layerPath);
           }
@@ -885,7 +887,7 @@ struct Gatherer {
         }
         case RuleKind::LayerStatement: {
           size_t start = 0;
-          const std::string& names = rule->layerName;
+          const std::string& names = rule->layerName();
           while (start < names.size()) {
             size_t comma = names.find(", ", start);
             if (collecting) RegisterLayer(Child(names.substr(start, comma == std::string::npos ? std::string::npos : comma - start)));
@@ -908,18 +910,18 @@ struct Gatherer {
           if (!rule->media || MediaListMatches(rule->media->queries, media)) Flatten(rule->rules, layer, out, unsafe, onlyTails);
           break;
         case RuleKind::Supports:
-          if (SupportsText(rule->supportsText)) Flatten(rule->rules, layer, out, unsafe, onlyTails);
+          if (SupportsText(rule->supportsText())) Flatten(rule->rules, layer, out, unsafe, onlyTails);
           break;
         case RuleKind::StartingStyle: case RuleKind::LayerStatement: break;
         case RuleKind::Import: {
-          CssStyleSheet* imported = rule->importedSheet;
+          CssStyleSheet* imported = rule->importedSheet();
           if (imported && imported->disabled) break;
           if (rule->media && !MediaListMatches(rule->media->queries, media)) break;
-          if (!rule->supportsText.empty() && !SupportsText(rule->supportsText)) break;
+          if (!rule->supportsText().empty() && !SupportsText(rule->supportsText())) break;
           const std::string savedPath = layerPath;
           int id = layer;
-          if (!rule->layerName.empty()) {
-            layerPath = Child(rule->layerName == "\x01" ? "\x01" + std::to_string(++anonymousLayers) : rule->layerName.str());
+          if (!rule->layerName().empty()) {
+            layerPath = Child(rule->layerName() == "\x01" ? "\x01" + std::to_string(++anonymousLayers) : rule->layerName().str());
             id = RankOf(layerPath);
           }
           if (imported) Flatten(imported->rules, id, out, unsafe, onlyTails);
@@ -1487,7 +1489,7 @@ void CollectRuleKeys(const std::vector<CssRule*>& rules, AncestorKeys& out, int 
         break;
       case RuleKind::Scope: out.everything = true; break;
       case RuleKind::Import:
-        if (rule->importedSheet) CollectRuleKeys(rule->importedSheet->rules, out, depth + 1);
+        if (rule->importedSheet()) CollectRuleKeys(rule->importedSheet()->rules, out, depth + 1);
         break;
       default: break;
     }
@@ -2661,10 +2663,10 @@ void BuildUntimed(dom::Element* element, ElementStyle& style, const std::string&
           for (size_t i = 0; i < list->rules.size(); ++i) {
             CssRule* rule = list->rules[i];
             if (rule->kind != RuleKind::Style || !rule->selectors || !rule->style || !rule->rules.empty() || rule->selectors->size() != 1) continue;
-            if (rule->quickState == 0) WorkOutQuickKeys(*rule);
-            if (rule->quickAncestors.size() != 1 || rule->quickAncestors[0].empty()) continue;
-            list->ancestorKey1[i] = rule->quickAncestors[0][0];
-            if (rule->quickAncestors[0].size() > 1) list->ancestorKey2[i] = rule->quickAncestors[0][1];
+            if (rule->quickState() == 0) WorkOutQuickKeys(*rule);
+            if (rule->quickAncestors().size() != 1 || rule->quickAncestors()[0].empty()) continue;
+            list->ancestorKey1[i] = rule->quickAncestors()[0][0];
+            if (rule->quickAncestors()[0].size() > 1) list->ancestorKey2[i] = rule->quickAncestors()[0][1];
           }
         }
         if (flats.size() > 64) flats.clear();
@@ -3701,8 +3703,8 @@ bool DirtyKeysOfRules(const std::vector<CssRule*>& rules, std::unordered_set<uin
         if (!DirtyKeysOfRules(rule->rules, keys, everything, usesLayers, registered, depth + 1, insideLayer)) return false;
         break;
       case RuleKind::Import:
-        if (!rule->layerName.empty()) return false;
-        if (rule->importedSheet && !DirtyKeysOfRules(rule->importedSheet->rules, keys, everything, usesLayers, registered, depth + 1, insideLayer)) return false;
+        if (!rule->layerName().empty()) return false;
+        if (rule->importedSheet() && !DirtyKeysOfRules(rule->importedSheet()->rules, keys, everything, usesLayers, registered, depth + 1, insideLayer)) return false;
         break;
       case RuleKind::LayerBlock:
         // (Whether what the layers do to the ranks of the ones there are is nothing is looked at by the caller.)
@@ -3737,7 +3739,7 @@ bool MentionsAny(const std::vector<CssRule*>& rules, const std::vector<std::stri
       }
     }
     if (MentionsAny(rule->rules, names, depth + 1)) return true;
-    if (rule->kind == RuleKind::Import && rule->importedSheet && MentionsAny(rule->importedSheet->rules, names, depth + 1)) return true;
+    if (rule->kind == RuleKind::Import && rule->importedSheet() && MentionsAny(rule->importedSheet()->rules, names, depth + 1)) return true;
   }
   return false;
 }
@@ -3995,10 +3997,10 @@ void ScanRules(const std::vector<CssRule*>& rules, SelectorFeatures& f, int dept
         f.stateUnknown = true;
       }
     }
-    if (rule->scopeStart) ScanList(*rule->scopeStart, f);
-    if (rule->scopeEnd) ScanList(*rule->scopeEnd, f);
+    if (rule->scopeStart()) ScanList(*rule->scopeStart(), f);
+    if (rule->scopeEnd()) ScanList(*rule->scopeEnd(), f);
     ScanRules(rule->rules, f, depth + 1);
-    if (rule->kind == RuleKind::Import && rule->importedSheet) ScanRules(rule->importedSheet->rules, f, depth + 1);
+    if (rule->kind == RuleKind::Import && rule->importedSheet()) ScanRules(rule->importedSheet()->rules, f, depth + 1);
   }
 }
 
@@ -4130,7 +4132,7 @@ void NoteStructureKeysOfRules(const std::vector<CssRule*>& rules, ShareFeatures&
     }
     if (rule->kind == RuleKind::Scope) { out.structureAny = true; return; }
     NoteStructureKeysOfRules(rule->rules, out, depth + 1);
-    if (rule->kind == RuleKind::Import && rule->importedSheet) NoteStructureKeysOfRules(rule->importedSheet->rules, out, depth + 1);
+    if (rule->kind == RuleKind::Import && rule->importedSheet()) NoteStructureKeysOfRules(rule->importedSheet()->rules, out, depth + 1);
   }
 }
 
@@ -4149,7 +4151,7 @@ void NotePositionKeysOfRules(const std::vector<CssRule*>& rules, ShareFeatures& 
       out.positionAny = true;
     }
     NotePositionKeysOfRules(rule->rules, out, depth + 1);
-    if (rule->kind == RuleKind::Import && rule->importedSheet) NotePositionKeysOfRules(rule->importedSheet->rules, out, depth + 1);
+    if (rule->kind == RuleKind::Import && rule->importedSheet()) NotePositionKeysOfRules(rule->importedSheet()->rules, out, depth + 1);
   }
 }
 
@@ -4252,10 +4254,10 @@ void NotePseudoNamesOfRules(const std::vector<CssRule*>& rules, std::unordered_s
   if (depth > 40) return;
   for (const CssRule* rule : rules) {
     if (rule->selectors) NotePseudoNames(*rule->selectors, names);
-    if (rule->scopeStart) NotePseudoNames(*rule->scopeStart, names);
-    if (rule->scopeEnd) NotePseudoNames(*rule->scopeEnd, names);
+    if (rule->scopeStart()) NotePseudoNames(*rule->scopeStart(), names);
+    if (rule->scopeEnd()) NotePseudoNames(*rule->scopeEnd(), names);
     NotePseudoNamesOfRules(rule->rules, names, depth + 1);
-    if (rule->importedSheet) NotePseudoNamesOfRules(rule->importedSheet->rules, names, depth + 1);
+    if (rule->importedSheet()) NotePseudoNamesOfRules(rule->importedSheet()->rules, names, depth + 1);
   }
 }
 
@@ -4332,7 +4334,7 @@ void NotePseudoKeysOfRules(const std::vector<CssRule*>& rules, std::unordered_ma
       NotePseudoKeys(*rule->selectors, out, declares);
     }
     NotePseudoKeysOfRules(rule->rules, out, depth + 1);
-    if (rule->importedSheet) NotePseudoKeysOfRules(rule->importedSheet->rules, out, depth + 1);
+    if (rule->importedSheet()) NotePseudoKeysOfRules(rule->importedSheet()->rules, out, depth + 1);
   }
 }
 
@@ -4487,7 +4489,7 @@ void CollectAnimationRules(const std::vector<CssRule*>& rules, std::vector<const
         break;
       }
       case RuleKind::Import:
-        if (rule->importedSheet && !rule->importedSheet->disabled) CollectAnimationRules(rule->importedSheet->rules, out, usable, nested, depth + 1);
+        if (rule->importedSheet() && !rule->importedSheet()->disabled) CollectAnimationRules(rule->importedSheet()->rules, out, usable, nested, depth + 1);
         break;
       default: break;
     }
@@ -4564,15 +4566,15 @@ bool MayDeclareAnimation(dom::Element* element, const std::string& pseudo) {
     kept.indexed = true;
     for (const CssRule* rule : kept.rules) {
       if (!rule->selectors) continue;
-      if (rule->quickState == 0) WorkOutQuickKeys(*const_cast<CssRule*>(rule));
-      if (rule->quickState != 1) {
+      if (rule->quickState() == 0) WorkOutQuickKeys(*const_cast<CssRule*>(rule));
+      if (rule->quickState() != 1) {
         kept.anyKey.push_back({rule, ~uint64_t(0)});     // (a marker that no element asks for says "every marker")
         continue;
       }
-      for (size_t j = 0; j < rule->quickKeys.size(); ++j) {
-        const uint64_t base = rule->quickKeys[j] ^ rule->quickMarkers[j];
-        if (base == 0) kept.anyKey.push_back({rule, rule->quickMarkers[j]});
-        else kept.byKey[base].push_back({rule, rule->quickMarkers[j]});
+      for (size_t j = 0; j < rule->quickKeys().size(); ++j) {
+        const uint64_t base = rule->quickKeys()[j] ^ rule->quickMarkers()[j];
+        if (base == 0) kept.anyKey.push_back({rule, rule->quickMarkers()[j]});
+        else kept.byKey[base].push_back({rule, rule->quickMarkers()[j]});
       }
     }
   }
@@ -4593,12 +4595,12 @@ bool MayDeclareAnimation(dom::Element* element, const std::string& pseudo) {
   }
   for (const CssRule* rule : kept.rules) {
     if (!rule->selectors) continue;
-    if (rule->quickState == 0) WorkOutQuickKeys(*const_cast<CssRule*>(rule));
-    if (keys.usable && rule->quickState == 1) {
+    if (rule->quickState() == 0) WorkOutQuickKeys(*const_cast<CssRule*>(rule));
+    if (keys.usable && rule->quickState() == 1) {
       bool possible = false;
-      for (size_t j = 0; j < rule->quickKeys.size() && !possible; ++j) {
-        if (rule->quickMarkers[j] != marker) continue;
-        const uint64_t base = rule->quickKeys[j] ^ marker;
+      for (size_t j = 0; j < rule->quickKeys().size() && !possible; ++j) {
+        if (rule->quickMarkers()[j] != marker) continue;
+        const uint64_t base = rule->quickKeys()[j] ^ marker;
         possible = base == 0 || keys.Has(base);
       }
       if (!possible) continue;

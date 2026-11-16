@@ -501,7 +501,7 @@ const css::CssRule* FindTryRule(const Env& env, const std::string& name) {
           walk(rule->rules);
           break;
         case css::RuleKind::Import:
-          if (rule->importedSheet) walk(rule->importedSheet->rules);
+          if (rule->importedSheet()) walk(rule->importedSheet()->rules);
           break;
         default: break;
       }

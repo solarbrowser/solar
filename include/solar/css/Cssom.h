@@ -174,11 +174,20 @@ struct CssRule : Quanta::DOMObject {
   // Style rule: its selector list as written (serialized), and parsed. Page rule: the selector text.
   RareString selectorText;  // (a page rule's; a style rule's is made from `selectors` when it is asked for: SelectorTextOf)
   std::shared_ptr<SelectorList> selectors;
-  // What a style rule needs of an element at the least, one key (an id, a class or a type) for each of its selectors: worked out when it is first looked at.
-  std::vector<uint64_t> quickKeys;
-  std::vector<uint64_t> quickMarkers;  // and the pseudo-element each selector ends in (0: none)
-  std::vector<std::vector<uint64_t>> quickAncestors;  // for each selector, the keys the elements around the one it is for must have
-  uint8_t quickState = 0;  // 0: not worked out; 1: every selector has a key; 2: some has none
+  // What a style rule needs of an element at the least, one key (an id, a class or a type) for each of its selectors: worked out when it is first looked at, and kept
+  // beside the rule (seventy-three bytes in every rule of a page that has tens of thousands, whether or not anything has looked).
+  struct Quick {
+    std::vector<uint64_t> keys;
+    std::vector<uint64_t> markers;  // and the pseudo-element each selector ends in (0: none)
+    std::vector<std::vector<uint64_t>> ancestors;  // for each selector, the keys the elements around the one it is for must have
+    uint8_t state = 0;  // 0: not worked out; 1: every selector has a key; 2: some has none
+  };
+  std::unique_ptr<Quick> quick_;
+  Quick& QuickMut() { if (!quick_) quick_ = std::make_unique<Quick>(); return *quick_; }
+  const std::vector<uint64_t>& quickKeys() const { static const std::vector<uint64_t> none; return quick_ ? quick_->keys : none; }
+  const std::vector<uint64_t>& quickMarkers() const { static const std::vector<uint64_t> none; return quick_ ? quick_->markers : none; }
+  const std::vector<std::vector<uint64_t>>& quickAncestors() const { static const std::vector<std::vector<uint64_t>> none; return quick_ ? quick_->ancestors : none; }
+  uint8_t quickState() const { return quick_ ? quick_->state : 0; }
   // Grouping rules (media, supports, layer, container, scope, starting-style, style rules with nested rules,
   // keyframes, page rules with margin rules): the rules in them.
   std::vector<CssRule*> rules;
@@ -186,9 +195,24 @@ struct CssRule : Quanta::DOMObject {
   // Media rule, import rule: the media; import rule: the address and the sheet it brought in.
   MediaList* media = nullptr;
   RareString href;
-  CssStyleSheet* importedSheet = nullptr;
-  RareString layerName;       // import and layer rules: the layer, a layer statement: the names, comma-separated
-  RareString supportsText;    // import rule's supports(), supports rule's condition, container rule's condition
+  // What a few kinds of rule have and a style rule does not (the layer of an import or a layer rule, the conditions of an import, a supports rule and a container rule, the
+  // bounds of a scope rule, the sheet an import brought in): made for the rule that has one.
+  struct Extras {
+    RareString layerName;       // import and layer rules: the layer, a layer statement: the names, comma-separated
+    RareString supportsText;    // import rule's supports(), supports rule's condition, container rule's condition
+    RareString containerName, containerQuery;  // a container rule: the name, and the condition, when there is one query
+    std::shared_ptr<SelectorList> scopeStart, scopeEnd;  // scope rule: <scope-start> and <scope-end> (none: absent)
+    CssStyleSheet* importedSheet = nullptr;  // an import rule: the sheet it brought in
+  };
+  std::unique_ptr<Extras> extras_;
+  Extras& ExtrasMut() { if (!extras_) extras_ = std::make_unique<Extras>(); return *extras_; }
+  const RareString& layerName() const { static const RareString none; return extras_ ? extras_->layerName : none; }
+  const RareString& supportsText() const { static const RareString none; return extras_ ? extras_->supportsText : none; }
+  const RareString& containerName() const { static const RareString none; return extras_ ? extras_->containerName : none; }
+  const RareString& containerQuery() const { static const RareString none; return extras_ ? extras_->containerQuery : none; }
+  const std::shared_ptr<SelectorList>& scopeStart() const { static const std::shared_ptr<SelectorList> none; return extras_ ? extras_->scopeStart : none; }
+  const std::shared_ptr<SelectorList>& scopeEnd() const { static const std::shared_ptr<SelectorList> none; return extras_ ? extras_->scopeEnd : none; }
+  CssStyleSheet* importedSheet() const { return extras_ ? extras_->importedSheet : nullptr; }
   // Namespace rule.
   RareString prefix;
   RareString namespaceUri;
@@ -196,9 +220,7 @@ struct CssRule : Quanta::DOMObject {
   RareString name;
   // The prelude of a rule this module keeps as written (container, scope, page): its serialization.
   RareString prelude;
-  RareString containerName, containerQuery;  // a container rule: the name, and the condition, when there is one query
   // Scope rule: <scope-start> and <scope-end> (none: absent).
-  std::shared_ptr<SelectorList> scopeStart, scopeEnd;
   bool isNested = false;  // a style rule inside another
   // A property rule: what it registers, if it is a valid one.
   std::unique_ptr<RegisteredProperty> registered;  // (made for the rule that registers one: of a rule in a hundred it is a hundred and fifty bytes)

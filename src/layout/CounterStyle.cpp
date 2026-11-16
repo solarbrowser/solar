@@ -197,7 +197,7 @@ CounterStyles::CounterStyles(dom::Document* document) {
     for (const css::CssRule* rule : rules) {
       switch (rule->kind) {
         case css::RuleKind::LayerStatement: {
-          std::string names = rule->layerName;
+          std::string names = rule->layerName();
           std::stringstream ss(names);
           std::string one;
           while (std::getline(ss, one, ',')) {
@@ -216,10 +216,10 @@ CounterStyles::CounterStyles(dom::Document* document) {
           walk(rule->rules, layer);
           break;
         case css::RuleKind::Import:
-          if (rule->importedSheet) {
-            const std::string path = rule->layerName.empty() ? layer : (layer.empty() ? rule->layerName.str() : layer + "." + rule->layerName);
-            if (!rule->layerName.empty()) rank(path);
-            walk(rule->importedSheet->rules, path);
+          if (rule->importedSheet()) {
+            const std::string path = rule->layerName().empty() ? layer : (layer.empty() ? rule->layerName().str() : layer + "." + rule->layerName());
+            if (!rule->layerName().empty()) rank(path);
+            walk(rule->importedSheet()->rules, path);
           }
           break;
         case css::RuleKind::CounterStyle: {
