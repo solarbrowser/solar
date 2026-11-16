@@ -92,7 +92,7 @@ void Document::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(adoptedStyleSheets);
   visitor.Mark(styleFlush);
   visitor.Mark(animationWake);
-  for (Element* element : drawAnimated) visitor.Mark(element);
+  for (const DrawAnimated& entry : drawAnimated) visitor.Mark(entry.element);
   visitor.Mark(contentVisibilityWake);
   visitor.Mark(frameElement);
 }

@@ -337,15 +337,16 @@ void SetAnimatedValues(dom::Element* element, const std::string& pseudo, Animate
   static const std::set<std::string> boxDrawn = {"opacity", "transform", "translate", "rotate", "scale", "filter", "backdrop-filter", "box-shadow", "clip-path", "background-color",
                                                   "outline-color", "background-position", "mask-position", "-webkit-transform", "-webkit-filter", "-webkit-backdrop-filter", "-webkit-box-shadow"};
   static const bool noFast = std::getenv("SOLAR_NO_DRAW_FAST") != nullptr;
-  bool drawFast = !noFast && pseudo.empty() && !sizing && itself && now != heldNow.end() && element->nodeDocument && !sizingElements.count(element);
+  // (The pseudo-elements that have boxes of their own and are made of the element's style alone: a mark that pulses before a link is not a layout of the page at each frame.)
+  bool drawFast = !noFast && (pseudo.empty() || pseudo == "before" || pseudo == "after") && !sizing && itself && now != heldNow.end() && element->nodeDocument && !sizingElements.count(element);
   if (drawFast) {
     for (const auto& entry : now->second) {
       if (!boxDrawn.count(entry.first) && !inheritedPaint.count(entry.first) && !(DrawOnlyColor(entry.first) && entry.first != "color" && entry.first != "caret-color" && entry.first != "accent-color")) { drawFast = false; break; }
     }
   }
   if (drawFast) {
-    std::vector<dom::Element*>& pending = element->nodeDocument->drawAnimated;
-    if (std::find(pending.begin(), pending.end(), element) == pending.end()) pending.push_back(element);
+    auto& pending = element->nodeDocument->drawAnimated;
+    if (std::find_if(pending.begin(), pending.end(), [&](const dom::Document::DrawAnimated& d) { return d.element == element && d.pseudo == pseudo; }) == pending.end()) pending.push_back({element, pseudo});
     element->nodeDocument->NoteWrite();
     ++g_drawAnimationVersion;
     NoteDrawAnimated();

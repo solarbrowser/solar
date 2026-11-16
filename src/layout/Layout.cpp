@@ -193,13 +193,15 @@ namespace {
 
 // The boxes of elements whose animation changed only how they are drawn are given the style they draw with now (opacity, transform, its background color); what else is read at
 // paint time is read from the style then. False when a box is of a kind that is not for this (its style makes a stacking context or a containing block differently now).
-bool RefreshDrawn(Quanta::Context& ctx, Tree& tree, const std::vector<dom::Element*>& elements) {
-  for (dom::Element* element : elements) {
+bool RefreshDrawn(Quanta::Context& ctx, Tree& tree, const std::vector<dom::Document::DrawAnimated>& entries) {
+  for (const dom::Document::DrawAnimated& entry : entries) {
+    dom::Element* element = entry.element;
     const std::vector<Box*>& boxes = BoxesOf(tree, element);
     if (boxes.empty()) continue;
-    const std::shared_ptr<const BoxStyle> fresh = ReadStyle(ctx, element, "");
+    const std::shared_ptr<const BoxStyle> fresh = ReadStyle(ctx, element, entry.pseudo);
     if (!fresh) return false;
     for (Box* box : boxes) {
+      if (box->pseudo != entry.pseudo) continue;  // (the boxes of the element are not the ones of its pseudo-elements)
       if (!box->style) return false;
       if (box->style->containsPositioned != fresh->containsPositioned || box->style->stackingContext != fresh->stackingContext) return false;
       const auto patched = [&](const BoxStyle& old) {
@@ -266,7 +268,7 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
   // What animations changed only in how elements are drawn is given to the boxes there are, without a layout; when the tree is not good as it is (or a box cannot take it),
   // the pending elements are let go and layout is made.
   if (!document->drawAnimated.empty()) {
-    std::vector<dom::Element*> pending = std::move(document->drawAnimated);
+    std::vector<dom::Document::DrawAnimated> pending = std::move(document->drawAnimated);
     document->drawAnimated.clear();
     Tree* current = document->layoutTree.get();
     if (current && current->root && current->builtFor == versionNow() && !current->damaged) {

@@ -519,7 +519,11 @@ struct Document : Node {
   bool containIntrinsicAutoSeen = false;  // a box with contain-intrinsic-size: auto was made (it remembers the size it had)
   // The function that asks for a frame, which parsing something that declares animations or transitions calls.
   Quanta::Object* animationWake = nullptr;
-  std::vector<Element*> drawAnimated;  // elements whose animation only changed how they are drawn since layout last looked (see css::SetAnimatedValues)
+  struct DrawAnimated {
+    Element* element;
+    std::string pseudo;  // empty: the element's own boxes; "before", "after": those of the pseudo-element
+  };
+  std::vector<DrawAnimated> drawAnimated;  // elements (and pseudo-elements) whose animation only changed how they are drawn since layout last looked (see css::SetAnimatedValues)
   // The function that asks for a frame to send the contentvisibilityautostatechange events in.
   Quanta::Object* contentVisibilityWake = nullptr;
   // For an about: document whose iframe is gone: the address it was resolving against, which is the origin it keeps.
