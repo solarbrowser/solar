@@ -111,14 +111,27 @@
     if (/%$/.test(text)) return null;
     if (/^-/.test(text) && !/^-?0/.test(text) && !/^calc|^min|^max|^clamp/.test(text)) return null;
     if (typeof document === "undefined" || !document.documentElement) return null;
+    // A length that depends on the viewport alone needs no element and no layout of the page: a plain px/vw/vh/vmin/vmax is worked out here, and a
+    // calc() of them is measured once for a size of the window (every image of a page asks the same few lengths; each ask was a layout of the page).
+    const vw = typeof innerWidth === "number" ? innerWidth : 800, vh = typeof innerHeight === "number" ? innerHeight : 600;
+    const plain = /^([-+]?(?:\d+|\d*\.\d+)(?:[eE][-+]?\d+)?)(px|vw|vh|vmin|vmax)$/.exec(text);
+    if (plain) {
+      const n = Number(plain[1]), u = plain[2];
+      return u === "px" ? n : n * (u === "vw" ? vw : u === "vh" ? vh : u === "vmin" ? Math.min(vw, vh) : Math.max(vw, vh)) / 100;
+    }
+    const viewportOnly = !/[a-zA-Z%]/.test(text.replace(/\b(calc|min|max|clamp)\(|\d(?:px|vw|vh|vmin|vmax)\b/g, ""));
+    const key = text + "|" + vw + "x" + vh;
+    if (viewportOnly && lengthCache.has(key)) return lengthCache.get(key);
     const probe = document.createElement("div");
     probe.style.cssText = "position:absolute;visibility:hidden;margin:0;padding:0;border:0;height:0;width:" + text;
     if (probe.style.width === "") return null;
     document.documentElement.appendChild(probe);
     const w = probe.getBoundingClientRect().width;
     probe.remove();
+    if (viewportOnly) { if (lengthCache.size > 64) lengthCache.clear(); lengthCache.set(key, w); }
     return w;
   };
+  const lengthCache = new Map();
   const splitTop = (text, separator) => {
     const parts = []; let depth = 0, start = 0;
     for (let i = 0; i < text.length; i++) { const c = text[i]; if (c === "(") depth++; else if (c === ")") depth--; else if (c === separator && depth === 0) { parts.push(text.slice(start, i)); start = i + 1; } }
