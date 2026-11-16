@@ -257,7 +257,11 @@ sk_sp<SkImage> DecodeImage(const void* data, size_t size) {
     if (head.find("<svg") != std::string::npos) return DecodeSvg(data, size);
     return nullptr;
   }
-  // (Decoded now, so that what is drawn is the pixels and not a promise of them.)
+  // (Decoded now, so that what is drawn is the pixels and not a promise of them: but a big picture is left as the promise, which holds the file and no more, and is decoded where
+  // it is drawn. A page that makes Image objects for its feed (reddit.com) kept every one of them as pixels: 45, 29, 27 megabytes each, two hundred in all, for pictures
+  // that were never drawn on a canvas.)
+  constexpr int64_t kKeepEncodedAbove = 4 * 1024 * 1024;  // bytes of pixels
+  if (static_cast<int64_t>(image->width()) * image->height() * 4 > kKeepEncodedAbove) return image;
   return image->makeRasterImage(nullptr);
 }
 
