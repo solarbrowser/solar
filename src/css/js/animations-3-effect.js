@@ -599,9 +599,37 @@
   };
   natives.onFlush(() => S.styleFlush());
 
+  // The dashes of the stroke of a shape are not drawn by this engine: what an animation of them gives is worked out when something asks for it (getComputedStyle, a change of the animation) and
+  // for the rest a few times a second, not at every frame. (A loading mark that turns for ever is on a good many pages, in a corner or out of sight, and each frame of it was an
+  // interpolation, a string and a call into the engine.)
+  const UNPAINTED = new Set(['stroke-dasharray', 'stroke-dashoffset']);
+  const nextDue = new WeakMap();  // target → key → the time it is next worked out at
+  const onlyUnpainted = (target, key) => {
+    const set = registry.get(target) && registry.get(target).get(key);
+    if (!set || !set.size) return false;
+    let any = false;
+    for (const effect of set) {
+      const slot = effectSlots.get(effect);
+      if (!slot || !slot.animation) continue;
+      for (const css of computedKeyframes(slot).keys()) {
+        if (!UNPAINTED.has(css)) return false;
+        any = true;
+      }
+    }
+    return any;
+  };
   S.refreshAll = () => {
     for (const [target, byPseudo] of [...registry]) {
-      for (const key of [...byPseudo.keys()]) refreshPair(target, key ? '::' + key : null);
+      for (const key of [...byPseudo.keys()]) {
+        if (onlyUnpainted(target, key)) {
+          let times = nextDue.get(target);
+          if (!times) nextDue.set(target, (times = new Map()));
+          const now = S.now();
+          if ((times.get(key) || 0) > now) continue;
+          times.set(key, now + 250);
+        }
+        refreshPair(target, key ? '::' + key : null);
+      }
     }
   };
 
