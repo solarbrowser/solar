@@ -204,16 +204,16 @@ void AssignSlottablesForSlot(Element* slot) {
   if (slottables != slot->AssignedNodes()) QueueSlotChange(slot);
   for (Node* old : slot->AssignedNodes()) {
     if (old->assignedSlot == slot && !Contains(slottables, old)) {
-      old->assignedSlot = nullptr;
       MarkPending(old, kPendingShadow);
+      old->assignedSlot = nullptr;
       old->NoteWrite();
     }
   }
   if (!slottables.empty() || slot->rare) slot->MakeRare().assignedNodes = slottables;
   MarkPending(slot, kPendingShadow);
   for (Node* slottable : slottables) {
-    slottable->assignedSlot = slot;
     MarkPending(slottable, kPendingShadow);
+    slottable->assignedSlot = slot;
     slottable->NoteWrite();
   }
   slot->NoteWrite();

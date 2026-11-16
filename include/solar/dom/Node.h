@@ -158,7 +158,9 @@ struct Node : web::JsEventTarget {
   Node* previousSibling = nullptr;
   Node* nextSibling = nullptr;
   // The places of the node in the tree as style and layout see them: the committed ones. Script changes the fields above (the pending ones);
-  // CommitPending takes them over into these, for the nodes that changed, when a frame is begun (see CommittedView).
+  // CommitPending takes them over into these, for the nodes that changed, when a frame is begun (see CommittedView). For nearly every node they are the
+  // same as the fields above, and there is nothing here (null: they are the same); a node that is about to change gets the ones it has, made by MarkPending
+  // before the change (what a change of these fields has to be told of first), and loses them at the commit.
   struct Links {
     Node* parent = nullptr;
     Node* first = nullptr;
@@ -166,7 +168,9 @@ struct Node : web::JsEventTarget {
     Node* previous = nullptr;
     Node* next = nullptr;
     Element* assignedSlot = nullptr;  // the slot a slottable is assigned to
-  } committed;
+  };
+  Links* committedLinks = nullptr;
+  bool committedOnce = false;  // a commit has taken the node over: until then nothing in the committed view is of it (it is not in the committed tree), and what is changed is not kept
   bool controlDirty = false;  // a form control: what it shows may have changed, and the script of the window is asked for it again before the next frame
   uint8_t pendingMask = 0;  // what of it changed since it was committed (kPending...: it is in the list of CommitPending)
   uint32_t dirtyIndex = 0;  // where it is in that list (while pendingMask is set), so that a node that dies before it is committed leaves it at once
@@ -224,16 +228,16 @@ struct ControlState {
   bool multiple = false;
   double fraction = 0;  // a range: where the thumb is, from 0 to 1
 };
-// Notes that the node changed in the way, to be committed.
+// Notes that the node changed in the way, to be committed. Called BEFORE the change of links or of the slot it is assigned to: it keeps what the node has as the committed ones.
 void MarkPending(Node* node, uint8_t kinds);
 extern thread_local int g_committedViewDepth;
 inline bool InCommittedView() { return g_committedViewDepth > 0; }
-inline Node* ParentOf(const Node* n) { return g_committedViewDepth ? n->committed.parent : n->parentNode; }
-inline Node* FirstChildOf(const Node* n) { return g_committedViewDepth ? n->committed.first : n->firstChild; }
-inline Node* LastChildOf(const Node* n) { return g_committedViewDepth ? n->committed.last : n->lastChild; }
-inline Node* PreviousSiblingOf(const Node* n) { return g_committedViewDepth ? n->committed.previous : n->previousSibling; }
-inline Node* NextSiblingOf(const Node* n) { return g_committedViewDepth ? n->committed.next : n->nextSibling; }
-inline Element* AssignedSlotOf(const Node* n) { return g_committedViewDepth ? n->committed.assignedSlot : n->assignedSlot; }
+inline Node* ParentOf(const Node* n) { return g_committedViewDepth && n->committedLinks ? n->committedLinks->parent : n->parentNode; }
+inline Node* FirstChildOf(const Node* n) { return g_committedViewDepth && n->committedLinks ? n->committedLinks->first : n->firstChild; }
+inline Node* LastChildOf(const Node* n) { return g_committedViewDepth && n->committedLinks ? n->committedLinks->last : n->lastChild; }
+inline Node* PreviousSiblingOf(const Node* n) { return g_committedViewDepth && n->committedLinks ? n->committedLinks->previous : n->previousSibling; }
+inline Node* NextSiblingOf(const Node* n) { return g_committedViewDepth && n->committedLinks ? n->committedLinks->next : n->nextSibling; }
+inline Element* AssignedSlotOf(const Node* n) { return g_committedViewDepth && n->committedLinks ? n->committedLinks->assignedSlot : n->assignedSlot; }
 // The versions of the documents (see DocumentVersion): in a committed view, as they were when it was committed.
 // Takes what script changed into the committed state. Nothing is lost by calling it again; it does nothing when nothing changed.
 void CommitPending();
@@ -258,9 +262,12 @@ struct CommittedViewSuspend {
 struct CharacterData : Node {
   using Parent = Node;
   std::string data;
-  std::string committedData;  // what style and layout read (see CommitPending)
+  // What style and layout read, when it is not the same as `data`: made by KeepCommitted before a change, and gone at the commit (nearly every text is not being changed,
+  // and a copy of it for each would be the text twice).
+  std::unique_ptr<std::string> committedData_;
   // The data as style and layout see it: the committed one in a committed view.
-  const std::string& Data() const { return g_committedViewDepth ? committedData : data; }
+  const std::string& Data() const { return g_committedViewDepth && committedData_ ? *committedData_ : data; }
+  void KeepCommitted();  // before data is changed
   std::string target;  // a ProcessingInstruction's
 
   void Visit(Quanta::Visitor& visitor) { Node::Visit(visitor); }
@@ -308,10 +315,11 @@ struct Attr : Node {
   Name prefix;        // empty: none
   Name localName;
   std::string value;
-  std::string committedValue;  // what style and layout read (see CommitPending)
+  std::unique_ptr<std::string> committedValue_;  // what style and layout read, when it is not the value (see CharacterData::committedData_)
   Element* ownerElement = nullptr;
   // The value as style and layout see it: the committed one in a committed view.
-  const std::string& Value() const { return g_committedViewDepth ? committedValue : value; }
+  const std::string& Value() const { return g_committedViewDepth && committedValue_ ? *committedValue_ : value; }
+  void KeepCommitted();  // before value is changed
 
   // The qualified name: prefix:localName, or the local name alone.
   std::string QualifiedName() const { return prefix.empty() ? localName : prefix + ":" + localName; }
@@ -331,8 +339,9 @@ struct Element : Node {
   Name prefix;        // empty: none
   Name localName;
   std::vector<Attr*> attributes;
-  std::vector<Attr*> committedAttributes;  // the attributes as style and layout see them (see CommitPending)
-  const std::vector<Attr*>& AttributesInView() const { return g_committedViewDepth ? committedAttributes : attributes; }
+  std::unique_ptr<std::vector<Attr*>> committedAttributes_;  // the attributes as style and layout see them, when they are not `attributes` (see CharacterData::committedData_)
+  const std::vector<Attr*>& AttributesInView() const { return g_committedViewDepth && committedAttributes_ ? *committedAttributes_ : attributes; }
+  void KeepCommittedAttributes();  // before an attribute is added or taken off
   // attributes and classList, which are the same object each time.
   Quanta::Object* attributeMap = nullptr;
   Quanta::Object* tokenList = nullptr;

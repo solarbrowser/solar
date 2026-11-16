@@ -54,12 +54,14 @@ void Node::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(previousSibling);
   visitor.Mark(nextSibling);
   // (A node that left the tree stays reachable from the committed tree until the next commit. What is the same as the field above is marked by it already.)
-  if (committed.parent != parentNode) visitor.Mark(committed.parent);
-  if (committed.first != firstChild) visitor.Mark(committed.first);
-  if (committed.last != lastChild) visitor.Mark(committed.last);
-  if (committed.previous != previousSibling) visitor.Mark(committed.previous);
-  if (committed.next != nextSibling) visitor.Mark(committed.next);
-  if (committed.assignedSlot != assignedSlot) visitor.Mark(committed.assignedSlot);
+  if (committedLinks) {
+    if (committedLinks->parent != parentNode) visitor.Mark(committedLinks->parent);
+    if (committedLinks->first != firstChild) visitor.Mark(committedLinks->first);
+    if (committedLinks->last != lastChild) visitor.Mark(committedLinks->last);
+    if (committedLinks->previous != previousSibling) visitor.Mark(committedLinks->previous);
+    if (committedLinks->next != nextSibling) visitor.Mark(committedLinks->next);
+    if (committedLinks->assignedSlot != assignedSlot) visitor.Mark(committedLinks->assignedSlot);
+  }
   visitor.Mark(nodeDocument);
   visitor.Mark(childNodesList);
   visitor.Mark(childrenList);
@@ -111,8 +113,8 @@ void Element::Visit(Quanta::Visitor& visitor) {
   visitor.Mark(contentDocument);
   visitor.Mark(contentWindow);
   for (Attr* attribute : attributes) visitor.Mark(attribute);
-  if (committedAttributes != attributes) {
-    for (Attr* attribute : committedAttributes) visitor.Mark(attribute);
+  if (committedAttributes_ && *committedAttributes_ != attributes) {
+    for (Attr* attribute : *committedAttributes_) visitor.Mark(attribute);
   }
   if (committedShadowRoot != shadowRoot) visitor.Mark(committedShadowRoot);
   visitor.Mark(attributeMap);
@@ -142,12 +144,29 @@ std::vector<Node*>& DirtyLinks() {
 }
 }  // namespace
 
+void CharacterData::KeepCommitted() {
+  if (committedData_ || !committedOnce) return;
+  // (The text of a script is not read by style or layout: it is not copied each time a bit is added to it.)
+  const Element* parent = parentNode && parentNode->IsElement() ? static_cast<Element*>(parentNode) : nullptr;
+  if (parent && parent->localName == "script") return;
+  committedData_ = std::make_unique<std::string>(data);
+}
+void Attr::KeepCommitted() {
+  if (!committedValue_ && ownerElement && ownerElement->committedOnce) committedValue_ = std::make_unique<std::string>(value);
+}
+void Element::KeepCommittedAttributes() {
+  if (!committedAttributes_ && committedOnce) committedAttributes_ = std::make_unique<std::vector<Attr*>>(attributes);
+}
+
 void MarkPending(Node* node, uint8_t kinds) {
   if (!node) return;
   if (!node->pendingMask) {
     std::vector<Node*>& list = DirtyLinks();
     node->dirtyIndex = static_cast<uint32_t>(list.size());
     list.push_back(node);
+  }
+  if ((kinds & (kPendingLinks | kPendingShadow)) && node->committedOnce && !node->committedLinks) {
+    node->committedLinks = new Node::Links{node->parentNode, node->firstChild, node->lastChild, node->previousSibling, node->nextSibling, node->assignedSlot};
   }
   node->pendingMask |= kinds;
 }
@@ -354,22 +373,21 @@ void CommitPending() {
     if (!node) continue;  // (it died before this: see ~Node)
     const uint8_t mask = node->pendingMask;
     node->pendingMask = 0;
-    if (mask & kPendingLinks) {
-      node->committed.parent = node->parentNode;
-      node->committed.first = node->firstChild;
-      node->committed.last = node->lastChild;
-      node->committed.previous = node->previousSibling;
-      node->committed.next = node->nextSibling;
-    }
+    node->committedOnce = true;
     if ((mask & kPendingAttributes) && node->IsElement()) {
       Element* element = static_cast<Element*>(node);
-      element->committedAttributes = element->attributes;
-      for (Attr* attribute : element->attributes) {
-        if (attribute->committedValue != attribute->value) attribute->committedValue = attribute->value;
+      // (What the element kept of its attributes and of their values is what they are from here.)
+      if (element->committedAttributes_) {
+        for (Attr* attribute : *element->committedAttributes_) attribute->committedValue_.reset();
+        element->committedAttributes_.reset();
       }
+      for (Attr* attribute : element->attributes) attribute->committedValue_.reset();
+    }
+    if (mask & (kPendingLinks | kPendingShadow)) {
+      delete node->committedLinks;  // the committed ones are the pending ones from here
+      node->committedLinks = nullptr;
     }
     if (mask & kPendingShadow) {
-      node->committed.assignedSlot = node->assignedSlot;
       if (node->IsElement()) {
         Element* element = static_cast<Element*>(node);
         element->committedShadowRoot = element->shadowRoot;
@@ -396,9 +414,7 @@ void CommitPending() {
     }
     if ((mask & kPendingText) && node->IsCharacterData()) {
       CharacterData* text = static_cast<CharacterData*>(node);
-      // (The text of a script is not read by style or layout: it is not copied each time a bit is added to it.)
-      const Element* parent = node->parentNode && node->parentNode->IsElement() ? static_cast<Element*>(node->parentNode) : nullptr;
-      if (!(parent && parent->localName == "script")) text->committedData = text->data;
+      text->committedData_.reset();  // (what it kept of its data is what the data is from here)
     }
   }
   list.clear();
@@ -467,11 +483,11 @@ void DisposeDocument(Document* document) {
     }
   }
   for (Node* n : all) {
-    n->parentNode = n->firstChild = n->lastChild = n->previousSibling = n->nextSibling = nullptr;
     MarkLinks(n);
+    MarkPending(n, kPendingShadow);
+    n->parentNode = n->firstChild = n->lastChild = n->previousSibling = n->nextSibling = nullptr;
     n->childNodesList = n->childrenList = nullptr;
     n->assignedSlot = n->manualSlot = nullptr;
-    MarkPending(n, kPendingShadow);
     n->registrations.reset();
     n->ClearEvents();
     if (n != document) n->nodeDocument = nullptr;
@@ -510,6 +526,7 @@ size_t g_liveNodes = 0;
 }
 Node::Node() { ++g_liveNodes; }
 Node::~Node() {
+  delete committedLinks;
   --g_liveNodes;
   if (!InNameIndex().empty()) ForgetDestroyedNode(this);
   if (g_mediaAttached.load(std::memory_order_relaxed) > 0 && g_mediaDetach) g_mediaDetach(this);
@@ -1216,6 +1233,7 @@ std::optional<DomError> ReplaceData(CharacterData* node, uint32_t offset, uint32
   if (HasMutationObservers()) QueueCharacterDataRecord(node, node->data);
   const bool wasEmpty = node->data.empty();
   units.replace(offset, count, inserted);
+  node->KeepCommitted();
   node->data = FromUtf16(units);
   NoteDamage(node, kDamageText);
   NoteTextChange(wasEmpty, node->data.empty());  // (the lines of text it is in are not what they were)
@@ -1231,6 +1249,7 @@ void SetCharacterData(CharacterData* node, std::string data) {
   }
   if (HasMutationObservers()) QueueCharacterDataRecord(node, node->data);
   const bool wasEmpty = node->data.empty();
+  node->KeepCommitted();
   node->data = std::move(data);
   NoteDamage(node, kDamageText);
   NoteTextChange(wasEmpty, node->data.empty());
@@ -1244,6 +1263,7 @@ void AppendCharacterData(CharacterData* node, std::string_view data) {
   }
   if (HasMutationObservers()) QueueCharacterDataRecord(node, node->data);
   const bool wasEmpty = node->data.empty();
+  node->KeepCommitted();
   node->data += data;
   NoteDamage(node, kDamageText);
   NoteTextChange(wasEmpty, node->data.empty());
@@ -1254,6 +1274,7 @@ void SetAttrValue(Attr* attribute, std::string value) {
   Element* owner = attribute->ownerElement;
   if (owner && HasMutationObservers()) QueueAttributeRecord(owner, attribute->localName, attribute->namespaceUri, attribute->value);
   const std::string old = attribute->value;
+  attribute->KeepCommitted();
   attribute->value = std::move(value);
   const bool same = old == attribute->value;  // (what is written again as it was is no change for style and layout)
   if (!same) NoteTreeChangeAt(owner);
@@ -1272,6 +1293,7 @@ void AppendAttr(Element* element, Attr* attribute) {
   NoteAttributeName(attribute, element);
   attribute->ownerElement = element;
   attribute->nodeDocument = element->nodeDocument;
+  element->KeepCommittedAttributes();
   element->attributes.push_back(attribute);
   element->NoteWrite();
   attribute->NoteWrite();
@@ -1641,6 +1663,7 @@ std::optional<DomError> SetAttributeNode(Element* element, Attr* attribute, Attr
 void RemoveAttributeNode(Element* element, Attr* attribute) {
   NoteAttributeName(attribute, element);
   if (HasMutationObservers()) QueueAttributeRecord(element, attribute->localName, attribute->namespaceUri, attribute->value);
+  element->KeepCommittedAttributes();
   element->attributes.erase(std::find(element->attributes.begin(), element->attributes.end(), attribute));
   attribute->ownerElement = nullptr;
   attribute->NoteWrite();
