@@ -6,6 +6,7 @@
 
 // Block layout (https://www.w3.org/TR/CSS22/visudet.html, https://www.w3.org/TR/CSS22/box.html#collapsing-margins), floats
 // (https://www.w3.org/TR/CSS22/visuren.html#floats) and absolute positioning (https://www.w3.org/TR/CSS22/visuren.html#absolute-positioning).
+#include <functional>
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -665,7 +666,20 @@ bool SameNumber(double a, double b) { return a == b || (std::isnan(a) && std::is
 // A box in a block container's flow, whose parent only places it (and does not reach into what is inside it afterwards), outside of multicol containers.
 bool MemoEligible(const Box& box) {
   if (box.kind != Box::Kind::Block || box.inlineLevel || box.outsideMarker || !box.parent || box.parent->kind != Box::Kind::Block) return false;
-  if (box.style->IsOutOfFlow() || box.style->IsFloating()) return false;
+  if (box.style->IsOutOfFlow()) return false;
+  // (A float is laid out as a box of its own formatting context, as wide as its contents: how it is laid out does not depend on where it is put, which the parent works out after.)
+  if (box.style->IsFloating()) {
+    const Display d = box.parent->style->display;
+    if (d != Display::Block && d != Display::FlowRoot && d != Display::ListItem) return false;
+    // (The width of a float follows the scrollbars of what is in it, which a layout made again finds: not for one with something that scrolls by itself in it.)
+    const std::function<bool(const Box&)> scrolls = [&](const Box& b) {
+      const BoxStyle& st = b.style->Physical();
+      if (st.overflowX == Overflow::Auto || st.overflowY == Overflow::Auto) return true;
+      for (const auto& c : b.children) if (scrolls(*c)) return true;
+      return false;
+    };
+    if (scrolls(box)) return false;
+  }
   switch (box.parent->style->display) {
     case Display::Block: case Display::FlowRoot: case Display::ListItem: break;
     case Display::Flex: case Display::InlineFlex: case Display::Grid: case Display::InlineGrid: if (NoItemMemo()) return false; break;
