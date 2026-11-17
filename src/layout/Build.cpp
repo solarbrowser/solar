@@ -836,7 +836,7 @@ class Builder {
   }
 
   // The style layout reads of an element: what was made of it before, while nothing it depends on has changed, and else worked out again.
-  std::shared_ptr<const BoxStyle> StyleFor(dom::Element* element, bool& recomputed, bool* attrChanged = nullptr, bool* styleChanged = nullptr) {
+  std::shared_ptr<const BoxStyle> StyleFor(dom::Element* element, bool& recomputed, bool* attrChanged = nullptr, bool* styleChanged = nullptr, bool* structureChanged = nullptr) {
     const dom::Node* parent = dom::ParentOf(element);
     const dom::Element* parentElement = parent && parent->IsElement() ? static_cast<const dom::Element*>(parent) : nullptr;
     dom::Element::LayoutStamp want;
@@ -851,6 +851,7 @@ class Builder {
     want.parentChildren = reuse_.structural && parentElement ? pv.children : 0;
     want.parentChildAttr = reuse_.sibling && parentElement ? pv.childAttr : 0;
     want.epoch = reuse_.allowed ? css::StyleEpochOf(element) : 0;
+    want.structEpoch = reuse_.allowed ? css::StructEpochOf(element) : 0;
     const dom::Element::LayoutStamp& have = element->layoutStamp;
     if (attrChanged) {
       // (What is read of the style of what is under the element is the language it is in: other attributes than lang change nothing of it.)
@@ -891,6 +892,7 @@ class Builder {
     element->layoutLang = lastLang_;
     // (What is under the element is made again for a style that is another one than it was; for its own children changing, the boxes of what is under them are as they were.)
     if (styleChanged) *styleChanged = element->layoutStyle != style;
+    if (structureChanged) *structureChanged = !reuse_.allowed || have.structEpoch != want.structEpoch;
     element->layoutStyle = style;
     element->layoutStamp = want;
     recomputed = true;
@@ -934,8 +936,8 @@ class Builder {
       lc_.tree.truncated = true;
       return;
     }
-    bool recomputed = false, attrChanged = false, styleChanged = false;
-    std::shared_ptr<const BoxStyle> style = StyleFor(element, recomputed, &attrChanged, &styleChanged);
+    bool recomputed = false, attrChanged = false, styleChanged = false, structureChanged = true;
+    std::shared_ptr<const BoxStyle> style = StyleFor(element, recomputed, &attrChanged, &styleChanged, &structureChanged);
     ++g_visited;
     if (recomputed) ++g_recomputed;
     if ((style->containIntrinsicWidthAuto || style->containIntrinsicHeightAuto) && element->nodeDocument) element->nodeDocument->containIntrinsicAutoSeen = true;
@@ -945,7 +947,8 @@ class Builder {
       bool saved, savedLang;
       ~Below() { builder->dirtyBelow_ = saved; builder->langBelow_ = savedLang; }
     } below{this, dirtyBelow_, langBelow_};
-    dirtyBelow_ = dirtyBelow_ || styleChanged;
+    // (The boxes under an element are made again when what they are made from changed, not for its padding or its size: they are laid out in what is asked of them.)
+    dirtyBelow_ = dirtyBelow_ || (styleChanged && structureChanged);
     langBelow_ = langBelow_ || attrChanged;
     if (style->display == Display::None) return;
     // Whether the box of the element depends on more than the DOM nodes under it: a shadow host and a slot are made of other trees, and what is in a shadow tree or

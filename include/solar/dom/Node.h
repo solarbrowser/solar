@@ -450,6 +450,7 @@ struct Element : Node {
     const Node* parent = nullptr;
     uint32_t attr = 0, anim = 0, children = 0, parentChildren = 0, parentChildAttr = 0;
     uint64_t epoch = 0;  // of the style it was made from (see css::StyleEpochOf)
+    uint64_t structEpoch = 0;  // (see css::StructEpochOf)
   } layoutStamp;
 
   std::string QualifiedName() const { return prefix.empty() ? localName : prefix + ":" + localName; }

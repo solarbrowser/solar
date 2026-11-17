@@ -34,6 +34,8 @@ struct StyleReuse {
 StyleReuse StyleReuseFor(dom::Document* document);
 // A number that changes when the styles kept of the element are made anew (see Validate): what was read of them is good while it is the same.
 uint64_t StyleEpochOf(dom::Element* element);
+// A number that changes when what the boxes of what is under the element are made from does (not for its padding, its size, its background: see StructureDiffers).
+uint64_t StructEpochOf(dom::Element* element);
 // Changes when a style sheet or what the cascade depends on besides the elements does.
 uint64_t SheetsVersion();
 // The same, but a sheet that was added and told which elements it is for does not change it (what layout made of the styles of the others stays good).

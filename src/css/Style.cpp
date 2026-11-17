@@ -1381,6 +1381,8 @@ struct StyleEntry {
   // while they have not changed since. The elements that never asked are not touched by a change of sizes.
   bool usesContainer = false;
   uint64_t containerEpoch = 0;
+  // A number that changes when what the boxes of what is under the element are made from changes (see StructureDiffers), and the one of the element above it the last time.
+  uint64_t structEpoch = 0, parentStructEpoch = 0;
 };
 
 std::unordered_map<dom::Element*, StyleEntry>& Cache() {
@@ -1733,6 +1735,32 @@ void MarkSubjectsDirty(dom::Element* element, const std::unordered_set<uint64_t>
 }
 
 
+// A property of an element that only the element is made differently by: the boxes of what is under it are made as they were when only these changed (what they are laid out in is
+// asked of the box, which layout keys by what it is given: see the memos of LayoutBlockLevel). The others (display, position, float, writing mode, overflow, lists and counters,
+// columns, content...) change how what is under it is made.
+bool SelfOnlyProperty(std::string_view name) {
+  static const char* exact[] = {"width", "height", "top", "right", "bottom", "left", "inset", "opacity", "transform", "translate", "rotate", "scale", "filter", "z-index", "cursor", "box-shadow",
+                                "inline-size", "block-size"};
+  for (const char* e : exact) if (name == e) return true;
+  if (name.rfind("padding", 0) == 0 || name.rfind("margin", 0) == 0 || name.rfind("background", 0) == 0 || name.rfind("outline", 0) == 0 || name.rfind("inset", 0) == 0) return true;
+  if (name.rfind("min-", 0) == 0 || name.rfind("max-", 0) == 0) return true;
+  if (name.rfind("border", 0) == 0) return name != "border-collapse" && name != "border-spacing";
+  return false;
+}
+
+// Whether the properties that make what is under an element differ between two cascades of it.
+bool StructureDiffers(const ElementStyle& a, const ElementStyle& b) {
+  for (const auto& [name, winner] : b.cascade) {
+    if (SelfOnlyProperty(name)) continue;
+    const auto at = a.cascade.find(name);
+    if (at == a.cascade.end() || !SameWinners(at->second, winner)) return true;
+  }
+  for (const auto& [name, winner] : a.cascade) {
+    if (!SelfOnlyProperty(name) && !b.cascade.count(name)) return true;
+  }
+  return false;
+}
+
 // Whether what changed between two cascades of an element is something the elements under it have from it: a property that is inherited, a custom property, one some rule gives
 // inherit or unset (for the property of the element above), what container queries ask of a container.
 bool InheritRelevantChange(const ElementStyle& before, const ElementStyle& after, bool coupled) {
@@ -1773,13 +1801,19 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   const StyleReuse reuse = element->nodeDocument ? StyleReuseFor(element->nodeDocument) : StyleReuse();
   const dom::Node* parentNode = dom::ParentOf(element);
   dom::Element* parent = parentNode && parentNode->IsElement() ? const_cast<dom::Element*>(static_cast<const dom::Element*>(parentNode)) : nullptr;
-  uint64_t parentEpoch = 0, parentCascade = 0, parentCustom = 0;
+  uint64_t parentEpoch = 0, parentCascade = 0, parentCustom = 0, parentStruct = 0;
   if (parent) {
     StyleEntry& up = Cache()[parent];
     Validate(parent, up, treeVersion);
     parentEpoch = up.inheritEpoch;
     parentCascade = up.cascadeEpoch;
     parentCustom = up.customEpoch;
+    parentStruct = up.structEpoch;
+  }
+  // (What is under the element is made from what is above it too: it follows.)
+  if (entry.parentStructEpoch != parentStruct) {
+    entry.structEpoch = ++g_styleEpoch;
+    entry.parentStructEpoch = parentStruct;
   }
   // The rules that apply to an element are told by the tree around it (the attributes and states of the elements above), not by their styles: but a container query asks
   // what its container is, which is a style.
@@ -1943,6 +1977,8 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   entry.usesContainer = false;  // (the style that is made now says whether it asks of a container)
   entry.serial = element->serial;
   const uint64_t oldCustomEpoch = entry.customEpoch, oldInheritEpoch = entry.inheritEpoch;
+  const uint64_t oldStruct = entry.structEpoch;
+  entry.structEpoch = ++g_styleEpoch;  // (kept below when the style is made again and what is under the element is made from the same)
   entry.epoch = keptEpoch ? keptEpoch : ++g_styleEpoch;
   entry.customEpoch = entry.epoch;
   entry.inheritEpoch = entry.epoch;
@@ -1965,6 +2001,7 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   if (soft) {
     Build(element, entry.plain, "");
     bool same = SameCascade(old, entry.plain);
+    if (same || !StructureDiffers(old, entry.plain)) entry.structEpoch = oldStruct;
     for (auto it = oldOthers.begin(); same && it != oldOthers.end(); ++it) {
       // (What was not made, and the variants of animations and starting styles, are made when they are asked for.)
       if (it->first.find_first_of("\x03\x04") != std::string::npos || !it->second.built) continue;
@@ -4332,6 +4369,11 @@ uint64_t StyleCacheVersion() { return g_cacheVersion; }
 uint64_t StyleEpochOf(dom::Element* element) {
   StyleOf(element);
   return Cache()[element].epoch;
+}
+
+uint64_t StructEpochOf(dom::Element* element) {
+  StyleOf(element);
+  return Cache()[element].structEpoch;
 }
 
 std::shared_ptr<void> SharedStyleToken(Quanta::Context&, dom::Element* element, const std::string& pseudo) {
