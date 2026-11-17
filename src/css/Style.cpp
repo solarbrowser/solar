@@ -251,6 +251,57 @@ struct Winner {
   std::vector<Winner> rest;  // what lost to it, for revert and revert-layer
 };
 
+// The declarations that win for the properties of an element, in the order of the names. The names are those of the declarations (which the winners point at and so keep), not
+// copies of them, and the winners lie in one block, where a map made a node of a hundred and thirty-six bytes for each (a page of two thousand elements held ten megabytes of
+// them).
+class Cascade {
+ public:
+  struct Item {
+    std::string_view first;
+    Winner second;
+  };
+  using iterator = Item*;
+  using const_iterator = const Item*;
+  size_t size() const { return items_.size(); }
+  bool empty() const { return items_.empty(); }
+  iterator begin() { return items_.data(); }
+  iterator end() { return items_.data() + items_.size(); }
+  const_iterator begin() const { return items_.data(); }
+  const_iterator end() const { return items_.data() + items_.size(); }
+  const_iterator find(std::string_view name) const {
+    const const_iterator at = Lower(name);
+    return at != end() && at->first == name ? at : end();
+  }
+  iterator find(std::string_view name) {
+    const iterator at = Lower(name);
+    return at != end() && at->first == name ? at : end();
+  }
+  size_t count(std::string_view name) const { return find(name) != end() ? 1 : 0; }
+  // The winner of a property, made empty when there is none. `stable` has to outlive the cascade (the name of a declaration does).
+  Winner& Slot(const std::string& stable) {
+    const std::string_view name = stable;
+    const size_t at = Lower(name) - items_.data();
+    if (at < items_.size() && items_[at].first == name) return items_[at].second;
+    return items_.insert(items_.begin() + at, Item{name, Winner()})->second;
+  }
+  iterator erase(iterator it) { return items_.data() + (items_.erase(items_.begin() + (it - items_.data())) - items_.begin()); }
+  // Lets go of the room that was kept for more.
+  void Compact() { items_.shrink_to_fit(); }
+
+ private:
+  const_iterator Lower(std::string_view name) const {
+    size_t lo = 0, hi = items_.size();
+    while (lo < hi) {
+      const size_t mid = (lo + hi) / 2;
+      if (items_[mid].first < name) lo = mid + 1;
+      else hi = mid;
+    }
+    return items_.data() + lo;
+  }
+  iterator Lower(std::string_view name) { return const_cast<iterator>(static_cast<const Cascade*>(this)->Lower(name)); }
+  std::vector<Item> items_;
+};
+
 constexpr int kUnlayered = INT_MAX / 2;
 
 bool Beats(const Winner& a, const Winner& b) {
@@ -592,7 +643,7 @@ bool NoFlatRules() {
 struct Gatherer {
   dom::Element* element;
   MatchContext matchContext;
-  std::map<std::string, Winner>& winners;
+  Cascade& winners;
   uint32_t order = 0;
   uint32_t ruleSerial = 0;
   uint32_t proximity = UINT32_MAX;
@@ -668,7 +719,7 @@ struct Gatherer {
     candidate.origin = entry.important ? (author ? 2 : 3) : (author ? 1 : 0);
     candidate.layer = entry.important ? (layer == kUnlayered ? -1 : 1000000 - layer) : layer;
     if (inlineStyle) candidate.layer = INT_MAX;  // element-attached styles come before the layers are looked at
-    Winner& slot = winners[entry.name];
+    Winner& slot = winners.Slot(entry.name);
     if (Beats(candidate, slot)) {
       candidate.rest = std::move(slot.rest);
       if (slot.entry) {
@@ -1229,7 +1280,7 @@ struct Memo {
 
 struct ElementStyle {
   uint64_t version = 0;
-  std::map<std::string, Winner> cascade;
+  Cascade cascade;
   std::shared_ptr<Memo> memo = std::make_shared<Memo>();
   std::set<std::string> resolving;
   std::vector<std::vector<DeclarationEntry>> storage;  // the style attribute's declarations
@@ -1382,7 +1433,7 @@ bool SameCascadeButCustom(const ElementStyle& a, const ElementStyle& b) {
   if (a.hasLogical != b.hasLogical || !a.storage.empty() || !b.storage.empty()) return false;
   auto x = a.cascade.begin();
   auto y = b.cascade.begin();
-  const auto custom = [](const std::string& name) { return name.size() > 1 && name[0] == '-' && name[1] == '-'; };
+  const auto custom = [](std::string_view name) { return name.size() > 1 && name[0] == '-' && name[1] == '-'; };
   for (;;) {
     while (x != a.cascade.end() && custom(x->first)) ++x;
     while (y != b.cascade.end() && custom(y->first)) ++y;
@@ -1646,13 +1697,13 @@ void MarkSubjectsDirty(dom::Element* element, const std::unordered_set<uint64_t>
 bool InheritRelevantChange(const ElementStyle& before, const ElementStyle& after, bool coupled) {
   static const bool off = std::getenv("SOLAR_NO_INHERIT_EPOCH") != nullptr;
   if (off || coupled) return true;  // (what container queries ask of a container is the size layout found as well: every change counts)
-  const auto relevant = [&](const std::string& name, const Winner* winner) {
+  const auto relevant = [&](std::string_view name, const Winner* winner) {
     if (name.size() > 1 && name[0] == '-' && name[1] == '-') return true;
     if (name == "all") return true;
     if (winner && winner->entry && !winner->entry->pendingShorthand.empty()) return true;
     const PropertyDefinition* definition = FindProperty(name);
     if (!definition || definition->inherited || IsShorthand(*definition)) return true;
-    if (g_inheritKeywordProps.count(name)) return true;
+    if (g_inheritKeywordProps.count(std::string(name))) return true;
     if (coupled && (name == "display" || name == "container-type" || name == "container-name" || name == "writing-mode" || name == "direction")) return true;
     return false;
   };
@@ -2142,7 +2193,7 @@ void Share(dom::Element* element, ElementStyle& style, const std::string& pseudo
   hash = hash * 1000003 + std::hash<std::string>()(element->namespaceUri);
   for (const auto& [name, winner] : style.cascade) {
     if (!SafeToShare(winner.entry)) return no("a declaration that looks at the element");
-    hash = hash * 1000003 + std::hash<std::string>()(name);
+    hash = hash * 1000003 + std::hash<std::string_view>()(name);
     hash = hash * 1000003 + std::hash<const void*>()(winner.entry);
     hash = hash * 1000003 + static_cast<uint64_t>(winner.origin * 31 + winner.layer);
     // (The declarations that lost are part of the style too: the same ones lost.)
@@ -2227,7 +2278,7 @@ class Resolver {
 };
 
 // revert and revert-layer: the declaration is replaced by the one that applies when its origin or layer is left out.
-void RollBack(std::map<std::string, Winner>& winners) {
+void RollBack(Cascade& winners) {
   for (auto it = winners.begin(); it != winners.end();) {
     Winner* w = &it->second;
     bool gone = false;
@@ -2856,9 +2907,10 @@ void BuildUntimed(dom::Element* element, ElementStyle& style, const std::string&
   SetHasSubject(subjectOfOuter);
   MergeHasUse(hasOfOuter);
   RollBack(style.cascade);
+  style.cascade.Compact();
   for (const auto& [name, winner] : style.cascade) {
     (void)winner;
-    if (IsLogicalProperty(name)) {
+    if (IsLogicalProperty(std::string(name))) {
       style.hasLogical = true;
       break;
     }
@@ -3805,7 +3857,7 @@ bool NoteSheetAdded(CssStyleSheet* sheet) {
     // The layers are ranked by where they are first named: the ones there are keep their ranks (and so the styles made from them stay good) when the sheet only adds
     // layers after them. That is looked at by ranking them with the sheet and without it.
     const auto ranks = [&](bool withSheet) {
-      std::map<std::string, Winner> none;
+      Cascade none;
       MatchContext context;
       Gatherer g{const_cast<dom::Element*>(owner), context, none};
       g.collecting = true;
