@@ -1871,7 +1871,7 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
     if (good) { entry.parentChildAttr = pv.childAttr; entry.parentChildren = pv.children; }
   }
   // (What the rules that apply are told by is other around the element, or its children are others: the rules are looked at again for it, and what is worked out stays where they come to the same.)
-  if (basicButParent && !good && entry.plain.built && !(reuse.has && entry.plain.has.any)) goodButStructure = true;
+  if (basicButParent && !good && entry.plain.built) goodButStructure = true;
   if (good && reuse.has) {
     const bool before = good;
     HasUse use = entry.plain.has;
