@@ -7,6 +7,7 @@
   // time(name, op, {ops, runs, setup}): op() is run `runs` times after setup() each time; the median of the time of a run, divided by `ops` (what one run does that many times).
   const only = (location.search.match(/only=([^&]+)/) || [0, ''])[1];
   const onlyRe = only ? new RegExp(decodeURIComponent(only)) : null;
+  const verbose = /verbose=1/.test(location.search);
   const extraRuns = Number((location.search.match(/runs=(\d+)/) || [0, 0])[1]);
   const time = (name, op, options = {}) => {
     if (onlyRe && !onlyRe.test(name)) return;
@@ -18,6 +19,7 @@
       const t0 = now();
       op();
       samples.push(now() - t0);
+      if (verbose) console.log('SAMPLE ' + name + ' ' + (now() - t0).toFixed(1));
     }
     const ms = median(samples) / ops;
     results.push({ name, ms, ops });
@@ -73,6 +75,7 @@
 
     // A change, then a read: the price of a forced layout after a small change.
     time(label + 'text change in one card, then clientWidth', () => { midText.firstChild.data += '.'; mid.clientWidth; }, { runs: 7 });
+    time(label + 'shift everything by 1px (padding-top of #root), then clientWidth', () => { root.style.paddingTop = (root.style.paddingTop === '1px' ? '0px' : '1px'); mid.clientWidth; }, { runs: 7 });
     time(label + 'attribute (data-x) change, then clientWidth', () => { mid.setAttribute('data-x', String(Math.random())); mid.clientWidth; }, { runs: 7 });
     time(label + 'class toggle on one card, then clientWidth', () => { mid.classList.toggle('hot'); mid.clientWidth; }, { runs: 7 });
     time(label + 'style.width change on one card, then clientWidth', () => { mid.style.width = (250 + Math.floor(Math.random() * 40)) + 'px'; mid.clientWidth; }, { runs: 7 });

@@ -1737,7 +1737,16 @@ void MarkSubjectsDirty(dom::Element* element, const std::unordered_set<uint64_t>
 // inherit or unset (for the property of the element above), what container queries ask of a container.
 bool InheritRelevantChange(const ElementStyle& before, const ElementStyle& after, bool coupled) {
   static const bool off = std::getenv("SOLAR_NO_INHERIT_EPOCH") != nullptr;
-  if (off || coupled) return true;  // (what container queries ask of a container is the size layout found as well: every change counts)
+  // What container queries ask of a container is its facts (the properties below), its size (layout finds that, and has the styles that asked made again when it changes: see
+  // NoteContainerSizesChanged), and for a style() query its whole style. Every change counted before, and a change of the padding of a block made every style under it again.
+  if (off || (coupled && (g_styleContainerQueries || (AnyAnimationAffectsSizes() && g_sizingMatters)))) return true;
+  if (coupled) {
+    // An element that is a container (or was) has every change of its style count: what is under it asks of it, and its size is what its width, its padding and its display make.
+    for (const ElementStyle* style : {&before, &after}) {
+      const auto at = style->cascade.find("container-type");
+      if (at != style->cascade.end() && at->second.entry && at->second.entry->value.find("normal") == std::string::npos && at->second.entry->value != "none") return true;
+    }
+  }
   const auto relevant = [&](std::string_view name, const Winner* winner) {
     if (name.size() > 1 && name[0] == '-' && name[1] == '-') return true;
     if (name == "all") return true;
