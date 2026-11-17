@@ -57,6 +57,9 @@ bool g_loadThrottle = false;  // the program shows pages as they load (the windo
 uint64_t g_layoutAnimationVersion = 1;  // the same, but not for what animations give that only changes how things are drawn
 uint64_t g_authorVersion = 1;  // changed when the rules do
 bool g_anyContainerQueries = false;  // a rule with a container query has been looked at
+bool g_sharedStale = false;          // the styles that elements share were worked out with sizes of containers that are not what they are now (let go of when no computation holds the cache)
+uint64_t g_containerEpoch = 1;       // a new number each time layout finds the size of a container to be another than the styles were made with
+void NoteUsesContainer(const dom::Element* element, bool evaluated);  // (see StyleEntry::usesContainer)
 bool g_overlayScrollbars = false;
 int g_sheetParsing = 0;
 CssStyleSheet* g_additiveSheet = nullptr;  // the sheet of the outermost parse, when it had no rules before
@@ -655,6 +658,9 @@ struct Gatherer {
   std::shared_ptr<const std::map<std::string, int>> sharedRank;  // the ranks that were worked out for the tree (not copied for each element)
   std::string layerPath;
   bool collecting = false;  // only finding the layers
+  // A dry run of the rules of a container group, to see whether any of them is for the element at all: nothing is added to the cascade, and the condition of the group is not asked.
+  bool probing = false;
+  bool probeHit = false;
   bool startingMode = false;  // the starting style of the element is being made: @starting-style rules count
   int anonymousLayers = 0;  // the anonymous layers are numbered as they are met, the same in both passes
   MediaEnvironment media = EnvironmentFor(element->nodeDocument);
@@ -707,6 +713,10 @@ struct Gatherer {
   bool Matches(const ComplexSelector& selector, Specificity& extra);
 
   void Offer(const DeclarationEntry& entry, bool author, bool inlineStyle, int layer, Specificity spec) {
+    if (probing) {
+      probeHit = true;
+      return;
+    }
     Winner candidate;
     candidate.entry = &entry;
     candidate.author = author;
@@ -911,7 +921,27 @@ struct Gatherer {
           if (element->nodeDocument) element->nodeDocument->containerQueriesSeen = true;
           g_anyContainerQueries = true;
           if (!g_styleContainerQueries && rule->prelude().find("tyle(") != std::string::npos) g_styleContainerQueries = true;
-          if (g_activeContext && ContainerRuleMatches(*g_activeContext, const_cast<dom::Element*>(element), matchContext.pseudoElement != nullptr, rule->prelude())) Rules(rule->rules, layer, outer);
+          if (probing) {
+            Rules(rule->rules, layer, outer);
+            break;
+          }
+          {
+            // A group none of whose rules is for the element is nothing to it, whatever the sizes of the containers are: it is not asked of them, and the style is not made from them.
+            const bool wasHit = probeHit;
+            probing = true;
+            probeHit = false;
+            Rules(rule->rules, layer, outer);
+            probing = false;
+            const bool anyFor = probeHit;
+            probeHit = wasHit;
+            if (!anyFor) break;
+          }
+          {
+            // (The style of an element is made by whoever asks for it, layout among them, which has no computation of a style going on: the document's context asks the sizes then.)
+            Quanta::Context* asking = g_activeContext ? g_activeContext : (element->nodeDocument ? element->nodeDocument->context : nullptr);
+            NoteUsesContainer(element, asking != nullptr);
+            if (asking && ContainerRuleMatches(*asking, const_cast<dom::Element*>(element), matchContext.pseudoElement != nullptr, rule->prelude())) Rules(rule->rules, layer, outer);
+          }
           break;
         case RuleKind::Import: {
           CssStyleSheet* imported = rule->importedSheet();
@@ -1347,11 +1377,21 @@ struct StyleEntry {
   uint64_t treeVersion = 0;  // of the tree when the styles were begun
   uint32_t subtree = 0, parentSubtree = 0;
   bool dirty = false;  // rules were added that may be for the element: its styles are made again, and kept as they are when the same declarations win
+  // A container query was asked of the element (or a container unit worked out for it) when its style was made, with the sizes the containers had at g_containerEpoch: the style is good only
+  // while they have not changed since. The elements that never asked are not touched by a change of sizes.
+  bool usesContainer = false;
+  uint64_t containerEpoch = 0;
 };
 
 std::unordered_map<dom::Element*, StyleEntry>& Cache() {
   static std::unordered_map<dom::Element*, StyleEntry> cache;
   return cache;
+}
+
+void NoteUsesContainer(const dom::Element* element, bool evaluated) {
+  StyleEntry& entry = Cache()[const_cast<dom::Element*>(element)];
+  entry.usesContainer = true;
+  entry.containerEpoch = evaluated ? g_containerEpoch : 0;  // (not evaluated at all: stale at once)
 }
 
 struct DocumentState {
@@ -1755,7 +1795,8 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   const bool attrReaches = attrEffect == AttrEffect::Reaches;
   const bool attrStays = attrEffect != AttrEffect::Unknown;  // (it stays, or it reaches only what the keys are for: that is looked at below)
   const bool basicButParent = reuse.allowed && !shadowed && !entry.shadowed && entry.serial == element->serial && entry.parent == parentNode && (attrSame || attrStays) && entry.animInherit == ev.animInherit;
-  const bool basic = basicButParent && parentSame && attrSame;
+  const bool containerStale = entry.usesContainer && entry.containerEpoch != g_containerEpoch;
+  const bool basic = basicButParent && parentSame && attrSame && !containerStale;
   int structureMatters = -1;
   const auto matters = [&] {
     if (structureMatters < 0) structureMatters = ElementAsksStructure(element) ? 1 : 0;
@@ -1890,6 +1931,7 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   }
   entry.plain = ElementStyle();
   entry.others.clear();
+  entry.usesContainer = false;  // (the style that is made now says whether it asks of a container)
   entry.serial = element->serial;
   const uint64_t oldCustomEpoch = entry.customEpoch, oldInheritEpoch = entry.inheritEpoch;
   entry.epoch = keptEpoch ? keptEpoch : ++g_styleEpoch;
@@ -1933,7 +1975,8 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
       // (What the elements under it are told by is a new number where the tree around it is another: they look at the rules again, as it did.)
       if (!goodButStructure || keepCascade) entry.cascadeEpoch = oldCascadeEpoch;
     } else if (!computedStale && !g_styleContainerQueries && oldEpoch != 0 && entry.others.empty() && oldOthers.empty() && SameCascadeButCustom(old, entry.plain) &&
-               !UsesVar(old) && !UsesVar(entry.plain) && !(attrStays && (UsesAttr(old) || UsesAttr(entry.plain)))) {
+               !UsesVar(old) && !UsesVar(entry.plain) && !(attrStays && (UsesAttr(old) || UsesAttr(entry.plain))) &&
+               old.memo.use_count() == 1) {  // (a memo that other elements share was worked out for a cascade they all had: this one is another now)
       // Only custom properties are others, and nothing of the element is worked out from them: what it was worked out to stays; the elements under it are told.
       entry.plain.memo = old.memo;
       entry.plain.memo->custom.clear();
@@ -1978,6 +2021,10 @@ ElementStyle& StyleOf(dom::Element* element, const std::string& pseudo = "") {
   static Last last;
   const bool plainAsk = pseudo.empty() && !AnimatedValuesSuppressed() && !StartingStyleFor(element, pseudo);
   if (plainAsk && last.element == element && last.serial == element->serial && last.generation == g_cacheGeneration && last.cacheVersion == g_cacheVersion && last.treeVersion == treeVersion) return *last.style;
+  if (g_styleHolds == 0 && g_sharedStale) {
+    ClearShared();
+    g_sharedStale = false;
+  }
   if (g_styleHolds == 0) {
     // (What was kept for elements that are gone: the entry of one is not small (the cascade, the memo), and it would stay until the cache is emptied, at sixty thousand of them.)
     std::vector<dom::Element*>& dead = dom::DeadElements();
@@ -2508,6 +2555,12 @@ bool ShareFromSibling(dom::Element* element, ElementStyle& style) {
       if (!safe) break;
     }
     if (!safe) return false;
+    if (other.usesContainer) {
+      // (A style made from the sizes of containers is taken from a sibling only while they are the sizes it was made with, and then it is as much a style of that kind.)
+      if (other.containerEpoch != g_containerEpoch) return false;
+      own->second.usesContainer = true;
+      own->second.containerEpoch = other.containerEpoch;
+    }
     style.cascade = other.plain.cascade;
     style.memo = other.plain.memo;
     style.has = other.plain.has;
@@ -3258,6 +3311,7 @@ ComputeContext Resolver::ContextFor(dom::Element* element, const std::string& pr
   if (text.find("cq") != std::string::npos) {
     double w, h;
     bool vertical = false;
+    NoteUsesContainer(element, true);
     if (NearestContainerSize(ctx_, element, !pseudo.empty(), w, h, vertical)) {
       c.containerWidth = w;
       c.containerHeight = h;
@@ -3990,6 +4044,11 @@ void NoteStyleChange() {
   ++g_cacheVersion;
   ++g_authorVersion;
   ++g_layoutSheetsVersion;
+}
+void NoteContainerSizesChanged() {
+  g_sharedStale = true;
+  ++g_containerEpoch;  // (the styles that asked of a container are others than they should be: they are made again when they are asked for)
+  ++g_styleVersion;    // (the styles are looked at again: all the others are good as they were)
 }
 void NoteStyleChangeForRegistry() { NoteStyleChange(); }
 void NoteSizingEffect(bool containersChanged) { g_sizingMatters = containersChanged; }

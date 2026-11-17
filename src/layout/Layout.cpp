@@ -396,7 +396,9 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
     if (!containers && !visibility) break;
     if (containers) {
       containersEverChanged = true;
-      css::NoteStyleChange();
+      // (While an animation of sizes runs the styles are all made again, as they always were: that is what the animations of containers are looked at in. Otherwise only those that asked of one.)
+      if (css::AnyAnimationAffectsSizes()) css::NoteStyleChange();
+      else css::NoteContainerSizesChanged();
     }
   }
   if (document->containerQueriesSeen && css::AnyAnimationAffectsSizes()) css::NoteSizingEffect(containersEverChanged);
