@@ -373,6 +373,9 @@
     if (visible) {
       for (let a = target.parentNode; a && a !== root; a = a.parentNode || a.host) {
         if (!isElement(a) || a === document.documentElement) continue;
+        // The overflow of the body belongs to the viewport (when the root element's is visible), not to the body: the body clips nothing, and a body that is
+        // as tall as its in-flow content (YouTube's is 0 high: everything of the page is absolutely positioned in it) would clip the whole page away.
+        if (a === document.body && !overflowClips(document.documentElement)) continue;
         if (overflowClips(a)) {
           const r = a.getBoundingClientRect();
           const clip = { left: r.left + a.clientLeft, top: r.top + a.clientTop, right: r.left + a.clientLeft + a.clientWidth, bottom: r.top + a.clientTop + a.clientHeight };
