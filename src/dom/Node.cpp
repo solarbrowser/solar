@@ -4,6 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+#include <cstring>
 #include "solar/dom/Node.h"
 #include "solar/css/WatchedAttributes.h"
 #include "solar/dom/MediaHook.h"
@@ -1234,7 +1235,56 @@ uint32_t NodeLength(const Node* node) {
   }
 }
 
+namespace {
+// The UTF-16 length of well-formed UTF-8 and, for two UTF-16 positions, the byte positions they are at; false for what is not well-formed or a position inside a pair of
+// surrogates (those go the slow way, through UTF-16). No allocation: a page that builds a long text a piece at a time (appendData in a loop, a script's text) made the
+// change of a text, which turned all of it into UTF-16 and back, quadratic: ten milliseconds a piece at two megabytes, and all of the time of a navigation that never finished.
+bool ScanUtf8(std::string_view s, size_t unitA, size_t unitB, size_t& length16, size_t& byteA, size_t& byteB) {
+  size_t units = 0, i = 0;
+  bool haveA = false, haveB = false;
+  const size_t n = s.size();
+  while (i < n) {
+    if (units == unitA) { byteA = i; haveA = true; }
+    if (units == unitB) { byteB = i; haveB = true; }
+    const unsigned char b = static_cast<unsigned char>(s[i]);
+    size_t bytes, u;
+    if (b < 0x80) { bytes = 1; u = 1; }
+    else if ((b & 0xE0) == 0xC0) { bytes = 2; u = 1; }
+    else if ((b & 0xF0) == 0xE0) { bytes = 3; u = 1; }
+    else if ((b & 0xF8) == 0xF0) { bytes = 4; u = 2; }
+    else return false;
+    if (i + bytes > n) return false;
+    for (size_t k = 1; k < bytes; ++k) if ((static_cast<unsigned char>(s[i + k]) & 0xC0) != 0x80) return false;
+    if (u == 2 && ((unitA == units + 1) || (unitB == units + 1))) return false;  // (inside a pair)
+    units += u;
+    i += bytes;
+  }
+  if (units == unitA) { byteA = n; haveA = true; }
+  if (units == unitB || unitB > units) { byteB = n; haveB = true; }
+  length16 = units;
+  return haveA && haveB;
+}
+}  // namespace
+
 std::optional<DomError> ReplaceData(CharacterData* node, uint32_t offset, uint32_t count, std::string_view replacement) {
+  {
+    size_t length = 0, byteFrom = 0, byteTo = 0, insertedLength = 0, dummyA = 0, dummyB = 0;
+    if (ScanUtf8(replacement, 0, 0, insertedLength, dummyA, dummyB) && ScanUtf8(node->data, offset, static_cast<size_t>(offset) + count, length, byteFrom, byteTo)) {
+      if (offset > length) {
+        return DomError{"IndexSizeError", "The offset " + std::to_string(offset) + " is larger than the node's length (" + std::to_string(length) + ")."};
+      }
+      if (count > length - offset) count = static_cast<uint32_t>(length - offset);
+      if (HasMutationObservers()) QueueCharacterDataRecord(node, node->data);
+      const bool wasEmpty = node->data.empty();
+      node->KeepCommitted();
+      node->data.replace(byteFrom, byteTo - byteFrom, replacement);
+      NoteDamage(node, kDamageText);
+      NoteTextChange(wasEmpty, node->data.empty());
+      if (HasLiveRanges()) RangesReplaceData(node, offset, count, static_cast<uint32_t>(insertedLength));
+      if (g_hooks.childrenChanged && node->parentNode) g_hooks.childrenChanged(node->parentNode);
+      return std::nullopt;
+    }
+  }
   std::u16string units = ToUtf16(node->data);
   if (offset > units.size()) {
     return DomError{"IndexSizeError", "The offset " + std::to_string(offset) + " is larger than the node's length (" + std::to_string(units.size()) + ")."};
