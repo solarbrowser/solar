@@ -4003,7 +4003,9 @@ void NoteAnimatedStyleChange(bool affectsSizes, bool) {
   ++g_animationVersion;
   ++g_layoutAnimationVersion;
   if (affectsSizes) ++g_sizingAnimation;
-  if (g_anyContainerQueries && affectsSizes) ++g_cacheVersion;  // (the size of a container may be what an animation gives)
+  // (The size of a container may be what an animation gives: layout finds the sizes, and the styles are made again by it when a container is not as large as they were made for -- and
+  // while sizes are animated none is kept: see StyleReuseFor. The cache was let go of as well for each tick of an animation of sizes, which made the sheets known again, the lists of rules
+  // that apply, and everything worked out, a hundred and fifty times in forty seconds on a page with a carousel.)
 }
 uint64_t AuthorStyleVersion() { return dom::StructureVersion() * 1000003 + g_authorVersion; }
 uint64_t FlushVersion() { return AuthorStyleVersion() * 1000003 + dom::StateVersion(); }
