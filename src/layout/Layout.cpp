@@ -289,6 +289,24 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
   // The styles that depend on the size of containers are made from the sizes of the last pass; layout is done again until they stop changing.
   bool eventsPending = false;
   bool containersEverChanged = false;  // (for css::NoteSizingEffect)
+  // The strict way (a box is left as it was only when the way it was laid out last is the way it is asked now) is for the boxes a layout found unsettled, for the rest of that layout: the
+  // flags were kept for good, and a page whose cards were measured in two ways once (a flex row that measures its items and then stretches them) laid out every box of them again at each
+  // change of the page, from a text of a card (77 ms in a thousand cards) to the class of a block (79): without them 5 and 3.
+  static const bool keepStrict = std::getenv("SOLAR_KEEP_STRICT") != nullptr;
+  if (!keepStrict && previous && previous->root) {
+    // (A box that was made strict by the last layout stays so for this one; a box that was strict before that is not, unless the last layout found it unsettled again.)
+    const auto walk = [&](auto&& self, Box& box) -> void {
+      if (box.memoStrictFresh) box.memoStrictFresh = false;
+      else box.memoStrict = false;
+      if (box.node && box.node->IsElement()) {
+        dom::Element* element = static_cast<dom::Element*>(box.node);
+        if (element->layoutMemoStrictFresh) element->layoutMemoStrictFresh = false;
+        else element->layoutMemoStrict = false;
+      }
+      for (auto& child : box.children) self(self, *child);
+    };
+    walk(walk, *previous->root);
+  }
   for (int pass = 0; pass < 5; ++pass) {
     tree = std::make_shared<Tree>();
     tree->keepScrollbars = pass > 0;
@@ -348,7 +366,11 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
         std::vector<Box*> stack;
         for (Box* b : unsettled) {
           b->memoStrict = true;
-          if (b->node && b->node->IsElement()) static_cast<dom::Element*>(b->node)->layoutMemoStrict = true;
+          b->memoStrictFresh = true;
+          if (b->node && b->node->IsElement()) {
+            static_cast<dom::Element*>(b->node)->layoutMemoStrict = true;
+            static_cast<dom::Element*>(b->node)->layoutMemoStrictFresh = true;
+          }
           stack.push_back(b);
         }
         while (!stack.empty()) {
@@ -359,7 +381,11 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
             if (c->kind != Box::Kind::Block) continue;
             if (!c->memoStrict && c->MemoValid(0) && c->MemoValid(1)) {
               c->memoStrict = true;
-              if (c->node && c->node->IsElement()) static_cast<dom::Element*>(c->node)->layoutMemoStrict = true;
+              c->memoStrictFresh = true;
+              if (c->node && c->node->IsElement()) {
+                static_cast<dom::Element*>(c->node)->layoutMemoStrict = true;
+                static_cast<dom::Element*>(c->node)->layoutMemoStrictFresh = true;
+              }
             }
             stack.push_back(c);
           }

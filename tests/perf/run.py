@@ -16,7 +16,7 @@ import sys
 import threading
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-BASE = os.path.join(ROOT, "baseline.json")
+BASE = os.path.join(ROOT, "baseline.json")  # (numbers are named by the cards and not by the layout: save and compare with the same --layout)
 
 
 def main():
@@ -24,6 +24,7 @@ def main():
     ap.add_argument("--cards", default="200,1000")
     ap.add_argument("--save", action="store_true")
     ap.add_argument("--compare", action="store_true")
+    ap.add_argument("--layout", default="flex", help="how the cards are laid out: flex, grid, float or block")
     ap.add_argument("--only", default="", help="a regular expression: only the benchmarks whose names match")
     ap.add_argument("--runs", type=int, default=0, help="runs of each (more of them for a profile)")
     ap.add_argument("--timeout", type=int, default=240)
@@ -37,7 +38,7 @@ def main():
 
     env = dict(os.environ, SOLAR_SANDBOX="off", SDL_VIDEODRIVER="dummy", SDL_AUDIODRIVER="dummy", SOLAR_GUI_CPU="1", SOLAR_GUI_SETTLE="600000", SOLAR_GUI_SHOT="/tmp/solar_bench.png")
     import urllib.parse
-    url = "http://127.0.0.1:%d/bench.html?cards=%s&only=%s&runs=%d" % (port, args.cards, urllib.parse.quote(args.only), args.runs)
+    url = "http://127.0.0.1:%d/bench.html?cards=%s&layout=%s&only=%s&runs=%d" % (port, args.cards, args.layout, urllib.parse.quote(args.only), args.runs)
     proc = subprocess.Popen(["./solar", url], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
     rows, info = [], []
     try:

@@ -28,7 +28,10 @@
   const make = (cards) => {
     const css = [];
     for (let i = 0; i < 300; i++) css.push(`.c${i % 40} .t${i % 17} { color: rgb(${i % 255}, 10, 20); margin: ${i % 7}px; }`);
-    css.push('.card { display: flex; flex-direction: column; padding: 8px; border: 1px solid #ccc; margin: 4px; width: 280px; float: left; container-type: inline-size; }');
+    const mode = (location.search.match(/layout=(\w+)/) || [0, 'flex'])[1];  // how the cards are put in a row: flex (wrap), grid, float, block (one under the other)
+    const place = { flex: '', float: 'float: left;', grid: '', block: '' }[mode];
+    css.push('#cards { ' + ({ flex: 'display: flex; flex-wrap: wrap;', grid: 'display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));', float: '', block: '' }[mode]) + ' }');
+    css.push('.card { display: flex; flex-direction: column; padding: 8px; border: 1px solid #ccc; margin: 4px; ' + (mode === 'grid' || mode === 'block' ? '' : 'width: 280px; ') + place + ' container-type: inline-size; }');
     css.push('.card h3 { font-size: 16px; margin: 0 0 4px; } .card p { margin: 0; color: #444; } .card .row { display: flex; justify-content: space-between; }');
     css.push('@container (min-width: 200px) { .card h3 { font-size: 18px; } .card .row { gap: 8px; } }');
     css.push('@media (min-width: 600px) { .card { width: 300px; } .nav a { padding: 6px 12px; } } @media (max-width: 300px) { .card { width: 100%; } }');
@@ -57,7 +60,7 @@
     console.log('BENCH ' + cards + ': build page and first layout ' + (now() - t0).toFixed(2) + ' ' + 1);
     const label = cards + ': ';
     const elements = document.querySelectorAll('*').length;
-    console.log('INFO ' + cards + ' cards, ' + elements + ' elements');
+    console.log('INFO ' + cards + ' cards, ' + elements + ' elements, layout ' + ((location.search.match(/layout=(\w+)/) || [0, 'flex'])[1]));
     const cardList = root.querySelectorAll('.card');
     const mid = cardList[Math.floor(cardList.length / 2)];
     const midText = mid.querySelector('p');
