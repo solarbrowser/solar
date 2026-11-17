@@ -1329,6 +1329,9 @@ int main(int argc, char** argv) {
     ::prctl(PR_SET_PDEATHSIG, SIGKILL);
 #endif
     ::signal(SIGPIPE, SIG_IGN);
+    // The machine code a page keeps is capped at 48 MB (the engine's own cap is 192): the watch page of YouTube had 105 MB of it in 560 regions after forty seconds, a ninth of the
+    // page's process, and with the cap the process is 90 MB smaller (the page loads in the same time; what is over the cap stays in the interpreter). A user's own setting wins.
+    ::setenv("QUANTA_JIT_MAXMAPPED_MB", "48", 0);
     char* pageArguments[] = {argv[0], argc > 2 ? argv[2] : nullptr, nullptr};
     // (The interface's process is not the page: what is set for looking at the page, a picture of it and what a user would do in it, is not for the interface.)
     const bool isChrome = argc > 2 && solar::gui::IsInterfaceAddress(argv[2]);
