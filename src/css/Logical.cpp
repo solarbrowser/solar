@@ -4,6 +4,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+#include <mutex>
+#include <map>
 #include "solar/css/Logical.h"
 
 #include <unordered_map>
@@ -139,12 +141,23 @@ std::string PhysicalOf(const std::string& logical, const WritingContext& context
 }
 
 std::vector<std::string> LogicalsOf(const std::string& physical, const WritingContext& context) {
-  std::vector<std::string> out;
-  for (const auto& [name, info] : Table()) {
-    (void)info;
-    if (PhysicalOf(name, context) == physical) out.push_back(name);
+  // (Which logical properties a physical one is, for a writing mode and a direction: worked out once for each, not by looking at every logical property each time.)
+  using Reverse = std::unordered_map<std::string, std::vector<std::string>>;
+  static std::mutex mutex;
+  static std::map<std::pair<std::string, std::string>, Reverse> reverses;
+  std::lock_guard<std::mutex> lock(mutex);
+  auto found = reverses.find({context.mode, context.direction});
+  if (found == reverses.end()) {
+    Reverse reverse;
+    for (const auto& [name, info] : Table()) {
+      (void)info;
+      const std::string target = PhysicalOf(name, context);
+      if (!target.empty()) reverse[target].push_back(name);
+    }
+    found = reverses.emplace(std::make_pair(context.mode, context.direction), std::move(reverse)).first;
   }
-  return out;
+  const auto at = found->second.find(physical);
+  return at == found->second.end() ? std::vector<std::string>() : at->second;
 }
 
 }  // namespace solar::css

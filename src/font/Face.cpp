@@ -6,6 +6,9 @@
 
 #include "solar/font/Face.h"
 
+#include <cstdlib>
+#include <mutex>
+#include <unordered_map>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -115,6 +118,9 @@ struct Face::Impl {
   hb_face_t* face = nullptr;
   hb_font_t* font = nullptr;  // at units per em, so that positions are in font units
   unsigned upem = 1000;
+  // The glyphs a text came to (what is shaped is the same text again and again: the title of a thousand cards): by the options and the text.
+  std::mutex shapedMutex;
+  std::unordered_map<std::string, std::vector<Glyph>> shaped;
 };
 
 Face::~Face() {
@@ -259,6 +265,32 @@ double Face::Advance(char32_t codePoint) const {
 }
 
 std::vector<Glyph> Face::Shape(std::string_view text, const ShapeOptions& options) const {
+  static const bool noCache = std::getenv("SOLAR_NO_SHAPE_CACHE") != nullptr;
+  std::string key;
+  const bool cacheable = !noCache && text.size() <= 256 && options.features.empty();
+  if (cacheable) {
+    key.reserve(text.size() + options.script.size() + options.language.size() + 16);
+    key.push_back(options.rightToLeft ? 'r' : 'l');
+    key.push_back(options.kerning ? 'k' : '-');
+    key.push_back(options.ligatures ? 'g' : '-');
+    key.append(reinterpret_cast<const char*>(&options.letterSpacing), sizeof options.letterSpacing);
+    key.append(options.script).push_back('\0');
+    key.append(options.language).push_back('\0');
+    key.append(text);
+    std::lock_guard<std::mutex> lock(impl_->shapedMutex);
+    const auto found = impl_->shaped.find(key);
+    if (found != impl_->shaped.end()) return found->second;
+  }
+  std::vector<Glyph> glyphs = ShapeUncached(text, options);
+  if (cacheable) {
+    std::lock_guard<std::mutex> lock(impl_->shapedMutex);
+    if (impl_->shaped.size() >= 8192) impl_->shaped.clear();
+    impl_->shaped.emplace(std::move(key), glyphs);
+  }
+  return glyphs;
+}
+
+std::vector<Glyph> Face::ShapeUncached(std::string_view text, const ShapeOptions& options) const {
   hb_buffer_t* buffer = hb_buffer_create();
   hb_buffer_add_utf8(buffer, text.data(), static_cast<int>(text.size()), 0, static_cast<int>(text.size()));
   hb_buffer_set_direction(buffer, options.rightToLeft ? HB_DIRECTION_RTL : HB_DIRECTION_LTR);

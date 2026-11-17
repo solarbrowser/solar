@@ -94,6 +94,7 @@ class Face : public std::enable_shared_from_this<Face> {
   double Advance(char32_t codePoint) const;
   // The text, a UTF-8 string, as the glyphs it comes to.
   std::vector<Glyph> Shape(std::string_view text, const ShapeOptions& options = {}) const;
+  std::vector<Glyph> ShapeUncached(std::string_view text, const ShapeOptions& options) const;
   // Its width, in em.
   double Measure(std::string_view text, const ShapeOptions& options = {}) const;
 
