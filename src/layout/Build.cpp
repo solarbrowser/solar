@@ -491,6 +491,7 @@ class Builder {
   bool canReuse_ = false;
   static inline uint64_t g_serial = 0;
   const uint64_t serial_ = ++g_serial;
+  uint64_t listEvents_ = 0;  // counted when a list item is numbered by those before it (not for what is around a list: it numbers its own items): see volatileEvents_
   uint64_t volatileEvents_ = 0;  // counted when something is built that depends on more than the nodes under it (counters, replaced contents)
   std::unordered_map<const Box*, std::unique_ptr<Box>*> slots_;  // where the boxes of the tree before are held
   std::unique_ptr<CounterStyles> styles_;
@@ -533,9 +534,13 @@ class Builder {
 
   void ApplyCounters(const BoxStyle& style, bool listItem, dom::Element* element) {
     // (What reads or sets a counter depends on the elements before it.)
-    if (listItem || (!style.counterReset.empty() && style.counterReset != "none") || (!style.counterIncrement.empty() && style.counterIncrement != "none") ||
-        (!style.counterSet.empty() && style.counterSet != "none") || (element && element->IsHtml() && (element->localName == "ol" || element->localName == "ul" || element->localName == "menu" || element->localName == "dir" || element->localName == "li"))) {
+    // (What the user agent gives a list, a reset of the item counter, is the list numbering its own items: that is a list event and no more.)
+    const bool listReset = element && element->IsHtml() && (element->localName == "ol" || element->localName == "ul" || element->localName == "menu" || element->localName == "dir") &&
+                           (style.counterReset == "list-item" || style.counterReset == "list-item 0");
+    if ((!listReset && !style.counterReset.empty() && style.counterReset != "none") || (!style.counterIncrement.empty() && style.counterIncrement != "none") || (!style.counterSet.empty() && style.counterSet != "none")) {
       ++volatileEvents_;
+    } else if (listItem || (element && element->IsHtml() && (element->localName == "ol" || element->localName == "ul" || element->localName == "menu" || element->localName == "dir" || element->localName == "li"))) {
+      ++listEvents_;
     }
     for (const auto& [name, value] : ParseCounterList(style.counterReset, 0)) Instantiate(name, value);
     // HTML: ol, ul and menu reset the list item counter; li may set it.
@@ -976,15 +981,22 @@ class Builder {
       Builder* b;
       dom::Element* element;
       Box** box;
-      uint64_t before;
+      uint64_t before, listBefore;
       ~Seal() {
         if (!*box) return;
-        (*box)->volatileSubtree = b->volatileEvents_ != before;
+        (*box)->volatileSubtree = b->volatileEvents_ != before || b->listEvents_ != listBefore;
         element->subtreeBuilt = element->VersionsInView().subtree;
       }
     };
     Box* sealed = nullptr;
-    Seal seal{this, element, &sealed, volatileBefore};
+    Seal seal{this, element, &sealed, volatileBefore, listEvents_};
+    // A list numbers its own items (it resets the counter): what is numbered inside it is no reason for what is around it to be made again.
+    struct ListScope {
+      Builder* b;
+      uint64_t before;
+      bool on;
+      ~ListScope() { if (on) b->listEvents_ = before; }
+    } listScope{this, listEvents_, element->IsHtml() && (element->localName == "ol" || element->localName == "ul" || element->localName == "menu" || element->localName == "dir")};
     // Style containment keeps the counters of its subtree to itself.
     struct Scope {
       Builder* b;
