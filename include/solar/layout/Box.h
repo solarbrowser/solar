@@ -207,6 +207,7 @@ struct Box {
   uint64_t memoDescSerial = 0;  // the tree whose layout left what is under it as it is
   bool memoStrict = false;        // it was left unsettled once: it is left as it was only when asked the way its contents are laid out as
   bool memoStrictFresh = false;  // it was made strict by the last layout (see LayoutDocument): it stays so for the next, and is let go of after it if it was not found unsettled again
+  mutable int8_t autoOverflowBelow = -1;  // the box, or one under it, has an overflow of auto (-1: not looked at)
   bool memoInconsistent = false;  // its size and place are those of another slot than the one its contents are laid out as: to be settled before the layout is done
   uint64_t hitSerial = 0;  // the tree in which layout left it as it was (see LayoutMemo)
   bool converted = false;  // what is in it is in the physical frame already (it has not been laid out since)

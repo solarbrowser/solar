@@ -32,7 +32,7 @@ void SetPreviewBudget(long elements) { g_previewBudget = elements; }
 namespace {
 
 // The content boxes of the containers, for the container queries. True if one is not what style was made with.
-bool UpdateContainerSizes(Tree& tree) {
+bool UpdateContainerSizes(Tree& tree, std::vector<dom::Element*>& changedContainers) {
   bool changed = false;
   const auto walk = [&](auto&& self, const Box& box) -> void {
     if (box.kind == Box::Kind::Block && box.node && box.node->IsElement() && box.style && box.style->sizeContainer) {
@@ -42,6 +42,7 @@ bool UpdateContainerSizes(Tree& tree) {
       if (std::fabs(element->containerWidth - w) > 0.005 || std::fabs(element->containerHeight - h) > 0.005) {
         element->containerWidth = w;
         element->containerHeight = h;
+        changedContainers.push_back(element);
         changed = true;
       }
     }
@@ -307,7 +308,10 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
     };
     walk(walk, *previous->root);
   }
+  bool passReuseOff = false;  // (while an animation of sizes runs, every style is made again after a pass)
+  std::shared_ptr<Tree> passBefore;  // the tree of the pass before in this layout: the boxes of what did not change in the styles after it are kept
   for (int pass = 0; pass < 5; ++pass) {
+    passBefore = tree;
     tree = std::make_shared<Tree>();
     tree->keepScrollbars = pass > 0;
     double barWidth = 0, barHeight = 0;
@@ -331,7 +335,7 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
       tree->viewportHeight = environment.height - barHeight - extraHeight;
       LayoutContext lc{ctx, *tree, tree->viewportWidth, tree->viewportHeight};
       const auto t0 = std::chrono::steady_clock::now();
-      BuildTree(lc, document, attempt == 0 && pass == 0 && previous && previous->root ? previous.get() : nullptr);
+      BuildTree(lc, document, attempt == 0 && pass == 0 && previous && previous->root ? previous.get() : (attempt == 0 && pass > 0 && passBefore && passBefore->root && !passReuseOff && !std::getenv("SOLAR_NO_PASS_REUSE") ? passBefore.get() : nullptr));
       const auto t1 = std::chrono::steady_clock::now();
       LayoutRoot(lc);
       // A box that was given back its size from one way it was laid out, and was left with what is under it as another way left it, and was not asked in that other way after: it
@@ -413,7 +417,8 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
       extraWidth = std::max(extraWidth, wantWidth);
       extraHeight = std::max(extraHeight, wantHeight);
     }
-    const bool containers = document->containerQueriesSeen && UpdateContainerSizes(*tree);
+    std::vector<dom::Element*> changedContainers;
+    const bool containers = document->containerQueriesSeen && UpdateContainerSizes(*tree, changedContainers);
     // (What the scroll position was is kept for the new tree, as the relevance of boxes is worked out from it.)
     if (document->layoutTree) {
       for (const auto& entry : document->layoutTree->scroll) tree->scroll.emplace(entry);
@@ -423,8 +428,8 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
     if (containers) {
       containersEverChanged = true;
       // (While an animation of sizes runs the styles are all made again, as they always were: that is what the animations of containers are looked at in. Otherwise only those that asked of one.)
-      if (css::AnyAnimationAffectsSizes()) css::NoteStyleChange();
-      else css::NoteContainerSizesChanged();
+      if (css::AnyAnimationAffectsSizes()) { css::NoteStyleChange(); passReuseOff = true; }
+      else { css::NoteContainerSizesChanged(); css::MarkContainerUsersForRebuild(changedContainers); }
     }
   }
   if (document->containerQueriesSeen && css::AnyAnimationAffectsSizes()) css::NoteSizingEffect(containersEverChanged);

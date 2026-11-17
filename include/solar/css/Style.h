@@ -101,6 +101,7 @@ std::vector<CssStyleSheet*> SheetsOfTreeRoot(dom::Node* root);
 void NoteStyleChange();
 // The sizes of the containers that container queries are asked of are others than the styles were made with: the styles that asked of a container are made again, and only they.
 void NoteContainerSizesChanged();
+void MarkContainerUsersForRebuild(const std::vector<dom::Element*>& changed);
 // A style sheet is being parsed: script must not run until it is done (what is half made is not safe to collect).
 double SheetParseMillis();
 // `added` is a sheet that had no rules before this parse: what it adds can be told of the elements it is for, and the styles of the others are kept.

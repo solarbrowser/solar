@@ -4096,6 +4096,23 @@ void NoteContainerSizesChanged() {
   ++g_containerEpoch;  // (the styles that asked of a container are others than they should be: they are made again when they are asked for)
   ++g_styleVersion;    // (the styles are looked at again: all the others are good as they were)
 }
+// The boxes of the elements whose styles asked of a container that came to be of another size (they are below one of those), and of those above them, are not taken over as they were by the next build of the same layout (a container that came to be of
+// another size: what is below it may be styled otherwise now, and the walk takes a box whole when nothing in the document under it changed).
+void MarkContainerUsersForRebuild(const std::vector<dom::Element*>& changed) {
+  const std::unordered_set<const dom::Node*> containers(changed.begin(), changed.end());
+  for (auto& [element, entry] : Cache()) {
+    if (!entry.usesContainer) continue;
+    bool below = false;
+    for (const dom::Node* n = dom::ParentOf(element); n && !below; n = dom::ParentOf(n)) below = containers.count(n) != 0;
+    if (!below) continue;
+    for (dom::Element* e = element; e; ) {
+      if (e->subtreeBuilt == UINT32_MAX) break;
+      e->subtreeBuilt = UINT32_MAX;
+      const dom::Node* parent = dom::ParentOf(e);
+      e = parent && parent->IsElement() ? const_cast<dom::Element*>(static_cast<const dom::Element*>(parent)) : nullptr;
+    }
+  }
+}
 void NoteStyleChangeForRegistry() { NoteStyleChange(); }
 void NoteSizingEffect(bool containersChanged) {
   g_sizingMatters = containersChanged;

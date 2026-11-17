@@ -721,10 +721,20 @@ void ResetStatics(Box& box) {
 
 namespace {
 
-bool MemoMatches(const LayoutMemo& memo, LayoutContext& lc, double cbWidth, double cbHeight, bool shrinkToFit) {
-  return memo.valid && memo.shrinkToFit == shrinkToFit && memo.keepOwnFrame == lc.keepOwnFrame && memo.keepScrollbars == lc.tree.keepScrollbars &&
+// Whether the box, or one under it, scrolls when its contents overflow (an overflow of auto): the scrollbars an earlier pass found stay in a layout made again (keepScrollbars) for those boxes only.
+bool SubtreeHasAutoOverflow(const Box& box) {
+  if (box.autoOverflowBelow >= 0) return box.autoOverflowBelow != 0;
+  const BoxStyle& st = box.style->Physical();
+  bool has = st.overflowX == Overflow::Auto || st.overflowY == Overflow::Auto;
+  for (const auto& c : box.children) if (!has && SubtreeHasAutoOverflow(*c)) has = true;
+  box.autoOverflowBelow = has ? 1 : 0;
+  return has;
+}
+
+bool MemoMatches(const LayoutMemo& memo, LayoutContext& lc, const Box& box, double cbWidth, double cbHeight, bool shrinkToFit) {
+  return memo.valid && memo.shrinkToFit == shrinkToFit && memo.keepOwnFrame == lc.keepOwnFrame && memo.keepScrollbars == (lc.tree.keepScrollbars && SubtreeHasAutoOverflow(box)) &&
          SameNumber(memo.cbWidth, cbWidth) && SameNumber(memo.cbHeight, cbHeight) && SameNumber(memo.forceWidth, lc.forceWidth) && SameNumber(memo.forceHeight, lc.forceHeight) &&
-         SameNumber(memo.availOverride, lc.availOverride) && SameNumber(memo.inlineCbHeight, lc.inlineCbHeight) && memo.viewportWidth == lc.viewportWidth && memo.viewportHeight == lc.viewportHeight;
+         SameNumber(memo.availOverride, lc.availOverride) && SameNumber(memo.inlineCbHeight, box.style->IsMulticol() ? lc.inlineCbHeight : kNaN) && memo.viewportWidth == lc.viewportWidth && memo.viewportHeight == lc.viewportHeight;
 }
 
 void RestoreFromMemo(Box& box, const LayoutMemo& memo) {
@@ -766,10 +776,10 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
   int hit = -1;
   if (!box.memoStrict && box.node && box.node->IsElement() && static_cast<dom::Element*>(box.node)->layoutMemoStrict) box.memoStrict = true;  // (it was left unsettled before, as another box of the element)
   if (eligible && (floatsEmpty || establishes)) {
-    if (box.memoDesc >= 0 && MemoMatches(box.Memo(box.memoDesc), lc, cbWidth, cbHeight, shrinkToFit)) hit = box.memoDesc;
+    if (box.memoDesc >= 0 && MemoMatches(box.Memo(box.memoDesc), lc, box, cbWidth, cbHeight, shrinkToFit)) hit = box.memoDesc;
     else if (!lc.tree.strictMemo && !box.memoStrict && !oneSlot) {
       for (int j = 0; j < Box::kMemoSlots && hit < 0; ++j) {
-        if (j != box.memoDesc && box.memoStore && MemoMatches(box.memoStore->slot[j], lc, cbWidth, cbHeight, shrinkToFit)) hit = j;
+        if (j != box.memoDesc && box.memoStore && MemoMatches(box.memoStore->slot[j], lc, box, cbWidth, cbHeight, shrinkToFit)) hit = j;
       }
     }
   }
@@ -793,8 +803,8 @@ void LayoutBlockLevel(LayoutContext& lc, Box& box, double cbWidth, double cbHeig
     if (!box.style->IsOutOfFlow()) box.staticX = box.staticY = 0;
     ResetStatics(box);
     LayoutMemo key;
-    key.cbWidth = cbWidth; key.cbHeight = cbHeight; key.forceWidth = lc.forceWidth; key.forceHeight = lc.forceHeight; key.availOverride = lc.availOverride; key.inlineCbHeight = lc.inlineCbHeight;
-    key.viewportWidth = lc.viewportWidth; key.viewportHeight = lc.viewportHeight; key.shrinkToFit = shrinkToFit; key.keepOwnFrame = lc.keepOwnFrame; key.keepScrollbars = lc.tree.keepScrollbars;
+    key.cbWidth = cbWidth; key.cbHeight = cbHeight; key.forceWidth = lc.forceWidth; key.forceHeight = lc.forceHeight; key.availOverride = lc.availOverride; key.inlineCbHeight = box.style->IsMulticol() ? lc.inlineCbHeight : kNaN;  // (only what is laid out as an inline-block asks for it: a box in the flow sets its own for its inline content)
+    key.viewportWidth = lc.viewportWidth; key.viewportHeight = lc.viewportHeight; key.shrinkToFit = shrinkToFit; key.keepOwnFrame = lc.keepOwnFrame; key.keepScrollbars = lc.tree.keepScrollbars && SubtreeHasAutoOverflow(box);
     LayoutBlockLevelDetecting(lc, box, cbWidth, cbHeight, shrinkToFit);
     box.memoInconsistent = false;  // (laid out as asked: what is under it is as it is now)
     if (eligible && ((floatsEmpty && lc.floatEvents == events) || establishes)) {
