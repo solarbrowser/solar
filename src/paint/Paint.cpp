@@ -883,7 +883,7 @@ class Painter {
       }
       return;
     }
-    const std::shared_ptr<font::Face> face = layout::FaceOf(ctx_, tree_, box);
+    const std::shared_ptr<font::Face> face = layout::FaceForText(ctx_, tree_, box, view.value + view.placeholder + view.label);
     if (!face) return;
     const double size = box.style->fontSize;
     const double ascent = std::round(face->metrics().ascent * size), descent = std::round(face->metrics().descent * size);

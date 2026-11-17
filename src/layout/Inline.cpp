@@ -640,6 +640,28 @@ std::shared_ptr<font::Face> FaceOf(Quanta::Context& ctx, Tree& tree, const Box& 
   return PrimaryFace(lc, box);
 }
 
+std::shared_ptr<font::Face> FaceForText(Quanta::Context& ctx, Tree& tree, const Box& box, const std::string& text) {
+  if (!box.style) return nullptr;
+  LayoutContext lc{ctx, tree, tree.viewportWidth, tree.viewportHeight};
+  const FontSet& set = FontsOf(lc, *box.style);
+  if (set.faces.empty()) return nullptr;
+  // A web font named first in the family list (Roboto, declared with @font-face) that is not loaded has no glyph for anything: the text of a control was
+  // drawn with it as boxes, where the text of the page falls back one character at a time.
+  char32_t missing = 0;
+  for (const auto& face : set.faces) {
+    char32_t lacking = 0;
+    for (size_t i = 0; i < text.size();) {
+      const char32_t cp = DecodeAt(text, i);
+      if (cp == '\n' || cp == '\t' || IsCombining(cp)) continue;
+      if (!face->HasGlyph(cp)) { lacking = cp; break; }
+    }
+    if (!lacking) return face;
+    if (!missing) missing = lacking;
+  }
+  if (std::shared_ptr<font::Face> fallback = font::Database::System().Fallback(missing, solar::css::MakeFontRequest(box.style->fontFamily, box.style->fontWeight, box.style->fontStretch, box.style->italic))) return fallback;
+  return set.faces[0];
+}
+
 namespace {
 
 // Splits each text atom at the break opportunities, makes chunks.

@@ -68,6 +68,9 @@ std::string AbsoluteAddress(const std::string& address, const std::string& base)
 
 // The font a box's text is set in (the first of its family list that has a face), for text the program draws itself, as in form controls.
 std::shared_ptr<font::Face> FaceOf(Quanta::Context& ctx, Tree& tree, const Box& box);
+// The face that draws `text` of a form control (one face draws all of it): the first of the box's family list with a glyph for the text's first character
+// that has one nowhere in the list... that is, the first face that covers every character, or else the system's fallback for the first character the list lacks.
+std::shared_ptr<font::Face> FaceForText(Quanta::Context& ctx, Tree& tree, const Box& box, const std::string& text);
 
 // The lines a text area shows: where each begins and ends in the text (bytes; a line ends before its newline), wrapped at spaces and, for a word longer than
 // the line, anywhere, to `width`. At least one line, an empty one for an empty text.
