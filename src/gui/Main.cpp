@@ -1556,6 +1556,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
     environment.height = environment.deviceHeight = h;
     environment.resolution = shared.density.load();
     environment.colorScheme = shared.dark.load() ? "dark" : "light";
+    solar::net::SetPrefersDark(shared.dark.load());
     solar::css::SetCurrentMediaEnvironment(environment);
   };
   setViewport();

@@ -4,6 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+#include <atomic>
 #include "solar/net/UserAgent.h"
 
 #include <cstdlib>
@@ -56,6 +57,13 @@ const char* PlatformToken() {
 // The major version of Chrome that the page is told Solar is like. Sites that look at the User-Agent (Google's sign-in script answers 403 to one it does not know) look for the engine's name
 // (AppleWebKit and Chrome, or Gecko and Firefox) and for a version that is recent; the third part of a version is no longer sent by Chrome, so it is not here.
 constexpr int kChromeMajor = 142;
+
+namespace {
+std::atomic<bool> g_prefersDark{false};
+}  // namespace
+
+void SetPrefersDark(bool dark) { g_prefersDark.store(dark); }
+bool PrefersDark() { return g_prefersDark.load(); }
 
 std::string DefaultUserAgent() {
   // SOLAR_USER_AGENT: another, for trying what a site does with it.

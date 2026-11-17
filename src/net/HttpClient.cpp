@@ -552,6 +552,7 @@ std::vector<std::pair<std::string, std::string>> Exchange::RequestFields() const
     fields.emplace_back("Cache-Control", "max-age=0");
   }
   if (!hasUserAgent) fields.emplace_back("User-Agent", impl.options.userAgent);
+  if (current.scheme == "https") fields.emplace_back("Sec-CH-Prefers-Color-Scheme", PrefersDark() ? "dark" : "light");
   if (!hasAccept) fields.emplace_back("Accept", "*/*");
   if (options.useCookies) {
     std::string cookies = impl.cookies->HeaderFor(current, AsCookieRequest());

@@ -16,5 +16,9 @@ namespace solar::net {
 std::string DefaultUserAgent();
 // What `navigator.platform` says: Win32, MacIntel or Linux x86_64.
 std::string NavigatorPlatform();
+// The colour scheme the user wants (what prefers-color-scheme says to the pages), sent to https servers as Sec-CH-Prefers-Color-Scheme. A site that draws its theme on the server (YouTube) reads it;
+// without it the page came light while matchMedia said dark, and YouTube took the difference for a toggle of the system's theme and reloaded the page with themeRefresh=1.
+void SetPrefersDark(bool dark);
+bool PrefersDark();
 
 }  // namespace solar::net
