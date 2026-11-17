@@ -261,6 +261,22 @@ uint64_t g_drawAnimationVersion = 0;
 uint64_t DrawAnimationVersion() { return g_drawAnimationVersion; }
 bool DrawOnlyColor(const std::string& name) { return name.size() > 6 && name.compare(name.size() - 6, 6, "-color") == 0; }
 
+std::set<std::string>& SizingVerdictFalse() {
+  static std::set<std::string> verdicts;
+  return verdicts;
+}
+std::set<std::string>& SizingPending() {
+  static std::set<std::string> pending;
+  return pending;
+}
+void NoteSizingVerdict(bool containersChanged) {
+  for (const std::string& key : SizingPending()) {
+    if (containersChanged) SizingVerdictFalse().erase(key);
+    else SizingVerdictFalse().insert(key);
+  }
+  SizingPending().clear();
+}
+
 void SetAnimatedValues(dom::Element* element, const std::string& pseudo, AnimatedValues values) {
   if (!element) return;
   {
@@ -356,7 +372,17 @@ void SetAnimatedValues(dom::Element* element, const std::string& pseudo, Animate
   if (sizing) sizingElements.insert(element);
   else sizingElements.erase(element);
   g_sizingAnimations = sizingElements.size();
-  if (sizing && !wasSizing) NoteSizingEffect(true);  // (a new animation of sizes: layout has not looked at what it does to the containers)
+  if (sizing && !wasSizing) {
+    // A new animation of sizes: layout has not looked at what it does to the containers. When layout looked at one of these properties on another element and found it changed no container, and
+    // this one is in none, the same is taken as true of it (the carousels of a page, and the shimmer of each of its tiles, were a new animation each, and each was one layout in which every
+    // style was made again).
+    std::string key;
+    if (now != heldNow.end()) for (const auto& entry : now->second) key += entry.first + ",";
+    if (ElementInSizeContainer(element) || !SizingVerdictFalse().count(key)) {
+      SizingPending().insert(key);
+      NoteSizingEffect(true);
+    }
+  }
   sizing = sizing || wasSizing;
   NoteAnimatedStyleChange(sizing, itself);
 }

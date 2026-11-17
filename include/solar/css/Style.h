@@ -128,6 +128,7 @@ uint64_t StyleVersion();
 void NoteAnimatedStyleChange(bool affectsSizes = true, bool onlyItself = false);
 // A layout was made: whether the containers were found to be of other sizes than the styles were made with (while animations of sizes are running: see StyleReuseFor).
 void NoteSizingEffect(bool containersChanged);
+bool ElementInSizeContainer(dom::Element* element);
 // Keeps the computed values the element has now (of the properties that can be animated), as the style that a change of style that
 // follows is compared with, which a transition starts from.
 void SnapshotComputedValues(Quanta::Context& ctx, dom::Element* element);

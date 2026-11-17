@@ -21,6 +21,8 @@ using AnimatedValues = std::map<std::string, std::string>;
 // The values (longhand → text) animations give the element's pseudo-element ("" for the element). Replaces what was there;
 // an empty map takes them away. Computed styles are made again.
 void SetAnimatedValues(dom::Element* element, const std::string& pseudo, AnimatedValues values);
+// Layout looked at the containers while the animations that were new since the last time were running: whether it found one of another size than the styles were made with.
+void NoteSizingVerdict(bool containersChanged);
 // The value of the property that animations give, or null; always null while suppressed.
 const std::string* AnimatedValue(dom::Element* element, const std::string& pseudo, const std::string& property);
 // While suppressed computed styles are the ones without animations (the value an effect adds to or interpolates from).

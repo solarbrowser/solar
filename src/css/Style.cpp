@@ -4097,7 +4097,22 @@ void NoteContainerSizesChanged() {
   ++g_styleVersion;    // (the styles are looked at again: all the others are good as they were)
 }
 void NoteStyleChangeForRegistry() { NoteStyleChange(); }
-void NoteSizingEffect(bool containersChanged) { g_sizingMatters = containersChanged; }
+void NoteSizingEffect(bool containersChanged) {
+  g_sizingMatters = containersChanged;
+  NoteSizingVerdict(containersChanged);
+}
+
+// Whether the element, or one above it, is a container of a size that queries ask of.
+bool ElementInSizeContainer(dom::Element* element) {
+  for (const dom::Node* n = element; n; n = dom::ParentOf(n)) {
+    if (!n->IsElement()) continue;
+    dom::Element* e = const_cast<dom::Element*>(static_cast<const dom::Element*>(n));
+    const ElementStyle& style = StyleOf(e);
+    const auto at = style.cascade.find("container-type");
+    if (at != style.cascade.end() && at->second.entry && at->second.entry->value.find("normal") == std::string::npos && at->second.entry->value != "none") return true;
+  }
+  return false;
+}
 void NoteInheritKeyword(const std::string& name) { g_inheritKeywordProps.insert(name); }
 
 uint64_t AnimationVersion() { return g_animationVersion; }
