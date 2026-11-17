@@ -160,6 +160,19 @@ struct Run {
   bool rtl = false;   // shaped right to left
   std::shared_ptr<font::Face> face;
   std::vector<font::Glyph> glyphs;  // clusters relative to the processed text
+  // The order of the clusters of the glyphs, found when it is first asked (the glyphs of a word are looked for in a run that holds a paragraph: by search and not by going through all of it).
+  int8_t clusterOrder = 0;  // 0 not looked at, 1 ascending, 2 descending, 3 neither
+  int8_t ClusterOrder() {
+    if (clusterOrder == 0) {
+      bool up = true, down = true;
+      for (size_t i = 1; i < glyphs.size() && (up || down); ++i) {
+        if (glyphs[i].cluster < glyphs[i - 1].cluster) up = false;
+        if (glyphs[i].cluster > glyphs[i - 1].cluster) down = false;
+      }
+      clusterOrder = up ? 1 : down ? 2 : 3;
+    }
+    return clusterOrder;
+  }
 };
 
 struct TextData {
@@ -1328,13 +1341,25 @@ double LayoutInlineContentOnce(LayoutContext& lc, Box& container, double width, 
           tp.fontSize = a.box->style->fontSize;
           const FontSet& set = FontsOf(lc, *a.box->style);
           tp.face = a.data->runs.empty() ? (set.faces.empty() ? nullptr : set.faces[0]) : a.data->runs[0].face;
-          for (const Run& run : a.data->runs) {
+          for (Run& run : a.data->runs) {
             if (run.end <= a.begin || run.begin >= a.end) continue;
             const size_t first = tp.glyphs.size();
-            for (font::Glyph g : run.glyphs) {
-              if (g.cluster >= a.begin && g.cluster < a.end) {
-                g.cluster -= static_cast<uint32_t>(a.begin);
-                tp.glyphs.push_back(g);
+            const auto take = [&](const font::Glyph& glyph) {
+              font::Glyph g = glyph;
+              g.cluster -= static_cast<uint32_t>(a.begin);
+              tp.glyphs.push_back(g);
+            };
+            const int8_t order = run.ClusterOrder();
+            if (order == 1) {
+              // (A run is the paragraph, and a word is a few of its glyphs: found by search, not by going through the others.)
+              auto at = std::lower_bound(run.glyphs.begin(), run.glyphs.end(), a.begin, [](const font::Glyph& g, size_t v) { return g.cluster < v; });
+              for (; at != run.glyphs.end() && at->cluster < a.end; ++at) take(*at);
+            } else if (order == 2) {
+              auto at = std::partition_point(run.glyphs.begin(), run.glyphs.end(), [&](const font::Glyph& g) { return g.cluster >= a.end; });
+              for (; at != run.glyphs.end() && at->cluster >= a.begin; ++at) take(*at);
+            } else {
+              for (const font::Glyph& g : run.glyphs) {
+                if (g.cluster >= a.begin && g.cluster < a.end) take(g);
               }
             }
             if (tp.glyphs.size() > first) tp.faceRuns.push_back({run.face, first, tp.glyphs.size()});
