@@ -277,6 +277,7 @@ bool StartModuleScript(Quanta::Embed::Realm& realm, dom::Document* document, dom
 double g_scriptMs = 0;
 
 bool RunScript(Quanta::Embed::Realm& realm, dom::Document* document, dom::Element* script) {
+  if (realm.GlobalDropped()) return false;  // (a page that was left: a script of it that finishes loading now runs against an emptied global)
   const std::string kind = LowerType(script);
   // An import map is read, not run.
   if (kind == "importmap") {

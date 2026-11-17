@@ -715,8 +715,9 @@
         id = options.id;
         if (options.timeline !== undefined) timeline = options.timeline;
       }
-      const effect = new KeyframeEffect(this, keyframes, options);
-      const animation = new Animation(effect, timeline);
+      // (Not the globals: a page may have put a polyfill in their place -- youtube's calls Element.animate from inside its own Animation, which then made another one of its own, whose underlying animation was null.)
+      const effect = new S.KeyframeEffect(this, keyframes, options);
+      const animation = new S.Animation(effect, timeline);
       if (id !== undefined) animation.id = id;
       animation.play();
       return animation;

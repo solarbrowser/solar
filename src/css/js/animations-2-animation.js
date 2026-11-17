@@ -563,6 +563,7 @@
   Object.defineProperty(Animation.prototype, Symbol.toStringTag, { value: 'Animation', configurable: true });
   for (const type of ['finish', 'cancel', 'remove']) defineHandler(Animation.prototype, type);
   globalThis.Animation = Animation;
+  S.Animation = Animation;  // (what Element.animate makes: the global may be a page's polyfill)
 
   function slotOf(animation) {
     const slot = slots.get(animation);
