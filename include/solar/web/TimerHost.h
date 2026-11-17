@@ -49,6 +49,7 @@ class TimerHost {
 
   std::multimap<Clock::time_point, Quanta::Embed::Task> queue_;
   std::multiset<Quanta::Embed::Realm*> running_;  // the realms that have a task on the stack
+  std::set<Quanta::Embed::Realm*> dropped_;       // the realms of pages that were left: what of theirs is already taken for this turn does not run
 };
 
 }  // namespace solar::web

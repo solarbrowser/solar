@@ -1714,7 +1714,24 @@ int PageMain(Shared& shared, int argc, char** argv) {
       // scripts and data are hundreds of megabytes) stayed until then, with its timers running. Its timers stop, what hangs from its document is let go of,
       // its realm goes, and what is no more used is collected.
       timers.DropRealm(left);
+      // The realms of its frames go with it (a hidden iframe of YouTube ran its scheduler's timers for as long as the browser lived, against a document that was let go of).
+      std::vector<qe::Realm*> frameRealms;
+      {
+        std::vector<solar::dom::Document*> pending;
+        if (leftDocument) pending.push_back(leftDocument);
+        for (size_t at = 0; at < pending.size() && at < 64; ++at) {
+          for (solar::dom::Node* n = pending[at]; n; n = n->NextInTree(pending[at])) {
+            if (!n->IsElement()) continue;
+            solar::dom::Document* inner = static_cast<solar::dom::Element*>(n)->contentDocument;
+            if (!inner) continue;
+            if (inner->realm) frameRealms.push_back(inner->realm);
+            pending.push_back(inner);
+          }
+        }
+      }
+      for (qe::Realm* frameRealm : frameRealms) timers.DropRealm(frameRealm);
       if (leftDocument) solar::dom::DisposeDocument(leftDocument);
+      for (qe::Realm* frameRealm : frameRealms) if (frameRealm != left) browser.ReleaseRealm(frameRealm);
       if (leftDocument) solar::css::ForgetDocument(leftDocument);
       browser.ReleaseRealm(left);
       solar::layout::ForgetImages();

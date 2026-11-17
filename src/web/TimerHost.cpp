@@ -30,6 +30,7 @@ qe::TimerProvider TimerHost::Provider() {
 }
 
 void TimerHost::DropRealm(qe::Realm* realm) {
+  dropped_.insert(realm);
   for (auto it = queue_.begin(); it != queue_.end();) {
     if (it->second.GetRealm() == realm) {
       it->second.Cancel();
@@ -41,6 +42,7 @@ void TimerHost::DropRealm(qe::Realm* realm) {
 }
 
 void TimerHost::Schedule(qe::Task task) {
+  dropped_.erase(task.GetRealm());  // (an address can be a new realm's)
   double delay = std::max(0.0, task.DelayMs());
   // A timer nested five deep, or a repeating one that has run as often, waits at least four milliseconds.
   if (task.NestingLevel() >= 5) delay = std::max(delay, 4.0);
@@ -64,7 +66,7 @@ bool TimerHost::RunDue() {
     it = queue_.erase(it);
   }
   for (qe::Task& task : due) {
-    if (task.IsCancelled()) continue;
+    if (task.IsCancelled() || dropped_.count(task.GetRealm())) continue;
     // A realm is one thread: a wait inside one of its tasks (a script blocked on a resource) does not run its other tasks, which would see (and drain)
     // what the task on the stack is in the middle of. They stay for when it is over; the tasks of other realms run.
     if (running_.count(task.GetRealm())) {
