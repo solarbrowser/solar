@@ -1432,8 +1432,15 @@ uint64_t g_styleEpoch = 0;
 // above it, and (when a rule looks at them) its children and its siblings. A document with rules that look at more than that has nothing kept across changes.
 void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo);
 
+// Whether two declarations say the same (the style attribute of an element is parsed into declarations of its own each time its style is made: they are not the same objects, and are the same declarations).
+bool SameDeclaration(const DeclarationEntry* a, const DeclarationEntry* b) {
+  if (a == b) return true;
+  if (!a || !b) return false;
+  return a->important == b->important && a->name == b->name && a->value == b->value && a->pendingShorthand == b->pendingShorthand && a->pendingText == b->pendingText && a->base == b->base;
+}
+
 bool SameWinners(const Winner& a, const Winner& b) {
-  if (a.entry != b.entry || a.origin != b.origin || a.layer != b.layer || a.context != b.context || a.rest.size() != b.rest.size()) return false;
+  if (!SameDeclaration(a.entry, b.entry) || a.origin != b.origin || a.layer != b.layer || a.context != b.context || a.rest.size() != b.rest.size()) return false;
   for (size_t i = 0; i < a.rest.size(); ++i) {
     if (!SameWinners(a.rest[i], b.rest[i])) return false;
   }
@@ -1442,7 +1449,7 @@ bool SameWinners(const Winner& a, const Winner& b) {
 
 // Whether two cascades have the same declaration winning for every property: what comes of them is the same.
 bool SameCascade(const ElementStyle& a, const ElementStyle& b) {
-  if (a.cascade.size() != b.cascade.size() || a.hasLogical != b.hasLogical || !a.storage.empty() || !b.storage.empty()) {
+  if (a.cascade.size() != b.cascade.size() || a.hasLogical != b.hasLogical) {
     return false;
   }
   auto x = a.cascade.begin();
@@ -1474,7 +1481,7 @@ bool UsesAttr(const ElementStyle& style) {
 
 // The same winners but for the custom properties (the declarations of --x are not looked at).
 bool SameCascadeButCustom(const ElementStyle& a, const ElementStyle& b) {
-  if (a.hasLogical != b.hasLogical || !a.storage.empty() || !b.storage.empty()) return false;
+  if (a.hasLogical != b.hasLogical) return false;
   auto x = a.cascade.begin();
   auto y = b.cascade.begin();
   const auto custom = [](std::string_view name) { return name.size() > 1 && name[0] == '-' && name[1] == '-'; };
@@ -1901,7 +1908,23 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   // them is dropped (the elements under it follow: a class on a container was a new cascade for everything in it).
   const bool computedStale = entry.parentEpoch != parentEpoch;
   const auto dropWorkedOut = [&] {
-    entry.plain.memo = std::make_shared<Memo>();
+    // Elements that shared what was worked out from one cascade, under styles of an element above that were one too, share what is worked out again (the style of everything came to be made
+    // again for each element, where it was made once for the thousand that were the same: a variable of the root changed, 100 us for each element of the page).
+    static uint64_t sharedFor = 0;
+    struct Remade { std::shared_ptr<Memo> old, fresh; };
+    static std::map<std::pair<const Memo*, const Memo*>, Remade> remade;
+    if (sharedFor != treeVersion || remade.size() > 100000) { remade.clear(); sharedFor = treeVersion; }
+    std::shared_ptr<Memo> fresh;
+    if (parent && entry.plain.memo && entry.plain.memo.use_count() > 1 && !std::getenv("SOLAR_NO_REMADE_SHARING")) {
+      const auto key = std::make_pair(static_cast<const Memo*>(entry.plain.memo.get()), static_cast<const Memo*>(Cache()[parent].plain.memo.get()));
+      const auto found = remade.find(key);
+      if (found != remade.end()) fresh = found->second.fresh;
+      else {
+        fresh = std::make_shared<Memo>();
+        remade[key] = {entry.plain.memo, fresh};
+      }
+    }
+    entry.plain.memo = fresh ? fresh : std::make_shared<Memo>();
     entry.plain.resolving.clear();
     for (auto& other : entry.others) {
       other.second.memo = std::make_shared<Memo>();
