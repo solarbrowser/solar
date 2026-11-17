@@ -19,6 +19,7 @@
 #include "solar/dom/MediaHook.h"
 #include "solar/css/Logical.h"
 #include "solar/css/MediaQuery.h"
+#include "solar/css/Animation.h"
 #include "solar/css/Style.h"
 #include "solar/dom/Range.h"
 
@@ -287,6 +288,7 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
   const std::shared_ptr<Tree> previous = document->layoutTree;
   // The styles that depend on the size of containers are made from the sizes of the last pass; layout is done again until they stop changing.
   bool eventsPending = false;
+  bool containersEverChanged = false;  // (for css::NoteSizingEffect)
   for (int pass = 0; pass < 5; ++pass) {
     tree = std::make_shared<Tree>();
     tree->keepScrollbars = pass > 0;
@@ -392,8 +394,12 @@ Tree* UpdateLayout(Quanta::Context& ctx, dom::Document* document) {
     }
     const bool visibility = document->contentVisibilityAutoSeen && UpdateContentVisibility(*tree, document, eventsPending);
     if (!containers && !visibility) break;
-    if (containers) css::NoteStyleChange();
+    if (containers) {
+      containersEverChanged = true;
+      css::NoteStyleChange();
+    }
   }
+  if (document->containerQueriesSeen && css::AnyAnimationAffectsSizes()) css::NoteSizingEffect(containersEverChanged);
   inside.erase(document);
   // The events of the elements whose contents were skipped or not are sent in a frame of their own.
   if (eventsPending && document->contentVisibilityWake) {

@@ -356,6 +356,7 @@ void SetAnimatedValues(dom::Element* element, const std::string& pseudo, Animate
   if (sizing) sizingElements.insert(element);
   else sizingElements.erase(element);
   g_sizingAnimations = sizingElements.size();
+  if (sizing && !wasSizing) NoteSizingEffect(true);  // (a new animation of sizes: layout has not looked at what it does to the containers)
   sizing = sizing || wasSizing;
   NoteAnimatedStyleChange(sizing, itself);
 }

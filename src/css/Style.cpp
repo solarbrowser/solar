@@ -69,6 +69,7 @@ struct StyleHold {
   ~StyleHold() { --g_styleHolds; }
 };
 uint64_t g_cacheGeneration = 1;  // changed whenever the entries of the style cache are dropped (a reference to one is no longer good)
+bool g_sizingMatters = true;      // an animation of sizes is running and layout found a container to be of another size because of it, or has not looked (see StyleReuseFor)
 uint64_t g_sizingAnimation = 1;  // changed when what animations give changes the size of something
 uint64_t g_cacheVersion = 1;   // changed when what the kept styles were made from is (not for the values animations give: each element has its own number for those)
 LayoutHook g_layoutHook = nullptr;
@@ -3991,6 +3992,7 @@ void NoteStyleChange() {
   ++g_layoutSheetsVersion;
 }
 void NoteStyleChangeForRegistry() { NoteStyleChange(); }
+void NoteSizingEffect(bool containersChanged) { g_sizingMatters = containersChanged; }
 void NoteInheritKeyword(const std::string& name) { g_inheritKeywordProps.insert(name); }
 
 uint64_t AnimationVersion() { return g_animationVersion; }
@@ -4293,7 +4295,9 @@ StyleReuse StyleReuseFor(dom::Document* document) {
   StyleReuse none;
   // (Adopted style sheets are in the sheets: the array tells of every change of it. A container query is of a size that layout finds, not of the elements.)
   // (A container query is of a size that layout finds: when sizes are being animated, the styles are made anew.)
-  if (!document || (document->containerQueriesSeen && AnyAnimationAffectsSizes())) return none;
+  // (Only while the animations of sizes are the reason for containers to be of other sizes: when layout has looked and found none, as with a carousel whose items grow, the styles are kept
+  // as they are for any other reason to keep them. A container that comes to be of another size has every style made again, at that moment, whatever this says.)
+  if (!document || (document->containerQueriesSeen && AnyAnimationAffectsSizes() && g_sizingMatters)) return none;
   // (The list that is kept for the tree, not a copy of it for each element that asks: with a hundred style sheets that was most of what this did when nothing had changed.)
   const std::shared_ptr<const std::vector<CssStyleSheet*>> sheetsShared = SheetsOfTreeShared(document, document->context);
   const std::vector<CssStyleSheet*>& sheets = *sheetsShared;
