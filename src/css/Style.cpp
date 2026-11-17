@@ -1408,6 +1408,7 @@ std::unordered_map<const dom::Document*, DocumentState>& DocumentStates() {
 }
 
 void ClearShared();
+void Share(dom::Element* element, ElementStyle& style, const std::string& pseudo);
 void DropSharedBuckets();
 
 // A number for the sheets of a document that count and the environment its media queries are of: the styles kept are good while it is the same.
@@ -2000,6 +2001,8 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
   entry.state = ev.state;
   if (soft) {
     Build(element, entry.plain, "");
+    // (What is made again for many elements that came to the same cascade, as the h3 of a thousand cards do when their container is of another size, is one style, as it is when it is made the first time.)
+    if (entry.plain.cascade.size() && entry.plain.memo && entry.plain.memo->computed.empty() && entry.plain.memo->custom.empty()) Share(element, entry.plain, "");
     bool same = SameCascade(old, entry.plain);
     if (same || !StructureDiffers(old, entry.plain)) entry.structEpoch = oldStruct;
     for (auto it = oldOthers.begin(); same && it != oldOthers.end(); ++it) {

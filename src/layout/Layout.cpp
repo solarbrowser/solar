@@ -39,11 +39,16 @@ bool UpdateContainerSizes(Tree& tree, std::vector<dom::Element*>& changedContain
       dom::Element* element = static_cast<dom::Element*>(box.node);
       const double w = std::max(0.0, box.width - box.border.Horizontal() - box.padding.Horizontal());
       const double h = std::max(0.0, box.height - box.border.Vertical() - box.padding.Vertical());
-      if (std::fabs(element->containerWidth - w) > 0.005 || std::fabs(element->containerHeight - h) > 0.005) {
+      // (A container of inline-size is asked of in the inline axis only: for the other the queries have nothing, and the layout is not made again for it.)
+      const bool vertical = box.style->writingMode != WritingMode::HorizontalTb;
+      const bool wDiffers = std::fabs(element->containerWidth - w) > 0.005, hDiffers = std::fabs(element->containerHeight - h) > 0.005;
+      if (wDiffers || hDiffers) {
         element->containerWidth = w;
         element->containerHeight = h;
-        changedContainers.push_back(element);
-        changed = true;
+        if (box.style->sizeContainerBothAxes || (vertical ? hDiffers : wDiffers)) {
+          changedContainers.push_back(element);
+          changed = true;
+        }
       }
     }
     for (const auto& child : box.children) self(self, *child);

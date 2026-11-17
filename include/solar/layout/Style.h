@@ -170,6 +170,7 @@ struct BoxStyle {
   bool fieldSizingContent = false;  // field-sizing: content (a text control is as large as what is in it)
   bool containLayout = false, containPaint = false, containSizeInline = false, containSizeBlock = false;
   bool sizeContainer = false;  // container-type: size or inline-size: container queries look at its size
+  bool sizeContainerBothAxes = false;  // container-type: size (inline-size is asked of in the inline axis only)
   bool skipContents = false;
   bool contentVisibilityAuto = false;
   bool containStyle = false;  // style containment: counters changed inside do not change outside
