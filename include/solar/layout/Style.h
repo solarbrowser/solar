@@ -16,11 +16,49 @@
 // algorithms want (lengths in px, keywords as enums).
 namespace solar::layout {
 
+// The text a length keeps when it is not a number (a calc() with a percentage in it, an anchor() as written): almost no length has one, and a string is thirty-two bytes
+// in each of the twenty-six lengths of a style. One pointer, null for no text.
+class CalcText {
+ public:
+  CalcText() = default;
+  CalcText(const CalcText& other) : text_(other.text_ ? std::make_unique<std::string>(*other.text_) : nullptr) {}
+  CalcText& operator=(const CalcText& other) {
+    if (this != &other) text_ = other.text_ ? std::make_unique<std::string>(*other.text_) : nullptr;
+    return *this;
+  }
+  CalcText(CalcText&&) noexcept = default;
+  CalcText& operator=(CalcText&&) noexcept = default;
+  CalcText& operator=(const std::string& text) {
+    if (text.empty()) text_.reset();
+    else text_ = std::make_unique<std::string>(text);
+    return *this;
+  }
+  CalcText& operator=(std::string&& text) {
+    if (text.empty()) text_.reset();
+    else text_ = std::make_unique<std::string>(std::move(text));
+    return *this;
+  }
+  CalcText& operator=(const char* text) { return *this = std::string(text); }
+  operator const std::string&() const { return text_ ? *text_ : Empty(); }
+  const std::string& str() const { return text_ ? *text_ : Empty(); }
+  bool empty() const { return !text_; }
+  size_t size() const { return text_ ? text_->size() : 0; }
+  char operator[](size_t i) const { return (*text_)[i]; }
+  friend bool operator==(const CalcText& a, const CalcText& b) { return a.str() == b.str(); }
+
+ private:
+  static const std::string& Empty() {
+    static const std::string empty;
+    return empty;
+  }
+  std::unique_ptr<std::string> text_;
+};
+
 struct Length {
   enum class Kind : uint8_t { Auto, Px, Percent, Calc, None, MinContent, MaxContent, FitContent, Stretch, Anchor };
   Kind kind = Kind::Auto;
   double value = 0;
-  std::string calc;  // a calc() that has a percentage in it, as written; for Anchor, the value as written (it has an anchor() or an anchor-size() in it)
+  CalcText calc;  // a calc() that has a percentage in it, as written; for Anchor, the value as written (it has an anchor() or an anchor-size() in it)
 
   Length() = default;
   explicit Length(Kind k, double v = 0) : kind(k), value(v) {}
