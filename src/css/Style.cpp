@@ -62,6 +62,7 @@ uint64_t g_containerEpoch = 1;       // a new number each time layout finds the 
 void NoteUsesContainer(const dom::Element* element, bool evaluated);  // (see StyleEntry::usesContainer)
 bool g_overlayScrollbars = false;
 int g_sheetParsing = 0;
+std::unordered_set<const CssStyleSheet*> g_removedSheets;  // sheets that left the document and were seen to as they went (NoteSheetRemoved)
 CssStyleSheet* g_additiveSheet = nullptr;  // the sheet of the outermost parse, when it had no rules before
 bool g_styleChangedInParse = false;
 bool g_wakeAfterParse = false;
@@ -2130,17 +2131,26 @@ ElementStyle& StyleOf(dom::Element* element, const std::string& pseudo = "") {
       // The sheets are the same as they were, or sheets that were seen to as they came (NoteSheetAdded) have come after them.
       const std::vector<CssStyleSheet*> sheetsNow = SheetsOfTree(element->nodeDocument, element->nodeDocument->context);
       // (The sheets there were are all there, in their order, and the ones that came, wherever they are among them, were seen to as they came.)
-      bool sheetsSame = state.sheets.size() <= sheetsNow.size();
+      // (The sheets that went and were seen to as they went are not looked for.)
+      std::vector<const CssStyleSheet*> before;
+      std::vector<char> beforeDisabled;
+      for (size_t i = 0; i < state.sheets.size(); ++i) {
+        if (g_removedSheets.count(state.sheets[i])) continue;
+        before.push_back(state.sheets[i]);
+        beforeDisabled.push_back(state.disabled[i]);
+      }
+      bool sheetsSame = before.size() <= sheetsNow.size();
       size_t kept = 0;
       for (size_t i = 0; sheetsSame && i < sheetsNow.size(); ++i) {
-        if (kept < state.sheets.size() && sheetsNow[i] == state.sheets[kept]) {
-          if ((sheetsNow[i]->disabled ? 1 : 0) != state.disabled[kept]) sheetsSame = false;
+        if (kept < before.size() && sheetsNow[i] == before[kept]) {
+          if ((sheetsNow[i]->disabled ? 1 : 0) != beforeDisabled[kept]) sheetsSame = false;
           ++kept;
         } else if (!sheetsNow[i]->additiveAnnounced) {
           sheetsSame = false;
         }
       }
-      if (kept != state.sheets.size()) sheetsSame = false;
+      if (kept != before.size()) sheetsSame = false;
+      g_removedSheets.clear();
       if (state.signature != signature || !sheetsSame) {
         if (state.signature != 0) {
           if (g_styleHolds > 0) {
@@ -4079,6 +4089,41 @@ bool NoteRuleAdded(CssStyleSheet* sheet, CssRule* rule, CssRule* parent) {
 }  // namespace
 
 bool NoteRuleInserted(CssStyleSheet* sheet, CssRule* rule, CssRule* parent) { return NoteRuleAdded(sheet, rule, parent); }
+
+// Whether everything in the rules is a rule that styles the elements its selectors are for (and not what is looked up by name: keyframes, position-try, fonts, counter styles; these are of the
+// elements that name them, which no key tells of).
+bool OnlyKeyedRules(const std::vector<CssRule*>& rules, int depth) {
+  if (depth > 8) return false;
+  for (const CssRule* rule : rules) {
+    switch (rule->kind) {
+      case RuleKind::Style: if (!rule->rules.empty()) return false; break;
+      case RuleKind::Media: case RuleKind::Supports: case RuleKind::Container:
+        if (!OnlyKeyedRules(rule->rules, depth + 1)) return false;
+        break;
+      default: return false;
+    }
+  }
+  return true;
+}
+
+void NoteSheetRemoved(CssStyleSheet* sheet) {
+  static const bool off = std::getenv("SOLAR_NO_ADDITIVE") != nullptr;
+  const auto fallback = [] { NoteStyleChange(); };
+  if (off || !sheet || sheet->disabled || sheet->constructed || sheet->pendingAttach || !sheet->ownerNode) return fallback();
+  const dom::Element* owner = dom::AsElement(sheet->ownerNode);
+  dom::Document* document = owner ? owner->nodeDocument : nullptr;
+  // (Its element is out of the document by now, or on its way: it had a sheet only while it was in one, and it is the sheets of the document that are looked at.)
+  if (!document || document->mode == dom::Document::Mode::Quirks) return fallback();
+  std::unordered_set<uint64_t> keys;
+  bool everything = false, usesLayers = false;
+  std::vector<std::string> registered;
+  if (!OnlyKeyedRules(sheet->rules, 0) || !DirtyKeysOfRules(sheet->rules, keys, everything, usesLayers, registered, 0, false) || usesLayers || !registered.empty()) return fallback();
+  // (The sheet is where it was in the list until its element lets go of it: what is made again is made from the sheets that are left, at the next look.)
+  ++g_styleVersion;
+  ++g_authorVersion;
+  g_removedSheets.insert(sheet);
+  MarkDirtyByKeys(keys, everything);
+}
 
 void NoteSheetAttached(CssStyleSheet* sheet) {
   sheet->pendingAttach = false;

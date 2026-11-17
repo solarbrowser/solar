@@ -1034,7 +1034,13 @@ Value ConstructSheet(Context& ctx, Value, qe::Args args, Value newTarget) {
 
 void UpdateStyleElement(Context& ctx, dom::Element* element) {
   const bool wasLinked = element->styleSheet != nullptr;
-  if (wasLinked) NoteStyleChange();  // (a sheet that goes: what it gave is not given; one that comes is told of when it has come)
+  // (A sheet that goes: what it gave is not given; one that comes is told of when it has come. When the element has left the document and is not to have a sheet again, only what the rules of the
+  // sheet were for is made again.)
+  if (wasLinked) {
+    dom::Node* top = dom::ShadowIncludingRoot(element);
+    if (top && top->IsDocument()) NoteStyleChange();
+    else NoteSheetRemoved(static_cast<CssStyleSheet*>(element->styleSheet));
+  }
   if (element->styleSheet) static_cast<CssStyleSheet*>(element->styleSheet)->ownerNode = nullptr;
   element->styleSheet = nullptr;
   if (!element->IsHtml("style")) return;

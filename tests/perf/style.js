@@ -123,7 +123,10 @@
     time('style: text change deep in the article, then read', () => { midPara.firstChild.data += '.'; midPara.clientWidth; }, { runs: 7 });
     // Adding things to the page.
     time('style: append 50 posts (innerHTML), then read', () => { const d = document.createElement('div'); d.innerHTML = page(0).slice(0, 0) + Array.from({ length: 50 }, (_, i) => `<article class="c${i % 40}" data-state="idle"><h3 class="c${i % 40}__title">N ${i}</h3><div class="c${i % 40}__body"><p>text <a class="c${i % 40}__link" href="#">l</a></p></div></article>`).join(''); root.querySelector('.feed').appendChild(d); d.clientWidth; d.remove(); root.clientWidth; }, { runs: 5, ops: 2 });
-    time('style: a late style sheet of 300 rules (a <style> added), then read', () => { const s = document.createElement('style'); s.textContent = Array.from({ length: 300 }, (_, i) => `.late${i % 30} .c${i % 40}__link { color: rgb(${i % 255}, 80, 90); }`).join('\n'); document.head.appendChild(s); midPost.clientWidth; s.remove(); midPost.clientWidth; }, { runs: 5, ops: 2 });
+    const lateText = Array.from({ length: 300 }, (_, i) => `.late${i % 30} .c${i % 40}__link { color: rgb(${i % 255}, 80, 90); }`).join('\n');
+    let late = null;
+    time('style: a late style sheet of 300 rules added (a <style>), then read', () => { late = document.createElement('style'); late.textContent = lateText; document.head.appendChild(late); midPost.clientWidth; }, { runs: 5, setup: () => { if (late) { late.remove(); late = null; midPost.clientWidth; } } });
+    time('style: a style sheet of 300 rules removed, then read', () => { late.remove(); late = null; midPost.clientWidth; }, { runs: 5, setup: () => { late = document.createElement('style'); late.textContent = lateText; document.head.appendChild(late); midPost.clientWidth; } });
     time('style: querySelectorAll(".article .sec3 .para4 a.l7")', () => { for (let i = 0; i < 20; i++) root.querySelectorAll('.article .sec3 .para4 a.l7'); }, { ops: 20 });
     time('style: matches() with :not/:is/:has x1000', () => { for (let i = 0; i < 1000; i++) midPost.matches('article:not(.x):has(> .c1__flag), :is(article, div) > h3'); }, { ops: 1000 });
   };

@@ -109,6 +109,8 @@ void BeginSheetParse(CssStyleSheet* added = nullptr);
 void EndSheetParse();
 // A sheet made for an element has been given to it: the styles of the elements it can be for are made again, and the others are kept.
 void NoteSheetAttached(CssStyleSheet* sheet);
+// A sheet that is about to leave the document (its element goes or its text is made again): the styles of the elements it can be for are made again, the others are kept; else all.
+void NoteSheetRemoved(CssStyleSheet* sheet);
 // A rule put in a sheet of the document by script: the styles of the elements it can be for are made again. False when that cannot be told (the caller tells of a change).
 bool NoteRuleInserted(CssStyleSheet* sheet, CssRule* rule, CssRule* parent);
 // Whether any declaration for the element (or its pseudo-element) is about animations or transitions: what has none has nothing to start.

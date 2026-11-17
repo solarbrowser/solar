@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<title>A style sheet that is added, changed and removed styles only what it is for</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<style>.base { color: rgb(1, 2, 3); } #other { margin-left: 7px; }</style>
+<div id="a" class="base item"></div>
+<div id="b" class="base"></div>
+<div id="other"><span id="s" class="item"></span></div>
+<script>
+  const color = (e) => getComputedStyle(e).color;
+  test(() => {
+    const s = document.createElement('style');
+    s.textContent = '.item { color: rgb(10, 20, 30); } @media (min-width: 1px) { #other .item { margin-top: 5px; } }';
+    document.head.appendChild(s);
+    assert_equals(color(a), 'rgb(10, 20, 30)');
+    assert_equals(color(b), 'rgb(1, 2, 3)');
+    assert_equals(getComputedStyle(document.getElementById('s')).marginTop, '5px');
+    s.textContent = '.item { color: rgb(40, 50, 60); }';
+    assert_equals(color(a), 'rgb(40, 50, 60)');
+    assert_equals(getComputedStyle(document.getElementById('s')).marginTop, '0px');
+    s.remove();
+    assert_equals(color(a), 'rgb(1, 2, 3)');
+    assert_equals(color(b), 'rgb(1, 2, 3)');
+    assert_equals(getComputedStyle(document.getElementById('other')).marginLeft, '7px');
+  }, 'add, change the text of and remove a style element');
+  test(() => {
+    const s = document.createElement('style');
+    s.textContent = '@keyframes k { from { margin-left: 3px } to { margin-left: 3px } } #b { animation: k 10s linear; }';
+    document.head.appendChild(s);
+    assert_equals(getComputedStyle(b).marginLeft, '3px');
+    s.remove();
+    assert_equals(getComputedStyle(b).marginLeft, '0px');
+  }, 'a sheet with keyframes that goes takes the animation with it');
+</script>
