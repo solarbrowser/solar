@@ -76,13 +76,14 @@ bool TimerHost::RunDue() {
     const auto began = Clock::now();
     qe::Realm* realm = task.GetRealm();
     running_.insert(realm);
+    const std::string taskSource = task.Source();  // (kept for SOLAR_TASK_DEBUG: a task that is run may be spent)
     task.Run();
     running_.erase(realm);
     ran = true;
     static const bool taskDebug = std::getenv("SOLAR_TASK_DEBUG") != nullptr;
     if (taskDebug) {
       const double ms = std::chrono::duration<double, std::milli>(Clock::now() - began).count();
-      if (ms > 100) std::fprintf(stderr, "  a task ran %.0f ms\n", ms);
+      if (ms > 100) std::fprintf(stderr, "  a task ran %.0f ms (%s)\n", ms, taskSource.c_str());
     }
     if (afterTask) afterTask();
     // A repeating task stays armed, and is scheduled for its next run.
