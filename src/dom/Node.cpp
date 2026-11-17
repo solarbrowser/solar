@@ -1318,10 +1318,7 @@ void SetCharacterData(CharacterData* node, std::string data) {
 }
 
 void AppendCharacterData(CharacterData* node, std::string_view data) {
-  if (HasLiveRanges()) {
-    ReplaceData(node, Utf16Length(node->data), 0, data);
-    return;
-  }
+  // (Text added at the end moves no boundary of a live range: the ones at the end stay there. It went through ReplaceData when there were ranges, with all the text turned into UTF-16 for each piece the parser added.)
   if (HasMutationObservers()) QueueCharacterDataRecord(node, node->data);
   const bool wasEmpty = node->data.empty();
   node->KeepCommitted();
