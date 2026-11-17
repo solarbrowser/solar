@@ -1108,7 +1108,19 @@ class Builder {
     Box* raw = parent.AddChild(std::move(box));
     Register(raw);
     sealed = raw;
-    if (control) ++volatileEvents_;  // (nor what a form control shows)
+    // (Nor what a form control shows: for one that is a box of a size of its own from its attributes and its contents in the document, a button, a field of text, a box to check, a change of what it
+    // holds is a change in the document that is counted; one made of parts of its own, a date, a list, a file, is made again with everything above it, as it always was.)
+    if (control) {
+      std::string type;
+      if (element->IsHtml("input")) {
+        if (const dom::Attr* a = element->FindAttribute("type")) type = a->Value();
+        for (char& c : type) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      }
+      static const char* const plain[] = {"", "text", "search", "password", "email", "url", "tel", "checkbox", "radio", "submit", "reset", "button", "hidden"};
+      bool simple = element->IsHtml("button") || element->IsHtml("textarea");
+      if (element->IsHtml("input")) for (const char* t : plain) if (type == t) simple = true;
+      if (!simple || std::getenv("SOLAR_CONTROL_VOLATILE")) ++volatileEvents_;
+    }
     if (raw->kind == Box::Kind::LineBreak) return;
     if (control && !element->IsHtml("textarea")) return;
     BuildGenerated(*raw, element, "before");
