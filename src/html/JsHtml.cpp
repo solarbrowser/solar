@@ -1117,6 +1117,20 @@ const char* const kWindowScript = R"JS(
     frameBusy = false;
     if (more) scheduleFrame();
   }
+  // The scroll event: the page was scrolled (by the user, by a script, by a link to a fragment): at the next frame, before the animation callbacks, the document is told (the window hears it as it
+  // bubbles). The window is told by the program (__solarScrolled), which is what sees the position change; nothing here asks the position until the frame, and a frame in which it did not
+  // change fires none. (YouTube's page header moves itself on the scroll event: with none it stayed where the page was before the scroll.)
+  let scrollSent = [0, 0];
+  let scrollQueued = false;
+  Object.defineProperty(globalThis, "__solarScrolled", { value: function () { if (!scrollQueued) { scrollQueued = true; scheduleFrame(); } }, configurable: true });
+  frameSteps.push(() => {
+    if (!scrollQueued) return;
+    scrollQueued = false;
+    const x = globalThis.scrollX, y = globalThis.scrollY;
+    if (x === scrollSent[0] && y === scrollSent[1]) return;
+    scrollSent = [x, y];
+    document.dispatchEvent(new Event("scroll", { bubbles: true }));
+  });
   Object.defineProperty(globalThis, "__solarAddFrameEndStep", { value: function (step) { frameEndSteps.push(step); }, configurable: true });
   Object.defineProperty(globalThis, "__solarAddFrameStep", { value: function (step) { frameSteps.push(step); }, configurable: true });
   Object.defineProperty(globalThis, "__solarFrameHook", { value: function (run, end, wants) {

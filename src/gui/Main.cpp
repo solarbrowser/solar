@@ -2620,10 +2620,15 @@ int PageMain(Shared& shared, int argc, char** argv) {
     solar::layout::Tree* tree = document ? document->layoutTree.get() : nullptr;
     if (!tree) return;
     auto& at = tree->scroll[document];
+    // (The page is told that it was scrolled: its scroll event is fired at its next frame.)
+    const auto tellScrolled = [&] {
+      if (realm) solar::html::RunInRealm(*realm, [&] { realm->Evaluate("if (typeof __solarScrolled === 'function') __solarScrolled();", "scroll"); });
+    };
     if (at.first != appliedX || at.second != appliedY) {
       // Script scrolled the page (or a link to a fragment did): the window goes there.
       appliedX = at.first;
       appliedY = at.second;
+      tellScrolled();
       UiCommand command;
       command.kind = UiCommand::Kind::ScrollTo;
       command.x = appliedX;
@@ -2641,6 +2646,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
     appliedX = at.first = sx;
     appliedY = at.second = sy;
     solar::layout::ApplySticky(*tree);
+    tellScrolled();
     lastScrollInput = Clock::now();
     hoverStale = pointerKnown;
     // The list that was made has items for some way above and below where it was made; past a part of that it is made again.
