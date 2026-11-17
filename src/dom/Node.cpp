@@ -512,6 +512,10 @@ void DisposeDocument(Document* document) {
   MarkPending(document, kPendingDocumentState);
   document->templateContentsOwner = nullptr;
   document->frameElement = nullptr;
+  // The realm and the context go with the page: what is still on its way to this document (a script that finishes loading after the page was left) must find
+  // them gone, not a freed realm to queue a task in.
+  document->realm = nullptr;
+  document->context = nullptr;
 }
 
 // ---- Making nodes ----

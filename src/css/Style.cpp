@@ -3811,7 +3811,11 @@ bool MentionsAny(const std::vector<CssRule*>& rules, const std::vector<std::stri
 void MarkDirtyByKeys(const std::unordered_set<uint64_t>& keys, bool everything) {
   const auto connected = [](const dom::Element* e) { const dom::Node* top = dom::ShadowIncludingRoot(const_cast<dom::Element*>(e)); return top && top->IsDocument(); };
   const uint64_t rootKey = KeyHash(6, "root", false);
+  // (The elements that were freed since the cache was last cleaned are still in it: a style is asked for after they are, and only then are they erased. They are not looked at: the memory is gone.)
+  const std::vector<dom::Element*>& deadList = dom::DeadElements();
+  const std::unordered_set<dom::Element*> dead(deadList.begin(), deadList.end());
   for (auto& [element, entry] : Cache()) {
+    if (!dead.empty() && dead.count(element)) continue;
     bool touched = everything || !connected(element);
     if (!touched && element == element->nodeDocument->DocumentElement()) touched = keys.count(rootKey) > 0;
     if (!touched) touched = keys.count(KeyHash(3, element->localName, true)) > 0;
