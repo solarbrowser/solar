@@ -1314,6 +1314,7 @@ struct ElementStyle {
   Cascade cascade;
   std::shared_ptr<Memo> memo = std::make_shared<Memo>();
   std::set<std::string> resolving;
+  std::vector<const PropertyDefinition*> resolvingProps;  // the properties being worked out (a cycle through them is none of the values)
   std::vector<std::vector<DeclarationEntry>> storage;  // the style attribute's declarations
   bool built = false;
   HasUse has;               // what the :has() looked at for it were: what is under it, and beside it, is what its style was made from, too
@@ -1926,9 +1927,11 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
     }
     entry.plain.memo = fresh ? fresh : std::make_shared<Memo>();
     entry.plain.resolving.clear();
+    entry.plain.resolvingProps.clear();
     for (auto& other : entry.others) {
       other.second.memo = std::make_shared<Memo>();
       other.second.resolving.clear();
+      other.second.resolvingProps.clear();
     }
   };
   // Only the custom properties of the style above are others than they were: what is worked out here that uses none of them is as it was, and the elements under it follow by their own.
@@ -3547,8 +3550,10 @@ std::string Resolver::ComputeInner(dom::Element* element, const std::string& pro
   // The initial value, asked for by the root of the tree.
   const bool initialOnly = property.rfind("\x01initial:", 0) == 0;
   // (What was worked out before is answered at once: the style is made, and its parents', when it is not there yet.)
+  ElementStyle* madeStyle = nullptr;
   if (!initialOnly) {
     ElementStyle& made = StyleOf(element, pseudo);
+    madeStyle = &made;
     if (made.built) {
       if (const auto cached = made.memo->computed.Find(property)) {
         lastKind_ = "memo hit";
@@ -3557,10 +3562,12 @@ std::string Resolver::ComputeInner(dom::Element* element, const std::string& pro
     }
   }
   const std::string name = initialOnly ? property.substr(9) : property;
+  bool prepared = false;
   if (!initialOnly && pseudo.empty() && !AnimatedValuesSuppressed() && !StartingStyleFor(element, pseudo)) {
-    if (InDocumentTree(element)) Prepare(element);
+    if (InDocumentTree(element)) { Prepare(element); prepared = true; }
   }
-  ElementStyle& style = StyleOf(element, pseudo);
+  // (The style asked for again only when it may have been made since.)
+  ElementStyle& style = madeStyle && !prepared && madeStyle->built ? *madeStyle : StyleOf(element, pseudo);
   const StyleHold hold;  // (what is computed from here on holds `style`: the cache is not emptied under it)
   if (!initialOnly) {
     if (const auto cached = style.memo->computed.Find(name)) {
@@ -3584,27 +3591,31 @@ std::string Resolver::ComputeInner(dom::Element* element, const std::string& pro
   // Not in a document: no computed style.
   if (!InDocumentTree(element)) return "";
 
-  if (style.resolving.count("\x02" + name)) {
+  const auto unresolve = [&] {
+    const auto at = std::find(style.resolvingProps.begin(), style.resolvingProps.end(), definition);
+    if (at != style.resolvingProps.end()) style.resolvingProps.erase(at);
+  };
+  if (std::find(style.resolvingProps.begin(), style.resolvingProps.end(), definition) != style.resolvingProps.end()) {
     // Only the sizes that lengths are relative to make a cycle of it.
     if (name == "font-size" || name == "line-height") cycleHit_ = true;
     return "";
   }
-  style.resolving.insert("\x02" + name);
+  style.resolvingProps.push_back(definition);
   bool valid = true;
   std::string specified = initialOnly ? "initial" : Specified(element, name, *definition, valid, pseudo);
   // A value nothing was declared for is the parent's, as it was finished there, or the initial one: neither is worked out again for each element.
   if (!initialOnly && plainInherit_ && valid) {
     plainInherit_ = false;
-    style.resolving.erase("\x02" + name);
-    StyleOf(element, pseudo).memo->computed.Set(name, specified);
+    unresolve();
+    style.memo->computed.Set(name, specified);
     lastKind_ = "inherited as it is";
     return specified;
   }
   plainInherit_ = false;
   if (specified == "initial") {
     if (const std::string* fast = FastInitial(*definition)) {
-      style.resolving.erase("\x02" + name);
-      if (!initialOnly) StyleOf(element, pseudo).memo->computed.Set(name, *fast);
+      unresolve();
+      if (!initialOnly) style.memo->computed.Set(name, *fast);
       lastKind_ = "fast initial";
       return *fast;
     }
@@ -3613,8 +3624,8 @@ std::string Resolver::ComputeInner(dom::Element* element, const std::string& pro
   std::string result = Finish(element, name, *definition, specified, context, pseudo);
   lastKind_ = specified == "initial" ? "initial, finished" : "declared, finished";
   if (specified == "initial") NoteInitial(*definition, result);
-  style.resolving.erase("\x02" + name);
-  if (!initialOnly) StyleOf(element, pseudo).memo->computed.Set(name, result);
+  unresolve();
+  if (!initialOnly) style.memo->computed.Set(name, result);
   return result;
 }
 
@@ -4025,6 +4036,7 @@ bool NoteSheetAdded(CssStyleSheet* sheet) {
       if (uses) {
         entry.plain.memo = std::make_shared<Memo>();
         entry.plain.resolving.clear();
+        entry.plain.resolvingProps.clear();
         for (auto& other : entry.others) {
           other.second.memo = std::make_shared<Memo>();
           other.second.resolving.clear();
