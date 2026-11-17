@@ -1323,6 +1323,14 @@ const char* const kStubScript = R"JS(
     }
   }
 
+  // document.all: every element, live. A browser's is a special object that reads as undefined (typeof, truthiness, == null) and is still not
+  // === undefined; this engine has no such object, so it is an ordinary collection. What matters is that it is not undefined: Polymer's resin
+  // (YouTube's templates) asks `value === document.all` for the value of every binding and, with document.all undefined, took every undefined
+  // value (`hidden="[[data.hideContents]]"`) for it and sanitized it into the string "zClosurez": the results of a search stayed hidden.
+  if (typeof Document === "function" && !("all" in Document.prototype)) {
+    const allOf = new WeakMap();
+    Object.defineProperty(Document.prototype, "all", { get() { let all = allOf.get(this); if (!all) { all = this.getElementsByTagName("*"); allOf.set(this, all); } return all; }, enumerable: true, configurable: true });
+  }
   if (typeof Document === "function" && !Object.getOwnPropertyDescriptor(Document.prototype, "domain")) {
     Object.defineProperty(Document.prototype, "domain", { get() { return location.hostname; }, set(value) {}, enumerable: true, configurable: true });
   }

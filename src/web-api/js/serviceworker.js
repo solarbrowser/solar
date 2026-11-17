@@ -413,7 +413,7 @@
     }
     request = new Request(input, init);
     const url = new URL(request.url);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return nativeFetch.call(thisArg, input, init);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return nativeFetch.call(thisArg, request);
     const signal = request.signal;
     if (signal && signal.aborted) throw signal.reason !== undefined ? signal.reason : new DOMException("The user aborted a request.", "AbortError");
     const body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.clone().arrayBuffer();
@@ -426,7 +426,7 @@
         request: { url: request.url, method: request.method, headers: Array.from(request.headers.entries()), body, mode: request.mode, credentials: request.credentials, cache: request.cache, redirect: request.redirect, referrer: request.referrer === "about:client" ? location.href : request.referrer, referrerPolicy: request.referrerPolicy || documentReferrerPolicy() },
       });
     });
-    if (result.kind === "fallback") return nativeFetch.call(thisArg, input, init);
+    if (result.kind === "fallback") return nativeFetch.call(thisArg, request);
     if (result.kind === "error") throw new TypeError("Failed to fetch");
     const d = result.response;
     const response = new Response(nullBody(d.status) ? null : d.body, { status: d.status, statusText: d.statusText, headers: d.headers });
