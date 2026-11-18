@@ -1263,14 +1263,21 @@ class ComputedMap {
     if (entries_.empty()) return std::nullopt;
     const uint32_t key = Number(name);
     if (key == kNone) return std::nullopt;
-    const auto at = Lower(static_cast<uint16_t>(key));
+    return FindNumber(static_cast<uint16_t>(key));
+  }
+  // The same by the number of the property (its place in the list of them), for one that has been looked up already.
+  std::optional<std::string_view> FindNumber(uint16_t key) const {
+    if (entries_.empty()) return std::nullopt;
+    const auto at = Lower(key);
     if (at == entries_.end() || at->key != key) return std::nullopt;
     return std::string_view(arena_).substr(at->offset, at->length);
   }
   void Set(std::string_view name, std::string_view value) {
     const uint32_t number = Number(name);
     if (number == kNone) return;
-    const uint16_t key = static_cast<uint16_t>(number);
+    SetNumber(static_cast<uint16_t>(number), value);
+  }
+  void SetNumber(uint16_t key, std::string_view value) {
     const auto at = Lower(key);
     if (at != entries_.end() && at->key == key) {
       Entry& entry = entries_[static_cast<size_t>(at - entries_.begin())];
@@ -5208,24 +5215,26 @@ bool StyleReader::FastUndeclared(const char* property, uint64_t now, std::string
   if (name.size() > 1 && name[0] == '-' && name[1] == '-') return false;
   const PropertyDefinition* definition = FindProperty(name);
   if (!definition) return false;
+  if (name != definition->name) return false;  // (an alias is of the property it stands for: its declarations are of that name)
   const size_t index = static_cast<size_t>(definition - kPropertyDefinitions);
   if (index >= kPropertyDefinitionCount || logical[index]) return false;
   const Cascade& cascade = *static_cast<const Cascade*>(cascade_);
   if (cascade.find(name) != cascade.end()) return false;
   if (hasLogical_ && counterpart[index]) return false;
-  if (AnimatedValue(element_, "", std::string(name))) return false;
+  if (!element_->AnimatedValuesInView().empty() && AnimatedValue(element_, "", std::string(name))) return false;
   Memo& own = *static_cast<Memo*>(memo_.get());
   if (definition->inherited) {
     if (!parentMemo_) return false;
-    const auto found = static_cast<const Memo*>(parentMemo_.get())->computed.Find(name);
+    const auto found = static_cast<const Memo*>(parentMemo_.get())->computed.FindNumber(static_cast<uint16_t>(index));
     if (!found) return false;
     out.assign(found->data(), found->size());
+    own.computed.SetNumber(static_cast<uint16_t>(index), out);  // (what the elements under it find in it)
   } else {
+    // (Nothing inherits what is not inherited: the initial value is not kept for the element.)
     const std::string* initial = FastInitial(*definition);
     if (!initial) return false;
     out = *initial;
   }
-  own.computed.Set(name, out);
   return true;
 }
 
