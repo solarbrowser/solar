@@ -56,6 +56,7 @@ bool g_styleContainerQueries = false;  // a container query asks about style() (
 bool g_loadThrottle = false;  // the program shows pages as they load (the window): see the bringing of layout in ComputedValue
 uint64_t g_layoutAnimationVersion = 1;  // the same, but not for what animations give that only changes how things are drawn
 uint64_t g_authorVersion = 1;  // changed when the rules do
+uint64_t g_authorNonAdditive = 1;  // the last version of them that was not a sheet that came to the document as it was (see StyleReuseFor)
 bool g_anyContainerQueries = false;  // a rule with a container query has been looked at
 bool g_sharedStale = false;          // the styles that elements share were worked out with sizes of containers that are not what they are now (let go of when no computation holds the cache)
 uint64_t g_containerEpoch = 1;       // a new number each time layout finds the size of a container to be another than the styles were made with
@@ -4141,6 +4142,7 @@ bool NoteRuleAdded(CssStyleSheet* sheet, CssRule* rule, CssRule* parent) {
   if (!DirtyKeysOfRules(one, keys, everything, usesLayers, registered, 0, false) || usesLayers || !registered.empty()) return false;
   ++g_styleVersion;
   ++g_authorVersion;
+  g_authorNonAdditive = g_authorVersion;  // (a rule in a sheet that was there: the sheets are not what they were, and what was found in them is found again)
   MarkDirtyByKeys(keys, everything);
   return true;
 }
@@ -4180,6 +4182,7 @@ void NoteSheetRemoved(CssStyleSheet* sheet) {
   // (The sheet is where it was in the list until its element lets go of it: what is made again is made from the sheets that are left, at the next look.)
   ++g_styleVersion;
   ++g_authorVersion;
+  g_authorNonAdditive = g_authorVersion;
   g_removedSheets.insert(sheet);
   MarkDirtyByKeys(keys, everything);
 }
@@ -4231,6 +4234,7 @@ void NoteStyleChange() {
   ++g_styleVersion;
   ++g_cacheVersion;
   ++g_authorVersion;
+  g_authorNonAdditive = g_authorVersion;
   ++g_layoutSheetsVersion;
 }
 void NoteContainerSizesChanged() {
@@ -4576,6 +4580,7 @@ StyleReuse StyleReuseFor(dom::Document* document) {
     uint64_t author = 0;
     std::shared_ptr<const std::vector<CssStyleSheet*>> sheets;
     StyleReuse reuse;
+    SelectorFeatures features;  // of the sheets above (not of the user agent's)
   };
   static Entry entry;
   StyleReuse none;
@@ -4588,25 +4593,46 @@ StyleReuse StyleReuseFor(dom::Document* document) {
   const std::shared_ptr<const std::vector<CssStyleSheet*>> sheetsShared = SheetsOfTreeShared(document, document->context);
   const std::vector<CssStyleSheet*>& sheets = *sheetsShared;
   if (entry.document == document && entry.author == g_authorVersion && (entry.sheets == sheetsShared || (entry.sheets && *entry.sheets == sheets)) && entry.reuse.shadows == dom::HasShadowTrees()) return entry.reuse;
-  SelectorFeatures f;
-  for (const CssStyleSheet* sheet : sheets) ScanRules(sheet->rules, f, 0);
+  // The user agent's rules are the same each time: looked at once.
+  static const SelectorFeatures ua = [] {
+    SelectorFeatures found;
+    for (const UserAgentRule& rule : UserAgentRules()) ScanList(rule.selectors, found);
+    return found;
+  }();
+  // Sheets that came to the document as they were (a page that puts one style element after another into itself, a hundred and more of them) are looked at alone, and what they have is
+  // added to what the sheets there were have: every sheet that came was a look at every rule of every sheet of the page, and a page of tens of thousands of rules did that a hundred times.
+  bool incremental = entry.document == document && entry.author >= g_authorNonAdditive && entry.sheets && entry.reuse.shadows == dom::HasShadowTrees() && !std::getenv("SOLAR_NO_INCREMENTAL_SHEETS");
+  std::vector<const CssStyleSheet*> extra;
+  if (incremental) {
+    std::unordered_set<const CssStyleSheet*> before(entry.sheets->begin(), entry.sheets->end());
+    size_t kept = 0;
+    for (const CssStyleSheet* sheet : sheets) {
+      if (before.count(sheet)) ++kept;
+      else extra.push_back(sheet);
+    }
+    if (kept != before.size()) incremental = false;  // (a sheet went)
+  }
+  SelectorFeatures f = incremental ? entry.features : SelectorFeatures();
+  const std::vector<const CssStyleSheet*> looked = incremental ? extra : std::vector<const CssStyleSheet*>(sheets.begin(), sheets.end());
+  for (const CssStyleSheet* sheet : looked) ScanRules(sheet->rules, f, 0);
   {
-    SelectorFeatures ua;
-    for (const UserAgentRule& rule : UserAgentRules()) ScanList(rule.selectors, ua);
-    ShareFeatures share;
+    ShareFeatures share = incremental ? g_shareFeatures : ShareFeatures();
     share.nth = f.nth || ua.nth;
     share.language = f.language || ua.language;
     share.attributes = f.attributes;
     share.attributes.insert(ua.attributes.begin(), ua.attributes.end());
-    for (const CssStyleSheet* sheet : sheets) NotePositionKeysOfRules(const_cast<CssStyleSheet*>(sheet)->rules, share, 0);
-    for (const CssStyleSheet* sheet : sheets) NoteStructureKeysOfRules(const_cast<CssStyleSheet*>(sheet)->rules, share, 0);
-    for (const UserAgentRule& rule : UserAgentRules()) NoteStructureKeys(rule.selectors, share);
-    for (const UserAgentRule& rule : UserAgentRules()) NotePositionKeys(rule.selectors, share);
+    for (const CssStyleSheet* sheet : looked) NotePositionKeysOfRules(const_cast<CssStyleSheet*>(sheet)->rules, share, 0);
+    for (const CssStyleSheet* sheet : looked) NoteStructureKeysOfRules(const_cast<CssStyleSheet*>(sheet)->rules, share, 0);
+    if (!incremental) {
+      for (const UserAgentRule& rule : UserAgentRules()) NoteStructureKeys(rule.selectors, share);
+      for (const UserAgentRule& rule : UserAgentRules()) NotePositionKeys(rule.selectors, share);
+    }
     g_shareFeatures = std::move(share);
   }
   entry.document = document;
   entry.author = g_authorVersion;
   entry.sheets = sheetsShared;
+  entry.features = f;
   entry.reuse = {!f.dynamic, f.structural, f.sibling, dom::HasShadowTrees(), f.has, f.stateAncestor};
   StateCompounds().clear();
   StateUnknown() = f.stateUnknown;

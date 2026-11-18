@@ -127,6 +127,17 @@
     let late = null;
     time('style: a late style sheet of 300 rules added (a <style>), then read', () => { late = document.createElement('style'); late.textContent = lateText; document.head.appendChild(late); midPost.clientWidth; }, { runs: 5, setup: () => { if (late) { late.remove(); late = null; midPost.clientWidth; } } });
     time('style: a style sheet of 300 rules removed, then read', () => { late.remove(); late = null; midPost.clientWidth; }, { runs: 5, setup: () => { late = document.createElement('style'); late.textContent = lateText; document.head.appendChild(late); midPost.clientWidth; } });
+    time('style: 60 style elements of 450 rules added one after another, a read after each (a page that styles itself in pieces)', () => {
+      const made = [];
+      for (let k = 0; k < 60; k++) {
+        const st = document.createElement('style');
+        st.textContent = Array.from({ length: 150 }, (_, i) => `.c${(i + k) % 40} .t${i % 17}:not(.zz) { color: rgb(${i % 255}, ${k % 255}, 9); } .k${k}-${i}:hover { margin: 1px; } .q${i}:nth-child(2n+1) > span { padding: ${i % 5}px; }`).join('\n');
+        document.head.appendChild(st); made.push(st);
+        getComputedStyle(midPost).color;
+      }
+      for (const st of made) st.remove();
+      midPost.clientWidth;
+    }, { runs: 2 });
     time('style: querySelectorAll(".article .sec3 .para4 a.l7")', () => { for (let i = 0; i < 20; i++) root.querySelectorAll('.article .sec3 .para4 a.l7'); }, { ops: 20 });
     time('style: matches() with :not/:is/:has x1000', () => { for (let i = 0; i < 1000; i++) midPost.matches('article:not(.x):has(> .c1__flag), :is(article, div) > h3'); }, { ops: 1000 });
   };
