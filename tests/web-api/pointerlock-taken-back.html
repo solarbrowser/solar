@@ -1,0 +1,21 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Pointer lock: the window takes the pointer back</title>
+<style>body { margin: 0; } #box { position: absolute; left: 20px; top: 20px; width: 200px; height: 100px; background: #3b7ddd; color: #fff; }</style>
+<div id="box">click me</div>
+<script>
+// Run by tests/web-api/run-pointerlock.sh: a click locks, a move is the locked one's, the window takes the pointer back (f:), and the page has to know: no lock, the event, and the moves are the plain ones.
+const log = (s) => console.log(s);
+const ok = (name, condition, detail) => log((condition ? "ok   " : "FAIL ") + name + (condition ? "" : "  " + detail));
+const box = document.getElementById("box");
+let changes = 0, movedAfter = 0;
+document.addEventListener("pointerlockchange", () => {
+  changes++;
+  if (document.pointerLockElement) return;
+  ok("the page hears that the lock is gone", changes === 2, changes);
+  window.__taken = true;
+});
+box.addEventListener("click", () => { box.requestPointerLock(); });
+document.addEventListener("mousemove", (e) => { if (window.__taken && e.movementX !== 0) movedAfter++; });
+setTimeout(() => ok("no lock after it", document.pointerLockElement === null && window.__taken === true, "taken=" + window.__taken), 3000);
+</script>

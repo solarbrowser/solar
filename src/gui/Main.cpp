@@ -3349,6 +3349,10 @@ int PageMain(Shared& shared, int argc, char** argv) {
         e.motion.xrel = dx;
         e.motion.yrel = dy;
         shared.Inject(e);
+      } else if (step.rfind("f:", 0) == 0) {
+        // (f:: the window takes the pointer back from the page that has it locked, as it does when the focus goes or another tab is in front.)
+        e.type = SDL_EVENT_WINDOW_FOCUS_LOST;
+        shared.Inject(e);
       } else if (step.rfind("c:", 0) == 0 || step.rfind("m:", 0) == 0 || step.rfind("p:", 0) == 0 || step.rfind("u:", 0) == 0) {
         float x = 0, y = 0;
         std::sscanf(step.c_str() + 2, "%f,%f", &x, &y);

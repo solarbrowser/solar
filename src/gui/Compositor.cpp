@@ -242,6 +242,10 @@ void RunCompositor(Shared& shared, net::ipc::Channel& link, int gpuFd) {
           shared.PushEvent(incoming);
           break;
         }
+        case SDL_EVENT_WINDOW_FOCUS_LOST:
+          // (The window took the pointer back from the page that had it locked: the page has to hear of it, or it goes on taking the moves of the pointer for the locked one's.)
+          shared.PushEvent(incoming);
+          break;
         default: break;
       }
     }
