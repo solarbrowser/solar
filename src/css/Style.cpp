@@ -5148,6 +5148,10 @@ std::string StyleReader::Get(const char* property) {
     const Memo& memo = *static_cast<const Memo*>(memo_.get());
     if (const auto found = memo.computed.Find(std::string_view(property))) return std::string(*found);
   }
+  {
+    std::string fast;
+    if (pseudo_.empty() && FastUndeclared(property, now, fast)) return fast;
+  }
   std::string value = ComputedValue(ctx_, element_, property, pseudo_);
   // After a first answer the style of the element is made, and what is asked next is found in it (unless the document asks for more: containers, animations).
   if (!memo_ && element_->nodeDocument && !AnimatedValuesSuppressed() && !StartingStyleFor(element_, pseudo_)) {
@@ -5158,6 +5162,71 @@ std::string StyleReader::Get(const char* property) {
     }
   }
   return value;
+}
+
+// A property that nothing declares for the element (no animation gives it, no logical property competes for it) is what the element above has when it is inherited, and its initial value when
+// it is not: the answer is found in the memo of the element above (which has been read before, as styles are read from the top), without all that a declared property needs (and that the
+// ones that are not declared went through for each of a hundred and thirty properties of each style).
+bool StyleReader::FastUndeclared(const char* property, uint64_t now, std::string& out) {
+  static const bool off = std::getenv("SOLAR_NO_FAST_UNDECLARED") != nullptr;
+  if (off) return false;
+  if (fastState_ == 2 && fastVersion_ == now) return false;
+  if (fastState_ != 1 || fastVersion_ != now) {
+    fastState_ = 2;
+    fastVersion_ = now;
+    cascade_ = nullptr;
+    parentMemo_.reset();
+    if (!element_->nodeDocument || AnimatedValuesSuppressed() || StartingStyleFor(element_, pseudo_)) return false;
+    if (element_->nodeDocument->animationStyleSeen && element_->nodeDocument->styleFlushedVersion != FlushVersion()) return false;
+    if (!InDocumentTree(element_)) return false;
+    ElementStyle& style = StyleOf(element_, "");
+    if (!style.built) return false;
+    memo_ = style.memo;
+    cascade_ = &style.cascade;
+    hasLogical_ = style.hasLogical;
+    dom::Element* up = FlatParent(element_);
+    if (up) {
+      ElementStyle& above = StyleOf(up, "");
+      if (above.built) parentMemo_ = above.memo;
+    }
+    // (StyleOf may have made the styles again: what it answered is of the version it was asked in.)
+    version_ = now;
+    fastState_ = 1;
+  }
+  // The tables by property: which are logical, which have logical ones for them.
+  static const std::vector<char> logical = [] {
+    std::vector<char> flags(kPropertyDefinitionCount, 0);
+    for (size_t i = 0; i < kPropertyDefinitionCount; ++i) flags[i] = IsLogicalProperty(kPropertyDefinitions[i].name) ? 1 : 0;
+    return flags;
+  }();
+  static const std::vector<char> counterpart = [] {
+    std::vector<char> flags(kPropertyDefinitionCount, 0);
+    for (size_t i = 0; i < kPropertyDefinitionCount; ++i) flags[i] = HasLogicalCounterparts(kPropertyDefinitions[i].name) ? 1 : 0;
+    return flags;
+  }();
+  const std::string_view name(property);
+  if (name.size() > 1 && name[0] == '-' && name[1] == '-') return false;
+  const PropertyDefinition* definition = FindProperty(name);
+  if (!definition) return false;
+  const size_t index = static_cast<size_t>(definition - kPropertyDefinitions);
+  if (index >= kPropertyDefinitionCount || logical[index]) return false;
+  const Cascade& cascade = *static_cast<const Cascade*>(cascade_);
+  if (cascade.find(name) != cascade.end()) return false;
+  if (hasLogical_ && counterpart[index]) return false;
+  if (AnimatedValue(element_, "", std::string(name))) return false;
+  Memo& own = *static_cast<Memo*>(memo_.get());
+  if (definition->inherited) {
+    if (!parentMemo_) return false;
+    const auto found = static_cast<const Memo*>(parentMemo_.get())->computed.Find(name);
+    if (!found) return false;
+    out.assign(found->data(), found->size());
+  } else {
+    const std::string* initial = FastInitial(*definition);
+    if (!initial) return false;
+    out = *initial;
+  }
+  own.computed.Set(name, out);
+  return true;
 }
 
 std::string ResolvedValue(Quanta::Context& ctx, dom::Element* element, const std::string& property, const std::string& pseudo) {

@@ -6,8 +6,10 @@
 
 #include "solar/css/Properties.h"
 
+#include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace solar::css {
 
@@ -58,11 +60,54 @@ const std::unordered_map<std::string_view, std::string_view>& Aliases() {
 
 }  // namespace
 
-const PropertyDefinition* FindProperty(std::string_view name) {
-  if (const auto alias = Aliases().find(name); alias != Aliases().end()) name = alias->second;
-  const auto found = PropertyIndex().find(name);
-  return found == PropertyIndex().end() ? nullptr : found->second;
+namespace {
+
+// What a name is, in one probe of a flat table (every style asks for the properties by name, hundreds of times: two lookups in tables of nodes were most of what it cost). An alias answers
+// for the property it stands for, as it did.
+struct FlatIndex {
+  struct Slot {
+    std::string_view name;
+    const PropertyDefinition* definition = nullptr;
+  };
+  static constexpr size_t kSize = 4096;  // (a power of two, with room: a probe ends at an empty slot soon)
+  std::vector<Slot> slots = std::vector<Slot>(kSize);
+  static uint64_t Hash(std::string_view text) {
+    uint64_t h = 1469598103934665603ull;
+    for (unsigned char c : text) h = (h ^ c) * 1099511628211ull;
+    return h;
+  }
+  void Put(std::string_view name, const PropertyDefinition* definition) {
+    size_t at = Hash(name) & (kSize - 1);
+    while (slots[at].definition && slots[at].name != name) at = (at + 1) & (kSize - 1);
+    slots[at] = {name, definition};
+  }
+  const PropertyDefinition* Get(std::string_view name) const {
+    size_t at = Hash(name) & (kSize - 1);
+    while (slots[at].definition) {
+      if (slots[at].name == name) return slots[at].definition;
+      at = (at + 1) & (kSize - 1);
+    }
+    return nullptr;
+  }
+};
+
+const FlatIndex& Flat() {
+  static const FlatIndex index = [] {
+    FlatIndex built;
+    for (const auto& [name, definition] : PropertyIndex()) built.Put(name, definition);
+    // (An alias is looked at before the property of that name, if there is one.)
+    for (const auto& [name, target] : Aliases()) {
+      const auto found = PropertyIndex().find(target);
+      if (found != PropertyIndex().end()) built.Put(name, found->second);
+    }
+    return built;
+  }();
+  return index;
 }
+
+}  // namespace
+
+const PropertyDefinition* FindProperty(std::string_view name) { return Flat().Get(name); }
 
 const char* FindTypeSyntax(std::string_view name) {
   const auto found = TypeIndex().find(name);
