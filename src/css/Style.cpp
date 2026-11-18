@@ -353,6 +353,8 @@ struct ElementKeys {
         i = j;
       }
     }
+    // (The names of the attributes: a rule whose selector asks for one of them ends in nothing else that is a key.)
+    for (const dom::Attr* attribute : element->AttributesInView()) keys.push_back(KeyHash(5, attribute->localName, true));
   }
   bool Has(uint64_t key) const {
     for (uint64_t k : keys) if (k == key) return true;
@@ -446,12 +448,31 @@ void WorkOutGroupKeys(CssRule& rule) {
 }
 
 // The key of each selector of a list (see above), or false when one of them has none.
+// The key of a compound selector, if it has one: an id says most, then a class; a type, then the name of an attribute, are the last resorts.
+bool CompoundKey(const CompoundSelector& compound, uint64_t& key, int depth = 0) {
+  for (const SimpleSelector& simple : compound.simples) {
+    if (simple.kind == SimpleSelector::Kind::Id) { key = KeyHash(1, simple.name, false); return true; }
+  }
+  for (const SimpleSelector& simple : compound.simples) {
+    if (simple.kind == SimpleSelector::Kind::Class) { key = KeyHash(2, simple.name, false); return true; }
+  }
+  for (const SimpleSelector& simple : compound.simples) {
+    if (simple.kind == SimpleSelector::Kind::Type && !simple.name.empty() && simple.name != "*") { key = KeyHash(3, simple.name, true); return true; }
+  }
+  for (const SimpleSelector& simple : compound.simples) {
+    if (simple.kind == SimpleSelector::Kind::Attribute && !simple.namespaceName && !simple.namespaceUri && !simple.name.empty()) { key = KeyHash(5, simple.name, true); return true; }
+  }
+  (void)depth;
+  return false;
+}
+
 bool KeysOf(const SelectorList& list, std::vector<uint64_t>& keys, std::vector<uint64_t>& markers) {
   keys.clear();
   markers.clear();
   for (const ComplexSelector& selector : list) {
-    uint64_t key = 0, marker = 0;
-    bool found = false, awkward = selector.compounds.empty();
+    uint64_t marker = 0;
+    std::vector<uint64_t> own;  // (more than one for a selector that ends in :is() or :where(): one for each of its alternatives)
+    bool awkward = selector.compounds.empty();
     if (!awkward) {
       const CompoundSelector& last = selector.compounds.back();
       int pseudoElements = 0;
@@ -461,25 +482,35 @@ bool KeysOf(const SelectorList& list, std::vector<uint64_t>& keys, std::vector<u
       }
       if (pseudoElements > 1) awkward = true;
       if (!awkward) {
-        // An id says most, then a class; a type is the last resort.
-        for (const SimpleSelector& simple : last.simples) {
-          if (simple.kind == SimpleSelector::Kind::Id) { key = KeyHash(1, simple.name, false); found = true; break; }
+        uint64_t key = 0;
+        if (CompoundKey(last, key)) own.push_back(key);
+        else {
+          // :is() and :where(): an element has one of the keys of its alternatives, when each has one.
+          for (const SimpleSelector& simple : last.simples) {
+            if ((simple.kind == SimpleSelector::Kind::Is || simple.kind == SimpleSelector::Kind::Where) && simple.list && !simple.list->empty()) {
+              std::vector<uint64_t> inner;
+              bool all = true;
+              for (const ComplexSelector& alternative : *simple.list) {
+                uint64_t k = 0;
+                if (alternative.compounds.empty() || !CompoundKey(alternative.compounds.back(), k)) { all = false; break; }
+                inner.push_back(k);
+              }
+              if (all) { own = inner; break; }
+            }
+          }
         }
-        if (!found) for (const SimpleSelector& simple : last.simples) {
-          if (simple.kind == SimpleSelector::Kind::Class) { key = KeyHash(2, simple.name, false); found = true; break; }
-        }
-        if (!found) for (const SimpleSelector& simple : last.simples) {
-          if (simple.kind == SimpleSelector::Kind::Type && !simple.name.empty() && simple.name != "*") { key = KeyHash(3, simple.name, true); found = true; break; }
-        }
-        if (!found && marker) found = true;  // (a pseudo-element on its own: the pseudo-element is the key)
+        if (own.empty() && marker) own.push_back(0);  // (a pseudo-element on its own: the pseudo-element is the key)
       }
     }
-    if (awkward || !found) { keys.clear(); markers.clear(); return false; }
-    keys.push_back(key ^ marker);
-    markers.push_back(marker);
+    if (awkward || own.empty()) { keys.clear(); markers.clear(); return false; }
+    for (uint64_t key : own) {
+      keys.push_back(key ^ marker);
+      markers.push_back(marker);
+    }
   }
   return true;
 }
+
 
 void WorkOutQuickKeys(CssRule& rule) {
   if (rule.kind == RuleKind::Media || rule.kind == RuleKind::Supports) { WorkOutGroupKeys(rule); return; }
