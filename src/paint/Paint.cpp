@@ -1213,6 +1213,67 @@ class Painter {
     list_->items.push_back(std::move(item));
   }
 
+  // `text` with each var(--name, fallback) in it replaced by the value of the custom property on the element (or the fallback).
+  std::string ResolveVars(dom::Element* element, const std::string& text, int depth = 0) {
+    std::string out;
+    size_t at = 0;
+    while (at < text.size()) {
+      const size_t begin = text.find("var(", at);
+      if (begin == std::string::npos || depth > 8) { out += text.substr(at); break; }
+      out += text.substr(at, begin - at);
+      size_t end = begin + 4;
+      int nesting = 1;
+      while (end < text.size() && nesting > 0) {
+        if (text[end] == '(') nesting++;
+        else if (text[end] == ')') nesting--;
+        end++;
+      }
+      std::string inside = text.substr(begin + 4, end - begin - 5);
+      std::string fallback;
+      const size_t comma = inside.find(',');
+      if (comma != std::string::npos) {
+        fallback = inside.substr(comma + 1);
+        inside.resize(comma);
+      }
+      const auto trim = [](std::string v) {
+        const size_t first = v.find_first_not_of(" \t\n");
+        const size_t last = v.find_last_not_of(" \t\n");
+        return first == std::string::npos ? std::string() : v.substr(first, last - first + 1);
+      };
+      std::string pseudo;
+      std::string value = trim(css::ComputedValue(ctx_, element, trim(inside), pseudo));
+      if (value.empty()) value = trim(fallback);
+      out += value.find("var(") != std::string::npos ? ResolveVars(element, value, depth + 1) : value;
+      at = end;
+    }
+    return out;
+  }
+
+  // The paint properties of a part of an inline svg as a declaration list, for those that differ from what the picture takes when it is not told.
+  std::string SvgStyleOf(dom::Element* part) {
+    if (!part || part->namespaceUri != dom::kSvgNamespace) return std::string();
+    struct Property { const char* name; const char* initial; };
+    static const Property kProperties[] = {
+        {"fill", "rgb(0, 0, 0)"}, {"fill-opacity", "1"}, {"fill-rule", "nonzero"}, {"stroke", "none"}, {"stroke-width", "1px"}, {"stroke-opacity", "1"},
+        {"stroke-linecap", "butt"}, {"stroke-linejoin", "miter"}, {"stroke-miterlimit", "4"}, {"stroke-dasharray", "none"}, {"stroke-dashoffset", "0px"},
+        {"stop-color", "rgb(0, 0, 0)"}, {"stop-opacity", "1"}, {"opacity", "1"}, {"clip-rule", "nonzero"}};
+    std::string out, pseudo;
+    for (const Property& property : kProperties) {
+      // A presentation attribute that holds var() is not worked out by the style, and the picture cannot (it has no custom properties): it is here.
+      std::string value;
+      for (const dom::Attr* attribute : part->attributes) {
+        if (attribute->namespaceUri.empty() && attribute->localName == property.name && attribute->value.find("var(") != std::string::npos) {
+          value = ResolveVars(part, attribute->value);
+          break;
+        }
+      }
+      if (value.empty()) value = css::ComputedValue(ctx_, part, property.name, pseudo);
+      if (value.empty() || value == "initial" || value == property.initial || value.find('"') != std::string::npos) continue;
+      out += std::string(property.name) + ":" + value + ";";
+    }
+    return out;
+  }
+
   // The picture of an img (and the like): in its content box.
   void PaintImageOf(const Box& box, const RectF& borderBox, const PaintProps& props) {
     if (PaintDebug() && box.element() && box.element()->IsHtml("img")) std::fprintf(stderr, "paint img box replaced=%d kind=%d url=[%s] size %gx%g\n", box.replaced, (int)box.kind, box.imageUrl.c_str(), box.width, box.height);
@@ -1223,7 +1284,8 @@ class Painter {
       // An svg in the markup is drawn as the picture of its own source (with the color it is given, for currentColor).
       dom::Element* svg = box.element();
       if (!svg || svg->namespaceUri != dom::kSvgNamespace || svg->localName != "svg") return;
-      std::optional<std::string> source = html::SerializeXml(svg, false);
+      // (The picture is drawn from its own source, away from the page: what the style sheets say of its parts, and what var() comes to, goes into it as style.)
+      std::optional<std::string> source = html::SerializeXmlWithStyle(svg, [this](const dom::Element* part) { return SvgStyleOf(const_cast<dom::Element*>(part)); });
       if (!source || source->compare(0, 4, "<svg") != 0) return;
       std::string pseudo;
       const std::string color = css::ComputedValue(ctx_, svg, "color", pseudo);

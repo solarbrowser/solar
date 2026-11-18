@@ -759,6 +759,13 @@ bool ExpandShorthand(const PropertyDefinition& property, const ComponentValues& 
     for (Longhand& l : mine) out.push_back(std::move(l));
     return true;
   }
+  if (name == "border-block" || name == "border-inline") {
+    // The one border is both sides of the axis (each side is itself a shorthand of the width, the style and the color).
+    const std::string text = SerializeValue(items);
+    for (const char* side : property.longhands) add(side, text);
+    for (Longhand& l : mine) out.push_back(std::move(l));
+    return true;
+  }
   if (IsEdgeShorthand(property)) {
     const std::vector<size_t> at = EdgeIndices(items.size(), property.longhands.size());
     if (items.empty() || items.size() > property.longhands.size()) return false;
@@ -1063,6 +1070,8 @@ std::optional<std::string> SerializeShorthand(const PropertyDefinition& shorthan
   }
   const std::string name = shorthand.name;
   std::string candidate;
+  // The one border of both sides of the axis: when the two are the same, that is what is written.
+  if ((name == "border-block" || name == "border-inline") && n == 2) return input.values[0] == input.values[1] ? std::optional<std::string>(input.values[0]) : std::nullopt;
   if (name == "border-radius" || name == "-webkit-border-radius") {
     if (n != 4) return std::nullopt;
     std::vector<std::string> h(4), v(4);

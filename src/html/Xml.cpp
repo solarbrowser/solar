@@ -7,6 +7,7 @@
 #include "solar/html/Xml.h"
 
 #include <algorithm>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
@@ -988,8 +989,14 @@ struct Serialization {
     return markup + "</" + qualified + ">";
   }
 
+  // (What a host adds to the style attribute of each element it is asked about: the serialization of an svg that is drawn on its own, with what the style sheets of the page say.)
+  std::function<std::string(const Element*)> extraStyle;
+
   std::string Attributes(const Element* element, PrefixMap& map, int& index, std::map<std::string, std::string>& localPrefixes, bool ignoreNamespaceDefinition) {
     std::string result;
+    const std::string extra = extraStyle ? extraStyle(element) : std::string();
+    bool styleWritten = false;
+    std::string styleValue;
     std::vector<std::pair<std::string, std::string>> localNameSet;
     for (const dom::Attr* attribute : element->attributes) {
       const std::optional<std::string> attributeNs = Ns(attribute->namespaceUri);
@@ -1019,8 +1026,15 @@ struct Serialization {
       result += " ";
       if (candidate) result += *candidate + ":";
       if (requireWellFormed && (attribute->localName.find(':') != std::string::npos || !IsXmlNameString(attribute->localName) || (attribute->localName == "xmlns" && !attributeNs))) Fail();
+      if (!attributeNs && attribute->localName == "style" && !extra.empty()) {
+        // (It goes last: a reader that takes the attributes one after the other, as Skia's does, has the style over the presentation attributes then.)
+        styleValue = attribute->value;
+        styleWritten = true;
+        continue;
+      }
       result += attribute->localName + "=\"" + AttributeValue(attribute->value) + "\"";
     }
+    if (!extra.empty()) result += " style=\"" + AttributeValue(extra + styleValue) + "\"";
     return result;
   }
 };
@@ -1040,6 +1054,18 @@ XmlResult ParseXmlFragment(Quanta::Context& ctx, dom::Element* context, std::str
 std::optional<std::string> SerializeXml(const dom::Node* node, bool requireWellFormed) {
   Serialization serialization;
   serialization.requireWellFormed = requireWellFormed;
+  Serialization::PrefixMap map;
+  Serialization::Add(map, "xml", std::string(dom::kXmlNamespace));
+  int index = 1;
+  std::string out = serialization.Node(node, std::nullopt, map, index);
+  if (serialization.failed) return std::nullopt;
+  return out;
+}
+
+std::optional<std::string> SerializeXmlWithStyle(const dom::Node* node, const std::function<std::string(const dom::Element*)>& extraStyle) {
+  Serialization serialization;
+  serialization.requireWellFormed = false;
+  serialization.extraStyle = extraStyle;
   Serialization::PrefixMap map;
   Serialization::Add(map, "xml", std::string(dom::kXmlNamespace));
   int index = 1;

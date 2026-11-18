@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -34,6 +35,8 @@ XmlResult ParseXmlFragment(Quanta::Context& ctx, dom::Element* context, std::str
 // "XML serialization" of a node; with `requireWellFormed`, nothing if it would not be well-formed.
 std::optional<std::string> SerializeXml(const dom::Node* node, bool requireWellFormed);
 // The same for the children of a node, which is what innerHTML is in an XML document.
+// The same as SerializeXml(node, false), with what `extraStyle` says of an element put in front of its style attribute (a declaration list, or nothing).
+std::optional<std::string> SerializeXmlWithStyle(const dom::Node* node, const std::function<std::string(const dom::Element*)>& extraStyle);
 std::optional<std::string> SerializeXmlChildren(const dom::Node* node, bool requireWellFormed);
 
 }  // namespace solar::html
