@@ -2938,7 +2938,7 @@ int PageMain(Shared& shared, int argc, char** argv) {
             }
           }
           switch (key) {
-            case SDLK_ESCAPE: if (!focused) running = false; break;
+            case SDLK_ESCAPE: break;  // (The key that gives the pointer back, closes a menu or a find: it does not end the page, and with it the browser.)
             case SDLK_DOWN: scrollBy(0, 60); break;
             case SDLK_UP: scrollBy(0, -60); break;
             case SDLK_PAGEDOWN: case SDLK_SPACE: scrollBy(0, h * 0.9); break;

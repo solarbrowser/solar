@@ -146,6 +146,7 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
   float lockedAtX = 0, lockedAtY = 0;
   bool pointerLocked = false;  // a page has the pointer locked (hidden, and its movements are the page's, wherever the pointer would be)
   uint32_t lockedHost = 0;     // the page (its process) that has it
+  uint32_t lockedShown = 0;    // the page that was in front when it was locked (the lock ends when another is)
   bool running = true;
 
   // The height of the bar in pixels (what it is in points, at the density of the window).
@@ -386,6 +387,7 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
           SDL_SetWindowRelativeMouseMode(window, true);
           pointerLocked = true;
           lockedHost = message.host;
+          lockedShown = session.current();
         } else if (pointerLocked && (message.host == lockedHost || lockedHost == 0)) {
           SDL_SetWindowRelativeMouseMode(window, false);
           SDL_WarpMouseInWindow(window, lockedAtX, lockedAtY);
@@ -908,7 +910,7 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
         default: forward = false; break;
       }
       // (Another page in front: the pointer is not the one that had it locked's any more.)
-      if (pointerLocked && lockedHost != 0 && session.current() != lockedHost) releasePointer();
+      if (pointerLocked && session.current() != lockedShown) releasePointer();
       if (forward) {
         uint32_t target = session.current();
         const float barPts = static_cast<float>(barPoints()), leftPts = static_cast<float>(leftPoints());
