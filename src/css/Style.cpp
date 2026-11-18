@@ -3605,6 +3605,22 @@ std::string Resolver::ComputeInner(dom::Element* element, const std::string& pro
   }
   // Not in a document: no computed style.
   if (!InDocumentTree(element)) return "";
+  // A property that nothing declares for the element (no animation gives it, no logical property competes for it): what it is is what the parent has when it is inherited, and the initial value
+  // when it is not. Most of the properties of most elements are so, and the way that goes through all that a declared one needs is the cost of a style.
+  if (!initialOnly && pseudo.empty() && style.built && !(style.hasLogical && HasLogicalCounterparts(name)) && !AnimatedValue(element, pseudo, name) && style.cascade.find(name) == style.cascade.end()) {
+    if (definition->inherited) {
+      if (dom::Element* up = FlatParent(element)) {
+        std::string inherited = Compute(up, name, "");
+        style.memo->computed.Set(name, inherited);
+        lastKind_ = "inherited as it is";
+        return inherited;
+      }
+    } else if (const std::string* fast = FastInitial(*definition)) {
+      style.memo->computed.Set(name, *fast);
+      lastKind_ = "fast initial";
+      return *fast;
+    }
+  }
 
   const auto unresolve = [&] {
     const auto at = std::find(style.resolvingProps.begin(), style.resolvingProps.end(), definition);
