@@ -202,8 +202,16 @@ void CollectCandidates(Context& ctx, dom::Node* node, bool pseudos, Value& out) 
       slot = {epoch, mask};
     }
     if (mask) {
-      qe::ArrayPush(ctx, out, qe::FromObject(element));
-      qe::ArrayPush(ctx, out, qe::FromInt32(mask));
+      // (Only what is new, or made again since it was last given: what asks for animations or transitions and has the same style as when it was given has nothing to start, and the ones that
+      // have some are kept by the script. Every flush gave back the hundreds of elements of a page that have a transition, and the script looked at each.)
+      static std::unordered_map<const dom::Element*, std::pair<uint64_t, uint64_t>> delivered;
+      if (delivered.size() > 200000) delivered.clear();
+      uint64_t& last = pseudos ? delivered[element].second : delivered[element].first;
+      if (epoch == 0 || last != epoch || std::getenv("SOLAR_ALL_ANIM_CANDIDATES")) {
+        last = epoch;
+        qe::ArrayPush(ctx, out, qe::FromObject(element));
+        qe::ArrayPush(ctx, out, qe::FromInt32(mask));
+      }
     }
     if (element->shadowRoot) CollectCandidates(ctx, element->shadowRoot, pseudos, out);
     CollectCandidates(ctx, element, pseudos, out);
@@ -218,6 +226,13 @@ Value Candidates(Context& ctx, Value, qe::Args args, Value) {
   NoStyleFlush noFlush;
   CollectCandidates(ctx, document, args.size() > 0 && qe::ToBoolean(args[0]), out);
   return out;
+}
+
+// __solarAnimEpoch(element): a number that is another when the style of the element has been made again (what a flush looks at again of the elements it has seen to).
+Value Epoch(Context&, Value, qe::Args args, Value) {
+  dom::Element* element = args.size() > 0 ? DOMObject::Cast<dom::Element>(args[0]) : nullptr;
+  NoStyleFlush noFlush;
+  return qe::FromNumber(element ? static_cast<double>(StyleEpochOf(element)) : 0);
 }
 
 // __solarAnimPseudoPossible(): whether the style sheets have a rule for ::before, ::after or ::marker.
@@ -279,6 +294,7 @@ void InstallAnimationNatives(Context& ctx) {
   qe::DefineGlobalFunction(ctx, "__solarAnimMentions", Mentions, 0);
   qe::DefineGlobalFunction(ctx, "__solarAnimOnWake", OnWake, 1);
   qe::DefineGlobalFunction(ctx, "__solarAnimCandidates", Candidates, 1);
+  qe::DefineGlobalFunction(ctx, "__solarAnimEpoch", Epoch, 1);
   qe::DefineGlobalFunction(ctx, "__solarAnimPseudoPossible", PseudoPossible, 0);
   qe::DefineGlobalFunction(ctx, "__solarAnimLastRead", LastRead, 3);
   qe::DefineGlobalFunction(ctx, "__solarAnimStarting", Starting, 3);

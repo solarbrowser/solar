@@ -245,12 +245,32 @@
     for (const property of [...seenMap.keys()]) if (!params.has(property)) seenMap.delete(property);
   };
 
-  S.transitionElements = () => new Set([...running.keys(), ...seen.keys()]);
+  // The elements a flush looks at: those with a transition running, and those that have been seen with one whose style has been made again since (the others are as they were:
+  // there is nothing to start, and what was read of them is what they change from).
+  const processedEpoch = new WeakMap();
+  S.transitionElements = () => {
+    const out = new Set();
+    for (const [el, byPseudo] of running) {
+      for (const runMap of byPseudo.values()) {
+        if (runMap.size) { out.add(el); break; }
+      }
+    }
+    const idle = (el) => {
+      if (out.has(el)) return;
+      const epoch = N.epoch ? N.epoch(el) : 0;
+      if (!epoch || processedEpoch.get(el) !== epoch) out.add(el);
+    };
+    for (const el of running.keys()) idle(el);
+    for (const el of seen.keys()) idle(el);
+    for (const el of out) processedEpoch.set(el, N.epoch ? N.epoch(el) : 0);
+    return out;
+  };
 
   // Elements that have gone lose their transitions.
   S.transitionsCleanup = (liveElements) => {
     for (const [el, byPseudo] of [...running]) {
-      if (liveElements.has(el) && el.isConnected) continue;
+      // (An element that is in the document and was not looked at this time had nothing to look at: it is not gone.)
+      if (el.isConnected) continue;
       for (const runMap of byPseudo.values()) for (const animation of runMap.values()) if (isRunning(animation)) cancelTransition(animation);
       running.delete(el);
       seen.delete(el);

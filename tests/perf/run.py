@@ -24,7 +24,7 @@ def main():
     ap.add_argument("--cards", default="200,1000")
     ap.add_argument("--save", action="store_true")
     ap.add_argument("--compare", action="store_true")
-    ap.add_argument("--suite", default="layout", help="layout (bench.html: DOM, layout, animations) or style (style.html: a big style sheet and document)")
+    ap.add_argument("--suite", default="layout", help="layout (bench.html: DOM, layout, animations), style (style.html: a big style sheet and document) or yt (yt.html: a video page with a player in a container, an ad overlay that animates, comments and related videos)")
     ap.add_argument("--feed", default="300", help="the style suite: posts in the feed (the size of the document)")
     ap.add_argument("--layout", default="flex", help="how the cards are laid out: flex, grid, float or block")
     ap.add_argument("--only", default="", help="a regular expression: only the benchmarks whose names match")
@@ -32,7 +32,7 @@ def main():
     ap.add_argument("--timeout", type=int, default=240)
     args = ap.parse_args()
 
-    base_file = BASE if args.suite == "layout" else os.path.join(ROOT, "baseline-style.json")
+    base_file = BASE if args.suite == "layout" else os.path.join(ROOT, "baseline-style.json" if args.suite == "style" else "baseline-yt.json")
     handler = lambda *a, **k: http.server.SimpleHTTPRequestHandler(*a, directory=ROOT, **k)
     handler_cls = type("H", (http.server.SimpleHTTPRequestHandler,), {"log_message": lambda *a: None})
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), lambda *a, **k: handler_cls(*a, directory=ROOT, **k))
@@ -41,7 +41,9 @@ def main():
 
     env = dict(os.environ, SOLAR_SANDBOX="off", SDL_VIDEODRIVER="dummy", SDL_AUDIODRIVER="dummy", SOLAR_GUI_CPU="1", SOLAR_GUI_SETTLE="600000", SOLAR_GUI_SHOT="/tmp/solar_bench.png")
     import urllib.parse
-    if args.suite == "style":
+    if args.suite == "yt":
+        url = "http://127.0.0.1:%d/yt.html?only=%s" % (port, urllib.parse.quote(args.only))
+    elif args.suite == "style":
         url = "http://127.0.0.1:%d/style.html?feed=%s&only=%s&runs=%d" % (port, args.feed, urllib.parse.quote(args.only), args.runs)
     else:
         url = "http://127.0.0.1:%d/bench.html?cards=%s&layout=%s&only=%s&runs=%d" % (port, args.cards, args.layout, urllib.parse.quote(args.only), args.runs)

@@ -4260,6 +4260,8 @@ void NoteSizingEffect(bool containersChanged) {
   g_sizingMatters = containersChanged;
   NoteSizingVerdict(containersChanged);
 }
+// A new animation of sizes: layout has not looked at what it does yet, and the styles are made again until it has. (What the animations that are waiting for a verdict are is kept for it.)
+void NoteSizingUnknown() { g_sizingMatters = true; }
 
 // Whether the element, or one above it, is a container of a size that queries ask of.
 bool ElementInSizeContainer(dom::Element* element) {

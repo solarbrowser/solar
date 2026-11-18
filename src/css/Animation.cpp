@@ -378,9 +378,12 @@ void SetAnimatedValues(dom::Element* element, const std::string& pseudo, Animate
     // style was made again).
     std::string key;
     if (now != heldNow.end()) for (const auto& entry : now->second) key += entry.first + ",";
-    if (ElementInSizeContainer(element) || !SizingVerdictFalse().count(key)) {
+    // (For an element in a container the verdict is of that element and what it gives: a bar that grows in a player looked at once and found to change no container is not looked at again at
+    // each tick that restarts it, and every style of the page was made again for each.)
+    if (ElementInSizeContainer(element)) key += "@" + std::to_string(reinterpret_cast<uintptr_t>(element)) + "#" + std::to_string(element->serial);
+    if (!SizingVerdictFalse().count(key)) {
       SizingPending().insert(key);
-      NoteSizingEffect(true);
+      NoteSizingUnknown();
     }
   }
   sizing = sizing || wasSizing;
