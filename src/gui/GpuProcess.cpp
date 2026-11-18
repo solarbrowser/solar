@@ -37,7 +37,9 @@ const std::string& GpuHost::renderer() const {
 
 #include <sys/syscall.h>
 
+#include <atomic>
 #include <chrono>
+#include <cstring>
 #include <cstdio>
 #include <filesystem>
 #include <map>
@@ -62,6 +64,34 @@ extern char** environ;
 namespace solar::gui {
 
 namespace {
+
+// Where the GPU's process is in what it does, for a thread that tells when it is somewhere for long (a picture that is not answered is waited for by the page for four seconds).
+std::atomic<const char*> g_phase{"waiting for the page"};
+std::atomic<int64_t> g_phaseSinceMs{0};
+int64_t NowMs() { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+void Phase(const char* name) {
+  g_phase.store(name);
+  g_phaseSinceMs.store(NowMs());
+}
+void StartWatchdog() {
+  static std::once_flag once;
+  std::call_once(once, [] {
+    std::thread([] {
+      int64_t told = 0;
+      for (;;) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        const char* phase = g_phase.load();
+        const int64_t since = g_phaseSinceMs.load();
+        if (std::strcmp(phase, "waiting for the page") == 0 || since == 0) continue;
+        const int64_t stuck = NowMs() - since;
+        if (stuck > 1500 && since != told) {
+          told = since;
+          std::fprintf(stderr, "gpu: the process has been in \"%s\" for %lld ms\n", phase, static_cast<long long>(stuck));
+        }
+      }
+    }).detach();
+  });
+}
 
 // What the GPU's process does for one page: it keeps the display list the page sent (and what that has), and the memory the pictures go in, and draws when it is asked to.
 void Serve(GpuRaster& raster, int fd, uint64_t token, const std::vector<std::string>& fontDirectories) {
@@ -89,7 +119,10 @@ void Serve(GpuRaster& raster, int fd, uint64_t token, const std::vector<std::str
   std::string bytes;
   int received = -1;
   bool good = true;
+  StartWatchdog();
+  Phase("waiting for the page");
   while (good && channel.ReceiveRaw(type, bytes, &received)) {
+    Phase("working on a message");
     const int descriptor = received;
     received = -1;
     if (type >= static_cast<uint8_t>(paint::ListMessage::DefineFace) && type <= static_cast<uint8_t>(paint::ListMessage::DefineGlCanvas)) {
@@ -138,15 +171,28 @@ void Serve(GpuRaster& raster, int fd, uint64_t token, const std::vector<std::str
           bar.windowWidth = draw.windowWidth;
           bar.windowHeight = draw.windowHeight;
           // (The textures of the page's WebGL are not changed or deleted while they are drawn from.)
+          const auto askedAt = std::chrono::steady_clock::now();
+          Phase("waiting for the lock of the page's GL");
           std::lock_guard<std::recursive_mutex> shared(paint::gl::SharedLock());
+          Phase("waiting for the GL thread");
+          const auto lockedAt = std::chrono::steady_clock::now();
+          std::chrono::steady_clock::time_point gotThread{}, drawnAt{};
           paint::gl::RunOnGlThread([&] {
+            gotThread = std::chrono::steady_clock::now();
+            Phase("drawing");
             drawn = raster.Draw(*painter, *list, draw.pixelWidth, draw.pixelHeight, draw.density, draw.scrollX, draw.scrollY, bar, slot->second.memory.data(), static_cast<size_t>(slot->second.shape.stride));
+            drawnAt = std::chrono::steady_clock::now();
           });
+          // (A picture that took long, for the one who looks at why: where the time went.)
+          const auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
+          const double total = ms(askedAt, std::chrono::steady_clock::now());
+          if (total > 400) std::fprintf(stderr, "gpu: a picture took %.0f ms (the lock of the page's GL %.0f, the GL thread %.0f, drawing %.0f)\n", total, ms(askedAt, lockedAt), ms(lockedAt, gotThread), ms(gotThread, drawnAt));
         }
         if (!drawn && std::getenv("SOLAR_GL_DEBUG")) std::fprintf(stderr, "gpu: a draw failed: buffer %s, list %s, asked %dx%d, buffer is %dx%d\n", slot != buffers.end() ? "there" : "missing", list ? "there" : "missing", draw.pixelWidth, draw.pixelHeight, slot != buffers.end() ? slot->second.shape.width : 0, slot != buffers.end() ? slot->second.shape.height : 0);
         net::ipc::Writer out;
         out.U32(draw.index);
         out.U64(draw.serial);
+        Phase("telling the page");
         channel.SendRaw(static_cast<uint8_t>(drawn ? gpu::FromGpu::Drawn : gpu::FromGpu::Failed), out.bytes());
         break;
       }
@@ -154,6 +200,7 @@ void Serve(GpuRaster& raster, int fd, uint64_t token, const std::vector<std::str
         if (descriptor >= 0) ::close(descriptor);
         break;
     }
+    Phase("waiting for the page");
   }
   // (What the page had on the GPU goes with its painter, with the context to hand.)
   paint::gl::RunOnGlThread([&] {

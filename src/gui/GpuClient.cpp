@@ -4,6 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+#include <cstdio>
 #include "solar/gui/GpuClient.h"
 
 #include <chrono>
@@ -80,8 +81,18 @@ bool GpuClient::Draw(const std::shared_ptr<const paint::DisplayList>& list, cons
   if (!channel_.SendRaw(static_cast<uint8_t>(gpu::ToGpu::Draw), out.bytes())) return false;
   std::unique_lock<std::mutex> lock(mutex_);
   // (A picture is waited for for a few seconds: a GPU's process that does not answer is not waited for again.)
+  const auto waitFrom = std::chrono::steady_clock::now();
   const bool arrived = changed_.wait_for(lock, std::chrono::seconds(4), [&] { return broken_ || answered_ >= draw.serial; });
-  return arrived && !broken_ && answered_ == draw.serial && answeredOk_;
+  const bool good = arrived && !broken_ && answered_ == draw.serial && answeredOk_;
+  if (!arrived) {
+    // (A process that did not answer in four seconds is not waited for on each picture after it: that is a window that stops for four seconds at each frame. The page draws by itself from here on.)
+    broken_ = true;
+  }
+  if (!good) {
+    std::fprintf(stderr, "the GPU's process: no picture (%s; waited %.0f ms, answered %llu of %llu, said %s, serial of the list %llu)\n", !arrived ? "no answer in four seconds" : broken_ ? "the connection broke" : answered_ != draw.serial ? "the answer is of another picture" : "it said it could not draw",
+                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - waitFrom).count(), (unsigned long long)answered_, (unsigned long long)draw.serial, answeredOk_ ? "drawn" : "failed", (unsigned long long)serial_);
+  }
+  return good;
 }
 
 }  // namespace solar::gui
