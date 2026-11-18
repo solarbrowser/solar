@@ -170,15 +170,16 @@ void Serve(GpuRaster& raster, int fd, uint64_t token, const std::vector<std::str
           bar.height = draw.barHeight;
           bar.windowWidth = draw.windowWidth;
           bar.windowHeight = draw.windowHeight;
-          // (The textures of the page's WebGL are not changed or deleted while they are drawn from.)
+          // (The textures of the page's WebGL are not changed or deleted while they are drawn from. The lock is taken in the GL thread, as everything else that takes it is: taken here, before
+          // asking for the thread, a picture waited for a thread that was waiting for the lock, which the WebGL of the page's own connection (a publish, a resize) was, and neither went on.)
           const auto askedAt = std::chrono::steady_clock::now();
-          Phase("waiting for the lock of the page's GL");
-          std::lock_guard<std::recursive_mutex> shared(paint::gl::SharedLock());
           Phase("waiting for the GL thread");
-          const auto lockedAt = std::chrono::steady_clock::now();
+          const auto lockedAt = askedAt;
           std::chrono::steady_clock::time_point gotThread{}, drawnAt{};
           paint::gl::RunOnGlThread([&] {
             gotThread = std::chrono::steady_clock::now();
+            Phase("waiting for the lock of the page's GL");
+            std::lock_guard<std::recursive_mutex> shared(paint::gl::SharedLock());
             Phase("drawing");
             drawn = raster.Draw(*painter, *list, draw.pixelWidth, draw.pixelHeight, draw.density, draw.scrollX, draw.scrollY, bar, slot->second.memory.data(), static_cast<size_t>(slot->second.shape.stride));
             drawnAt = std::chrono::steady_clock::now();
