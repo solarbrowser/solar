@@ -571,7 +571,11 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
   else s.fontWeight = parent->fontWeight;
   if (DECLARED("font-style")) s.italic = get("font-style") != "normal";
   else s.italic = parent->italic;
-  if (DECLARED("font-width", "font-stretch")) s.fontStretch = Number(get("font-width"), Number(get("font-stretch"), 100));
+  if (DECLARED("font-width", "font-stretch")) {
+    // (The legacy name is asked about only when the other has nothing: it is the slow way, for the name is an alias.)
+    const double width = Number(get("font-width"), -1e9);
+    s.fontStretch = width != -1e9 ? width : Number(get("font-stretch"), 100);
+  }
   else s.fontStretch = parent->fontStretch;
   if (DECLARED("line-height")) {
     const std::string lineHeight = get("line-height");
