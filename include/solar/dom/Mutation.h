@@ -23,7 +23,8 @@ bool HasMutationObservers();
 void QueueChildListRecord(Node* target, const std::vector<Node*>& added, const std::vector<Node*>& removed, Node* previousSibling, Node* nextSibling);
 // "queue a mutation record" of attributes and of characterData.
 void QueueAttributeRecord(Element* element, const std::string& name, const std::string& namespaceUri, const std::optional<std::string>& oldValue);
-void QueueCharacterDataRecord(Node* node, const std::string& oldValue);
+// `coalesce`: when the observer's last record is already one of this text's data being changed (and the observer wants no old value), no other is made: text a parser adds piece by piece is one change to look at.
+void QueueCharacterDataRecord(Node* node, const std::string& oldValue, bool coalesce = false);
 // The part of "remove" that leaves what the observers of a subtree watch with the node that is going.
 void RegisterTransientObservers(Node* node, Node* oldParent);
 

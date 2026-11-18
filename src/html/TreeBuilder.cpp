@@ -420,7 +420,7 @@ void TreeBuilder::InsertCharacter(const std::string& utf8) {
   if (location.parent->IsDocument()) return;
   Node* previous = location.reference ? location.reference->previousSibling : location.parent->lastChild;
   if (previous && previous->nodeType == dom::NodeType::Text) {
-    dom::AppendCharacterData(static_cast<dom::CharacterData*>(previous), utf8);
+    dom::AppendCharacterData(static_cast<dom::CharacterData*>(previous), utf8, true);
     return;
   }
   dom::Document* document = location.parent->nodeDocument ? location.parent->nodeDocument : document_;

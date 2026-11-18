@@ -743,7 +743,8 @@ std::optional<DomError> ReplaceData(CharacterData* node, uint32_t offset, uint32
 // the changes the observers hear of. Native code that changes these goes through them.
 void SetCharacterData(CharacterData* node, std::string data);
 // The same for adding to the end of it, without copying what is there when nothing is watching.
-void AppendCharacterData(CharacterData* node, std::string_view data);
+// `fromParser`: the text is added a piece at a time by the parser: the observers are told of it once (see QueueCharacterDataRecord).
+void AppendCharacterData(CharacterData* node, std::string_view data, bool fromParser = false);
 void SetAttrValue(Attr* attribute, std::string value);
 void AppendAttr(Element* element, Attr* attribute);
 // textContent set on a node that can have children: replaces them with one Text node, or none for "".

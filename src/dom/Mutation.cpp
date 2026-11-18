@@ -140,7 +140,7 @@ bool TouchesTags(const PendingRecord& record, const std::vector<std::string>& ta
   return false;
 }
 
-void Queue(PendingRecord base) {
+void Queue(PendingRecord base, bool coalesce = false) {
   struct Interest {
     JsMutationObserver* observer;
     std::optional<std::string> oldValue;
@@ -170,6 +170,10 @@ void Queue(PendingRecord base) {
     }
   }
   for (Interest& interest : interested) {
+    if (coalesce && !interest.oldValue && !interest.observer->queue.empty()) {
+      const PendingRecord& last = interest.observer->queue.back();
+      if (last.type == "characterData" && last.target == base.target && !last.oldValue) continue;
+    }
     PendingRecord record = base;
     record.oldValue = interest.oldValue;
     interest.observer->queue.push_back(std::move(record));
@@ -480,15 +484,15 @@ void QueueAttributeRecord(Element* element, const std::string& name, const std::
   Queue(std::move(record));
 }
 
-void QueueCharacterDataRecord(Node* node, const std::string& oldValue) {
-  // (The old data is copied for a record only if an observer will have the record: a text that grows by the piece, as the parser makes it, would be copied each time.)
-  bool observed = false;
-  for (Node* n = node; n && !observed; n = n->parentNode) {
+void QueueCharacterDataRecord(Node* node, const std::string& oldValue, bool coalesce) {
+  // (The old data is copied for a record only if an observer will want it: a text that grows by the piece, as the parser makes it, would be copied each time.)
+  bool observed = false, wantsOld = false;
+  for (Node* n = node; n; n = n->parentNode) {
     if (!n->registrations) continue;
     for (const Registration& registration : *n->registrations) {
       if (registration.options.characterData && (n == node || registration.options.subtree)) {
         observed = true;
-        break;
+        if (registration.options.characterDataOldValue) wantsOld = true;
       }
     }
   }
@@ -496,8 +500,8 @@ void QueueCharacterDataRecord(Node* node, const std::string& oldValue) {
   PendingRecord record;
   record.type = "characterData";
   record.target = node;
-  record.oldValue = oldValue;
-  Queue(std::move(record));
+  if (wantsOld) record.oldValue = oldValue;
+  Queue(std::move(record), coalesce && !wantsOld);
 }
 
 void RegisterTransientObservers(Node* node, Node* oldParent) {

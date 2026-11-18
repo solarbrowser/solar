@@ -1344,9 +1344,9 @@ void SetCharacterData(CharacterData* node, std::string data) {
   if (g_hooks.childrenChanged && node->parentNode) g_hooks.childrenChanged(node->parentNode);
 }
 
-void AppendCharacterData(CharacterData* node, std::string_view data) {
+void AppendCharacterData(CharacterData* node, std::string_view data, bool fromParser) {
   // (Text added at the end moves no boundary of a live range: the ones at the end stay there. It went through ReplaceData when there were ranges, with all the text turned into UTF-16 for each piece the parser added.)
-  if (HasMutationObservers()) QueueCharacterDataRecord(node, node->data);
+  if (HasMutationObservers()) QueueCharacterDataRecord(node, node->data, fromParser);
   const bool wasEmpty = node->data.empty();
   node->KeepCommitted();
   node->data += data;

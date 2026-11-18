@@ -444,7 +444,20 @@ class Builder {
   }
 
   void Build(dom::Document* document) {
-    styles_ = std::make_unique<CounterStyles>(document);
+    // (What the style sheets say of counter styles is read again only when they changed: every pass of a page with a megabyte of rules went through all of them.)
+    static thread_local dom::Document* cachedDocument = nullptr;
+    static thread_local uint64_t cachedVersion = 0, cachedRoot = 0;
+    static thread_local std::shared_ptr<CounterStyles> cached;
+    const uint64_t sheets = css::LayoutSheetsVersion();
+    const dom::Element* rootElement = document ? document->DocumentElement() : nullptr;
+    const uint64_t rootSerial = rootElement ? rootElement->serial : 0;
+    if (!cached || cachedDocument != document || cachedVersion != sheets || cachedRoot != rootSerial) {
+      cached = std::make_shared<CounterStyles>(document);
+      cachedDocument = document;
+      cachedVersion = sheets;
+      cachedRoot = rootSerial;
+    }
+    styles_ = cached;
     auto root = std::make_unique<Box>();
     root->kind = Box::Kind::Block;
     root->anonymous = true;
@@ -494,7 +507,7 @@ class Builder {
   uint64_t listEvents_ = 0;  // counted when a list item is numbered by those before it (not for what is around a list: it numbers its own items): see volatileEvents_
   uint64_t volatileEvents_ = 0;  // counted when something is built that depends on more than the nodes under it (counters, replaced contents)
   std::unordered_map<const Box*, std::unique_ptr<Box>*> slots_;  // where the boxes of the tree before are held
-  std::unique_ptr<CounterStyles> styles_;
+  std::shared_ptr<CounterStyles> styles_;
 
   // ---- Counters (https://www.w3.org/TR/css-lists-3/#counters) ----
   std::map<std::string, std::vector<int>> counters_;
