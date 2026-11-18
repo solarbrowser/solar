@@ -73,6 +73,7 @@ struct Length {
   bool IsFixed() const { return kind == Kind::Px; }
   // The length in px for a percentage of `basis`; `fallback` for auto, none and the intrinsic keywords.
   double Resolve(double basis, double fallback = 0) const;
+  friend bool operator==(const Length& a, const Length& b) { return a.kind == b.kind && a.value == b.value && a.calc == b.calc; }
 };
 
 enum class Display : uint8_t {
@@ -110,6 +111,7 @@ struct Align {
   Kind kind = Kind::Normal;
   bool safe = false;    // `safe`: not past the start edge
   bool unsafe = false;  // `unsafe`
+  friend bool operator==(const Align& a, const Align& b) { return a.kind == b.kind && a.safe == b.safe && a.unsafe == b.unsafe; }
 };
 
 struct BoxStyle {
@@ -239,8 +241,12 @@ struct BoxStyle {
   bool CreatesBlockFormattingContext() const;
 };
 
+// The name of the first member two styles differ in, or null (made by a script from the members above: src/layout/StyleVerify.cpp).
+const char* FirstDifference(const BoxStyle& a, const BoxStyle& b);
+
 // The style of the element (or of a pseudo-element of it).
-std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* element, const std::string& pseudo = "");
+// `parent` is the style of the element above (as written, in the physical frame): a style is then made of it and what is declared for the element, and not property by property.
+std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* element, const std::string& pseudo = "", const BoxStyle* parent = nullptr);
 
 // The writing modes: whether the block axis is horizontal, and the way the lines and blocks run.
 inline bool IsVertical(WritingMode m) { return m != WritingMode::HorizontalTb; }

@@ -8,6 +8,7 @@
 
 #include <memory>
 
+#include <initializer_list>
 #include <string>
 #include <vector>
 
@@ -68,12 +69,22 @@ void ViewportScrollbars(Quanta::Context& ctx, dom::Document* document, double& v
 std::string ComputedValue(Quanta::Context& ctx, dom::Element* element, const std::string& property, const std::string& pseudo = "");
 
 // Many computed values of one element (or one of its pseudo-elements) in a row: the same as ComputedValue, without what each call does around the lookup.
+// The element a style is inherited from (the parent in the flat tree), or none.
+dom::Element* StyleParentOf(dom::Element* element);
+// The numbers of properties (their places in the list of them), for asking about them without the name.
+std::vector<int> PropertyIndicesOf(std::initializer_list<const char*> names);
+
 class StyleReader {
  public:
   StyleReader(Quanta::Context& ctx, dom::Element* element, const std::string& pseudo = "");
   ~StyleReader();
   std::string Get(const char* property);
   std::string Get(const std::string& property) { return Get(property.c_str()); }
+  // Whether a style can be made from the style of the element above and what is declared for this element: no animation, nothing that makes the values other than the declarations.
+  bool CanDelta();
+  // Whether something is declared for the element for one of the properties (a logical one that is declared counts for the physical ones it may stand for).
+  bool AnyDeclared(const std::vector<int>* properties);
+  bool DeclaredName(const char* name);
 
  private:
   Quanta::Context& ctx_;
@@ -81,6 +92,16 @@ class StyleReader {
   const std::string& pseudo_;
   std::shared_ptr<void> memo_;
   uint64_t version_ = 0;
+  // What a property that nothing declares for the element is, found without the way a declared one is worked out (see FastUndeclared).
+  bool FastUndeclared(const char* property, uint64_t now, std::string& out);
+  bool FastInit(uint64_t now);
+  bool FastUndeclaredFound(const char* property, std::string& out);
+  std::vector<char> declared_;  // by the number of the property: something is declared for the element (see CanDelta)
+  int fastState_ = 0;  // 0 not looked at, 1 it can be, 2 it cannot
+  uint64_t fastVersion_ = 0;
+  std::shared_ptr<void> parentMemo_;
+  const void* cascade_ = nullptr;
+  bool hasLogical_ = false;
 };
 
 // What getComputedStyle answers: the used value where the property has one that layout works out (the width of a box, margins in px),

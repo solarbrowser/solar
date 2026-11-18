@@ -818,7 +818,14 @@ class Builder {
     static long unshared = 0, sharedHits = 0, read = 0;
     if (debug && (++unshared + sharedHits + read) % 5000 == 0) std::fprintf(stderr, "box styles: no token %ld, token and found %ld, token and read %ld\n", unshared, sharedHits, read);
     lastToken_ = token;
-    if (!token) return Logicalize(ReadStyle(lc_.ctx, element, pseudo));
+    // (The style of the element above, as it is read of it now: it is made from that and what is declared for this element.)
+    const BoxStyle* above = nullptr;
+    if (pseudo.empty()) {
+      if (dom::Element* up = css::StyleParentOf(element)) {
+        if (up->layoutStyle) above = &static_cast<const BoxStyle*>(up->layoutStyle.get())->Physical();
+      }
+    }
+    if (!token) return Logicalize(ReadStyle(lc_.ctx, element, pseudo, above));
     --unshared;
     lastLang_ = LangOf(element);
     const auto key = std::make_pair(static_cast<const void*>(token.get()), lastLang_);
@@ -829,7 +836,7 @@ class Builder {
     }
     ++read;
     const auto readFrom = debug ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point();  // (the clock is read only when it is looked at: it was a call for every style read)
-    std::shared_ptr<const BoxStyle> style = Logicalize(ReadStyle(lc_.ctx, element, pseudo));
+    std::shared_ptr<const BoxStyle> style = Logicalize(ReadStyle(lc_.ctx, element, pseudo, above));
     if (debug) {
       static double readMs = 0;
       static long reads = 0;

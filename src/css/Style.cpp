@@ -5177,6 +5177,11 @@ std::string StyleReader::Get(const char* property) {
 bool StyleReader::FastUndeclared(const char* property, uint64_t now, std::string& out) {
   static const bool off = std::getenv("SOLAR_NO_FAST_UNDECLARED") != nullptr;
   if (off) return false;
+  if (!FastInit(now)) return false;
+  return FastUndeclaredFound(property, out);
+}
+
+bool StyleReader::FastInit(uint64_t now) {
   if (fastState_ == 2 && fastVersion_ == now) return false;
   if (fastState_ != 1 || fastVersion_ != now) {
     fastState_ = 2;
@@ -5199,7 +5204,76 @@ bool StyleReader::FastUndeclared(const char* property, uint64_t now, std::string
     // (StyleOf may have made the styles again: what it answered is of the version it was asked in.)
     version_ = now;
     fastState_ = 1;
+    declared_.clear();
   }
+  return true;
+}
+
+namespace {
+// The tables by property: which are logical, which have logical ones for them.
+struct LogicalTables {
+  std::vector<char> logical, counterpart;
+  LogicalTables() : logical(kPropertyDefinitionCount, 0), counterpart(kPropertyDefinitionCount, 0) {
+    for (size_t i = 0; i < kPropertyDefinitionCount; ++i) {
+      logical[i] = IsLogicalProperty(kPropertyDefinitions[i].name) ? 1 : 0;
+      counterpart[i] = HasLogicalCounterparts(kPropertyDefinitions[i].name) ? 1 : 0;
+    }
+  }
+};
+const LogicalTables& Tables() {
+  static const LogicalTables tables;
+  return tables;
+}
+}  // namespace
+
+dom::Element* StyleParentOf(dom::Element* element) { return FlatParent(element); }
+
+std::vector<int> PropertyIndicesOf(std::initializer_list<const char*> names) {
+  std::vector<int> out;
+  for (const char* name : names) {
+    const PropertyDefinition* definition = FindProperty(name);
+    out.push_back(definition && name == std::string_view(definition->name) ? static_cast<int>(definition - kPropertyDefinitions) : -1);
+  }
+  return out;
+}
+
+bool StyleReader::CanDelta() {
+  static const bool off = std::getenv("SOLAR_NO_FAST_UNDECLARED") != nullptr;
+  if (off || !pseudo_.empty()) return false;
+  const uint64_t now = (((dom::DocumentVersion() * 1000003 + g_styleVersion) * 1000003 + g_cacheVersion) * 1000003 + g_animationVersion) * 1000003 + dom::StateVersion();
+  // (A style is made of the values that are there for the element: it has to be made, and none of them given by an animation.)
+  ComputedValue(ctx_, element_, "display", pseudo_);
+  if (!FastInit(now)) return false;
+  if (!element_->AnimatedValuesInView().empty()) return false;
+  if (declared_.empty()) {
+    declared_.assign(kPropertyDefinitionCount, 0);
+    const Cascade& cascade = *static_cast<const Cascade*>(cascade_);
+    for (const auto& [name, winner] : cascade) {
+      (void)winner;
+      const PropertyDefinition* definition = FindProperty(name);
+      if (definition) declared_[static_cast<size_t>(definition - kPropertyDefinitions)] = 1;
+    }
+  }
+  return true;
+}
+
+bool StyleReader::AnyDeclared(const std::vector<int>* properties) {
+  const LogicalTables& tables = Tables();
+  for (int index : *properties) {
+    if (index < 0) return true;  // (not a property that is known: read)
+    if (declared_[static_cast<size_t>(index)] || (hasLogical_ && tables.counterpart[static_cast<size_t>(index)])) return true;
+  }
+  return false;
+}
+
+bool StyleReader::DeclaredName(const char* name) {
+  const PropertyDefinition* definition = FindProperty(name);
+  if (!definition || name != std::string_view(definition->name)) return true;
+  const size_t index = static_cast<size_t>(definition - kPropertyDefinitions);
+  return declared_[index] || (hasLogical_ && Tables().counterpart[index]);
+}
+
+bool StyleReader::FastUndeclaredFound(const char* property, std::string& out) {
   // The tables by property: which are logical, which have logical ones for them.
   static const std::vector<char> logical = [] {
     std::vector<char> flags(kPropertyDefinitionCount, 0);

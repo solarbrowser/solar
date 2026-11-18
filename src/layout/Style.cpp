@@ -6,7 +6,9 @@
 
 #include "solar/layout/Style.h"
 
+#include <array>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <unordered_map>
 
@@ -283,12 +285,35 @@ T Pick(const std::string& text, std::initializer_list<std::pair<const char*, T>>
 Length ParseLengthText(const std::string& text) { return ParseLength(text); }
 
 
-std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* element, const std::string& pseudo) {
+std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* element, const std::string& pseudo, const BoxStyle* parent) {
   auto style = std::make_shared<BoxStyle>();
   BoxStyle& s = *style;
   solar::css::StyleReader reader(ctx, element, pseudo);
+  // A style made from the style of the element above and what is declared for the element: what nothing declares is what the element above has (inherited) or the initial value (the members
+  // of a style that is made are the initial ones), and is not read property by property.
+  static const bool noDelta = std::getenv("SOLAR_NO_DELTA_STYLE") != nullptr;
+  const bool delta = parent && !noDelta && pseudo.empty() && reader.CanDelta();
   const auto get = [&](const char* property) { return reader.Get(property); };
+  // Whether the properties are read: always when the style is not made from the one above, else when one of them is declared for the element.
+#define DECLARED(...) (!delta || reader.AnyDeclared([]() -> const std::vector<int>* { static const std::vector<int> indices = solar::css::PropertyIndicesOf({__VA_ARGS__}); return &indices; }()))
+  // The properties of each side, by number (looked up once).
+  struct SideProperties {
+    std::vector<int> margin, padding, inset, borderStyleOrWidth;
+  };
+  static const std::array<SideProperties, 4> sideProperties = [] {
+    static const char* const names[4] = {"top", "right", "bottom", "left"};
+    std::array<SideProperties, 4> all;
+    for (int i = 0; i < 4; ++i) {
+      const std::string side = names[i];
+      all[static_cast<size_t>(i)].margin = solar::css::PropertyIndicesOf({("margin-" + side).c_str()});
+      all[static_cast<size_t>(i)].padding = solar::css::PropertyIndicesOf({("padding-" + side).c_str()});
+      all[static_cast<size_t>(i)].inset = solar::css::PropertyIndicesOf({side.c_str()});
+      all[static_cast<size_t>(i)].borderStyleOrWidth = solar::css::PropertyIndicesOf({("border-" + side + "-style").c_str(), ("border-" + side + "-width").c_str()});
+    }
+    return all;
+  }();
 
+  if (DECLARED("display")) {
   const std::string display = get("display");
   s.display = Pick<Display>(display, {
       {"none", Display::None}, {"contents", Display::Contents}, {"block", Display::Block}, {"flow-root", Display::FlowRoot}, {"inline", Display::Inline},
@@ -302,7 +327,8 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
       {"block flex", Display::Flex}, {"inline flex", Display::InlineFlex}, {"block grid", Display::Grid}, {"inline grid", Display::InlineGrid},
       {"block table", Display::Table}, {"inline table", Display::InlineTable}, {"list-item block flow", Display::ListItem}, {"block flow list-item", Display::ListItem}}, Display::Inline);
   s.gridLanes = display == "grid-lanes" || display == "inline-grid-lanes" || display == "block grid-lanes" || display == "inline grid-lanes";
-  {
+  }
+  if (DECLARED("anchor-name", "anchor-scope", "position-anchor", "position-area", "position-try-fallbacks", "position-try-order", "position-visibility")) {
     // Anchor positioning: the names, the default anchor, the area and the fallbacks.
     const std::string names = get("anchor-name");
     if (!names.empty() && names != "none") {
@@ -339,41 +365,52 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
     const std::string visibility = get("position-visibility");
     if (!visibility.empty()) s.positionVisibility = visibility;
   }
-  s.position = Pick<Position>(get("position"), {{"relative", Position::Relative}, {"absolute", Position::Absolute}, {"fixed", Position::Fixed}, {"sticky", Position::Sticky}, {"-webkit-sticky", Position::Sticky}}, Position::Static);
-  s.floating = Pick<Float>(get("float"), {{"left", Float::Left}, {"right", Float::Right}, {"inline-start", Float::InlineStart}, {"inline-end", Float::InlineEnd}}, Float::None);
-  s.clear = Pick<Clear>(get("clear"), {{"left", Clear::Left}, {"right", Clear::Right}, {"both", Clear::Both}, {"inline-start", Clear::InlineStart}, {"inline-end", Clear::InlineEnd}}, Clear::None);
-  s.boxSizing = get("box-sizing") == "border-box" ? BoxSizing::BorderBox : BoxSizing::ContentBox;
+  if (DECLARED("position")) s.position = Pick<Position>(get("position"), {{"relative", Position::Relative}, {"absolute", Position::Absolute}, {"fixed", Position::Fixed}, {"sticky", Position::Sticky}, {"-webkit-sticky", Position::Sticky}}, Position::Static);
+  if (DECLARED("float")) s.floating = Pick<Float>(get("float"), {{"left", Float::Left}, {"right", Float::Right}, {"inline-start", Float::InlineStart}, {"inline-end", Float::InlineEnd}}, Float::None);
+  if (DECLARED("clear")) s.clear = Pick<Clear>(get("clear"), {{"left", Clear::Left}, {"right", Clear::Right}, {"both", Clear::Both}, {"inline-start", Clear::InlineStart}, {"inline-end", Clear::InlineEnd}}, Clear::None);
+  if (DECLARED("box-sizing")) s.boxSizing = get("box-sizing") == "border-box" ? BoxSizing::BorderBox : BoxSizing::ContentBox;
   const auto overflow = [](const std::string& v) {
     return Pick<Overflow>(v, {{"hidden", Overflow::Hidden}, {"clip", Overflow::Clip}, {"scroll", Overflow::Scroll}, {"auto", Overflow::Auto}}, Overflow::Visible);
   };
-  s.overflowX = overflow(get("overflow-x"));
-  s.overflowY = overflow(get("overflow-y"));
-  s.visibility = Pick<Visibility>(get("visibility"), {{"hidden", Visibility::Hidden}, {"collapse", Visibility::Collapse}}, Visibility::Visible);
-  s.direction = get("direction") == "rtl" ? Direction::Rtl : Direction::Ltr;
-  {
+  if (DECLARED("overflow-x", "overflow-y")) {
+    s.overflowX = overflow(get("overflow-x"));
+    s.overflowY = overflow(get("overflow-y"));
+  }
+  if (DECLARED("visibility")) s.visibility = Pick<Visibility>(get("visibility"), {{"hidden", Visibility::Hidden}, {"collapse", Visibility::Collapse}}, Visibility::Visible);
+  else s.visibility = parent->visibility;
+  if (DECLARED("direction")) s.direction = get("direction") == "rtl" ? Direction::Rtl : Direction::Ltr;
+  else s.direction = parent->direction;
+  if (DECLARED("unicode-bidi")) {
     const std::string bidi = get("unicode-bidi");
     s.unicodeBidi = bidi == "embed" ? UnicodeBidi::Embed : bidi == "isolate" ? UnicodeBidi::Isolate : bidi == "bidi-override" ? UnicodeBidi::BidiOverride :
                     bidi == "isolate-override" ? UnicodeBidi::IsolateOverride : bidi == "plaintext" ? UnicodeBidi::Plaintext : UnicodeBidi::Normal;
   }
-  s.sidewaysText = get("text-orientation") == "sideways";
-  s.writingMode = Pick<WritingMode>(get("writing-mode"), {{"vertical-rl", WritingMode::VerticalRl}, {"vertical-lr", WritingMode::VerticalLr}, {"sideways-rl", WritingMode::SidewaysRl}, {"sideways-lr", WritingMode::SidewaysLr}}, WritingMode::HorizontalTb);
+  if (DECLARED("text-orientation")) s.sidewaysText = get("text-orientation") == "sideways";
+  else s.sidewaysText = parent->sidewaysText;
+  if (DECLARED("writing-mode")) s.writingMode = Pick<WritingMode>(get("writing-mode"), {{"vertical-rl", WritingMode::VerticalRl}, {"vertical-lr", WritingMode::VerticalLr}, {"sideways-rl", WritingMode::SidewaysRl}, {"sideways-lr", WritingMode::SidewaysLr}}, WritingMode::HorizontalTb);
+  else s.writingMode = parent->writingMode;
 
-  s.width = ParseLength(get("width"));
-  s.height = ParseLength(get("height"));
-  s.minWidth = ParseLength(get("min-width"));
-  s.minHeight = ParseLength(get("min-height"));
-  s.maxWidth = ParseLength(get("max-width"));
-  s.maxHeight = ParseLength(get("max-height"));
+  if (DECLARED("width")) s.width = ParseLength(get("width"));
+  if (DECLARED("height")) s.height = ParseLength(get("height"));
+  if (DECLARED("min-width")) s.minWidth = ParseLength(get("min-width"));
+  if (DECLARED("min-height")) s.minHeight = ParseLength(get("min-height"));
+  if (DECLARED("max-width")) s.maxWidth = ParseLength(get("max-width"));
+  if (DECLARED("max-height")) s.maxHeight = ParseLength(get("max-height"));
   static const char* const sides[4] = {"top", "right", "bottom", "left"};
   for (int i = 0; i < 4; ++i) {
     const std::string side = sides[i];
-    s.margin[i] = ParseLength(get(("margin-" + side).c_str()));
-    s.padding[i] = ParseLength(get(("padding-" + side).c_str()));
-    s.inset[i] = ParseLength(get(side.c_str()));
+    const SideProperties& props = sideProperties[static_cast<size_t>(i)];
+    if (!delta || reader.AnyDeclared(&props.margin)) s.margin[i] = ParseLength(get(("margin-" + side).c_str()));
+    else s.margin[i] = Length::Px(0);
+    if (!delta || reader.AnyDeclared(&props.padding)) s.padding[i] = ParseLength(get(("padding-" + side).c_str()));
+    else s.padding[i] = Length::Px(0);
+    if (!delta || reader.AnyDeclared(&props.inset)) s.inset[i] = ParseLength(get(side.c_str()));
+    if (!delta || reader.AnyDeclared(&props.borderStyleOrWidth)) {
     s.borderStyle[i] = Pick<BorderStyle>(get(("border-" + side + "-style").c_str()), {{"hidden", BorderStyle::Hidden}, {"dotted", BorderStyle::Dotted}, {"dashed", BorderStyle::Dashed}, {"solid", BorderStyle::Solid}, {"double", BorderStyle::Double}, {"groove", BorderStyle::Groove}, {"ridge", BorderStyle::Ridge}, {"inset", BorderStyle::Inset}, {"outset", BorderStyle::Outset}}, BorderStyle::None);
     s.border[i] = (s.borderStyle[i] == BorderStyle::None || s.borderStyle[i] == BorderStyle::Hidden) ? 0 : Number(get(("border-" + side + "-width").c_str()));
+    }
   }
-  const std::string ratio = get("aspect-ratio");
+  const std::string ratio = DECLARED("aspect-ratio") ? get("aspect-ratio") : std::string("auto");
   if (ratio != "auto" && !ratio.empty()) {
     const size_t slash = ratio.find('/');
     const std::string numerator = ratio.substr(0, slash);
@@ -383,16 +420,22 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
   }
 
   {
-    const std::string direction = get("flex-direction");
-    s.flexDirection = direction == "row-reverse" ? FlexDirection::RowReverse : direction == "column" ? FlexDirection::Column : direction == "column-reverse" ? FlexDirection::ColumnReverse : FlexDirection::Row;
-    const std::string wrap = get("flex-wrap");
-    s.flexWrap = wrap == "wrap" ? FlexWrap::Wrap : wrap == "wrap-reverse" ? FlexWrap::WrapReverse : FlexWrap::Nowrap;
-    s.flexGrow = Number(get("flex-grow"), 0);
-    s.flexShrink = Number(get("flex-shrink"), 1);
-    const std::string basis = get("flex-basis");
-    if (basis == "content") s.flexBasisContent = true;
-    else s.flexBasis = ParseLength(basis);
-    s.order = static_cast<int>(Number(get("order"), 0));
+    if (DECLARED("flex-direction")) {
+      const std::string direction = get("flex-direction");
+      s.flexDirection = direction == "row-reverse" ? FlexDirection::RowReverse : direction == "column" ? FlexDirection::Column : direction == "column-reverse" ? FlexDirection::ColumnReverse : FlexDirection::Row;
+    }
+    if (DECLARED("flex-wrap")) {
+      const std::string wrap = get("flex-wrap");
+      s.flexWrap = wrap == "wrap" ? FlexWrap::Wrap : wrap == "wrap-reverse" ? FlexWrap::WrapReverse : FlexWrap::Nowrap;
+    }
+    if (DECLARED("flex-grow")) s.flexGrow = Number(get("flex-grow"), 0);
+    if (DECLARED("flex-shrink")) s.flexShrink = Number(get("flex-shrink"), 1);
+    if (DECLARED("flex-basis")) {
+      const std::string basis = get("flex-basis");
+      if (basis == "content") s.flexBasisContent = true;
+      else s.flexBasis = ParseLength(basis);
+    }
+    if (DECLARED("order")) s.order = static_cast<int>(Number(get("order"), 0));
     const auto align = [&](const char* property) {
       std::string v = get(property);
       Align a;
@@ -406,73 +449,107 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
                                      {"space-evenly", Align::Kind::SpaceEvenly}, {"anchor-center", Align::Kind::AnchorCenter}}, Align::Kind::Normal);
       return a;
     };
-    s.justifyContent = align("justify-content");
-    s.alignItems = align("align-items");
-    s.alignSelf = align("align-self");
-    s.alignContent = align("align-content");
-    s.justifyItems = align("justify-items");
-    s.justifySelf = align("justify-self");
+    if (DECLARED("justify-content")) s.justifyContent = align("justify-content");
+    if (DECLARED("align-items")) s.alignItems = align("align-items");
+    if (DECLARED("align-self")) s.alignSelf = align("align-self");
+    else s.alignSelf.kind = Align::Kind::Auto;
+    if (DECLARED("align-content")) s.alignContent = align("align-content");
+    if (DECLARED("justify-items")) s.justifyItems = align("justify-items");
+    if (DECLARED("justify-self")) s.justifySelf = align("justify-self");
+    else s.justifySelf.kind = Align::Kind::Auto;
     const auto gap = [&](const char* property) {
       const std::string v = get(property);
       return v == "normal" ? Length() : ParseLength(v);
     };
-    s.transform = get("transform");
-    s.transformOrigin = get("transform-origin");
-    s.translate = get("translate");
-    s.rotate = get("rotate");
-    s.scale = get("scale");
-    s.perspective = get("perspective");
-    s.perspectiveOrigin = get("perspective-origin");
-    s.preserve3d = get("transform-style") == "preserve-3d";
-    s.counterReset = get("counter-reset");
-    s.counterIncrement = get("counter-increment");
-    s.counterSet = get("counter-set");
-    s.listStyleType = get("list-style-type");
-    s.listStyleInside = get("list-style-position") == "inside";
-    s.quotes = get("quotes");
-    s.tableLayoutFixed = get("table-layout") == "fixed";
-    s.borderCollapse = get("border-collapse") == "collapse";
-    s.captionBottom = get("caption-side") == "bottom";
-    s.emptyCellsHide = get("empty-cells") == "hide";
-    {
+    if (DECLARED("transform")) s.transform = get("transform");
+    if (DECLARED("transform-origin")) s.transformOrigin = get("transform-origin");
+    else s.transformOrigin = "50% 50%";
+    if (DECLARED("translate")) s.translate = get("translate");
+    if (DECLARED("rotate")) s.rotate = get("rotate");
+    if (DECLARED("scale")) s.scale = get("scale");
+    if (DECLARED("perspective")) s.perspective = get("perspective");
+    if (DECLARED("perspective-origin")) s.perspectiveOrigin = get("perspective-origin");
+    else s.perspectiveOrigin = "50% 50%";
+    if (DECLARED("transform-style")) s.preserve3d = get("transform-style") == "preserve-3d";
+    if (DECLARED("counter-reset")) s.counterReset = get("counter-reset");
+    else s.counterReset = "none";
+    if (DECLARED("counter-increment")) s.counterIncrement = get("counter-increment");
+    else s.counterIncrement = "none";
+    if (DECLARED("counter-set")) s.counterSet = get("counter-set");
+    else s.counterSet = "none";
+    if (DECLARED("list-style-type")) s.listStyleType = get("list-style-type");
+    else s.listStyleType = parent->listStyleType;
+    if (DECLARED("list-style-position")) s.listStyleInside = get("list-style-position") == "inside";
+    else s.listStyleInside = parent->listStyleInside;
+    if (DECLARED("quotes")) s.quotes = get("quotes");
+    else s.quotes = parent->quotes;
+    if (DECLARED("table-layout")) s.tableLayoutFixed = get("table-layout") == "fixed";
+    if (DECLARED("border-collapse")) s.borderCollapse = get("border-collapse") == "collapse";
+    else s.borderCollapse = parent->borderCollapse;
+    if (DECLARED("caption-side")) s.captionBottom = get("caption-side") == "bottom";
+    else s.captionBottom = parent->captionBottom;
+    if (DECLARED("empty-cells")) s.emptyCellsHide = get("empty-cells") == "hide";
+    else s.emptyCellsHide = parent->emptyCellsHide;
+    if (DECLARED("border-spacing")) {
       const std::string spacing = get("border-spacing");
       const size_t space = spacing.find(' ');
       s.borderSpacingH = Number(spacing, 0);
       s.borderSpacingV = space == std::string::npos ? s.borderSpacingH : Number(spacing.substr(space + 1), 0);
+    } else {
+      s.borderSpacingH = parent->borderSpacingH;
+      s.borderSpacingV = parent->borderSpacingV;
     }
     for (int i = 0; i < 4; ++i) {
-      s.borderStyleRaw[i] = s.borderStyle[i];
-      s.borderWidthRaw[i] = Number(get((std::string("border-") + sides[i] + "-width").c_str()));
+      if (!delta || reader.AnyDeclared(&sideProperties[static_cast<size_t>(i)].borderStyleOrWidth)) {
+        s.borderStyleRaw[i] = s.borderStyle[i];
+        s.borderWidthRaw[i] = Number(get((std::string("border-") + sides[i] + "-width").c_str()));
+      }
     }
-    s.gridTemplateColumns = get("grid-template-columns");
-    s.gridTemplateRows = get("grid-template-rows");
-    s.gridTemplateAreas = get("grid-template-areas");
-    s.gridAutoFlow = get("grid-auto-flow");
+    if (DECLARED("grid-template-columns")) s.gridTemplateColumns = get("grid-template-columns");
+    else s.gridTemplateColumns = "none";
+    if (DECLARED("grid-template-rows")) s.gridTemplateRows = get("grid-template-rows");
+    else s.gridTemplateRows = "none";
+    if (DECLARED("grid-template-areas")) s.gridTemplateAreas = get("grid-template-areas");
+    else s.gridTemplateAreas = "none";
+    if (DECLARED("grid-auto-flow")) s.gridAutoFlow = get("grid-auto-flow");
+    else s.gridAutoFlow = "row";
     if (s.gridLanes) {
       s.gridLanesDirection = get("grid-lanes-direction");
       s.flowTolerance = get("flow-tolerance");
       s.gridLanesDense = get("grid-lanes-pack") == "dense";
     }
-    s.gridAutoColumns = get("grid-auto-columns");
-    s.gridAutoRows = get("grid-auto-rows");
-    s.gridColumnStart = get("grid-column-start");
-    s.gridColumnEnd = get("grid-column-end");
-    s.gridRowStart = get("grid-row-start");
-    s.gridRowEnd = get("grid-row-end");
-    s.rowGap = gap("row-gap");
-    s.columnGap = gap("column-gap");
+    if (DECLARED("grid-auto-columns")) s.gridAutoColumns = get("grid-auto-columns");
+    else s.gridAutoColumns = "auto";
+    if (DECLARED("grid-auto-rows")) s.gridAutoRows = get("grid-auto-rows");
+    else s.gridAutoRows = "auto";
+    if (DECLARED("grid-column-start")) s.gridColumnStart = get("grid-column-start");
+    else s.gridColumnStart = "auto";
+    if (DECLARED("grid-column-end")) s.gridColumnEnd = get("grid-column-end");
+    else s.gridColumnEnd = "auto";
+    if (DECLARED("grid-row-start")) s.gridRowStart = get("grid-row-start");
+    else s.gridRowStart = "auto";
+    if (DECLARED("grid-row-end")) s.gridRowEnd = get("grid-row-end");
+    else s.gridRowEnd = "auto";
+    if (DECLARED("row-gap")) s.rowGap = gap("row-gap");
+    if (DECLARED("column-gap")) s.columnGap = gap("column-gap");
   }
   {
-    const std::string count = get("column-count"), width = get("column-width");
-    s.columnCount = count == "auto" || count.empty() ? 0 : std::max(0, static_cast<int>(Number(count, 0)));
-    s.columnWidth = width == "auto" || width.empty() ? -1 : Number(width, -1);
-    const std::string scrollbarWidth = get("scrollbar-width");
-    s.scrollbarWidth = scrollbarWidth == "thin" ? BoxStyle::ScrollbarWidth::Thin : scrollbarWidth == "none" ? BoxStyle::ScrollbarWidth::None : BoxStyle::ScrollbarWidth::Auto;
-    const std::string gutter = get("scrollbar-gutter");
-    s.gutterStable = gutter.find("stable") != std::string::npos;
-    s.gutterBothEdges = gutter.find("both-edges") != std::string::npos;
-    s.columnFillAuto = get("column-fill") == "auto";
-    s.columnSpanAll = get("column-span") == "all";
+    if (DECLARED("column-count", "column-width")) {
+      const std::string count = get("column-count"), width = get("column-width");
+      s.columnCount = count == "auto" || count.empty() ? 0 : std::max(0, static_cast<int>(Number(count, 0)));
+      s.columnWidth = width == "auto" || width.empty() ? -1 : Number(width, -1);
+    }
+    if (DECLARED("scrollbar-width")) {
+      const std::string scrollbarWidth = get("scrollbar-width");
+      s.scrollbarWidth = scrollbarWidth == "thin" ? BoxStyle::ScrollbarWidth::Thin : scrollbarWidth == "none" ? BoxStyle::ScrollbarWidth::None : BoxStyle::ScrollbarWidth::Auto;
+    }
+    if (DECLARED("scrollbar-gutter")) {
+      const std::string gutter = get("scrollbar-gutter");
+      s.gutterStable = gutter.find("stable") != std::string::npos;
+      s.gutterBothEdges = gutter.find("both-edges") != std::string::npos;
+    }
+    if (DECLARED("column-fill")) s.columnFillAuto = get("column-fill") == "auto";
+    if (DECLARED("column-span")) s.columnSpanAll = get("column-span") == "all";
     const auto breakKind = [&](const char* property) {
       const std::string v = get(property);
       if (v == "avoid" || v == "avoid-column" || v == "avoid-page") return BreakKind::Avoid;
@@ -480,55 +557,99 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
       if (v == "page" || v == "left" || v == "right" || v == "recto" || v == "verso" || v == "region" || v == "always") return BreakKind::Always;
       return BreakKind::Auto;
     };
-    s.breakBefore = breakKind("break-before");
-    s.breakAfter = breakKind("break-after");
-    s.breakInside = breakKind("break-inside");
-    s.orphans = std::max(1, static_cast<int>(Number(get("orphans"), 2)));
-    s.widows = std::max(1, static_cast<int>(Number(get("widows"), 2)));
+    if (DECLARED("break-before")) s.breakBefore = breakKind("break-before");
+    if (DECLARED("break-after")) s.breakAfter = breakKind("break-after");
+    if (DECLARED("break-inside")) s.breakInside = breakKind("break-inside");
+    if (DECLARED("orphans")) s.orphans = std::max(1, static_cast<int>(Number(get("orphans"), 2)));
+    else s.orphans = parent->orphans;
+    if (DECLARED("widows")) s.widows = std::max(1, static_cast<int>(Number(get("widows"), 2)));
+    else s.widows = parent->widows;
   }
-  s.fontSize = Number(get("font-size"), 16);
-  s.fontWeight = static_cast<int>(Number(get("font-weight"), 400));
-  s.italic = get("font-style") != "normal";
-  s.fontStretch = Number(get("font-width"), Number(get("font-stretch"), 100));
-  const std::string lineHeight = get("line-height");
-  if (lineHeight == "normal" || lineHeight.empty()) {
-    s.lineHeight = Length();
-  } else if (lineHeight.find("px") != std::string::npos || lineHeight.find('%') != std::string::npos) {
-    s.lineHeight = ParseLength(lineHeight);
-    if (s.lineHeight.kind == Length::Kind::Percent) s.lineHeight = Length::Px(s.fontSize * s.lineHeight.value / 100);
+  if (DECLARED("font-size")) s.fontSize = Number(get("font-size"), 16);
+  else s.fontSize = parent->fontSize;
+  if (DECLARED("font-weight")) s.fontWeight = static_cast<int>(Number(get("font-weight"), 400));
+  else s.fontWeight = parent->fontWeight;
+  if (DECLARED("font-style")) s.italic = get("font-style") != "normal";
+  else s.italic = parent->italic;
+  if (DECLARED("font-width", "font-stretch")) s.fontStretch = Number(get("font-width"), Number(get("font-stretch"), 100));
+  else s.fontStretch = parent->fontStretch;
+  if (DECLARED("line-height")) {
+    const std::string lineHeight = get("line-height");
+    if (lineHeight == "normal" || lineHeight.empty()) {
+      s.lineHeight = Length();
+    } else if (lineHeight.find("px") != std::string::npos || lineHeight.find('%') != std::string::npos) {
+      s.lineHeight = ParseLength(lineHeight);
+      if (s.lineHeight.kind == Length::Kind::Percent) s.lineHeight = Length::Px(s.fontSize * s.lineHeight.value / 100);
+    } else {
+      s.lineHeightNumber = Number(lineHeight, -1);
+      s.lineHeight = s.lineHeightNumber >= 0 ? Length::Px(s.fontSize * s.lineHeightNumber) : Length();
+    }
   } else {
-    s.lineHeightNumber = Number(lineHeight, -1);
-    s.lineHeight = s.lineHeightNumber >= 0 ? Length::Px(s.fontSize * s.lineHeightNumber) : Length();
+    // (A number is of the size of the element: it is not the length that it came to above.)
+    s.lineHeightNumber = parent->lineHeightNumber;
+    s.lineHeight = parent->lineHeightNumber >= 0 ? Length::Px(s.fontSize * parent->lineHeightNumber) : parent->lineHeight;
   }
-  const std::string va = get("vertical-align");
-  s.verticalAlign = Pick<VerticalAlign>(va, {{"baseline", VerticalAlign::Baseline}, {"sub", VerticalAlign::Sub}, {"super", VerticalAlign::Super}, {"top", VerticalAlign::Top}, {"text-top", VerticalAlign::TextTop}, {"middle", VerticalAlign::Middle}, {"bottom", VerticalAlign::Bottom}, {"text-bottom", VerticalAlign::TextBottom}}, VerticalAlign::Length);
-  if (s.verticalAlign == VerticalAlign::Length) s.verticalAlignLength = ParseLength(va);
+  if (DECLARED("vertical-align")) {
+    const std::string va = get("vertical-align");
+    s.verticalAlign = Pick<VerticalAlign>(va, {{"baseline", VerticalAlign::Baseline}, {"sub", VerticalAlign::Sub}, {"super", VerticalAlign::Super}, {"top", VerticalAlign::Top}, {"text-top", VerticalAlign::TextTop}, {"middle", VerticalAlign::Middle}, {"bottom", VerticalAlign::Bottom}, {"text-bottom", VerticalAlign::TextBottom}}, VerticalAlign::Length);
+    if (s.verticalAlign == VerticalAlign::Length) s.verticalAlignLength = ParseLength(va);
+  }
   const auto align = [](const std::string& v) {
     return Pick<TextAlign>(v, {{"end", TextAlign::End}, {"left", TextAlign::Left}, {"right", TextAlign::Right}, {"center", TextAlign::Center}, {"justify", TextAlign::Justify}, {"match-parent", TextAlign::MatchParent}, {"-webkit-left", TextAlign::Left}, {"-webkit-right", TextAlign::Right}, {"-webkit-center", TextAlign::Center}}, TextAlign::Start);
   };
-  s.textAlign = align(get("text-align"));
-  const std::string last = get("text-align-last");
-  s.textAlignLastAuto = last == "auto" || last.empty();
-  s.textAlignLast = align(last);
-  const std::string indent = get("text-indent");
-  s.textIndentHanging = indent.find("hanging") != std::string::npos;
-  s.textIndentEachLine = indent.find("each-line") != std::string::npos;
-  s.textIndent = ParseLength(indent.substr(0, indent.find(' ')));
-  if (s.textIndent.IsAuto()) s.textIndent = Length::Px(0);
-  s.whiteSpaceCollapse = Pick<WhiteSpaceCollapse>(get("white-space-collapse"), {{"preserve", WhiteSpaceCollapse::Preserve}, {"preserve-breaks", WhiteSpaceCollapse::PreserveBreaks}, {"preserve-spaces", WhiteSpaceCollapse::PreserveSpaces}, {"break-spaces", WhiteSpaceCollapse::BreakSpaces}}, WhiteSpaceCollapse::Collapse);
-  s.wrap = get("text-wrap-mode") != "nowrap";
-  s.letterSpacing = get("letter-spacing") == "normal" ? 0 : Number(get("letter-spacing"));
-  s.wordSpacing = get("word-spacing") == "normal" ? 0 : Number(get("word-spacing"));
-  s.textTransform = Pick<TextTransform>(get("text-transform"), {{"capitalize", TextTransform::Capitalize}, {"uppercase", TextTransform::Uppercase}, {"lowercase", TextTransform::Lowercase}}, TextTransform::None);
-  s.rubyUnder = get("ruby-position").find("under") != std::string::npos;
-  s.rubyAlternate = get("ruby-position").find("alternate") != std::string::npos;
-  s.rubyStart = get("ruby-align") == "start";
-  s.overflowWrap = Pick<OverflowWrap>(get("overflow-wrap"), {{"break-word", OverflowWrap::BreakWord}, {"anywhere", OverflowWrap::Anywhere}}, OverflowWrap::Normal);
-  s.wordBreak = Pick<WordBreak>(get("word-break"), {{"break-all", WordBreak::BreakAll}, {"keep-all", WordBreak::KeepAll}, {"break-word", WordBreak::BreakWord}}, WordBreak::Normal);
-  s.tabSize = static_cast<int>(Number(get("tab-size"), 8));
+  if (DECLARED("text-align")) s.textAlign = align(get("text-align"));
+  else s.textAlign = parent->textAlign;
+  if (DECLARED("text-align-last")) {
+    const std::string last = get("text-align-last");
+    s.textAlignLastAuto = last == "auto" || last.empty();
+    s.textAlignLast = align(last);
+  } else {
+    s.textAlignLastAuto = parent->textAlignLastAuto;
+    s.textAlignLast = parent->textAlignLast;
+  }
+  if (DECLARED("text-indent")) {
+    const std::string indent = get("text-indent");
+    s.textIndentHanging = indent.find("hanging") != std::string::npos;
+    s.textIndentEachLine = indent.find("each-line") != std::string::npos;
+    s.textIndent = ParseLength(indent.substr(0, indent.find(' ')));
+    if (s.textIndent.IsAuto()) s.textIndent = Length::Px(0);
+  } else {
+    s.textIndentHanging = parent->textIndentHanging;
+    s.textIndentEachLine = parent->textIndentEachLine;
+    s.textIndent = parent->textIndent;
+  }
+  if (DECLARED("white-space-collapse")) s.whiteSpaceCollapse = Pick<WhiteSpaceCollapse>(get("white-space-collapse"), {{"preserve", WhiteSpaceCollapse::Preserve}, {"preserve-breaks", WhiteSpaceCollapse::PreserveBreaks}, {"preserve-spaces", WhiteSpaceCollapse::PreserveSpaces}, {"break-spaces", WhiteSpaceCollapse::BreakSpaces}}, WhiteSpaceCollapse::Collapse);
+  else s.whiteSpaceCollapse = parent->whiteSpaceCollapse;
+  if (DECLARED("text-wrap-mode")) s.wrap = get("text-wrap-mode") != "nowrap";
+  else s.wrap = parent->wrap;
+  if (DECLARED("letter-spacing")) s.letterSpacing = get("letter-spacing") == "normal" ? 0 : Number(get("letter-spacing"));
+  else s.letterSpacing = parent->letterSpacing;
+  if (DECLARED("word-spacing")) s.wordSpacing = get("word-spacing") == "normal" ? 0 : Number(get("word-spacing"));
+  else s.wordSpacing = parent->wordSpacing;
+  if (DECLARED("text-transform")) s.textTransform = Pick<TextTransform>(get("text-transform"), {{"capitalize", TextTransform::Capitalize}, {"uppercase", TextTransform::Uppercase}, {"lowercase", TextTransform::Lowercase}}, TextTransform::None);
+  else s.textTransform = parent->textTransform;
+  if (DECLARED("ruby-position")) {
+    s.rubyUnder = get("ruby-position").find("under") != std::string::npos;
+    s.rubyAlternate = get("ruby-position").find("alternate") != std::string::npos;
+  } else {
+    s.rubyUnder = parent->rubyUnder;
+    s.rubyAlternate = parent->rubyAlternate;
+  }
+  if (DECLARED("ruby-align")) s.rubyStart = get("ruby-align") == "start";
+  else s.rubyStart = parent->rubyStart;
+  if (DECLARED("overflow-wrap")) s.overflowWrap = Pick<OverflowWrap>(get("overflow-wrap"), {{"break-word", OverflowWrap::BreakWord}, {"anywhere", OverflowWrap::Anywhere}}, OverflowWrap::Normal);
+  else s.overflowWrap = parent->overflowWrap;
+  if (DECLARED("word-break")) s.wordBreak = Pick<WordBreak>(get("word-break"), {{"break-all", WordBreak::BreakAll}, {"keep-all", WordBreak::KeepAll}, {"break-word", WordBreak::BreakWord}}, WordBreak::Normal);
+  else s.wordBreak = parent->wordBreak;
+  if (DECLARED("tab-size")) s.tabSize = static_cast<int>(Number(get("tab-size"), 8));
+  else s.tabSize = parent->tabSize;
   {
-    const std::string lb = get("line-break");
-    s.lineBreak = lb == "loose" ? 1 : lb == "strict" ? 2 : lb == "anywhere" ? 3 : 0;
+    if (DECLARED("line-break")) {
+      const std::string lb = get("line-break");
+      s.lineBreak = lb == "loose" ? 1 : lb == "strict" ? 2 : lb == "anywhere" ? 3 : 0;
+    } else {
+      s.lineBreak = parent->lineBreak;
+    }
     for (const dom::Node* n = element; n; n = dom::ParentOf(n)) {
       if (!n->IsElement()) continue;
       const dom::Element* e = static_cast<const dom::Element*>(n);
@@ -541,13 +662,18 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
       }
     }
   }
-  s.color = get("color");
-  s.backgroundColor = get("background-color");
-  s.fontFamily = get("font-family");
-  s.zIndex = get("z-index");
-  s.content = get("content");
-  s.fieldSizingContent = get("field-sizing") == "content";
-  {
+  if (DECLARED("color")) s.color = get("color");
+  else s.color = parent->color;
+  if (DECLARED("background-color")) s.backgroundColor = get("background-color");
+  if (DECLARED("font-family")) s.fontFamily = get("font-family");
+  else s.fontFamily = parent->fontFamily;
+  if (DECLARED("z-index")) s.zIndex = get("z-index");
+  if (DECLARED("content")) s.content = get("content");
+  if (DECLARED("field-sizing")) s.fieldSizingContent = get("field-sizing") == "content";
+  if (DECLARED("pointer-events")) s.pointerEventsNone = get("pointer-events") == "none";
+  else s.pointerEventsNone = parent->pointerEventsNone;
+  if (DECLARED("contain", "container-type", "will-change", "content-visibility", "transform", "perspective", "filter", "backdrop-filter", "translate", "rotate", "scale", "opacity", "position", "z-index",
+               "isolation", "mix-blend-mode", "clip-path", "mask-image", "contain-intrinsic-width", "contain-intrinsic-height")) {
     const std::string contain = get("contain");
     const auto has = [&](const char* word) { return (" " + contain + " ").find(std::string(" ") + word + " ") != std::string::npos; };
     const bool strict = has("strict"), content = has("content");
@@ -567,7 +693,6 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
     s.containsPositioned = !none("transform") || !none("perspective") || !none("filter") || !none("backdrop-filter") || !none("translate") || !none("rotate") || !none("scale") ||
                            willTransform || s.containLayout || s.containPaint;
     s.opacity = Number(get("opacity"), 1);
-    s.pointerEventsNone = get("pointer-events") == "none";
     const bool positionedZ = s.position != Position::Static && get("z-index") != "auto";
     s.stackingContext = positionedZ || s.position == Position::Fixed || s.position == Position::Sticky || s.opacity < 1 || s.containsPositioned || get("isolation") == "isolate" ||
                         get("mix-blend-mode") != "normal" || !none("clip-path") || !none("mask-image") || willChange.find("opacity") != std::string::npos;
@@ -593,6 +718,19 @@ std::shared_ptr<const BoxStyle> ReadStyle(Quanta::Context& ctx, dom::Element* el
       s.contentVisibilityAuto = true;
     }
   }
+  if (delta) {
+    // (SOLAR_VERIFY_STYLE: the style made from the one above is made the other way too, and what they differ in is told.)
+    static const bool verify = std::getenv("SOLAR_VERIFY_STYLE") != nullptr;
+    if (verify) {
+      const std::shared_ptr<const BoxStyle> whole = ReadStyle(ctx, element, pseudo, nullptr);
+      // (An element with no box has no style that anything reads: what is computed for one that is not in the tree of the boxes is not looked at.)
+      if (const char* field = s.display == Display::None ? nullptr : FirstDifference(*whole, s)) {
+        std::fprintf(stderr, "STYLE MISMATCH <%s class=%s>: %s\n", element->localName.c_str(), element->FindAttribute("class") ? element->FindAttribute("class")->Value().c_str() : "", field);
+      if (std::string(field) == "maxWidth") std::fprintf(stderr, "  maxWidth whole kind %d value %g, delta kind %d value %g display %d\n", (int)whole->maxWidth.kind, whole->maxWidth.value, (int)s.maxWidth.kind, s.maxWidth.value, (int)s.display);
+      }
+    }
+  }
+#undef DECLARED
   return style;
 }
 
