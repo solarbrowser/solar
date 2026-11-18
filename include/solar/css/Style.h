@@ -153,6 +153,9 @@ void NoteAnimatedStyleChange(bool affectsSizes = true, bool onlyItself = false);
 // A layout was made: whether the containers were found to be of other sizes than the styles were made with (while animations of sizes are running: see StyleReuseFor).
 void NoteSizingEffect(bool containersChanged);
 void NoteSizingUnknown();
+// A number that is another when anything that styles every element changes (the sheets, a cache that was let go of, the size of a container, the window the queries are of): what a pass over
+// the elements looks at again when it is not the same.
+uint64_t StyleEnvironmentStamp(dom::Document* document);
 bool ElementInSizeContainer(dom::Element* element);
 // Keeps the computed values the element has now (of the properties that can be animated), as the style that a change of style that
 // follows is compared with, which a transition starts from.

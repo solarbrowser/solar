@@ -180,10 +180,25 @@ int AnimationMask(Context& ctx, dom::Element* element, bool pseudos) {
   return mask;
 }
 
-void CollectCandidates(Context& ctx, dom::Node* node, bool pseudos, Value& out) {
+// What the walk saw of an element the last time: the elements whose styles were not made again since, with nothing around them that changed, are not looked at again (a walk of every element
+// of a page for each flush was a tenth of the time of a video page).
+struct Walked {
+  uint32_t subtree = 0, children = 0, childAttr = 0;
+  uint64_t stamp = 0, epoch = 0;
+};
+
+void CollectCandidates(Context& ctx, dom::Node* node, bool pseudos, Value& out, uint64_t stamp, bool all, bool level) {
+  const bool forced = all || level;
+  static const bool everything = std::getenv("SOLAR_ALL_ANIM_CANDIDATES") != nullptr;
+  static std::unordered_map<const dom::Element*, Walked> walked;
+  if (walked.size() > 200000) walked.clear();
   for (dom::Node* child = node->firstChild; child; child = child->nextSibling) {
     if (!child->IsElement()) continue;
     dom::Element* element = static_cast<dom::Element*>(child);
+    const dom::Element::Versions versions = element->VersionsInView();
+    Walked& record = walked[element];
+    const uint64_t stampHere = stamp * 2 + (pseudos ? 1 : 0);
+    if (!forced && !everything && record.stamp == stampHere && record.subtree == versions.subtree && !element->shadowRoot) continue;
     // What an element asks for is a matter of its styles, which are made again with a new epoch: it is looked at again only then (a page that is being built
     // changes at every step, and every step looked at every element of it).
     struct Seen {
@@ -207,14 +222,21 @@ void CollectCandidates(Context& ctx, dom::Node* node, bool pseudos, Value& out) 
       static std::unordered_map<const dom::Element*, std::pair<uint64_t, uint64_t>> delivered;
       if (delivered.size() > 200000) delivered.clear();
       uint64_t& last = pseudos ? delivered[element].second : delivered[element].first;
-      if (epoch == 0 || last != epoch || std::getenv("SOLAR_ALL_ANIM_CANDIDATES")) {
+      if (epoch == 0 || last != epoch || everything) {
         last = epoch;
         qe::ArrayPush(ctx, out, qe::FromObject(element));
         qe::ArrayPush(ctx, out, qe::FromInt32(mask));
       }
     }
-    if (element->shadowRoot) CollectCandidates(ctx, element->shadowRoot, pseudos, out);
-    CollectCandidates(ctx, element, pseudos, out);
+    // (Everything under an element whose style is not what it was is looked at: they are styled by it. The children of an element whose children, or what they are told by, are not what they were are
+    // looked at, whatever they are: it is they that the change is of.)
+    const bool everythingBelow = all || record.epoch != epoch || record.stamp != stampHere;
+    const bool childrenBelow = everythingBelow || record.children != versions.children || record.childAttr != versions.childAttr;
+    record = {versions.subtree, versions.children, versions.childAttr, stampHere, epoch};
+    // (Nothing under an element that has no box runs an animation or a transition, and its styles are not made for the sake of this: they are when it has a box again, and its own style is another then.)
+    if (!everything && ComputedValue(ctx, element, "display") == "none" && !element->shadowRoot) continue;
+    if (element->shadowRoot) CollectCandidates(ctx, element->shadowRoot, pseudos, out, stamp, true, true);
+    CollectCandidates(ctx, element, pseudos, out, stamp, everythingBelow, childrenBelow);
   }
 }
 
@@ -224,7 +246,7 @@ Value Candidates(Context& ctx, Value, qe::Args args, Value) {
   dom::Document* document = dom::AssociatedDocument(ctx);
   if (!document) return out;
   NoStyleFlush noFlush;
-  CollectCandidates(ctx, document, args.size() > 0 && qe::ToBoolean(args[0]), out);
+  CollectCandidates(ctx, document, args.size() > 0 && qe::ToBoolean(args[0]), out, StyleEnvironmentStamp(document), false, false);
   return out;
 }
 

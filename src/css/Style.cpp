@@ -4266,6 +4266,18 @@ void NoteSizingEffect(bool containersChanged) {
 }
 // A new animation of sizes: layout has not looked at what it does yet, and the styles are made again until it has. (What the animations that are waiting for a verdict are is kept for it.)
 void NoteSizingUnknown() { g_sizingMatters = true; }
+uint64_t StyleEnvironmentStamp(dom::Document* document) {
+  uint64_t h = g_authorVersion;
+  h = h * 1000003 + g_styleVersion;
+  h = h * 1000003 + g_cacheVersion;
+  h = h * 1000003 + g_containerEpoch;
+  if (document) {
+    const MediaEnvironment e = EnvironmentFor(document);
+    h = h * 1000003 + static_cast<uint64_t>(e.width * 8);
+    h = h * 1000003 + static_cast<uint64_t>(e.height * 8);
+  }
+  return h | 1;
+}
 
 // Whether the element, or one above it, is a container of a size that queries ask of.
 bool ElementInSizeContainer(dom::Element* element) {

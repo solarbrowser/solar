@@ -320,10 +320,29 @@
   }
   Object.defineProperty(IntersectionObserver.prototype, Symbol.toStringTag, { value: 'IntersectionObserver', configurable: true });
 
+  // What is worked out for the boxes the intersections are of is worked out once for each of them in a step: the boxes that clip are the same for a hundred targets in a list, and each target
+  // asked for the style of each box above it (the page asked a thousand times for the same few).
+  let passCache = null;
   const overflowClips = (element) => {
+    if (passCache) {
+      const kept = passCache.clips.get(element);
+      if (kept !== undefined) return kept;
+    }
     const cs = global.getComputedStyle(element);
     const clips = (v) => v !== 'visible';
-    return clips(cs.overflowX) || clips(cs.overflowY) || /paint|strict|content/.test(cs.contain || '');
+    const answer = clips(cs.overflowX) || clips(cs.overflowY) || /paint|strict|content/.test(cs.contain || '');
+    if (passCache) passCache.clips.set(element, answer);
+    return answer;
+  };
+  const clipRectOf = (a) => {
+    if (passCache) {
+      const kept = passCache.rects.get(a);
+      if (kept) return kept;
+    }
+    const r = a.getBoundingClientRect();
+    const clip = { left: r.left + a.clientLeft, top: r.top + a.clientTop, right: r.left + a.clientLeft + a.clientWidth, bottom: r.top + a.clientTop + a.clientHeight };
+    if (passCache) passCache.rects.set(a, clip);
+    return clip;
   };
   // The intersection of two rectangles ({left, top, right, bottom}), edges that touch counting; null if there is none.
   const intersect = (a, b) => {
@@ -360,7 +379,13 @@
   };
 
   const compute = (slot, target) => {
-    const rootEdges = rootRectOf(slot, target);
+    let rootEdges;
+    if (passCache) {
+      rootEdges = passCache.roots.get(slot);
+      if (!rootEdges) passCache.roots.set(slot, (rootEdges = rootRectOf(slot, target)));
+    } else {
+      rootEdges = rootRectOf(slot, target);
+    }
     const targetRect = target.getBoundingClientRect();
     const box = edges(targetRect);
     let root = slot.root;
@@ -377,8 +402,8 @@
         // as tall as its in-flow content (YouTube's is 0 high: everything of the page is absolutely positioned in it) would clip the whole page away.
         if (a === document.body && !overflowClips(document.documentElement)) continue;
         if (overflowClips(a)) {
-          const r = a.getBoundingClientRect();
-          const clip = { left: r.left + a.clientLeft, top: r.top + a.clientTop, right: r.left + a.clientLeft + a.clientWidth, bottom: r.top + a.clientTop + a.clientHeight };
+          const base = clipRectOf(a);
+          const clip = { left: base.left, top: base.top, right: base.right, bottom: base.bottom };
           // The scroll margin grows the box that clips, in the scrollers on the way.
           if (slot.scrollMargins.some((m) => m.value !== 0)) {
             const [mt, mr, mb, ml] = slot.scrollMargins;
@@ -455,7 +480,13 @@
 
   R.addEndStep((now) => {
     if (resizeObservers.size) broadcastResize();
-    for (const observer of [...intersectionObservers]) updateIntersections(observer, now);
+    if (!intersectionObservers.size) return;
+    passCache = { clips: new Map(), rects: new Map(), roots: new Map() };
+    try {
+      for (const observer of [...intersectionObservers]) updateIntersections(observer, now);
+    } finally {
+      passCache = null;
+    }
   });
 
   define('ResizeObserver', ResizeObserver);

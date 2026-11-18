@@ -50,6 +50,7 @@
 #include "include/core/SkStream.h"
 #include "include/encode/SkPngEncoder.h"
 #include "quanta/Embed.h"
+#include "quanta/core/vm/Interpreter.h"
 #include "solar/css/CssBindings.h"
 #include "solar/css/MediaQuery.h"
 #include "solar/css/Style.h"
@@ -1501,6 +1502,14 @@ static void MiHistogramIfDue() {
 
 int PageMain(Shared& shared, int argc, char** argv) {
   MiHistogramLater();
+  // QUANTA_PROF=1 (the engine's sampling profile of which JS functions the time goes to, under the JS function that called a native too: the DOM and the CSSOM are in what it counts): the
+  // profile is printed on SIGUSR2 (to stderr), as the program is not ended in a way that would print it.
+  if (std::getenv("QUANTA_PROF")) {
+    struct sigaction action{};
+    action.sa_handler = [](int) { Quanta::VM::jit_print_stats(); };
+    sigemptyset(&action.sa_mask);
+    sigaction(SIGUSR2, &action, nullptr);
+  }
   const auto programStart = Clock::now();
   const std::string given = argc > 1 ? argv[1] : "https://example.com/";
   std::string address = AddressOf(given);
