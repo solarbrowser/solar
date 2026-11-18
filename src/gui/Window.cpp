@@ -144,6 +144,8 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
   // The mouse button that is down belongs to the one it went down on (the bar or the page) until it is up.
   int capture = 0;  // 0: none, 1: the bar, 2: the page
   float lockedAtX = 0, lockedAtY = 0;
+  bool pointerLocked = false;  // a page has the pointer locked (hidden, and its movements are the page's, wherever the pointer would be)
+  uint32_t lockedHost = 0;     // the page (its process) that has it
   bool running = true;
 
   // The height of the bar in pixels (what it is in points, at the density of the window).
@@ -217,6 +219,22 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
     }
   };
 
+  // The pointer is taken back from the page that has it locked (the window lost the focus, or another page is in front): it is told, and gives up the lock.
+  const auto releasePointer = [&] {
+    if (!pointerLocked) return;
+    pointerLocked = false;
+    const uint32_t host = lockedHost;
+    lockedHost = 0;
+    SDL_SetWindowRelativeMouseMode(window, false);
+    SDL_WarpMouseInWindow(window, lockedAtX, lockedAtY);
+    if (host != 0) {
+      wire::Input input;
+      input.kind = wire::Input::Kind::PointerUnlock;
+      Writer out;
+      wire::Write(out, input);
+      session.Send(host, wire::ToRenderer::Input, out.bytes());
+    }
+  };
   const auto handle = [&](Message& message) {
     if (message.type == kGone) {
       views.erase(message.host);
@@ -364,11 +382,15 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
       case wire::ToBrowser::PointerLock:
         if (!shown) break;
         if (!message.bytes.empty() && message.bytes[0] != 0) {
-          SDL_GetMouseState(&lockedAtX, &lockedAtY);
+          if (!pointerLocked) SDL_GetMouseState(&lockedAtX, &lockedAtY);
           SDL_SetWindowRelativeMouseMode(window, true);
-        } else {
+          pointerLocked = true;
+          lockedHost = message.host;
+        } else if (pointerLocked && (message.host == lockedHost || lockedHost == 0)) {
           SDL_SetWindowRelativeMouseMode(window, false);
           SDL_WarpMouseInWindow(window, lockedAtX, lockedAtY);
+          pointerLocked = false;
+          lockedHost = 0;
         }
         break;
       case wire::ToBrowser::AudioOpen: {
@@ -879,8 +901,14 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
           input.x = event.button.x;
           input.y = event.button.y;
           break;
+        case SDL_EVENT_WINDOW_FOCUS_LOST:
+          releasePointer();
+          forward = false;
+          break;
         default: forward = false; break;
       }
+      // (Another page in front: the pointer is not the one that had it locked's any more.)
+      if (pointerLocked && lockedHost != 0 && session.current() != lockedHost) releasePointer();
       if (forward) {
         uint32_t target = session.current();
         const float barPts = static_cast<float>(barPoints()), leftPts = static_cast<float>(leftPoints());
@@ -898,8 +926,12 @@ int RunWindow(SDL_Window* window, SDL_Renderer* renderer, BrowserServices& servi
             if (overlayRight > overlayLeft) inBar = inBar || (y < bottom && x >= overlayLeft && x < overlayRight);
             else inBar = inBar || sideTabs || y < bottom;
           }
-          const int side = capture ? capture : (inBar ? 1 : 2);
-          if (input.kind == wire::Input::Kind::ButtonDown) {
+          // (A pointer that is locked is the page's wherever it is: it moves without a place, and what it would be over, the interface or a page of another tab, is not asked.)
+          const int side = pointerLocked ? 2 : capture ? capture : (inBar ? 1 : 2);
+          if (pointerLocked) target = lockedHost ? lockedHost : target;
+          if (pointerLocked) {
+            // (No press of it is the interface's to keep.)
+          } else if (input.kind == wire::Input::Kind::ButtonDown) {
             capture = side;
             if (side == 2 && barFocused) {
               barFocused = false;

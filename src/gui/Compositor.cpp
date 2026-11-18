@@ -469,6 +469,9 @@ UiEvent ToUiEvent(const wire::Input& in) {
       event.wheel.mouse_x = in.xrel;
       event.wheel.mouse_y = in.yrel;
       break;
+    case wire::Input::Kind::PointerUnlock:
+      event.type = SDL_EVENT_WINDOW_FOCUS_LOST;  // (what the page hears of it: the window does not have the pointer for it any more)
+      break;
   }
   out.clipboard = in.clipboard;
   out.mods = in.mod;

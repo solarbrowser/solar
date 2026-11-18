@@ -108,7 +108,8 @@ bool Read(net::ipc::Reader& in, Geometry& geometry);
 
 // What the user did, as the page needs to know it (keys are SDL's key codes; modifiers are SDL's mod bits).
 struct Input {
-  enum class Kind : uint8_t { KeyDown, KeyUp, Text, Motion, ButtonDown, ButtonUp, Wheel } kind = Kind::Motion;
+  // (PointerUnlock: the window took the pointer back from the page that had it locked: the focus went, or another page came to the front.)
+  enum class Kind : uint8_t { KeyDown, KeyUp, Text, Motion, ButtonDown, ButtonUp, Wheel, PointerUnlock } kind = Kind::Motion;
   uint32_t key = 0;
   uint16_t mod = 0;
   bool repeat = false;

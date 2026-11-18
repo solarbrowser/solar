@@ -47,7 +47,7 @@ void Write(Writer& out, const Input& i) {
 }
 
 bool Read(Reader& in, Input& i) {
-  i.kind = in.EnumUpTo(Input::Kind::Wheel);
+  i.kind = in.EnumUpTo(Input::Kind::PointerUnlock);
   i.key = in.U32();
   i.mod = static_cast<uint16_t>(in.U32());
   i.repeat = in.Bool();

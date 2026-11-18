@@ -83,6 +83,11 @@ async function run() {
   vao.bindVertexArrayOES(null);
   gl.enable(0x1234);
   ok("an error", gl.getError() === gl.INVALID_ENUM && gl.getError() === 0, "");
+  gl.drawingBufferColorSpace = "display-p3"; gl.unpackColorSpace = "display-p3";
+  ok("the color spaces can be set", gl.drawingBufferColorSpace === "display-p3" && gl.unpackColorSpace === "display-p3", gl.drawingBufferColorSpace);
+  gl.drawingBufferColorSpace = "nonsense";
+  ok("a color space that is none is left as it was", gl.drawingBufferColorSpace === "display-p3", gl.drawingBufferColorSpace);
+  gl.drawingBufferColorSpace = "srgb"; gl.unpackColorSpace = "srgb";
   ok("toDataURL", a.toDataURL().startsWith("data:image/png;base64,") && a.toDataURL().length > 200, a.toDataURL().length);
 
   // the 2D canvas can draw a WebGL canvas

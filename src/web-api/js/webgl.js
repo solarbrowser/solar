@@ -126,8 +126,11 @@
     get canvas() { return this._canvas; }
     get drawingBufferWidth() { return Math.max(1, this._width); }
     get drawingBufferHeight() { return Math.max(1, this._height); }
-    get drawingBufferColorSpace() { return "srgb"; }
-    get unpackColorSpace() { return "srgb"; }
+    // (The color spaces are kept as set: what is drawn is sRGB, which is what a display that cannot show another one gets of display-p3 too.)
+    get drawingBufferColorSpace() { return this._drawingBufferColorSpace || "srgb"; }
+    set drawingBufferColorSpace(v) { v = String(v); if (v === "srgb" || v === "display-p3") this._drawingBufferColorSpace = v; }
+    get unpackColorSpace() { return this._unpackColorSpace || "srgb"; }
+    set unpackColorSpace(v) { v = String(v); if (v === "srgb" || v === "display-p3") this._unpackColorSpace = v; }
     getContextAttributes() { return this._lost ? null : { ...this._attrs }; }
     isContextLost() { return this._lost; }
     makeXRCompatible() { return Promise.resolve(); }

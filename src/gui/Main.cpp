@@ -1762,6 +1762,8 @@ int PageMain(Shared& shared, int argc, char** argv) {
         }
       }
       for (qe::Realm* frameRealm : frameRealms) timers.DropRealm(frameRealm);
+      // (The page that is left had the pointer locked: the window gets it back, and the page that comes does not find the lock of the one before it.)
+      if (g_pointerLocked.load() && browser.pointerLock_) browser.pointerLock_(false);
       if (leftDocument) solar::dom::DisposeDocument(leftDocument);
       for (qe::Realm* frameRealm : frameRealms) if (frameRealm != left) browser.ReleaseRealm(frameRealm);
       if (leftDocument) solar::css::ForgetDocument(leftDocument);
@@ -2947,6 +2949,13 @@ int PageMain(Shared& shared, int argc, char** argv) {
           }
           break;
         }
+        case SDL_EVENT_WINDOW_FOCUS_LOST:
+          // The window has taken the pointer back (the focus went, or another page is in front): the page gives up the lock as its own exitPointerLock does.
+          if (g_pointerLocked.load()) {
+            solar::html::RunInRealm(*realm, [&] { realm->Evaluate("document.exitPointerLock && document.exitPointerLock()", "pointer lock"); });
+            dirty = true;
+          }
+          break;
         case SDL_EVENT_MOUSE_WHEEL: {
           if (document && pointerKnown && document->hoverElement) {
             solar::dom::Element* over = document->hoverElement;
