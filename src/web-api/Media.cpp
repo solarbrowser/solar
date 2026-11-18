@@ -49,6 +49,7 @@ struct State;
 // the thread of the player, so the request is posted.
 struct Fetcher : std::enable_shared_from_this<Fetcher> {
   web::FetchHost* host = nullptr;
+  net::Loop* loop = nullptr;  // (the program's: the player's thread asks for pieces through it while the host may be going)
   std::shared_ptr<media::ByteStream> stream;
   url::Url url;
   bool dead = false;
@@ -205,9 +206,11 @@ std::function<void()> Notifier(State* state, uint32_t id, Kind kind) {
   auto pending = std::make_shared<std::atomic<bool>>(false);
   web::FetchHost* host = state->host;
   std::shared_ptr<bool> alive = state->alive;
-  return [state, id, kind, pending, host, alive] {
+  // (The player's thread calls this, and it may do so as the page is being let go of: the loop is the program's, the host (and what it holds) is not.)
+  net::Loop* loop = host->config().loop;
+  return [state, id, kind, pending, host, alive, loop] {
     if (pending->exchange(true)) return;
-    host->config().loop->Post([state, id, kind, pending, host, alive] {
+    loop->Post([state, id, kind, pending, host, alive] {
       pending->store(false);
       if (!*alive) return;
       Context& c = *state->ctx;
@@ -289,11 +292,12 @@ Value Open(Context& ctx, Value, qe::Args args, Value) {
   } else if (auto parsed = url::Parse(address); parsed && (parsed->scheme == "http" || parsed->scheme == "https")) {
     item->fetcher = std::make_shared<Fetcher>();
     item->fetcher->host = state->host;
+    item->fetcher->loop = state->host->config().loop;
     item->fetcher->stream = item->stream;
     item->fetcher->url = *parsed;
     std::shared_ptr<Fetcher> fetcher = item->fetcher;
     item->stream->SetFetcher([fetcher](uint64_t from, uint64_t to, uint64_t generation) {
-      fetcher->host->config().loop->Post([fetcher, from, to, generation] { fetcher->Start(from, to, generation); });
+      fetcher->loop->Post([fetcher, from, to, generation] { fetcher->Start(from, to, generation); });
     });
   } else {
     item->stream->Finish(true);

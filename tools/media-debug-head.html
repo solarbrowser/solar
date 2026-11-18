@@ -1,0 +1,20 @@
+<!-- Usage: SOLAR_INJECT_HEAD=tools/media-debug-head.html ./solar <address> : lines "MEDIA <ms> ..." on the console: the video element events and the ranges it has, SourceBuffer appends/removes, the MediaSource closing, fetches that failed or were not 200 (for finding why a player stops). -->
+<script>(function(){
+const log=(m)=>console.log("MEDIA "+Math.round(performance.now())+" "+m);
+document.addEventListener("error",(e)=>{const t=e.target;if(t&&t.tagName==="VIDEO"||t&&t.tagName==="AUDIO"){const er=t.error;log("element error "+t.tagName+" code="+(er&&er.code)+" msg="+(er&&er.message))}},true);
+const wrap=(proto,name)=>{const o=proto&&proto[name];if(!o)return;proto[name]=function(...a){try{const r=o.apply(this,a);return r}catch(e){log(name+" threw "+e.name+": "+e.message);throw e}}};
+if(window.SourceBuffer){wrap(SourceBuffer.prototype,"appendBuffer");wrap(SourceBuffer.prototype,"remove");}
+if(window.MediaSource){wrap(MediaSource.prototype,"endOfStream");wrap(MediaSource.prototype,"addSourceBuffer");}
+const ev=["error","abort","sourceended","sourceclose"];
+const oAdd=EventTarget.prototype.addEventListener;
+EventTarget.prototype.addEventListener=function(t,f,o){if((this instanceof SourceBuffer||this instanceof MediaSource)&&ev.includes(t)){const g=f;f=function(e){log(this.constructor.name+" "+t+(this.updating!==undefined?" updating="+this.updating:"")+(this.readyState?" rs="+this.readyState:""));return g&&g.apply?g.apply(this,arguments):undefined}}return oAdd.call(this,t,f,o)};
+setInterval(()=>{for(const v of document.querySelectorAll("video")){const b=[];for(let i=0;i<v.buffered.length;i++)b.push(v.buffered.start(i).toFixed(1)+"-"+v.buffered.end(i).toFixed(1));log("video t="+v.currentTime.toFixed(2)+" rs="+v.readyState+" paused="+v.paused+" buf="+b.join(",")+" err="+(v.error&&v.error.code)+" src="+(v.src||"").slice(0,20))}},4000);
+
+const of=window.fetch;window.fetch=function(i,o){const u=String(i&&i.url||i);return of.apply(this,arguments).then(r=>{if(!r.ok||/videoplayback|player\?|get_ad|ptracking|api\/stats/.test(u))log("fetch "+r.status+" "+u.slice(0,110).replace(/\?.*?(&?(mime|itag)=[^&]*)?.*/,"?.."));return r},e=>{log("fetch FAILED "+u.slice(0,110)+" "+e);throw e})};
+const ox=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){this.__u=String(u);this.addEventListener("loadend",()=>{if(this.status!==200&&this.status!==204)log("xhr "+this.status+" "+this.__u.slice(0,110))});return ox.apply(this,arguments)};
+window.addEventListener("unhandledrejection",e=>log("unhandledrejection "+String(e.reason&&e.reason.message||e.reason).slice(0,160)));
+window.addEventListener("error",e=>log("window error "+e.message+" "+String(e.filename).slice(-50)+":"+e.lineno));
+
+for(const t of ["waiting","stalled","seeking","seeked","ended","emptied","abort","error","suspend","pause","play","playing","durationchange","ratechange"]){document.addEventListener(t,(e)=>{const v=e.target;if(v&&v.tagName==="VIDEO"){const b=[];for(let i=0;i<v.buffered.length;i++)b.push(v.buffered.start(i).toFixed(1)+"-"+v.buffered.end(i).toFixed(1));log("ev "+t+" t="+v.currentTime.toFixed(2)+" dur="+v.duration+" buf="+b.join(",")+" rs="+v.readyState)}},true)}
+if(window.SourceBuffer){const P=SourceBuffer.prototype;const oa=P.appendBuffer;P.appendBuffer=function(d){log("append "+(d&&d.byteLength)+" bytes ts="+this.timestampOffset+" mode="+this.mode+" mime="+(this.__m||""));return oa.apply(this,arguments)};const orm=P.remove;P.remove=function(a,b){log("remove "+a+"-"+b);return orm.apply(this,arguments)};}
+})();</script>
