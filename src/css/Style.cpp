@@ -4912,6 +4912,18 @@ void CollectAnimationRules(const std::vector<CssRule*>& rules, std::vector<const
 
 }  // namespace
 
+// Whether `now` is `before` and sheets that came as they were, and which those are (what was looked at in the sheets that were there need not be looked at again).
+bool OnlyMoreSheets(const std::vector<CssStyleSheet*>& before, const std::vector<CssStyleSheet*>& now, std::vector<CssStyleSheet*>& extra) {
+  extra.clear();
+  std::unordered_set<const CssStyleSheet*> was(before.begin(), before.end());
+  size_t kept = 0;
+  for (CssStyleSheet* sheet : now) {
+    if (was.count(sheet)) ++kept;
+    else extra.push_back(sheet);
+  }
+  return kept == was.size();
+}
+
 bool AuthorSheetsHavePseudoElements(dom::Document* document) {
   if (!document) return false;
   if (dom::HasShadowTrees()) return true;
@@ -4919,14 +4931,23 @@ bool AuthorSheetsHavePseudoElements(dom::Document* document) {
   static uint64_t keptAuthor = 0;
   static size_t keptSheets = 0;
   static bool answer = false;
+  static std::vector<CssStyleSheet*> keptList;
+  static std::unordered_set<std::string> keptNames;
   const std::vector<CssStyleSheet*> sheets = SheetsOfTree(document, document->context);
   if (keptDocument == document && keptAuthor == g_authorVersion && keptSheets == sheets.size()) return answer;
-  std::unordered_set<std::string> names;
-  for (CssStyleSheet* sheet : sheets) NotePseudoNamesOfRules(sheet->rules, names, 0);
+  // (A sheet that came as it was adds its names to the ones there are: the sheets before it are not looked at again.)
+  std::vector<CssStyleSheet*> extra;
+  const bool more = keptDocument == document && keptAuthor >= g_authorNonAdditive && OnlyMoreSheets(keptList, sheets, extra);
+  if (!more) {
+    keptNames.clear();
+    extra = sheets;
+  }
+  for (CssStyleSheet* sheet : extra) NotePseudoNamesOfRules(sheet->rules, keptNames, 0);
+  keptList = sheets;
   keptDocument = document;
   keptAuthor = g_authorVersion;
   keptSheets = sheets.size();
-  answer = names.count("before") || names.count("after") || names.count("marker");
+  answer = keptNames.count("before") || keptNames.count("after") || keptNames.count("marker");
   return answer;
 }
 
@@ -4955,14 +4976,42 @@ bool MayDeclareAnimation(dom::Element* element, const std::string& pseudo) {
     const std::vector<CssStyleSheet*> sheets = SheetsOfTree(document, document->context);
     kept.version = version;
     if (kept.document != document || kept.author != g_authorVersion || kept.sheets != sheets) {
-      kept = Kept();
-      kept.document = document;
-      kept.author = g_authorVersion;
-      kept.version = version;
-      kept.sheets = sheets;
-      kept.usable = true;
-      for (const CssStyleSheet* sheet : sheets) {
-        if (!sheet->disabled) CollectAnimationRules(sheet->rules, kept.rules, kept.usable, false, 0);
+      // (Sheets that came as they were: their rules are added to the ones kept, and to the index of them: the rules of the sheets before them are not looked at again.)
+      std::vector<CssStyleSheet*> extra;
+      if (kept.document == document && kept.usable && kept.author >= g_authorNonAdditive && OnlyMoreSheets(kept.sheets, sheets, extra)) {
+        const size_t from = kept.rules.size();
+        kept.author = g_authorVersion;
+        kept.version = version;
+        kept.sheets = sheets;
+        for (const CssStyleSheet* sheet : extra) {
+          if (!sheet->disabled) CollectAnimationRules(sheet->rules, kept.rules, kept.usable, false, 0);
+        }
+        if (kept.indexed) {
+          for (size_t i = from; i < kept.rules.size(); ++i) {
+            const CssRule* rule = kept.rules[i];
+            if (!rule->selectors) continue;
+            if (rule->quickState() == 0) WorkOutQuickKeys(*const_cast<CssRule*>(rule));
+            if (rule->quickState() != 1) {
+              kept.anyKey.push_back({rule, ~uint64_t(0)});
+              continue;
+            }
+            for (size_t j = 0; j < rule->quickKeys().size(); ++j) {
+              const uint64_t base = rule->quickKeys()[j] ^ rule->quickMarkers()[j];
+              if (base == 0) kept.anyKey.push_back({rule, rule->quickMarkers()[j]});
+              else kept.byKey[base].push_back({rule, rule->quickMarkers()[j]});
+            }
+          }
+        }
+      } else {
+        kept = Kept();
+        kept.document = document;
+        kept.author = g_authorVersion;
+        kept.version = version;
+        kept.sheets = sheets;
+        kept.usable = true;
+        for (const CssStyleSheet* sheet : sheets) {
+          if (!sheet->disabled) CollectAnimationRules(sheet->rules, kept.rules, kept.usable, false, 0);
+        }
       }
     }
   }

@@ -539,6 +539,28 @@ std::vector<dom::Element*> HtmlElementsIn(dom::Node* root, std::string_view name
 
 std::vector<dom::Element*> IframesIn(dom::Node* root) { return HtmlElementsIn(root, "iframe"); }
 
+// The elements of a tree that an insertion or a removal has to see to, found in one walk (it was a walk of the whole of what came for each kind: a page that puts a thousand nodes in at a time
+// walked them five times for each).
+struct Watched {
+  std::vector<dom::Element*> styles, links, metas, iframes, scripts;
+};
+void WatchedIn(dom::Node* root, Watched& out) {
+  for (dom::Node* node = root; node; node = node->NextInTree(root)) {
+    dom::Element* element = dom::AsElement(node);
+    if (!element) continue;
+    if (element->IsHtml()) {
+      const std::string& name = element->localName;
+      switch (name.size()) {
+        case 4: if (name == "link") out.links.push_back(element); else if (name == "meta") out.metas.push_back(element); break;
+        case 5: if (name == "style") out.styles.push_back(element); break;
+        case 6: if (name == "script") out.scripts.push_back(element); else if (name == "iframe") out.iframes.push_back(element); break;
+        default: break;
+      }
+    }
+    if (dom::ShadowRoot* shadow = element->ShadowRootInView()) WatchedIn(shadow, out);
+  }
+}
+
 // The iframes of a document, kept while its tree is as it was (every layout asks, and a walk of all the nodes of the page for each ask was a tenth of what a page that only
 // animates a dot spent at rest).
 std::vector<dom::Element*> IframesOfDocument(dom::Document* document) {
@@ -708,37 +730,41 @@ void AfterInsert(dom::Node* node) {
   if (!node->IsElement() && !node->IsFragment()) return;
   dom::Node* root = dom::ShadowIncludingRoot(node);
   if (!root || !root->IsDocument()) return;
-  for (dom::Element* style : HtmlElementsIn(node, "style")) {
+  Watched watched;
+  WatchedIn(node, watched);
+  for (dom::Element* style : watched.styles) {
     if (style->nodeDocument && style->nodeDocument->context) UpdateStyle(style);
   }
-  for (dom::Element* link : HtmlElementsIn(node, "link")) UpdateLink(link);
-  for (dom::Element* meta : HtmlElementsIn(node, "meta")) {
+  for (dom::Element* link : watched.links) UpdateLink(link);
+  for (dom::Element* meta : watched.metas) {
     const std::optional<std::string> equiv = dom::GetAttribute(meta, "http-equiv");
     const std::optional<std::string> content = dom::GetAttribute(meta, "content");
     std::string name = equiv ? *equiv : "";
     for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     if (equiv && content && name == "content-security-policy") csp::AddPolicy(static_cast<dom::Document*>(root), *content);
   }
-  const std::vector<dom::Element*> inserted = IframesIn(node);
+  const std::vector<dom::Element*>& inserted = watched.iframes;
   for (dom::Element* iframe : inserted) CreateContext(iframe);
   if (!inserted.empty()) SyncFrames(static_cast<dom::Document*>(root));
-  for (dom::Element* script : HtmlElementsIn(node, "script")) PrepareScript(script);
+  for (dom::Element* script : watched.scripts) PrepareScript(script);
 }
 
 void AfterRemove(dom::Node* node, bool) {
   FocusAfterRemove(node);
   if (!node->IsElement()) return;
   dom::Document* document = node->nodeDocument;
-  for (dom::Element* style : HtmlElementsIn(node, "style")) {
+  Watched watched;
+  WatchedIn(node, watched);
+  for (dom::Element* style : watched.styles) {
     if (style->nodeDocument && style->nodeDocument->context) UpdateStyle(style);
   }
-  for (dom::Element* link : HtmlElementsIn(node, "link")) {
+  for (dom::Element* link : watched.links) {
     if (link->styleSheet) static_cast<css::CssStyleSheet*>(link->styleSheet)->ownerNode = nullptr;
     link->styleSheet = nullptr;
     dom::NoteSheetOwnersChanged();
     css::NoteStyleChange();
   }
-  const std::vector<dom::Element*> removed = IframesIn(node);
+  const std::vector<dom::Element*>& removed = watched.iframes;
   for (dom::Element* iframe : removed) DiscardContext(iframe);
   if (!removed.empty()) SyncFrames(document);
 }
