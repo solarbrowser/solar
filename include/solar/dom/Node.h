@@ -631,6 +631,9 @@ size_t LiveDocuments();
 uint64_t DocumentVersion();
 // The same, but not for a change of the text of a node that stays text: what style and animations look at (the elements, their attributes) is as it was.
 uint64_t StructureVersion();
+// Which elements have a style sheet (a style or link element that has one made): a number that changes when an element gets one or loses one.
+uint64_t SheetOwnersVersion();
+void NoteSheetOwnersChanged();
 void NoteTextChange(bool wasEmpty, bool isEmpty);
 // Changes with the states of elements (hover, focus, pressed, defined): style is made anew for them, and what is kept of the tree is not let go.
 uint64_t StateVersion();

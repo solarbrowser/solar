@@ -629,6 +629,7 @@ void UpdateLink(dom::Element* link) {
     css::NoteStyleChange();  // (the sheet it had is gone)
   }
   link->styleSheet = nullptr;
+  dom::NoteSheetOwnersChanged();
   dom::Document* document = link->nodeDocument;
   if (!document || !document->context || !g_environment) return;
   dom::Node* root = dom::ShadowIncludingRoot(link);
@@ -671,6 +672,7 @@ void UpdateLink(dom::Element* link) {
     document->preferredSheetSet = sheet->title;
   }
   link->styleSheet = sheet;
+  dom::NoteSheetOwnersChanged();
   link->NoteWrite();
   css::NoteSheetAttached(sheet);
   const bool counted = DelayLoad(document);
@@ -733,6 +735,7 @@ void AfterRemove(dom::Node* node, bool) {
   for (dom::Element* link : HtmlElementsIn(node, "link")) {
     if (link->styleSheet) static_cast<css::CssStyleSheet*>(link->styleSheet)->ownerNode = nullptr;
     link->styleSheet = nullptr;
+    dom::NoteSheetOwnersChanged();
     css::NoteStyleChange();
   }
   const std::vector<dom::Element*> removed = IframesIn(node);

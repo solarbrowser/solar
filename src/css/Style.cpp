@@ -1102,7 +1102,7 @@ std::vector<CssStyleSheet*> SheetsOfTreeUncached(dom::Node* root, Quanta::Contex
 // The style sheets of a tree, kept until something changes: every element asks for them (what is kept is shared, not copied for each).
 std::shared_ptr<const std::vector<CssStyleSheet*>> SheetsOfTreeShared(dom::Node* root, Quanta::Context* ctx = nullptr) {
   static std::unordered_map<dom::Node*, std::pair<uint64_t, std::shared_ptr<const std::vector<CssStyleSheet*>>>> cache;
-  const uint64_t version = dom::StructureVersion() * 1000003 + g_styleVersion;
+  const uint64_t version = dom::SheetOwnersVersion() * 1000003 + g_styleVersion;  // (the elements that have a sheet, and the rules and the adopted ones: not any change of the tree)
   auto found = cache.find(root);
   if (found != cache.end() && found->second.first == version) return found->second.second;
   auto sheets = std::make_shared<const std::vector<CssStyleSheet*>>(SheetsOfTreeUncached(root, ctx));
@@ -3194,12 +3194,17 @@ std::optional<std::string> Resolver::Substitute(dom::Element* element, const std
 std::optional<RegisteredProperty> RegistrationOf(dom::Element* element, const std::string& name) {
   static std::map<std::pair<dom::Document*, std::string>, std::optional<RegisteredProperty>> cache;
   static std::map<dom::Document*, std::map<std::string, RegisteredProperty>> sheetRegistrations;  // (what the sheets register: made once for each version, not for each name)
-  static uint64_t cachedVersion = 0;
+  static uint64_t cachedVersion = 0, sheetsVersion = 0;
   const uint64_t version = dom::DocumentVersion() * 1000003 + g_styleVersion;
   if (version != cachedVersion) {
     cache.clear();
-    sheetRegistrations.clear();
     cachedVersion = version;
+  }
+  // (What the sheets register changes with the sheets, not with any change of the tree: the walk of the document that finds it was made for each one.)
+  const uint64_t sheetsNow = (dom::SheetOwnersVersion() * 1000003 + g_styleVersion) * 1000003 + g_authorVersion;
+  if (sheetsNow != sheetsVersion) {
+    sheetRegistrations.clear();
+    sheetsVersion = sheetsNow;
   }
   const auto key = std::make_pair(element->nodeDocument, name);
   const auto found = cache.find(key);

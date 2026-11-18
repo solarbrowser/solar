@@ -1043,6 +1043,7 @@ void UpdateStyleElement(Context& ctx, dom::Element* element) {
   }
   if (element->styleSheet) static_cast<CssStyleSheet*>(element->styleSheet)->ownerNode = nullptr;
   element->styleSheet = nullptr;
+  dom::NoteSheetOwnersChanged();
   if (!element->IsHtml("style")) return;
   dom::Node* root = dom::ShadowIncludingRoot(element);
   if (!root || !root->IsDocument()) {
@@ -1072,6 +1073,7 @@ void UpdateStyleElement(Context& ctx, dom::Element* element) {
     }
   }
   element->styleSheet = sheet;
+  dom::NoteSheetOwnersChanged();
   element->NoteWrite();
   NoteSheetAttached(sheet);
 }

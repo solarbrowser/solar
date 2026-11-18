@@ -496,6 +496,7 @@ void DisposeDocument(Document* document) {
     if (n->IsElement()) {
       Element* e = static_cast<Element*>(n);
       e->attributes.clear();
+      if (e->styleSheet) NoteSheetOwnersChanged();
       e->attributeMap = e->tokenList = e->styleSheet = e->inlineStyle = e->dataset = nullptr;
       e->templateContents = nullptr;
       e->shadowRoot = nullptr;
@@ -558,6 +559,9 @@ size_t LiveNodes() { return g_liveNodes; }
 size_t LiveDocuments() { return 0; }
 uint64_t DocumentVersion() { return g_committedViewDepth ? g_committedDocumentVersion : g_documentVersion; }
 uint64_t StructureVersion() { return g_committedViewDepth ? g_committedStructureVersion : g_structureVersion; }
+namespace { uint64_t g_sheetOwnersVersion = 1; }
+uint64_t SheetOwnersVersion() { return g_sheetOwnersVersion; }
+void NoteSheetOwnersChanged() { ++g_sheetOwnersVersion; }
 uint64_t StateVersion() { return g_committedViewDepth ? g_committedStateVersion : g_stateVersion; }
 
 namespace {
@@ -1119,6 +1123,7 @@ std::optional<DomError> MoveBefore(Node* node, Node* parent, Node* child) {
   RemoveImpl(node, false);
   InsertImpl(node, parent, reference, false);
   g_moving = false;
+  NoteSheetOwnersChanged();  // (a sheet that is moved keeps its element and its place in the tree is another)
   CustomAfterMove(node);
   return std::nullopt;
 }
