@@ -1,0 +1,44 @@
+<!doctype html>
+<!-- Run: SDL_VIDEODRIVER=dummy SOLAR_GUI_CPU=1 SOLAR_GUI_SETTLE=4000 SOLAR_GUI_SHOT=x.png ./solar tests/web-api/custom-property-changes.html : the line "t ok/FAIL ..." -->
+<title>custom properties: the styles that use one that changed are made again, the others are not</title><style>
+.b{--b:var(--a)}
+.gc{color:var(--b)}
+.ov{--a:rgb(1,1,1)}
+.ovc{color:var(--a)}
+.k1{--k:rgb(5,5,5)}
+.k2{--k:rgb(6,6,6)}
+.kc{color:var(--k)}
+.fb{color:var(--missing, var(--a))}
+.sh{border:2px solid var(--a)}
+.rootc{color:var(--rootv)}
+.deep{--c:var(--b)}
+.deepc{background-color:var(--c)}
+</style>
+<div id=top style="--a:rgb(9,9,9);color:rgb(0,0,0)"><div id=mid class=b><div id=g1 class=gc>x</div><div id=deep class=deep><div id=g2 class=deepc>x</div></div></div>
+<div id=o class=ov><div id=oc class=ovc>x</div></div>
+<div id=kb class=k1><div id=kc class=kc>x</div></div>
+<div id=f class=fb>x</div><div id=s class=sh>x</div><div id=r class=rootc>x</div></div>
+<script>
+const $=(i)=>document.getElementById(i), col=(i,p="color")=>getComputedStyle($(i))[p];
+const res=[];const chk=(name,got,exp)=>res.push((got===exp?"ok   ":"FAIL ")+name+" got="+got+" exp="+exp);
+col("g1");col("oc");col("kc");col("f");col("s");col("r");col("g2","backgroundColor");
+$("top").style.setProperty("--a","rgb(20,0,0)");
+chk("transitive via --b",col("g1"),"rgb(20, 0, 0)");
+chk("deep chain",col("g2","backgroundColor"),"rgb(20, 0, 0)");
+chk("override shields",col("oc"),"rgb(1, 1, 1)");
+chk("fallback var",col("f"),"rgb(20, 0, 0)");
+chk("shorthand var",getComputedStyle($("s")).borderTopColor,"rgb(20, 0, 0)");
+$("kb").className="k2";
+chk("class changes custom",col("kc"),"rgb(6, 6, 6)");
+document.documentElement.style.setProperty("--rootv","rgb(7,7,7)");
+chk("root var set later",col("r"),"rgb(7, 7, 7)");
+$("top").style.setProperty("--a","rgb(30,0,0)");
+chk("transitive again",col("g1"),"rgb(30, 0, 0)");
+$("top").style.removeProperty("--a");
+chk("removed var is guaranteed-invalid",col("g1"),"rgb(0, 0, 0)");
+$("mid").className="";
+chk("rule gone",col("g1"),"rgb(0, 0, 0)");
+$("mid").className="b";$("top").style.setProperty("--a","rgb(40,0,0)");
+chk("rule back",col("g1"),"rgb(40, 0, 0)");
+console.log("t "+res.join(" | "));
+</script>

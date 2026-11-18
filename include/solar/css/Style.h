@@ -51,6 +51,8 @@ uint64_t FlushVersion();
 uint64_t AnimationVersion();
 // Changes when an animation changed only how an element is drawn (layout is not made again for it).
 uint64_t DrawAnimationVersion();
+// Something is drawn another way and nothing of the tree, the styles or the sizes is (a canvas has a new picture): a new frame, and no more.
+void NoteDrawChange();
 // AnimationVersion without the changes that are only of how things are drawn: what a layout is made for.
 uint64_t LayoutAnimationVersion();
 // An animation gave an element something that is only drawn (the styles that were kept are made again for it, a layout is not).

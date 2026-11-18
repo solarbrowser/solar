@@ -1345,6 +1345,7 @@ class ComputedMap {
 };
 
 struct Memo {
+  bool shared = false;  // more than one element has it (what was worked out for the same cascade): an element whose cascade is another does not keep it
   ComputedMap computed;
   std::unordered_map<std::string, std::optional<std::string>> custom;
 };
@@ -1359,6 +1360,9 @@ struct ElementStyle {
   bool built = false;
   HasUse has;               // what the :has() looked at for it were: what is under it, and beside it, is what its style was made from, too
   bool hasLogical = false;  // a logical property is declared for the element
+  // The custom properties its values use with var(), worked out when asked (see UsedVarIds).
+  mutable bool varIdsKnown = false;
+  mutable std::vector<uint32_t> varIds;
 };
 
 // What the selectors of the document and of the user agent look at of an element (see ShareFromSibling).
@@ -1411,6 +1415,10 @@ struct StyleEntry {
   uint64_t parentEpoch = 0;
   // The same as the epoch, and a new number too when only the custom properties of the style changed (what is made of it by the elements below that use none, with var(), is as it was).
   uint64_t customEpoch = 0, parentCustomEpoch = 0;
+  // The custom properties it declares (by number) and a hash of the value of each, as they were when its style was made: when one is another, a custom property changed (see NoteCustomDeclarations).
+  uint64_t snapSerial = 0;
+  std::vector<std::pair<uint32_t, uint64_t>> snap;
+  uint64_t varSeen = 0;  // the count of changes of custom properties (VarState::clock) it was last made or looked at for
   // What the elements under are told by of the style: the epoch, except that it stays when what changed is none of what they have from it (a property that is not inherited).
   uint64_t inheritEpoch = 0;
   uint32_t animInherit = 0;
@@ -1503,6 +1511,126 @@ bool SameCascade(const ElementStyle& a, const ElementStyle& b) {
   return true;
 }
 
+
+// ---- Which custom properties changed ----
+// A custom property that changes (one element's declaration of it is another) tells the elements that use that name, and the names that are made from it, that their styles are not as they were:
+// the others (nearly all) keep what was worked out, where each change of a custom property of an element above used to make again every style that has a var() in it.
+struct VarState {
+  std::unordered_map<std::string, uint32_t> ids;
+  std::vector<uint64_t> changed;           // by number: the clock when a declaration of the name was last another
+  std::vector<std::vector<uint32_t>> deps;  // by number: the names the declarations of it use (a custom property made from others)
+  std::vector<uint64_t> reachAt, reachValue;  // by number: the answer of Reach, and the (clock, depsVersion) it was for
+  uint64_t clock = 1, depsVersion = 1;
+};
+VarState g_var;
+
+uint32_t VarId(std::string_view name) {
+  auto found = g_var.ids.find(std::string(name));
+  if (found != g_var.ids.end()) return found->second;
+  const uint32_t id = static_cast<uint32_t>(g_var.changed.size());
+  g_var.ids.emplace(std::string(name), id);
+  g_var.changed.push_back(0);
+  g_var.deps.emplace_back();
+  g_var.reachAt.push_back(0);
+  g_var.reachValue.push_back(0);
+  return id;
+}
+
+// The custom properties named by var() in a text (also in the fallback of one).
+void VarNamesIn(std::string_view text, std::vector<uint32_t>& out) {
+  size_t at = 0;
+  while ((at = text.find("var(", at)) != std::string_view::npos) {
+    at += 4;
+    while (at < text.size() && (text[at] == ' ' || text[at] == '\t' || text[at] == '\n')) ++at;
+    size_t end = at;
+    while (end < text.size() && text[end] != ',' && text[end] != ')' && text[end] != ' ' && text[end] != '\t' && text[end] != '\n') ++end;
+    if (end > at + 1 && text[at] == '-' && text[at + 1] == '-') {
+      const uint32_t id = VarId(text.substr(at, end - at));
+      if (std::find(out.begin(), out.end(), id) == out.end()) out.push_back(id);
+    }
+    at = end;
+  }
+}
+
+// When the name, or one it is made from, last changed.
+uint64_t VarReach(uint32_t id) {
+  const uint64_t stamp = g_var.clock * 1000003 + g_var.depsVersion;
+  if (g_var.reachAt[id] == stamp) return g_var.reachValue[id];
+  uint64_t reach = 0;
+  std::vector<uint32_t> stack{id}, seen{id};
+  while (!stack.empty()) {
+    const uint32_t at = stack.back();
+    stack.pop_back();
+    reach = std::max(reach, g_var.changed[at]);
+    for (uint32_t next : g_var.deps[at]) {
+      if (std::find(seen.begin(), seen.end(), next) != seen.end()) continue;
+      seen.push_back(next);
+      stack.push_back(next);
+    }
+  }
+  g_var.reachAt[id] = stamp;
+  g_var.reachValue[id] = reach;
+  return reach;
+}
+
+const std::vector<uint32_t>& UsedVarIds(const ElementStyle& style) {
+  if (style.varIdsKnown) return style.varIds;
+  style.varIdsKnown = true;
+  for (const auto& [name, winner] : style.cascade) {
+    if (!winner.entry) continue;
+    VarNamesIn(winner.entry->value, style.varIds);
+    if (!winner.entry->pendingText.empty()) VarNamesIn(winner.entry->pendingText.str(), style.varIds);
+  }
+  return style.varIds;
+}
+
+// Whether what a style says is made from a custom property that changed after `seen`.
+bool UsesChangedVar(const ElementStyle& style, uint64_t seen) {
+  for (uint32_t id : UsedVarIds(style)) {
+    if (VarReach(id) > seen) return true;
+  }
+  return false;
+}
+
+// The custom properties a style declares, compared with what the element declared when its style was made before: the ones that are other are what changed.
+void NoteCustomDeclarations(dom::Element* element, const ElementStyle& style, StyleEntry& entry) {
+  std::vector<std::pair<uint32_t, uint64_t>> now;
+  for (const auto& [name, winner] : style.cascade) {
+    if (name.size() < 3 || name[0] != '-' || name[1] != '-' || !winner.entry) continue;
+    const uint32_t id = VarId(name);
+    now.push_back({id, std::hash<std::string>{}(winner.entry->value)});
+    if (winner.entry->value.find("var(") != std::string::npos) {
+      std::vector<uint32_t> used;
+      VarNamesIn(winner.entry->value, used);
+      std::vector<uint32_t>& have = g_var.deps[id];
+      for (uint32_t u : used) {
+        if (std::find(have.begin(), have.end(), u) == have.end()) {
+          have.push_back(u);
+          ++g_var.depsVersion;
+        }
+      }
+    }
+  }
+  std::sort(now.begin(), now.end());
+  if (entry.snapSerial == element->serial) {
+    size_t i = 0, j = 0;
+    while (i < entry.snap.size() || j < now.size()) {
+      if (j == now.size() || (i < entry.snap.size() && entry.snap[i].first < now[j].first)) {
+        g_var.changed[entry.snap[i].first] = ++g_var.clock;
+        ++i;
+      } else if (i == entry.snap.size() || now[j].first < entry.snap[i].first) {
+        g_var.changed[now[j].first] = ++g_var.clock;
+        ++j;
+      } else {
+        if (entry.snap[i].second != now[j].second) g_var.changed[now[j].first] = ++g_var.clock;
+        ++i;
+        ++j;
+      }
+    }
+  }
+  entry.snap = std::move(now);
+  entry.snapSerial = element->serial;
+}
 
 // Whether a style says something with a var() in it (what it is worked out to depends on custom properties).
 bool UsesVar(const ElementStyle& style) {
@@ -1966,6 +2094,7 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
       }
     }
     entry.plain.memo = fresh ? fresh : std::make_shared<Memo>();
+    if (fresh) fresh->shared = true;
     entry.plain.resolving.clear();
     entry.plain.resolvingProps.clear();
     for (auto& other : entry.others) {
@@ -1988,8 +2117,10 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
       return;
     }
     entry.parentCustomEpoch = parentCustom;
-    bool uses = UsesVar(entry.plain);
-    for (const auto& other : entry.others) uses = uses || UsesVar(other.second);
+    // (Only a style made from a custom property that changed is made again: a var() of one that did not is as it was.)
+    bool uses = UsesChangedVar(entry.plain, entry.varSeen);
+    for (const auto& other : entry.others) uses = uses || UsesChangedVar(other.second, entry.varSeen);
+    entry.varSeen = g_var.clock;
     if (uses) {
       dropWorkedOut();
       entry.epoch = ++g_styleEpoch;
@@ -2090,10 +2221,11 @@ void Validate(dom::Element* element, StyleEntry& entry, uint64_t treeVersion) {
       // (What the elements under it are told by is a new number where the tree around it is another: they look at the rules again, as it did.)
       if (!goodButStructure || keepCascade) entry.cascadeEpoch = oldCascadeEpoch;
     } else if (!computedStale && !g_styleContainerQueries && oldEpoch != 0 && entry.others.empty() && oldOthers.empty() && SameCascadeButCustom(old, entry.plain) &&
-               !UsesVar(old) && !UsesVar(entry.plain) && !(attrStays && (UsesAttr(old) || UsesAttr(entry.plain))) &&
-               old.memo.use_count() == 1) {  // (a memo that other elements share was worked out for a cascade they all had: this one is another now)
+               !UsesVar(old) && !UsesVar(entry.plain) && !(attrStays && (UsesAttr(old) || UsesAttr(entry.plain)))) {
       // Only custom properties are others, and nothing of the element is worked out from them: what it was worked out to stays; the elements under it are told.
-      entry.plain.memo = old.memo;
+      // (A memo that other elements share was worked out for a cascade they all had: this one is another now, and has a copy of its own.)
+      entry.plain.memo = !old.memo->shared ? old.memo : std::make_shared<Memo>(*old.memo);
+      entry.plain.memo->shared = false;
       entry.plain.memo->custom.clear();
       entry.epoch = oldEpoch;
       entry.inheritEpoch = oldInheritEpoch;
@@ -2396,6 +2528,7 @@ void Share(dom::Element* element, ElementStyle& style, const std::string& pseudo
     }
     if (!same) continue;
     style.memo = other.style->memo;
+    style.memo->shared = true;
     return;
   }
   bucket.push_back({parentStyle.memo, element->localName, element->namespaceUri, &style, pseudo});
@@ -2687,6 +2820,7 @@ bool ShareFromSibling(dom::Element* element, ElementStyle& style) {
     }
     style.cascade = other.plain.cascade;
     style.memo = other.plain.memo;
+    style.memo->shared = true;
     style.has = other.plain.has;
     style.hasLogical = other.plain.hasLogical;
     static const bool debug = std::getenv("SOLAR_STYLE_DEBUG") != nullptr;
@@ -2704,7 +2838,15 @@ void BuildUntimed(dom::Element* element, ElementStyle& style, const std::string&
 void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo) {
   static const bool debug = std::getenv("SOLAR_STYLE_DEBUG") != nullptr;
   if (!debug) {
+    const bool was = style.built;
     BuildUntimed(element, style, pseudo);
+    if (!was && pseudo.empty()) {
+      const auto found = Cache().find(element);
+      if (found != Cache().end()) {
+        NoteCustomDeclarations(element, style, found->second);
+        found->second.varSeen = g_var.clock;
+      }
+    }
     return;
   }
   static double ms = 0, sharedMs = 0;
@@ -2712,6 +2854,13 @@ void Build(dom::Element* element, ElementStyle& style, const std::string& pseudo
   const bool was = style.built;
   const auto from = std::chrono::steady_clock::now();
   BuildUntimed(element, style, pseudo);
+  if (!was && pseudo.empty()) {
+    const auto found = Cache().find(element);
+    if (found != Cache().end()) {
+      NoteCustomDeclarations(element, style, found->second);
+      found->second.varSeen = g_var.clock;
+    }
+  }
   if (was) return;
   const double took = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - from).count();
   ms += took;

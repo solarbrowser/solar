@@ -259,6 +259,7 @@ bool OnlyItself(const AnimatedValues& values) {
 // The longhands of a color that is drawn (border-top-color, text-decoration-color...): nothing of the size of a box.
 uint64_t g_drawAnimationVersion = 0;
 uint64_t DrawAnimationVersion() { return g_drawAnimationVersion; }
+void NoteDrawChange() { ++g_drawAnimationVersion; }
 bool DrawOnlyColor(const std::string& name) { return name.size() > 6 && name.compare(name.size() - 6, 6, "-color") == 0; }
 
 std::set<std::string>& SizingVerdictFalse() {

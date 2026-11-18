@@ -14,6 +14,7 @@
 
 #include "CanvasSurface.h"
 #include "solar/dom/Damage.h"
+#include "solar/css/Style.h"
 #include "solar/dom/Node.h"
 #include "solar/web/FetchHost.h"
 
@@ -50,15 +51,17 @@ struct Natives {
       if (attached == elements.end()) return;
       // (An element that was destroyed since -- the collector took it, and its destructor took it out of the registry -- is not touched: this list kept its address only.)
       auto& list = attached->second;
+      bool shown = false;
       for (auto at = list.begin(); at != list.end();) {
         if (!CanvasOf(*at)) {
           at = list.erase(at);
           continue;
         }
-        dom::NoteDamage(*at, dom::kDamageAttributes);
-        dom::NoteTreeChangeAt(*at);
+        shown = true;
         ++at;
       }
+      // (The picture is asked of the surface when the list is drawn: nothing of the tree, the styles or the sizes is another, so none is made again for it, only a new frame.)
+      if (shown) css::NoteDrawChange();
     });
   }
   void Release() {
