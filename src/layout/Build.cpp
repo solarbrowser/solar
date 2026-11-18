@@ -812,7 +812,7 @@ class Builder {
       kept.clear();
       version = now;
     }
-    if (pseudo.empty()) css::ComputedValue(lc_.ctx, element, "display");  // (the style is made, with all that goes with it, before its token is looked at)
+    css::ComputedValue(lc_.ctx, element, "display", pseudo);  // (the style is made, with all that goes with it, before its token is looked at)
     std::shared_ptr<void> token = css::SharedStyleToken(lc_.ctx, element, pseudo);
     static const bool debug = std::getenv("SOLAR_STYLE_DEBUG") != nullptr;
     static long unshared = 0, sharedHits = 0, read = 0;
@@ -1364,7 +1364,7 @@ class Builder {
     dom::Element* element = static_cast<dom::Element*>(box.node);
     const std::string type = box.style->listStyleType;
     if (type == "none") return;
-    std::shared_ptr<const BoxStyle> markerStyle = Logicalize(ReadStyle(lc_.ctx, element, "marker"));
+    std::shared_ptr<const BoxStyle> markerStyle = SharedBoxStyle(element, "marker");  // (the markers of a thousand items are of one style, read once)
     std::string text;
     if (markerStyle->content != "normal" && markerStyle->content != "none" && !markerStyle->content.empty()) {
       if (!ContentText(*markerStyle, element, text)) return;

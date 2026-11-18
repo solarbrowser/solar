@@ -3221,7 +3221,7 @@ std::optional<std::string> Resolver::Custom(dom::Element* element, const std::st
   ElementStyle& style = StyleOf(element, pseudo);
   const bool fresh = !style.built;
   Build(element, style, pseudo);
-  if (fresh && !pseudo.empty() && !style.cascade.empty()) Share(element, style, pseudo);
+  if (fresh && !pseudo.empty() && (!style.cascade.empty() || pseudo == "marker")) Share(element, style, pseudo);
   const auto cached = style.memo->custom.find(name);
   if (cached != style.memo->custom.end()) return cached->second;
   if (style.resolving.count(name)) return std::nullopt;  // a cycle
@@ -3427,7 +3427,7 @@ std::string Resolver::Specified(dom::Element* element, const std::string& proper
   ElementStyle& style = StyleOf(element, pseudo);
   const bool fresh = !style.built;
   Build(element, style, pseudo);
-  if (fresh && !pseudo.empty() && !style.cascade.empty()) Share(element, style, pseudo);
+  if (fresh && !pseudo.empty() && (!style.cascade.empty() || pseudo == "marker")) Share(element, style, pseudo);
   const Parent parent = ParentOf(element, pseudo);
   const auto fromParent = [&]() -> std::string {
     if (parent.element) return Compute(parent.element, property, parent.pseudo);
@@ -4776,7 +4776,7 @@ bool HasPseudoStyle(dom::Element* element, const std::string& pseudo) {
   ElementStyle& style = StyleOf(element, pseudo);
   if (!style.built) {
     Build(element, style, pseudo);
-    if (!style.cascade.empty()) Share(element, style, pseudo);
+    if (!style.cascade.empty() || pseudo == "marker") Share(element, style, pseudo);
   }
   if (style.cascade.empty()) return false;
   // ::before and ::after are only there with a content: where no rule gives one (a reset that is for every element says box-sizing of both) there is nothing to make a
@@ -4965,7 +4965,7 @@ bool DeclaresAnimation(dom::Element* element, const std::string& pseudo) {
   ElementStyle& style = StyleOf(element, pseudo);
   if (!style.built) {
     Build(element, style, pseudo);
-    if (!style.cascade.empty()) Share(element, style, pseudo);
+    if (!style.cascade.empty() || pseudo == "marker") Share(element, style, pseudo);
   }
   return style.cascade.count("animation-name") || style.cascade.count("transition-duration") || style.cascade.count("transition-delay");
 }
