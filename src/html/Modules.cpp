@@ -238,14 +238,8 @@ std::vector<std::string> ImportedNames(const std::string& text) {
   return names;
 }
 
-void Fetch(qe::Realm* realm, const std::string& address, const std::string& type, std::function<void(qe::ModuleSource)> done) {
-  std::shared_ptr<const std::string> text;
-  if (address.starts_with("data:")) {
-    if (auto data = DecodeDataUrl(address)) text = std::make_shared<const std::string>(std::move(data->first));
-  } else {
-    text = LoadModuleSharedResource(address);
-  }
-  // The modules this one imports are on their way before anything waits for them, one after another otherwise.
+// What a module that was fetched is, for the engine; the modules it imports are on their way before anything waits for them, one after another otherwise.
+void AnswerFetch(qe::Realm* realm, const std::string& address, const std::string& type, std::shared_ptr<const std::string> text, const std::function<void(qe::ModuleSource)>& done) {
   if (text && !address.starts_with("data:")) {
     for (const std::string& name : ImportedNames(*text)) {
       std::string resolved, error;
@@ -267,6 +261,27 @@ void Fetch(qe::Realm* realm, const std::string& address, const std::string& type
   if (type.empty()) done(qe::ModuleSource::ScriptShared(std::move(text)));
   else if (type == "json") done(qe::ModuleSource::Json(*text));
   else done(qe::ModuleSource::Failure("Unsupported module type \"" + type + "\""));
+}
+
+void Fetch(qe::Realm* realm, const std::string& address, const std::string& type, std::function<void(qe::ModuleSource)> done) {
+  if (address.starts_with("data:")) {
+    std::shared_ptr<const std::string> text;
+    if (auto data = DecodeDataUrl(address)) text = std::make_shared<const std::string>(std::move(data->first));
+    AnswerFetch(realm, address, type, std::move(text), done);
+    return;
+  }
+  // What a script of the page asks for with import() is got while the page goes on (the ones that script asks for one after another, as a loader of chunks does, were waited for each in its turn,
+  // and the ones it asks for together were not together either); a module script of the page, with what it imports, is waited for.
+  const bool network = address.starts_with("http://") || address.starts_with("https://");
+  if (network && realm && !realm->ModuleFetchIsSync()) {
+    const std::weak_ptr<bool> life = realm->Life();
+    LoadModuleSharedResourceAsync(address, [realm, life, address, type, done](std::shared_ptr<const std::string> text) {
+      if (life.expired()) return;  // (the page was left: nothing waits for it)
+      AnswerFetch(realm, address, type, std::move(text), done);
+    });
+    return;
+  }
+  AnswerFetch(realm, address, type, LoadModuleSharedResource(address), done);
 }
 
 // ---- Parsing an import map ----

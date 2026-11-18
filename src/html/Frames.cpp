@@ -129,6 +129,14 @@ std::shared_ptr<const std::string> LoadModuleSharedResource(const std::string& u
   return g_environment->LoadModuleShared(url);
 }
 
+void LoadModuleSharedResourceAsync(const std::string& url, std::function<void(std::shared_ptr<const std::string>)> done) {
+  if (url.starts_with("blob:") || url.starts_with("data:") || !g_environment) {
+    done(LoadModuleSharedResource(url));
+    return;
+  }
+  g_environment->LoadModuleSharedAsync(url, std::move(done));
+}
+
 // A module script: asked for with CORS.
 std::optional<std::string> LoadModuleResource(const std::string& url) {
   if (url.starts_with("blob:") || url.starts_with("data:") || !g_environment) return LoadResource(url);

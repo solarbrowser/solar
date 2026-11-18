@@ -377,7 +377,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
       auto callbacks = std::move(whenDone);
       whenDone.clear();
       struct Run { std::vector<std::function<void()>>& list; ~Run() { for (auto& call : list) call(); } } run{callbacks};
-      if (owner->timing_) std::fprintf(stderr, "  fetch %5.0f ms  %7zu bytes  %s\n", std::chrono::duration<double, std::milli>(Clock::now() - started).count(), body->size(), url.substr(0, 100).c_str());
+      if (owner->timing_) std::fprintf(stderr, "  fetch %5.0f ms (answer at %5.0f ms, begun at %5.0f ms)  %7zu bytes  %s\n", std::chrono::duration<double, std::milli>(Clock::now() - started).count(), headersMs, std::chrono::duration<double, std::milli>(started - owner->programStartForLog_).count(), body->size(), url.substr(0, 100).c_str());
       if (owner->waiting_ == this) owner->loop_.Stop();
       if (owner->layoutImages_.erase(url)) {
         owner->sizesArrived_ = true;
@@ -646,6 +646,28 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
   std::optional<std::string> LoadNoCors(const std::string& url, bool styleSheet) override { return LoadAs(url, styleSheet ? Kind::Style : Kind::Script); }
   std::shared_ptr<const std::string> LoadNoCorsShared(const std::string& url, bool styleSheet) override { return LoadSharedAs(url, styleSheet ? Kind::Style : Kind::Script); }
   std::shared_ptr<const std::string> LoadModuleShared(const std::string& url) override { return LoadSharedAs(url, Kind::Module); }
+  // The same without waiting: the answer is given when the resource is here (at once, when it is).
+  void LoadModuleSharedAsync(const std::string& url, std::function<void(std::shared_ptr<const std::string>)> done) override {
+    if (url.starts_with("file://")) {
+      done(LoadSharedAs(url, Kind::Module));
+      return;
+    }
+    Resource* resource = Start(url, Kind::Module);
+    if (!resource) {
+      done(nullptr);
+      return;
+    }
+    const auto answer = [url, resource, done = std::move(done)]() {
+      if (resource->failed || resource->status < 200 || resource->status >= 300) {
+        std::fprintf(stderr, "  [%d%s] %s%s%s\n", resource->status, resource->failed ? " failed" : "", url.c_str(), resource->error.empty() ? "" : "  : ", resource->error.c_str());
+        done(nullptr);
+        return;
+      }
+      done(resource->body);
+    };
+    if (resource->done) answer();
+    else resource->whenDone.push_back(answer);
+  }
   std::optional<std::string> LoadModule(const std::string& url) override { return LoadAs(url, Kind::Module); }
   // The document of a frame that is navigated.
   std::optional<std::string> LoadNavigation(const std::string& url) override { return LoadAs(url, Kind::Document); }
@@ -933,6 +955,7 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
   double waited_ = 0;  // ms spent waiting for what the page asked for
   bool painting_ = false;
   bool timing_ = false;
+  Clock::time_point programStartForLog_ = Clock::now();  // (SOLAR_GUI_TIMES: when each fetch began, from here)
   std::function<void()> pump_;
   std::function<void(bool)> pointerLock_;  // (set where the window is: the pointer is hidden and locked, or not)
   std::function<void(bool)> fullscreen_;  // (set where the window is: the whole window is made full screen, or not)

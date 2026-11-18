@@ -57,6 +57,8 @@ class FrameEnvironment {
     std::optional<std::string> text = LoadModule(url);
     return text ? std::make_shared<const std::string>(std::move(*text)) : nullptr;
   }
+  // The same, without waiting: `done` is called with the text (or nothing, when it could not be got) when it is here, which may be at once.
+  virtual void LoadModuleSharedAsync(const std::string& url, std::function<void(std::shared_ptr<const std::string>)> done) { done(LoadModuleShared(url)); }
   virtual std::optional<std::string> LoadFont(const std::string& url) { return Load(url); }
 
   // What the resource at the URL is, as the Content-Type header would say: text/html, or an XML type.
@@ -184,6 +186,8 @@ std::optional<std::string> LoadResource(const std::string& url);
 // The same for a module script (asked for with CORS).
 std::optional<std::string> LoadModuleResource(const std::string& url);
 std::shared_ptr<const std::string> LoadModuleSharedResource(const std::string& url);
+// The same without waiting for it (see Environment::LoadModuleSharedAsync).
+void LoadModuleSharedResourceAsync(const std::string& url, std::function<void(std::shared_ptr<const std::string>)> done);
 // Starts getting a resource that is wanted later, without waiting for it.
 void PrefetchResource(const std::string& url);
 // Whether what is being loaded is a style sheet (the page is not to be drawn while it is waited for).
