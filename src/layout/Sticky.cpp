@@ -163,7 +163,9 @@ void Apply(Tree& tree, Box& box) {
     box.stickyX = dx;
     box.stickyY = dy;
   }
-  for (auto& child : box.children) Apply(tree, *child);
+  for (auto& child : box.children) {
+    if (child->FeaturesBelow() & Box::kSticky) Apply(tree, *child);  // (only where something sticks)
+  }
 }
 
 }  // namespace

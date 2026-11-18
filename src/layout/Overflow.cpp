@@ -13,6 +13,26 @@
 
 namespace solar::layout {
 
+uint8_t Box::FeaturesBelow() const {
+  if (featuresBelow & kKnown) return featuresBelow;
+  uint8_t found = 0;
+  if (style) {
+    const BoxStyle& p = style->Physical();
+    if (kind == Kind::Block) {
+      const auto wheels = [](Overflow o) { return o == Overflow::Auto || o == Overflow::Scroll; };
+      if (wheels(p.overflowX) || wheels(p.overflowY)) found |= kScroller;
+      if (replaced && node && node->IsElement() && static_cast<const dom::Element*>(node)->IsHtml("iframe")) found |= kIframe;
+    }
+    if (style->position == Position::Sticky) found |= kSticky;
+    if (style->IsOutOfFlow()) found |= kOutOfFlow;
+  }
+  for (const auto& child : children) {
+    if (child) found |= child->FeaturesBelow() & ~kKnown;
+  }
+  featuresBelow = found | kKnown;
+  return featuresBelow;
+}
+
 namespace {
 
 bool Clips(const BoxStyle& s) {

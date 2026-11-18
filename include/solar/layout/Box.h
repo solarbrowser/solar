@@ -208,6 +208,11 @@ struct Box {
   bool memoStrict = false;        // it was left unsettled once: it is left as it was only when asked the way its contents are laid out as
   bool memoStrictFresh = false;  // it was made strict by the last layout (see LayoutDocument): it stays so for the next, and is let go of after it if it was not found unsettled again
   mutable int8_t autoOverflowBelow = -1;  // the box, or one under it, has an overflow of auto (-1: not looked at)
+  // What there is in the box and under it that the passes over the whole tree look for (a box that scrolls, an iframe, one that sticks, one taken out of the flow), so that a pass goes only where
+  // something is: worked out the first time it is asked for, for the boxes of a tree that is made (a box that is kept for a later tree keeps it: what is under it is as it was).
+  enum Feature : uint8_t { kScroller = 1, kIframe = 2, kSticky = 4, kOutOfFlow = 8, kKnown = 128 };
+  mutable uint8_t featuresBelow = 0;
+  uint8_t FeaturesBelow() const;
   bool memoInconsistent = false;  // its size and place are those of another slot than the one its contents are laid out as: to be settled before the layout is done
   uint64_t hitSerial = 0;  // the tree in which layout left it as it was (see LayoutMemo)
   bool converted = false;  // what is in it is in the physical frame already (it has not been laid out since)

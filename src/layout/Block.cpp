@@ -1752,7 +1752,8 @@ void PlaceOneAt(LayoutContext& lc, Box& a) {
 void Walk(LayoutContext& lc, Box& box) {
   for (auto& c : box.children) {
     if (IsPositionedOutOfFlow(*c)) PlaceOne(lc, *c);
-    Walk(lc, *c);
+    // (Only where something is taken out of the flow: the boxes under one that has nothing of the kind are not looked at.)
+    if (c->FeaturesBelow() & Box::kOutOfFlow) Walk(lc, *c);
   }
 }
 

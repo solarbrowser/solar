@@ -1947,7 +1947,13 @@ int PageMain(Shared& shared, int argc, char** argv) {
         }
       }
       // A box with an overflow that scrolls and more than its room.
-      if (box.kind == solar::layout::Box::Kind::Block && box.element() && box.parent) {
+      // (Only a box whose own style scrolls can be one: the boxes of a page are not asked about, each by a look in the table of the boxes of its element.)
+      const bool scrolls = box.style && [&] {
+        const solar::layout::BoxStyle& p = box.style->Physical();
+        const auto wheels = [](solar::layout::Overflow o) { return o == solar::layout::Overflow::Auto || o == solar::layout::Overflow::Scroll; };
+        return wheels(p.overflowX) || wheels(p.overflowY);
+      }();
+      if (scrolls && box.kind == solar::layout::Box::Kind::Block && box.element() && box.parent) {
         solar::dom::Element* element = box.element();
         double maxX = 0, maxY = 0;
         const bool viewport = element == element->nodeDocument->DocumentElement() || element->IsHtml("body");
@@ -1973,7 +1979,10 @@ int PageMain(Shared& shared, int argc, char** argv) {
           out.push_back(region);
         }
       }
-      for (const auto& child : box.children) walk(tree, *child, originX, originY, fixedAbove, depth);
+      for (const auto& child : box.children) {
+        // (Only where there is a box that scrolls or a frame: the rest of the tree is not walked.)
+        if (child->FeaturesBelow() & (solar::layout::Box::kScroller | solar::layout::Box::kIframe)) walk(tree, *child, originX, originY, fixedAbove, depth);
+      }
     };
     if (top.root) walk(top, *top.root, 0, 0, false, 0);
     return out;

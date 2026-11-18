@@ -1394,8 +1394,30 @@ class Painter {
   }
 
   // The inline content of a block container: the backgrounds and borders of its inline boxes, then its text and atomic inlines.
-  void PaintLines(const Box& owner) {
-    const Rect origin = layout::AbsoluteBorderBox(owner);
+  void PaintLines(const Box& owner, const Rect& origin) {
+    // A block container whose lines are all out of the window, and has nothing in them that is more than a line of text (an atomic inline has contents of its own, which may reach far), is
+    // not looked at line by line.
+    if (!owner.lines.empty()) {
+      bool plain = true, any = false;
+      double left = 0, top = 0, right = 0, bottom = 0;
+      for (const Line& line : owner.lines) {
+        for (const LineItem& item : line.items) {
+          if (item.kind == LineItem::Kind::Atomic) { plain = false; break; }
+          if (!any) { left = item.rect.x; top = item.rect.y; right = item.rect.x + item.rect.width; bottom = item.rect.y + item.rect.height; any = true; }
+          else { left = std::min(left, item.rect.x); top = std::min(top, item.rect.y); right = std::max(right, item.rect.x + item.rect.width); bottom = std::max(bottom, item.rect.y + item.rect.height); }
+        }
+        if (!plain) break;
+      }
+      if (plain && any && Culled(origin.x + left, origin.y + top, right - left, bottom - top)) return;
+    }
+    // (The clips of the contents are worked out when something is to be made, not for what is out of the window.)
+    bool ensured = false;
+    const auto ensure = [&] {
+      if (!ensured) {
+        EnsureClipsForContentsOf(owner);
+        ensured = true;
+      }
+    };
     // Inline boxes, in tree order, with each of their fragments.
     std::function<void(const Box&)> boxes = [&](const Box& parent) {
       for (const auto& child : parent.children) {
@@ -1403,21 +1425,24 @@ class Painter {
           const size_t count = child->fragments.size();
           for (size_t i = 0; i < count; ++i) {
             const Rect& f = child->fragments[i];
+            if (Culled(origin.x + f.x, origin.y + f.y, f.width, f.height)) continue;
+            ensure();
             PaintDecoration(*child, Rect{origin.x + f.x, origin.y + f.y, f.width, f.height}, i == 0, i + 1 == count);
           }
           boxes(*child);
         }
       }
     };
-    EnsureClipsForContentsOf(owner);
     boxes(owner);
     for (const Line& line : owner.lines) {
       for (const LineItem& item : line.items) {
         if (item.kind == LineItem::Kind::Text) {
+          if (Culled(origin.x + item.rect.x, origin.y + item.rect.y, item.rect.width, item.rect.height)) continue;
+          ensure();
           PaintText(owner, item, origin);
         } else if (item.kind == LineItem::Kind::Atomic && item.box) {
           PaintStackingChild(*item.box);
-          EnsureClipsForContentsOf(owner);
+          ensured = false;  // (what is painted of it leaves the clips as they are for it)
         }
       }
     }
@@ -1449,7 +1474,7 @@ class Painter {
   }
 
   // The boxes that cut what is painted of `box`, outermost first.
-  std::vector<const Box*> ClipChain(const Box& box) {
+  const std::vector<const Box*>& ClipChain(const Box& box) {
     const auto cached = clipChains_.find(&box);
     if (cached != clipChains_.end()) return cached->second;
     std::vector<const Box*> chain;
@@ -1462,19 +1487,22 @@ class Painter {
       chain.push_back(up);
     }
     std::reverse(chain.begin(), chain.end());
-    clipChains_[&box] = chain;
-    return chain;
+    return clipChains_.emplace(&box, std::move(chain)).first->second;
   }
 
   void EnsureClipsFor(const Box& box) { EnsureClips(ClipChain(box)); }
 
   // What cuts the contents of a box: what cuts the box, and the box itself when it clips its overflow.
   void EnsureClipsForContentsOf(const Box& box) {
-    std::vector<const Box*> chain = ClipChain(box);
     const dom::Element* element = box.element();
     const bool viewport = element && (element->IsHtml("html") || (element->IsHtml("body") && box.parent && box.parent->element() && box.parent->element()->IsHtml("html") && &box == canvasFrom_));
-    if (box.parent && ClipsOverflow(box) && !viewport) chain.push_back(&box);
-    EnsureClips(chain);
+    if (box.parent && ClipsOverflow(box) && !viewport) {
+      std::vector<const Box*> chain = ClipChain(box);
+      chain.push_back(&box);
+      EnsureClips(chain);
+    } else {
+      EnsureClips(ClipChain(box));
+    }
   }
 
   void EnsureClips(const std::vector<const Box*>& chain) {
@@ -1528,15 +1556,22 @@ class Painter {
 
   static bool Positioned(const Box& b) { return b.style && b.style->position != layout::Position::Static; }
 
+  // A box and where its border box is in the document (found as the boxes are collected, from the box above: not by going up from each).
+  struct Placed {
+    const Box* box;
+    Rect absolute;
+  };
   struct Lists {
-    std::vector<const Box*> blocks, floats, inlineOwners;
+    std::vector<Placed> blocks, inlineOwners;
+    std::vector<const Box*> floats;
     std::vector<std::pair<int, const Box*>> negative, zero, positive;
   };
 
-  void Collect(const Box& parent, Lists& lists) {
+  // `parentAbs` is where the border box of `parent` is, `blockAbs` where that of the block it is in (or it) is.
+  void Collect(const Box& parent, const Rect& parentAbs, const Rect& blockAbs, Lists& lists) {
     // (The text of a text area is drawn by the control from its value, not from the text it was made with.)
     const bool areaText = parent.formControl && parent.element() && parent.element()->IsHtml("textarea");
-    if (parent.kind == Box::Kind::Block && parent.hasInlineContent && !parent.lines.empty() && !areaText) lists.inlineOwners.push_back(&parent);
+    if (parent.kind == Box::Kind::Block && parent.hasInlineContent && !parent.lines.empty() && !areaText) lists.inlineOwners.push_back({&parent, parentAbs});
     for (const auto& child : parent.children) {
       const Box& c = *child;
       if (!c.style) continue;
@@ -1555,10 +1590,12 @@ class Painter {
           continue;
         }
         if (c.outsideMarker && !c.hasInlineContent && c.children.empty()) continue;
-        lists.blocks.push_back(&c);
-        Collect(c, lists);
+        const Rect childAbs{c.x + parentAbs.x, c.y + parentAbs.y, c.width, c.height};
+        lists.blocks.push_back({&c, childAbs});
+        Collect(c, childAbs, childAbs, lists);
       } else if (c.kind == Box::Kind::Inline) {
-        Collect(c, lists);  // (what is positioned or floating in an inline box)
+        const Rect inlineAbs{c.x + blockAbs.x, c.y + blockAbs.y, c.width, c.height};
+        Collect(c, inlineAbs, blockAbs, lists);  // (what is positioned or floating in an inline box)
       }
     }
   }
@@ -1650,19 +1687,25 @@ class Painter {
       PaintDecoration(root, layout::AbsoluteBorderBox(root), true, true);
     }
     Lists lists;
-    Collect(root, lists);
+    {
+      const Rect rootAbs = layout::AbsoluteBorderBox(root);
+      Collect(root, rootAbs, rootAbs, lists);
+    }
     const auto inside = [&](const Box& b) { EnsureClipsFor(b); };
     const auto byZ = [](const std::pair<int, const Box*>& a, const std::pair<int, const Box*>& b) { return a.first < b.first; };
     std::stable_sort(lists.negative.begin(), lists.negative.end(), byZ);
     std::stable_sort(lists.positive.begin(), lists.positive.end(), byZ);
     for (const auto& n : lists.negative) PaintStackingChild(*n.second);
-    for (const Box* b : lists.blocks) {
-      inside(*b);
-      PaintDecoration(*b, layout::AbsoluteBorderBox(*b), true, true);
+    for (const Placed& placed : lists.blocks) {
+      // (What is out of the window is not painted, and the clips it would be painted in are not worked out for it.)
+      const Rect& absolute = placed.absolute;
+      if (Culled(absolute.x, absolute.y, absolute.width, absolute.height)) continue;
+      inside(*placed.box);
+      PaintDecoration(*placed.box, absolute, true, true);
     }
     for (const Box* f : lists.floats) PaintStackingChild(*f);
-    for (const Box* o : lists.inlineOwners) {
-      PaintLines(*o);
+    for (const Placed& o : lists.inlineOwners) {
+      PaintLines(*o.box, o.absolute);
     }
     for (const auto& z : lists.zero) PaintStackingChild(*z.second);
     for (const auto& p : lists.positive) PaintStackingChild(*p.second);
@@ -1696,7 +1739,9 @@ void CollectFrames(const layout::Box& box, std::vector<dom::Document*>& frames) 
       frames.push_back(element->contentDocument);
     }
   }
-  for (const auto& child : box.children) CollectFrames(*child, frames);
+  for (const auto& child : box.children) {
+    if (child->FeaturesBelow() & layout::Box::kIframe) CollectFrames(*child, frames);
+  }
 }
 
 }  // namespace
