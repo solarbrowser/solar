@@ -397,9 +397,20 @@ const char* const kFormScript = R"JS(
     if (type === "mouseup") t.dispatchEvent(new MouseEvent("click", { ...init, detail: 1 }));
     return proceed;
   });
+  // The pointer events of the mouse: they come before the mouse events of the same thing (Pointer Events), and when a script cancels the pointerdown the
+  // mouse events of that press (down, move, up) are not sent.
+  const pointerEvent = (type, x, y, button, buttons, related, bubbles = true) => new (typeof PointerEvent === "function" ? PointerEvent : MouseEvent)(type, {
+    bubbles, cancelable: bubbles, composed: true, view: globalThis, clientX: x, clientY: y, button: type === "pointermove" || type.startsWith("pointerover") || type === "pointerout" || type === "pointerenter" || type === "pointerleave" ? -1 : button, buttons,
+    relatedTarget: related || null, pointerId: 1, width: 1, height: 1, pressure: buttons ? 0.5 : 0, pointerType: "mouse", isPrimary: true });
+  let mouseSuppressed = false;
   setHelper("pointer", (target, type, x, y, button, buttons) => {
     if (type !== "mousemove") activate();
-    const proceed = target.dispatchEvent(trusted(new MouseEvent(type, { bubbles: true, cancelable: true, composed: true, view: globalThis, clientX: x, clientY: y, button, buttons, detail: type === "mousemove" ? 0 : 1 })));
+    const pointerType = type === "mousedown" ? "pointerdown" : type === "mouseup" ? "pointerup" : "pointermove";
+    const pointerOk = target.dispatchEvent(trusted(pointerEvent(pointerType, x, y, button, buttons)));
+    if (pointerType === "pointerdown" && !pointerOk) mouseSuppressed = true;
+    const skipMouse = mouseSuppressed;
+    if (pointerType === "pointerup") mouseSuppressed = false;
+    const proceed = skipMouse ? true : target.dispatchEvent(trusted(new MouseEvent(type, { bubbles: true, cancelable: true, composed: true, view: globalThis, clientX: x, clientY: y, button, buttons, detail: type === "mousemove" ? 0 : 1 })));
     // A press gives the focus to the nearest thing that can take it, or takes it from what has it.
     if (type === "mousedown" && proceed && button === 0) {
       const before = document.activeElement;
@@ -424,6 +435,10 @@ const char* const kFormScript = R"JS(
     const chain = (e) => { const list = []; for (let p = e; p; p = p.parentNode instanceof Element ? p.parentNode : (p.parentNode && p.parentNode.host) || null) list.push(p); return list; };
     const before = chain(from), after = chain(to);
     const init = (related, bubbles) => ({ bubbles, cancelable: bubbles, composed: true, view: globalThis, clientX: x, clientY: y, relatedTarget: related });
+    if (from) from.dispatchEvent(trusted(pointerEvent("pointerout", x, y, 0, 0, to)));
+    for (const e of before) if (!after.includes(e)) e.dispatchEvent(trusted(pointerEvent("pointerleave", x, y, 0, 0, to, false)));
+    if (to) to.dispatchEvent(trusted(pointerEvent("pointerover", x, y, 0, 0, from)));
+    for (const e of after.slice().reverse()) if (!before.includes(e)) e.dispatchEvent(trusted(pointerEvent("pointerenter", x, y, 0, 0, from, false)));
     if (from) from.dispatchEvent(new MouseEvent("mouseout", init(to, true)));
     for (const e of before) if (!after.includes(e)) e.dispatchEvent(new MouseEvent("mouseleave", init(to, false)));
     if (to) to.dispatchEvent(new MouseEvent("mouseover", init(from, true)));

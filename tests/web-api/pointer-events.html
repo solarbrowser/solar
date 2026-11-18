@@ -1,0 +1,24 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>pointer events of the mouse</title>
+<!-- Run: SOLAR_GUI_SCRIPT="m:50,50;m:60,60;p:60,60;u:60,60;m:300,300" SOLAR_GUI_EVAL="__report()" SDL_VIDEODRIVER=dummy SOLAR_GUI_CPU=1 SOLAR_GUI_SETTLE=6000 ./solar tests/web-api/pointer-events.html : the lines "ok"/"FAIL" -->
+<style>body{margin:0} #a{position:absolute;left:0;top:0;width:200px;height:200px;background:#cde} #b{position:absolute;left:20px;top:20px;width:100px;height:100px;background:#ecd}</style>
+<div id="a"><div id="b"></div></div>
+<script>
+const log = [];
+for (const type of ["pointerover", "pointerenter", "pointermove", "pointerdown", "pointerup", "pointerout", "pointerleave", "mousemove", "mousedown", "mouseup"]) {
+  for (const id of ["a", "b"]) document.getElementById(id).addEventListener(type, (e) => log.push(type + "@" + id + (type.startsWith("pointer") ? ":" + e.pointerType + ":" + e.pointerId + ":" + e.isPrimary + ":" + e.isTrusted : "")), true);
+}
+window.addEventListener("pointermove", () => log.push("window pointermove"));
+function __report() {
+  const has = (s) => log.some((l) => l.startsWith(s));
+  const results = [
+    ["pointermove reaches the window", has("window pointermove")],
+    ["pointermove of the mouse", has("pointermove@b:mouse:1:true:true")],
+    ["pointerdown and pointerup", has("pointerdown@b") && has("pointerup@b")],
+    ["pointer events come before the mouse events", log.indexOf("pointermove@b:mouse:1:true:true") < log.indexOf("mousemove@b")],
+    ["pointerout and pointerleave when the pointer leaves", has("pointerout@b") && has("pointerleave@b")],
+  ];
+  return results.map(([name, ok]) => (ok ? "ok   " : "FAIL ") + name).join("\n") + "\n" + log.slice(0, 30).join(" ");
+}
+</script>

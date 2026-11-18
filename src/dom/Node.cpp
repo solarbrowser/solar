@@ -608,18 +608,42 @@ void NoteTreeChangeAt(const Node* node) {
   if (g_treeChangeHook) g_treeChangeHook();
 }
 
-void NoteStateChange(Element* element) {
-  if (element && element->nodeDocument) MarkPending(element->nodeDocument, kPendingDocumentState);
-  const bool local = g_stateIsLocalHook && element && element->nodeDocument && g_stateIsLocalHook(element->nodeDocument, element);
+namespace {
+// The elements from `element` up (through the host of a shadow root): the ones a state of it (hover, active) is of.
+void StateChain(Element* element, std::vector<Node*>& chain) {
   for (Node* node = element; node;) {
-    NoteDamage(node, local ? kDamageState : kDamageAttributes);
+    chain.push_back(node);
     Node* up = node->parentNode;
     if (up && up->IsFragment() && static_cast<DocumentFragment*>(up)->isShadowRoot) up = static_cast<DocumentFragment*>(up)->host;
     node = up;
   }
+}
+}  // namespace
+
+// `skip`: the ones above that have the state both before and after (a move of the pointer from one element to another inside the same ones leaves the :hover of those as it was).
+static void NoteStateChangeOf(Element* element, const std::vector<Node*>& skip) {
+  if (element && element->nodeDocument) MarkPending(element->nodeDocument, kPendingDocumentState);
+  const bool local = g_stateIsLocalHook && element && element->nodeDocument && g_stateIsLocalHook(element->nodeDocument, element);
+  std::vector<Node*> chain;
+  StateChain(element, chain);
+  for (Node* node : chain) {
+    if (!skip.empty() && std::find(skip.begin(), skip.end(), node) != skip.end()) continue;
+    NoteDamage(node, local ? kDamageState : kDamageAttributes);
+  }
   // (A state — hover, focus, :defined — is no change of the tree: what is kept of the others stays; the elements it is of, and the ones above, are made anew.)
   ++g_stateVersion;
   if (g_treeChangeHook) g_treeChangeHook();
+}
+
+void NoteStateChange(Element* element) { NoteStateChangeOf(element, {}); }
+
+// The state of the chain of `old` and the chain of `element` changes where the two differ: the shared part (the page, the body, the boxes both are in) has it before and after.
+static void NoteStateMove(Element* old, Element* element) {
+  std::vector<Node*> before, after;
+  StateChain(old, before);
+  StateChain(element, after);
+  if (old) NoteStateChangeOf(old, after);
+  if (element) NoteStateChangeOf(element, before);
 }
 
 void SetHoverElement(Document* document, Element* element) {
@@ -627,8 +651,7 @@ void SetHoverElement(Document* document, Element* element) {
   Element* old = document->hoverElement;
   document->hoverElement = element;
   document->NoteWrite();
-  if (old) NoteStateChange(old);
-  if (element) NoteStateChange(element);
+  NoteStateMove(old, element);
 }
 
 void SetPressedElement(Document* document, Element* element) {
@@ -636,8 +659,7 @@ void SetPressedElement(Document* document, Element* element) {
   Element* old = document->pressedElement;
   document->pressedElement = element;
   document->NoteWrite();
-  if (old) NoteStateChange(old);
-  if (element) NoteStateChange(element);
+  NoteStateMove(old, element);
 }
 
 namespace {
