@@ -1,0 +1,12 @@
+{
+ "yt: 20 comments appended, then read": 8.0,
+ "yt: a new animation of bottom started at each frame (in the player)": 5.0,
+ "yt: build page, style and first layout": 158.0,
+ "yt: class toggle on the player (controls hidden), then read": 3.0,
+ "yt: hover state on a related video thumb (a ripple), then read": 3.0,
+ "yt: one running animation of bottom in the player, one frame": 0.0,
+ "yt: opacity fade restarted at each frame": 2.0,
+ "yt: text of one related video changed, then read": 1.0,
+ "yt: width of the player changed at each frame (a container)": 8.0,
+ "yt: width of the progress bar changed at each frame (a size, in the player)": 4.0
+}
