@@ -125,6 +125,22 @@ async function run() {
   ok("script processor runs in real time", realtimeCalls >= 5, realtimeCalls);
   await rc.close();
   ok("closed", rc.state === "closed", rc.state);
+
+  // a parameter that was set many times: what is behind the time that is rendered is let go of, and the value is what the last of them gave, and a ramp starts from it
+  let q = await render(16384, (c) => {
+    const buf = c.createBuffer(1, 16384, 44100); buf.getChannelData(0).fill(1);
+    const s = c.createBufferSource(); s.buffer = buf; const g = c.createGain();
+    for (let k = 0; k < 200; ++k) g.gain.setValueAtTime(k / 200, k * 0.001);
+    g.gain.linearRampToValueAtTime(0, 0.3);
+    s.connect(g); g.connect(c.destination); s.start();
+  }, 44100, 1);
+  const gainAt = (i) => { const t = i / 44100; if (t < 0.199) return Math.floor(t / 0.001 + 1e-9) / 200; return Math.max(0, 0.995 * (1 - (t - 0.199) / (0.3 - 0.199))); };
+  let worst = 0; for (const i of [0, 100, 1000, 4000, 8000, 8800, 9000, 12000, 16000]) worst = Math.max(worst, Math.abs(q.getChannelData(0)[i] - gainAt(i)));
+  ok("a parameter set 200 times and ramped", worst < 0.01, worst);
+  // a constant parameter and a detune that does not change
+  q = await render(2048, (c) => { const o = c.createOscillator(); o.frequency.value = 441; o.detune.value = 1200; const g = c.createGain(); g.gain.value = 0.5; o.connect(g); g.connect(c.destination); o.start(); }, 44100, 1);
+  let crossings = 0; { const d = q.getChannelData(0); for (let i = 1; i < d.length; ++i) if (d[i - 1] < 0 && d[i] >= 0) ++crossings; }
+  ok("an oscillator one octave up", crossings >= 40 && crossings <= 42, crossings);
 }
 run().then(() => console.log("done"), (e) => { console.log("FAIL exception " + (e && e.stack || e)); console.log("done"); });
 </script>

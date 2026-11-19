@@ -212,7 +212,32 @@ void Engine::Impl::FillParam(Node& n, int index, float* out, double* mean) {
   if (p.events.empty()) {
     for (int i = 0; i < kQuantum; ++i) out[i] = static_cast<float>(p.base);
   } else {
-    for (int i = 0; i < kQuantum; ++i) out[i] = static_cast<float>(p.At(t0 + i * dt));
+    // What is behind us is not looked at again: an event that has come to its time sets the value, and where a ramp is from, whatever came before it (the list of a gain that a
+    // page sets again and again would be scanned from its first event for each sample of the rest of the page's life). The last of them is kept, as a set.
+    {
+      size_t last = p.events.size();
+      for (size_t k = 0; k < p.events.size(); ++k) {
+        const Event& e = p.events[k];
+        if (e.time > t0) break;
+        if (e.op == ParamOp::SetAt || e.op == ParamOp::Set || e.op == ParamOp::LinearRampTo || e.op == ParamOp::ExponentialRampTo) last = k;
+      }
+      if (last != p.events.size() && last > 0) {
+        p.events[last].op = ParamOp::SetAt;
+        p.events.erase(p.events.begin(), p.events.begin() + static_cast<std::ptrdiff_t>(last));
+      } else if (last != p.events.size()) {
+        p.events[last].op = ParamOp::SetAt;
+      }
+    }
+    // A parameter that is where it was at the start of the block at its end, with nothing happening in between, is a constant for it (what goes between events only goes one way).
+    const double tEnd = t0 + (kQuantum - 1) * dt;
+    bool quiet = true;
+    for (const Event& e : p.events) if (e.time > t0 && e.time <= tEnd + dt) { quiet = false; break; }
+    const double first = p.At(t0);
+    if (quiet && p.At(tEnd) == first) {
+      for (int i = 0; i < kQuantum; ++i) out[i] = static_cast<float>(first);
+    } else {
+      for (int i = 0; i < kQuantum; ++i) out[i] = static_cast<float>(p.At(t0 + i * dt));
+    }
   }
   for (uint32_t source : p.inputs) {
     Node* from = Find(source);
@@ -299,10 +324,12 @@ void Engine::Impl::Process(Node& n) {
       FillParam(n, 0, frequency);
       FillParam(n, 1, detune);
       n.out.Clear(1);
+      double detuneSeen = 0, detuneFactor = 1;
       for (int i = 0; i < kQuantum; ++i) {
         const uint64_t frame = first + static_cast<uint64_t>(i);
         if (!n.started || frame < n.startFrame || frame >= n.stopFrame) continue;
-        const double f = frequency[i] * std::pow(2.0, detune[i] / 1200.0);
+        if (detune[i] != detuneSeen) { detuneSeen = detune[i]; detuneFactor = std::pow(2.0, detuneSeen / 1200.0); }
+        const double f = frequency[i] * detuneFactor;
         const double p = n.phase;
         float v = 0;
         switch (n.wave) {
@@ -328,6 +355,7 @@ void Engine::Impl::Process(Node& n) {
       const Buffer& b = *n.buffer;
       const double loopEnd = (n.loopEnd > 0 && n.loopEnd * b.rate <= b.frames) ? n.loopEnd * b.rate : static_cast<double>(b.frames);
       const double loopStart = std::clamp(n.loopStart * b.rate, 0.0, loopEnd);
+      double detuneSeen = 0, detuneFactor = 1;
       for (int i = 0; i < kQuantum; ++i) {
         const uint64_t frame = first + static_cast<uint64_t>(i);
         if (!n.started || n.ended || frame < n.startFrame) continue;
@@ -352,7 +380,8 @@ void Engine::Impl::Process(Node& n) {
           const float a1 = at + 1 < d.size() ? d[at + 1] : (n.loop ? d[static_cast<size_t>(loopStart)] : 0.f);
           n.out.d[c][i] = static_cast<float>(a0 + (a1 - a0) * frac);
         }
-        n.playPos += (b.rate / rate) * rateParam[i] * std::pow(2.0, detune[i] / 1200.0);
+        if (detune[i] != detuneSeen) { detuneSeen = detune[i]; detuneFactor = std::pow(2.0, detuneSeen / 1200.0); }
+        n.playPos += (b.rate / rate) * rateParam[i] * detuneFactor;
       }
       break;
     }
@@ -362,13 +391,15 @@ void Engine::Impl::Process(Node& n) {
       float pan[kQuantum];
       FillParam(n, 0, pan);
       n.out.Clear(2);
+      double panSeen = 2;  // (not a pan: nothing is cached yet)
+      float panCos = 0, panSin = 0;
       for (int i = 0; i < kQuantum; ++i) {
         const double x = std::clamp(static_cast<double>(pan[i]), -1.0, 1.0);
         float l, r;
         if (in.channels == 1) {
-          const double angle = (x + 1) * kPi / 4;
-          l = in.d[0][i] * static_cast<float>(std::cos(angle));
-          r = in.d[0][i] * static_cast<float>(std::sin(angle));
+          if (x != panSeen) { panSeen = x; const double angle = (x + 1) * kPi / 4; panCos = static_cast<float>(std::cos(angle)); panSin = static_cast<float>(std::sin(angle)); }
+          l = in.d[0][i] * panCos;
+          r = in.d[0][i] * panSin;
         } else {
           const double angle = (x <= 0 ? x + 1 : x) * kPi / 2;
           if (x <= 0) {
@@ -648,9 +679,10 @@ void Engine::Loop() {
       const size_t quanta = std::min<size_t>(wanted / kQuantum, 16);
       interleaved.assign(quanta * kQuantum * static_cast<size_t>(channels_), 0.f);
       {
-        std::lock_guard<std::mutex> lock(impl_->mutex);
         Block block;
         for (size_t q = 0; q < quanta; ++q) {
+          // (The lock is held for one quantum at a time: the page that asks for a change of a parameter in the middle does not wait for all of them.)
+          std::lock_guard<std::mutex> lock(impl_->mutex);
           impl_->RenderQuantum(block);
           for (int i = 0; i < kQuantum; ++i) for (int c = 0; c < channels_; ++c) interleaved[(q * kQuantum + static_cast<size_t>(i)) * static_cast<size_t>(channels_) + static_cast<size_t>(c)] = block.d[c][i];
         }
