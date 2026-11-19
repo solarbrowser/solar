@@ -62,6 +62,14 @@ void SetSecFetchHeaders(std::vector<std::pair<std::string, std::string>>& header
   std::erase_if(headers, [](const auto& header) { return header.first.size() > 10 && EqualsIgnoreCase(header.first.substr(0, 10), "sec-fetch-"); });
   if (!PotentiallyTrustworthy(target)) return;
   headers.emplace_back("Sec-Fetch-Dest", destination);
+  // (The extensible priorities of RFC 9218, which the servers that have them use in what goes first on a connection of many requests: what blocks the page first, pictures and media after.
+  // A page that sets its own says what it wants.)
+  const std::string dest = destination;
+  const bool own = std::any_of(headers.begin(), headers.end(), [](const auto& header) { return EqualsIgnoreCase(header.first, "priority"); });
+  if (!own) {
+    const char* urgency = dest == "style" || dest == "iframe" ? "u=0" : dest == "script" || dest == "font" || dest == "empty" ? "u=1" : dest == "image" ? "u=3, i" : dest == "video" || dest == "audio" ? "u=4, i" : nullptr;
+    if (urgency) headers.emplace_back("Priority", urgency);
+  }
   headers.emplace_back("Sec-Fetch-Mode", mode);
   headers.emplace_back("Sec-Fetch-Site", site == 0 ? "same-origin" : site == 1 ? "same-site" : "cross-site");
 }

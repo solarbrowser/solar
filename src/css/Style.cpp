@@ -600,6 +600,24 @@ void BuildFlatIndex(const std::vector<CssRule*>& rules, RuleIndex& index) {
   std::vector<uint64_t> keys;
   for (uint32_t i = 0; i < rules.size(); ++i) {
     CssRule* rule = rules[i];
+    if (rule->kind == RuleKind::Container) {
+      // A container query is for the elements that any of the plain style rules in it is for: one that has none of their keys is not asked of the containers (every element was, for each group of
+      // a page that has a hundred of them, as a list that was looked at in full).
+      keys.clear();
+      bool all = !rule->rules.empty();
+      for (CssRule* inner : rule->rules) {
+        if (inner->kind != RuleKind::Style || !inner->selectors || !inner->style || !inner->rules.empty() || inner->selectors->empty()) { all = false; break; }
+        for (const ComplexSelector& selector : *inner->selectors) {
+          if (!KeysOfComplex(selector, keys, 0)) { all = false; break; }
+        }
+        if (!all) break;
+      }
+      if (!all) { index.always.push_back(i); continue; }
+      std::sort(keys.begin(), keys.end());
+      keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+      for (uint64_t key : keys) index.buckets[key].push_back(i);
+      continue;
+    }
     if (rule->kind != RuleKind::Style || !rule->selectors || !rule->style || !rule->rules.empty()) { index.always.push_back(i); continue; }
     keys.clear();
     bool all = !rule->selectors->empty();
@@ -637,6 +655,10 @@ struct FlatList {
   // What a rule needs of the elements above the subject, for the rules that can be told by it alone (one selector, nothing nested in it): the first two keys of the
   // selector's ancestors, 0 for none. An element looks at these before it looks at the rule.
   std::vector<uint64_t> ancestorKey1, ancestorKey2;
+  // The same for a rule of several selectors (a list with commas): the first two keys of the ancestors of each, where every one of them has some: the rule is looked at only if the elements above
+  // have the keys of one of them. altOf[position] is the number of its list in `alts` plus one, or 0.
+  std::vector<uint32_t> altOf;
+  std::vector<std::vector<std::pair<uint64_t, uint64_t>>> alts;
   uint32_t lastPath = 0;
   void Push(CssRule* rule, int layer, const std::string& path) {
     if (paths.empty()) paths.push_back(std::string());
@@ -1110,6 +1132,11 @@ struct Gatherer {
         // (What the rule needs of the elements above, looked at without the rule: the same answer its own screening gives.)
         const Bloom* above = AncestorBloom();
         if (!above || !above->Has(flat.ancestorKey1[position]) || (flat.ancestorKey2[position] && !above->Has(flat.ancestorKey2[position]))) continue;
+      } else if (screening && !flat.altOf.empty() && flat.altOf[position]) {
+        const Bloom* above = AncestorBloom();
+        bool possible = false;
+        if (above) for (const auto& [first, second] : flat.alts[flat.altOf[position] - 1]) if (above->Has(first) && (!second || above->Has(second))) { possible = true; break; }
+        if (!possible) continue;
       }
       const std::string& path = flat.paths[flat.pathIds[position]];
       if (layerPath != path) layerPath = path;
@@ -3056,6 +3083,22 @@ void BuildUntimed(dom::Element* element, ElementStyle& style, const std::string&
             if (rule->quickAncestors().size() != 1 || rule->quickAncestors()[0].empty()) continue;
             list->ancestorKey1[i] = rule->quickAncestors()[0][0];
             if (rule->quickAncestors()[0].size() > 1) list->ancestorKey2[i] = rule->quickAncestors()[0][1];
+          }
+          list->altOf.assign(list->rules.size(), 0);
+          for (size_t i = 0; i < list->rules.size(); ++i) {
+            CssRule* rule = list->rules[i];
+            if (rule->kind != RuleKind::Style || !rule->selectors || !rule->style || !rule->rules.empty() || rule->selectors->size() < 2) continue;
+            if (rule->quickState() == 0) WorkOutQuickKeys(*rule);
+            if (rule->quickAncestors().size() != rule->selectors->size()) continue;
+            std::vector<std::pair<uint64_t, uint64_t>> alternatives;
+            bool all = true;
+            for (const std::vector<uint64_t>& keys : rule->quickAncestors()) {
+              if (keys.empty()) { all = false; break; }
+              alternatives.push_back({keys[0], keys.size() > 1 ? keys[1] : 0});
+            }
+            if (!all) continue;
+            list->alts.push_back(std::move(alternatives));
+            list->altOf[i] = static_cast<uint32_t>(list->alts.size());
           }
         }
         if (flats.size() > 64) flats.clear();

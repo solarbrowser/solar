@@ -627,7 +627,8 @@ class Browser : public solar::html::FrameEnvironment, public solar::webapi::Work
     }
     const double thisWait = std::chrono::duration<double, std::milli>(Clock::now() - waitStart).count();
     waited_ += thisWait;
-    if (timing_ && thisWait > 300) std::fprintf(stderr, "  waited %.0f ms (page tasks %.0f, painting %.0f; asked %.0f ms before, answer after %.0f ms) for %s\n", thisWait, inPump, inIdle, std::chrono::duration<double, std::milli>(waitStart - resource->started).count(), resource->headersMs, resource->url.substr(0, 110).c_str());
+    static const double waitLogMs = std::getenv("SOLAR_WAIT_LOG_MS") ? std::atof(std::getenv("SOLAR_WAIT_LOG_MS")) : 300;
+    if (timing_ && thisWait > waitLogMs) std::fprintf(stderr, "  waited %.0f ms (page tasks %.0f, painting %.0f; asked %.0f ms before, answer after %.0f ms; ended at %.3f) for %s\n", thisWait, inPump, inIdle, std::chrono::duration<double, std::milli>(waitStart - resource->started).count(), resource->headersMs, std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(), resource->url.substr(0, 110).c_str());
     waiting_ = nullptr;
   }
 
