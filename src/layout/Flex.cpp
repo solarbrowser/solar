@@ -689,6 +689,13 @@ void FlexContentSizes(LayoutContext& lc, Box& container, double& minContent, dou
     if (Known(fixed)) {
       mn = mx = cs.boxSizing == BoxSizing::BorderBox ? std::max(0.0, fixed - c->border.Horizontal() - c->padding.Horizontal()) : fixed;
     }
+    // (The contribution of an item is held between its min-width and its max-width, as a block's children are: a panel with a min-width makes a box that shrinks to fit it that wide.)
+    {
+      const double chrome = cs.boxSizing == BoxSizing::BorderBox ? c->border.Horizontal() + c->padding.Horizontal() : 0.0;
+      const double maxW = ResolveSize(cs.maxWidth, kNaN), minW = ResolveSize(cs.minWidth, kNaN);
+      if (Known(maxW)) { mn = std::min(mn, std::max(0.0, maxW - chrome)); mx = std::min(mx, std::max(0.0, maxW - chrome)); }
+      if (Known(minW)) { mn = std::max(mn, std::max(0.0, minW - chrome)); mx = std::max(mx, std::max(0.0, minW - chrome)); }
+    }
     // A flex item's min-content contribution does not go below its flex base size when it cannot shrink.
     minSum += mn + extras;
     maxSum += mx + extras;

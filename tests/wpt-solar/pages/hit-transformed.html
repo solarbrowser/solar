@@ -1,0 +1,20 @@
+<!doctype html>
+<title>What is moved by a transform is hit where it is drawn</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<body style="margin:0">
+<div id="plain" style="position:absolute;left:300px;top:10px;width:100px;height:40px;transform:translateX(-50px);background:#cdf"><button id="b" style="width:100px;height:40px;display:block">b</button></div>
+<div id="fixed" style="position:fixed;left:50%;bottom:0;transform:translateX(-50%);display:flex"><button id="f1" style="width:100px;height:40px">1</button><button id="f2" style="width:100px;height:40px">2</button></div>
+<script>
+const centre = (el) => { const r = el.getBoundingClientRect(); return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); };
+test(() => {
+  assert_equals(document.getElementById("b").getBoundingClientRect().left, 250);
+  assert_equals(centre(document.getElementById("b")), document.getElementById("b"));
+  assert_equals(document.elementFromPoint(255, 30), document.getElementById("b"), "its drawn left edge");
+  assert_not_equals(document.elementFromPoint(380, 30), document.getElementById("b"), "where it was before it was moved is not it");
+}, "a button in a box that is moved by a transform is hit where it is drawn");
+test(() => {
+  assert_equals(centre(document.getElementById("f1")), document.getElementById("f1"));
+  assert_equals(centre(document.getElementById("f2")), document.getElementById("f2"));
+}, "the buttons of a fixed box that is centred with a transform are hit where they are drawn");
+</script>

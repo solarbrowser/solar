@@ -1,0 +1,26 @@
+<!doctype html>
+<title>fixed flex nav grows</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<body style="margin:0">
+<nav id="nav" style="position:fixed;left:50%;bottom:0;transform:translateX(-50%);display:flex;flex-direction:column;max-width:calc(100% - 28px)">
+  <div id="tabs" style="display:flex;padding:3px"><button style="padding:3px 10px">Army</button><button style="padding:3px 10px">Animals</button></div>
+  <div id="panel" style="display:flex;padding:4px;max-width:980px"><div id="row" style="display:flex;gap:4px"><button style="width:46px;height:40px">a</button></div></div>
+</nav>
+<script>
+const nav = document.getElementById("nav"), row = document.getElementById("row"), panel = document.getElementById("panel");
+const frames = (n) => new Promise((r) => { const step = () => (--n <= 0 ? r() : requestAnimationFrame(step)); requestAnimationFrame(step); });
+promise_test(async () => {
+  await frames(2);
+  for (let i = 0; i < 5; i++) { const b = document.createElement("button"); b.style.width = "46px"; b.style.height = "40px"; row.appendChild(b); }
+  await frames(3);
+  assert_equals(nav.getBoundingClientRect().width, panel.getBoundingClientRect().width, "nav is as wide as the panel it holds");
+  panel.style.minWidth = "500px";
+  await frames(3);
+  assert_equals(nav.getBoundingClientRect().width, 508, "nav follows a min-width of its child (500 and the padding of 4 on each side)");
+  panel.style.minWidth = "";
+  for (let i = 0; i < 3; i++) { const b = document.createElement("button"); b.style.width = "46px"; b.style.height = "40px"; row.appendChild(b); }
+  await frames(3);
+  assert_equals(nav.getBoundingClientRect().width, panel.getBoundingClientRect().width, "after the min-width is taken away");
+}, "a fixed flex box is as wide as what it holds");
+</script>

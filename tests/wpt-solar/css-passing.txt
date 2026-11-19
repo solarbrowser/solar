@@ -3266,3 +3266,5 @@ tests/wpt-solar/pages/stylesheet-remove-add.html
 tests/wpt-solar/pages/hit-fixed-scrolled.html
 tests/wpt-solar/pages/scrollintoview-nearest-tall.html
 tests/wpt-solar/pages/hit-in-scrolled-fixed.html
+tests/wpt-solar/pages/fixed-flex-grows.html
+tests/wpt-solar/pages/hit-transformed.html

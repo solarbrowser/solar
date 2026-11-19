@@ -1032,6 +1032,17 @@ dom::Element* AreaOfImageAt(const Box& box, double x, double y, double scrollX, 
   return const_cast<dom::Element*>(FirstAreaHolding(dom::FirstChildOf(map), localX, localY));
 }
 
+// The point of the page that a transform brought to (x, y) of the window, i.e. where the point is in the box before its transform (what is under the pointer is what is drawn there).
+// A transform that is not flat is taken for what it does to the plane.
+bool UnmapPoint(const Matrix& m, double x, double y, double& ox, double& oy) {
+  const double a = m.m[0], b = m.m[1], c = m.m[4], d = m.m[5], e = m.m[12], f = m.m[13];
+  const double det = a * d - b * c;
+  if (std::fabs(det) < 1e-12) return false;
+  ox = (d * (x - e) - c * (y - f)) / det;
+  oy = (-b * (x - e) + a * (y - f)) / det;
+  return true;
+}
+
 }  // namespace
 
 std::vector<dom::Element*> ElementsAtPoint(Tree& tree, double x, double y) {
@@ -1061,9 +1072,15 @@ std::vector<dom::Element*> ElementsAtPoint(Tree& tree, double x, double y) {
       Rect r = AbsoluteBorderBox(b);
       double dx = 0, dy = 0;
       ScrolledBy(tree, &b, false, dx, dy);
-      r.x -= dx;
-      r.y -= dy;
-      inside = Contains(r, x, y);
+      Matrix moved;
+      double px = x + dx, py = y + dy;  // (the point in the page)
+      if (CumulativeTransform(b, moved) && moved.Is2d()) {
+        double ux = 0, uy = 0;
+        if (!UnmapPoint(moved, px, py, ux, uy)) continue;
+        px = ux;
+        py = uy;
+      }
+      inside = Contains(r, px, py);
     } else if (b.kind == Box::Kind::Inline || b.kind == Box::Kind::Text) {
       const Box* container = b.parent;
       while (container && container->kind != Box::Kind::Block) container = container->parent;
@@ -1071,8 +1088,16 @@ std::vector<dom::Element*> ElementsAtPoint(Tree& tree, double x, double y) {
       const Rect origin = AbsoluteBorderBox(*container);
       double dx = 0, dy = 0;
       ScrolledBy(tree, container, true, dx, dy);
+      Matrix moved;
+      double px = x + dx, py = y + dy;
+      if (CumulativeTransform(*container, moved) && moved.Is2d()) {
+        double ux = 0, uy = 0;
+        if (!UnmapPoint(moved, px, py, ux, uy)) continue;
+        px = ux;
+        py = uy;
+      }
       for (const Rect& f : b.fragments) {
-        if (Contains({origin.x + f.x - dx, origin.y + f.y - dy, f.width, f.height}, x, y)) inside = true;
+        if (Contains({origin.x + f.x, origin.y + f.y, f.width, f.height}, px, py)) inside = true;
       }
     }
     if (!inside || Clipped(tree, b, x, y)) continue;
