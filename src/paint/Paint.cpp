@@ -346,9 +346,67 @@ GradientRef ParseGradient(const std::string& given) {
   return g;
 }
 
+std::string UrlOf(const std::string& item);
+
+// The address an image-set(...) comes to: each candidate is a url("...") or a string and a resolution (1x, 2dppx, 96dpi), and the one nearest to the density of the picture is
+// taken: the lowest that is at least 1x, or the highest of those that are below it. (A sprite sheet of a page is given in a few sizes this way.)
+std::string ImageSetUrl(const std::string& text) {
+  const size_t open = text.find('(');
+  if (open == std::string::npos || text.back() != ')') return "";
+  const std::string inner = text.substr(open + 1, text.size() - open - 2);
+  std::vector<std::string> candidates;
+  {
+    int depth = 0;
+    char quote = 0;
+    std::string current;
+    for (char c : inner) {
+      if (quote) { current += c; if (c == quote) quote = 0; continue; }
+      if (c == '"' || c == '\'') { quote = c; current += c; continue; }
+      if (c == '(') ++depth;
+      if (c == ')') --depth;
+      if (c == ',' && depth == 0) { candidates.push_back(current); current.clear(); continue; }
+      current += c;
+    }
+    if (!Trim(current).empty()) candidates.push_back(current);
+  }
+  std::string best;
+  double bestDensity = -1;
+  for (const std::string& candidate : candidates) {
+    const std::string t = Trim(candidate);
+    std::string address;
+    std::string rest;
+    if (t.rfind("url(", 0) == 0) {
+      const size_t close = t.find(')');
+      if (close == std::string::npos) continue;
+      address = UrlOf(t.substr(0, close + 1));
+      rest = t.substr(close + 1);
+    } else if (!t.empty() && (t[0] == '"' || t[0] == '\'')) {
+      const size_t close = t.find(t[0], 1);
+      if (close == std::string::npos) continue;
+      address = t.substr(1, close - 1);
+      rest = t.substr(close + 1);
+    } else {
+      continue;
+    }
+    double density = 1;
+    const std::string r = Trim(rest);
+    if (!r.empty() && r.rfind("type(", 0) != 0) {
+      char* end = nullptr;
+      const double v = std::strtod(r.c_str(), &end);
+      const std::string unit = Trim(end ? std::string(end) : "");
+      if (end != r.c_str() && v > 0) density = unit == "dpi" ? v / 96 : unit == "dpcm" ? v * 2.54 / 96 : v;
+    }
+    if (address.empty()) continue;
+    const bool better = bestDensity < 0 || (bestDensity < 1 ? density > bestDensity : (density >= 1 && density < bestDensity));
+    if (better) { best = address; bestDensity = density; }
+  }
+  return best;
+}
+
 // The address in a url("...") (or url(...)); empty if it is not one.
 std::string UrlOf(const std::string& item) {
   const std::string t = Trim(item);
+  if ((t.rfind("image-set(", 0) == 0 || t.rfind("-webkit-image-set(", 0) == 0) && !t.empty() && t.back() == ')') return ImageSetUrl(t);
   if (t.rfind("url(", 0) != 0 || t.back() != ')') return "";
   std::string inner = Trim(t.substr(4, t.size() - 5));
   if (inner.size() >= 2 && (inner.front() == '"' || inner.front() == '\'') && inner.back() == inner.front()) {
@@ -1053,7 +1111,22 @@ class Painter {
     const std::string images = Trim(reader.Get(prefix + "image"));
     if (images.empty() || images == "none") return out;
     const std::vector<std::string> items = SplitList(images, ',');
-    const std::vector<std::string> sizes = SplitList(reader.Get(prefix + "size"), ','), positions = SplitList(reader.Get(prefix + "position"), ',');
+    // (The position of each layer is put together from its x and y: what the shorthand is read as is not always what the longhands came to.)
+    std::vector<std::string> positions = SplitList(reader.Get(prefix + "position"), ',');
+    {
+      const std::vector<std::string> xs = SplitList(reader.Get(prefix + "position-x"), ','), ys = SplitList(reader.Get(prefix + "position-y"), ',');
+      if (!xs.empty() && xs.size() == ys.size()) {
+        std::vector<std::string> joined;
+        bool simple = true;
+        for (size_t i = 0; i < xs.size() && simple; ++i) {
+          const std::string x = Trim(xs[i]), y = Trim(ys[i]);
+          if (x.empty() || y.empty() || x.find(' ') != std::string::npos || y.find(' ') != std::string::npos) simple = false;
+          else joined.push_back(x + " " + y);
+        }
+        if (simple) positions = std::move(joined);
+      }
+    }
+    const std::vector<std::string> sizes = SplitList(reader.Get(prefix + "size"), ',');
     const std::vector<std::string> repeats = SplitList(reader.Get(prefix + "repeat"), ','), origins = SplitList(reader.Get(prefix + "origin"), ','), clips = SplitList(reader.Get(prefix + "clip"), ',');
     const auto at = [&](const std::vector<std::string>& values, size_t i) { return values.empty() ? std::string() : Trim(values[i % values.size()]); };
     const std::string rendering = reader.Get("image-rendering");

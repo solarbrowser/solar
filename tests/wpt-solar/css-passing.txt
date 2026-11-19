@@ -3268,3 +3268,4 @@ tests/wpt-solar/pages/scrollintoview-nearest-tall.html
 tests/wpt-solar/pages/hit-in-scrolled-fixed.html
 tests/wpt-solar/pages/fixed-flex-grows.html
 tests/wpt-solar/pages/hit-transformed.html
+tests/wpt-solar/pages/image-set-webkit.html

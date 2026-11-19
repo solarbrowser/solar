@@ -1,0 +1,18 @@
+<!doctype html>
+<title>-webkit-image-set() is accepted as image-set() is, and the background position of a layer is its x and y</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<span id="a" style="background-image:-webkit-image-set(url(a.png) 1x, url(b.png) 2x);background-position:-92px 0px"></span>
+<script>
+test(() => {
+  assert_true(CSS.supports("background-image", "-webkit-image-set(url(a.png) 1x)"));
+  assert_true(CSS.supports("background-image", "image-set(url(a.png) 1x, url(b.png) 2x)"));
+  assert_true(getComputedStyle(document.getElementById("a")).backgroundImage.includes("image-set"));
+}, "-webkit-image-set is a background image");
+test(() => {
+  const c = getComputedStyle(document.getElementById("a"));
+  assert_equals(c.backgroundPositionX, "-92px");
+  assert_equals(c.backgroundPositionY, "0px");
+  assert_equals(c.backgroundPosition, "-92px 0px");
+}, "the position of a background is its x and y");
+</script>
