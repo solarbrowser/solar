@@ -1,0 +1,19 @@
+<!doctype html>
+<title>A fixed box is hit where it is in the viewport, however far the page is scrolled</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<body style="margin:0">
+<div style="height:3000px;background:#eee"></div>
+<div id="fixed" style="position:fixed;right:10px;bottom:10px;width:50px;height:50px;background:red;z-index:10"><img id="image" width="36" height="36" style="display:block"></div>
+<script>
+const centre = () => {
+  const r = document.getElementById("fixed").getBoundingClientRect();
+  return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+};
+test(() => {
+  assert_true(document.getElementById("fixed").contains(centre()), "not scrolled");
+  window.scrollTo(0, 1500);
+  assert_equals(window.scrollY, 1500);
+  assert_true(document.getElementById("fixed").contains(centre()), "scrolled: " + centre().tagName);
+}, "a fixed box is under the point where it is, after the page was scrolled");
+</script>

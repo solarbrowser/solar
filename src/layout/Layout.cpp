@@ -917,17 +917,41 @@ void PaintOrder(const Box& root, std::vector<const Box*>& out) {
 }
 
 // Whether a point is inside every ancestor's clip.
+// How far the scrolling of the boxes around `start` has moved it: a box that is fixed stays where it is in the viewport, and only the scrolling of what is its containing block (an
+// ancestor with a transform, say) moves it. (`includeStart`: the scrolling of `start` itself moves what it holds, as the lines of a block.)
+void ScrolledBy(const Tree& tree, const Box* start, bool includeStart, double& dx, double& dy) {
+  const auto addScroll = [&](const Box* q) {
+    if (!q->node) return;
+    const auto found = tree.scroll.find(q->node);
+    if (found != tree.scroll.end()) { dx += found->second.first; dy += found->second.second; }
+  };
+  // (A fixed box that is anchored to an element is put where the anchor is in the page, and the page scrolling moves it with the anchor.)
+  const auto isFixed = [](const Box* q) { return q->kind == Box::Kind::Block && q->style && q->style->position == Position::Fixed && !q->anchoredStyle; };
+  for (const Box* p = start; p; p = p->parent) {
+    if (p == start && includeStart) addScroll(p);
+    if (isFixed(p)) {
+      for (const Box* q = p->parent; q; q = q->parent) {
+        if (q->style && q->style->containsPositioned) {
+          for (const Box* r = p->parent; r; r = r->parent) {
+            addScroll(r);
+            if (r == q) break;
+          }
+          break;
+        }
+      }
+      break;
+    }
+    if (p != start) addScroll(p);
+  }
+}
+
 bool Clipped(Tree& tree, const Box& box, double x, double y) {
   for (const Box* p = box.parent; p; p = p->parent) {
     if (!p->style || p->kind != Box::Kind::Block) continue;
     if (p->style->Physical().overflowX == Overflow::Visible && p->style->Physical().overflowY == Overflow::Visible) continue;
     Rect r = AbsoluteBorderBox(*p);
     double dx = 0, dy = 0;
-    for (const Box* q = p->parent; q; q = q->parent) {
-      if (!q->node) continue;
-      const auto found = tree.scroll.find(q->node);
-      if (found != tree.scroll.end()) { dx += found->second.first; dy += found->second.second; }
-    }
+    ScrolledBy(tree, p, false, dx, dy);
     r.x += p->border.left - dx;
     r.y += p->border.top - dy;
     r.width -= p->border.Horizontal();
@@ -1055,11 +1079,7 @@ std::vector<dom::Element*> ElementsAtPoint(Tree& tree, double x, double y) {
     if (b.kind == Box::Kind::Block) {
       Rect r = AbsoluteBorderBox(b);
       double dx = 0, dy = 0;
-      for (const Box* q = b.parent; q; q = q->parent) {
-        if (!q->node) continue;
-        const auto found = tree.scroll.find(q->node);
-        if (found != tree.scroll.end()) { dx += found->second.first; dy += found->second.second; }
-      }
+      ScrolledBy(tree, &b, false, dx, dy);
       r.x -= dx;
       r.y -= dy;
       inside = Contains(r, x, y);
@@ -1069,12 +1089,7 @@ std::vector<dom::Element*> ElementsAtPoint(Tree& tree, double x, double y) {
       if (!container) continue;
       const Rect origin = AbsoluteBorderBox(*container);
       double dx = 0, dy = 0;
-      for (const Box* q = container; q; q = q->parent) {
-        if (!q->node) continue;
-        const auto found = tree.scroll.find(q->node);
-        if (found != tree.scroll.end() && q != container) { dx += found->second.first; dy += found->second.second; }
-        else if (found != tree.scroll.end()) { dx += found->second.first; dy += found->second.second; }
-      }
+      ScrolledBy(tree, container, true, dx, dy);
       for (const Rect& f : b.fragments) {
         if (Contains({origin.x + f.x - dx, origin.y + f.y - dy, f.width, f.height}, x, y)) inside = true;
       }
@@ -1085,11 +1100,7 @@ std::vector<dom::Element*> ElementsAtPoint(Tree& tree, double x, double y) {
     if (owner && owner->node && owner->node->IsDocument()) continue;
     if (owner && b.kind == Box::Kind::Block) {
       double dx = 0, dy = 0;
-      for (const Box* q = b.parent; q; q = q->parent) {
-        if (!q->node) continue;
-        const auto found = tree.scroll.find(q->node);
-        if (found != tree.scroll.end()) { dx += found->second.first; dy += found->second.second; }
-      }
+      ScrolledBy(tree, &b, false, dx, dy);
       // (A point on an image with a map is on the area of the map that holds it.)
       if (dom::Element* area = AreaOfImageAt(*owner, x, y, dx, dy)) add(area);
     }

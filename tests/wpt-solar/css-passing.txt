@@ -3263,3 +3263,4 @@ tests/wpt/resize-observer/ordering.html
 tests/wpt/resize-observer/scrollbars-2.html
 tests/wpt-solar/pages/layout-flex-abspos-inset.html
 tests/wpt-solar/pages/stylesheet-remove-add.html
+tests/wpt-solar/pages/hit-fixed-scrolled.html
