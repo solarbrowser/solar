@@ -2736,6 +2736,8 @@ int PageMain(Shared& shared, int argc, char** argv) {
     const auto iterStart = Clock::now();
     barMs = stepMs = glideMs = 0;
     UiEvent incoming;
+    // (A moment with nothing to draw: what the engine put off for one is done now, and not in the pause that ends a collection in the middle of a frame.)
+    if (!dirty) isolate->RunIdleWork();
     bool any = shared.WaitEvent(incoming, std::chrono::milliseconds(dirty ? 0 : 8));
     while (any) {
       SDL_Event& event = incoming.event;
