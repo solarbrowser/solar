@@ -31,6 +31,8 @@ void SetPreviewBudget(long elements) { g_previewBudget = elements; }
 
 namespace {
 
+void ScrolledBy(const Tree& tree, const Box* start, bool includeStart, double& dx, double& dy);
+
 // The content boxes of the containers, for the container queries. True if one is not what style was made with.
 bool UpdateContainerSizes(Tree& tree, std::vector<dom::Element*>& changedContainers) {
   bool changed = false;
@@ -588,28 +590,7 @@ std::vector<Rect> ClientRects(Tree& tree, dom::Element* element) {
     // Scrolled ancestors move what is in them -- except a box that is fixed: it stays where it is in the viewport, and only the scrolling of what is its containing block (an ancestor
     // with a transform, say) moves it. (YouTube's page header is fixed and moves itself with a transform as the page scrolls; its rectangle was asked for what the scrolling moved.)
     double dx = 0, dy = 0;
-    const auto addScroll = [&](const Box* q) {
-      if (!q->node) return;
-      const auto found = tree.scroll.find(q->node);
-      if (found != tree.scroll.end()) { dx += found->second.first; dy += found->second.second; }
-    };
-    // (A fixed box that is anchored to an element is put where the anchor is in the page, and the page scrolling moves it with the anchor: it stays in the way of any other box.)
-    const auto isFixed = [](const Box* q) { return q->kind == Box::Kind::Block && q->style && q->style->position == Position::Fixed && !q->anchoredStyle; };
-    for (const Box* p = box; p; p = p->parent) {
-      if (isFixed(p)) {
-        for (const Box* q = p->parent; q; q = q->parent) {
-          if (q->style && q->style->containsPositioned) {
-            for (const Box* r = p->parent; r; r = r->parent) {
-              addScroll(r);
-              if (r == q) break;
-            }
-            break;
-          }
-        }
-        break;
-      }
-      if (p != box) addScroll(p);
-    }
+    ScrolledBy(tree, box, false, dx, dy);
     const size_t added = box->kind == Box::Kind::Inline || box->kind == Box::Kind::Text || box->fragments.size() > 1 ? box->fragments.size() : 1;
     Matrix matrix;
     const Box* holder = box;
@@ -928,7 +909,8 @@ void ScrolledBy(const Tree& tree, const Box* start, bool includeStart, double& d
   // (A fixed box that is anchored to an element is put where the anchor is in the page, and the page scrolling moves it with the anchor.)
   const auto isFixed = [](const Box* q) { return q->kind == Box::Kind::Block && q->style && q->style->position == Position::Fixed && !q->anchoredStyle; };
   for (const Box* p = start; p; p = p->parent) {
-    if (p == start && includeStart) addScroll(p);
+    // (What a box scrolls moves what it holds, a fixed box too: it is what is above it that does not move it.)
+    if (p != start || includeStart) addScroll(p);
     if (isFixed(p)) {
       for (const Box* q = p->parent; q; q = q->parent) {
         if (q->style && q->style->containsPositioned) {
@@ -941,7 +923,6 @@ void ScrolledBy(const Tree& tree, const Box* start, bool includeStart, double& d
       }
       break;
     }
-    if (p != start) addScroll(p);
   }
 }
 

@@ -1,0 +1,25 @@
+<!doctype html>
+<title>What is in a fixed box that is scrolled is hit where it is drawn</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<body style="margin:0">
+<div style="height:3000px"></div>
+<div id="panel" style="position:fixed;left:20px;bottom:10px;width:300px;height:60px;overflow-x:auto;overflow-y:hidden;white-space:nowrap;background:#eee">
+  <div style="width:1200px;height:50px;display:flex"><div class="cell" style="flex:none;width:50px;height:50px;background:#cdf"></div><div class="cell" style="flex:none;width:50px;height:50px;background:#fcd"></div><div class="cell" style="flex:none;width:50px;height:50px;background:#cfd"></div><div class="cell" style="flex:none;width:50px;height:50px;background:#ffc"></div></div>
+</div>
+<script>
+const hitAtCentre = (el) => {
+  const r = el.getBoundingClientRect();
+  return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+};
+test(() => {
+  const panel = document.getElementById("panel");
+  const cells = document.querySelectorAll(".cell");
+  window.scrollTo(0, 1000);
+  panel.scrollLeft = 100;
+  assert_equals(panel.scrollLeft, 100);
+  assert_equals(cells[0].getBoundingClientRect().left, 20 - 100, "the first cell is scrolled out to the left");
+  assert_equals(hitAtCentre(cells[2]), cells[2], "the third cell is where it is drawn");
+  assert_equals(hitAtCentre(cells[3]), cells[3], "the fourth cell is where it is drawn");
+}, "a cell of a scrolled fixed box is hit where it is, on a scrolled page");
+</script>
