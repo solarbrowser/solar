@@ -63,8 +63,10 @@
         const beforeStart = targetMin < portMin, afterEnd = targetMax > portMax;
         if (!beforeStart && !afterEnd) return 0;
         if (beforeStart && afterEnd) return 0;
-        if (beforeStart) return targetSize < portSize || !startMin ? targetMin - portMin : targetMax - portMax;
-        return targetSize < portSize || startMin ? targetMax - portMax : targetMin - portMin;
+        // One edge is outside: a target smaller than the port is brought in by the edge that is outside, a larger one is lined up by the edge that is not (so a block taller than the
+        // window that starts in view stays where it is, and one that ends in view is lined up by its end), whichever way the axis runs.
+        if (beforeStart) return targetSize < portSize ? targetMin - portMin : targetMax - portMax;
+        return targetSize < portSize ? targetMax - portMax : targetMin - portMin;
       }
     }
   };

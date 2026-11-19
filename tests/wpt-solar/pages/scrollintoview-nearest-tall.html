@@ -1,0 +1,28 @@
+<!doctype html>
+<title>scrollIntoView with block nearest, for a target taller than the viewport</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<body style="margin:0">
+<div id="tall" style="height:4000px;background:#ccc"></div>
+<script>
+// A target that is taller than the viewport and starts in view stays where it is (it was scrolled to its end: clicking a page made it jump to the bottom, as the focus of the body does this).
+test(() => {
+  window.scrollTo(0, 0);
+  document.body.scrollIntoView({ block: "nearest" });
+  assert_equals(window.scrollY, 0);
+  document.getElementById("tall").scrollIntoView({ block: "nearest" });
+  assert_equals(window.scrollY, 0);
+}, "a target taller than the viewport that starts in view does not move the page");
+test(() => {
+  window.scrollTo(0, 100);
+  document.body.scrollIntoView({ block: "nearest" });
+  assert_equals(window.scrollY, 100, "both edges are outside: nothing moves");
+}, "a target that is taller than the viewport and has both edges outside does not move the page");
+test(() => {
+  window.scrollTo(0, 99999);
+  const end = window.scrollY;
+  assert_greater_than(end, 0);
+  document.body.scrollIntoView({ block: "nearest" });
+  assert_equals(window.scrollY, end, "the start is above, the end is in view");
+}, "a target taller than the viewport that ends in view stays");
+</script>
